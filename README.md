@@ -1,0 +1,35 @@
+# ProxyCrab Tauri
+
+ProxyCrab is a macOS-first Tauri application backend for HTTP/HTTPS MITM capture. The frontend is intentionally maintained separately; this repository's Rust workspace exposes the complete backend through matching management HTTP and Tauri command surfaces.
+
+## Rust workspace
+
+- `crates/proxy-crab-mitm`: proxy lifecycle, CA/TLS, sessions, SQLite captures, request/response bodies, Lua scripts, diagnostic failures, and the in-memory system-log ring.
+- `crates/proxy-crab-mgr`: the object-safe `ProxyCrabManager` trait, its MITM adapter, typed DTOs, stable errors, and the local management HTTP server.
+- `src-tauri`: Tauri initialization, application lifecycle, and thin commands that call the same management trait as HTTP handlers.
+
+Neither reusable crate depends on Tauri.
+
+## Runtime defaults
+
+- MITM proxy: `0.0.0.0:8089`, stopped when the app launches.
+- Management API: `127.0.0.1:18089`, started with the app.
+- CA download through the proxy: `http://proxy.crab/ca.crt`.
+- System log buffer: the newest 10,000 entries in memory.
+- Captured request/response bodies: at most 64 MiB each, with a 60-second read timeout, at most four concurrently materialized exchanges, and at most 256 client connections.
+
+The Tauri application data directory contains `config.json`, which points at the workspace. When the pointer is absent or invalid, `app_data_dir/workspace` is used and persisted. A changed pointer takes effect only on the next application launch.
+
+The Tauri command surface also reports the management HTTP service's `running`, `host`, `port`, and startup error state through `get_http_service_status`.
+
+## Development
+
+```bash
+cargo check --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+The frontend source under `src/` is not part of the backend implementation.
+
+See [backend API](docs/backend-api.md) and [Lua API](docs/lua-api.md).
