@@ -13,7 +13,8 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use crate::{
     model::{
         BodyPayload, CaptureDetail, CaptureError, CaptureOutcome, CaptureSummary, ErrorStage,
-        HeaderValues, Modification, RequestData, ResponseData,
+        HeaderValues, InterceptorExecution, InterceptorKind, InterceptorRun, Modification,
+        RequestData, ResponseData,
     },
     workspace::now_millis,
 };
@@ -70,13 +71,13 @@ impl CaptureStore {
         &self,
         id: u64,
         request: &RequestData,
-        modifications: &[Modification],
+        _modifications: &[Modification],
     ) -> Result<()> {
         self.connection()?.execute(
             "UPDATE captures SET
                 method=?2, uri=?3, req_version=?4, req_headers=?5,
-                req_modifications=?6, stage='request',
-                updated_at=MAX(updated_at + 1, ?7)
+                stage='request',
+                updated_at=MAX(updated_at + 1, ?6)
              WHERE id=?1",
             params![
                 id as i64,
@@ -84,7 +85,6 @@ impl CaptureStore {
                 request.uri,
                 request.version,
                 serde_json::to_string(&request.headers)?,
-                serde_json::to_string(modifications)?,
                 now_millis() as i64,
             ],
         )?;
@@ -95,20 +95,19 @@ impl CaptureStore {
         &self,
         id: u64,
         response: &ResponseData,
-        modifications: &[Modification],
+        _modifications: &[Modification],
     ) -> Result<()> {
         self.connection()?.execute(
             "UPDATE captures SET
                 resp_status=?2, resp_version=?3, resp_headers=?4,
-                resp_modifications=?5, outcome='success', stage='completed',
-                updated_at=MAX(updated_at + 1, ?6)
+                outcome='success', stage='completed',
+                updated_at=MAX(updated_at + 1, ?5)
              WHERE id=?1",
             params![
                 id as i64,
                 response.status,
                 response.version,
                 serde_json::to_string(&response.headers)?,
-                serde_json::to_string(modifications)?,
                 now_millis() as i64,
             ],
         )?;
@@ -193,6 +192,45 @@ impl CaptureStore {
             "UPDATE captures SET updated_at=MAX(updated_at + 1, ?2) WHERE id=?1",
             params![id as i64, now_millis() as i64],
         )?;
+        Ok(())
+    }
+
+    pub fn record_interceptor_run(&self, id: u64, run: &InterceptorRun) -> Result<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO interceptor_script_contents (hash, content)
+             VALUES (?1, ?2)
+             ON CONFLICT(hash) DO NOTHING",
+            params![run.script_hash, run.content],
+        )?;
+        let stored: String = transaction.query_row(
+            "SELECT content FROM interceptor_script_contents WHERE hash=?1",
+            params![run.script_hash],
+            |row| row.get(0),
+        )?;
+        if stored != run.content {
+            return Err(anyhow!("interceptor script hash collision"));
+        }
+        transaction.execute(
+            "INSERT INTO capture_interceptor_runs (
+                capture_id, phase, position, name, script_hash, modifications, error
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                id as i64,
+                interceptor_phase_name(run.phase),
+                run.position as i64,
+                run.name,
+                run.script_hash,
+                serde_json::to_string(&run.modifications)?,
+                run.error,
+            ],
+        )?;
+        transaction.execute(
+            "UPDATE captures SET updated_at=MAX(updated_at + 1, ?2) WHERE id=?1",
+            params![id as i64, now_millis() as i64],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -288,15 +326,12 @@ impl CaptureStore {
         let mut statement = connection.prepare(
             "SELECT id, source, method, uri, req_version, req_headers,
                     resp_status, resp_version, resp_headers, outcome, stage,
-                    error_stage, error_kind, error_message, created_at, updated_at,
-                    req_modifications, resp_modifications
+                    error_stage, error_kind, error_message, created_at, updated_at
              FROM captures WHERE id=?1",
         )?;
         statement
             .query_row(params![id as i64], |row| {
                 let summary = self.summary_from_row(row)?;
-                let request_modifications: String = row.get(16)?;
-                let response_modifications: String = row.get(17)?;
                 let request_body = self
                     .read_body(
                         id,
@@ -321,9 +356,11 @@ impl CaptureStore {
                     summary,
                     request_body,
                     response_body,
-                    request_modifications: serde_json::from_str(&request_modifications)
+                    request_interceptors: self
+                        .interceptor_executions(id, InterceptorKind::Request)
                         .unwrap_or_default(),
-                    response_modifications: serde_json::from_str(&response_modifications)
+                    response_interceptors: self
+                        .interceptor_executions(id, InterceptorKind::Response)
                         .unwrap_or_default(),
                 })
             })
@@ -364,7 +401,25 @@ impl CaptureStore {
                 req_modifications TEXT NOT NULL DEFAULT '[]',
                 resp_modifications TEXT NOT NULL DEFAULT '[]'
             );
-            CREATE INDEX IF NOT EXISTS captures_created_at ON captures(created_at);",
+            CREATE INDEX IF NOT EXISTS captures_created_at ON captures(created_at);
+            CREATE TABLE IF NOT EXISTS interceptor_script_contents (
+                hash TEXT PRIMARY KEY,
+                content TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS capture_interceptor_runs (
+                capture_id INTEGER NOT NULL,
+                phase TEXT NOT NULL CHECK (phase IN ('request', 'response')),
+                position INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                script_hash TEXT NOT NULL,
+                modifications TEXT NOT NULL DEFAULT '[]',
+                error TEXT,
+                PRIMARY KEY (capture_id, phase, position),
+                FOREIGN KEY (capture_id) REFERENCES captures(id) ON DELETE CASCADE,
+                FOREIGN KEY (script_hash) REFERENCES interceptor_script_contents(hash)
+            );
+            CREATE INDEX IF NOT EXISTS capture_interceptor_runs_capture
+            ON capture_interceptor_runs(capture_id, phase, position);",
         )?;
         Ok(())
     }
@@ -372,7 +427,52 @@ impl CaptureStore {
     fn connection(&self) -> Result<Connection> {
         let connection = Connection::open(&self.database_path)?;
         connection.busy_timeout(Duration::from_secs(5))?;
+        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         Ok(connection)
+    }
+
+    fn interceptor_executions(
+        &self,
+        id: u64,
+        phase: InterceptorKind,
+    ) -> Result<Vec<InterceptorExecution>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT runs.position, runs.name, runs.script_hash, contents.content,
+                    runs.modifications, runs.error
+             FROM capture_interceptor_runs AS runs
+             JOIN interceptor_script_contents AS contents
+               ON contents.hash = runs.script_hash
+             WHERE runs.capture_id=?1 AND runs.phase=?2
+             ORDER BY runs.position ASC",
+        )?;
+        let executions = statement.query_map(
+            params![id as i64, interceptor_phase_name(phase)],
+            |row| {
+                let modifications: String = row.get(4)?;
+                Ok(InterceptorExecution {
+                    phase,
+                    position: row.get::<_, i64>(0)? as usize,
+                    name: row.get(1)?,
+                    script_hash: row.get(2)?,
+                    content: row.get(3)?,
+                    modifications: serde_json::from_str(&modifications).unwrap_or_default(),
+                    error: row.get(5)?,
+                })
+            },
+        )?;
+        executions
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    #[cfg(test)]
+    fn interceptor_source_count(&self) -> Result<usize> {
+        Ok(self.connection()?.query_row(
+            "SELECT COUNT(*) FROM interceptor_script_contents",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? as usize)
     }
 
     fn summary_from_row(&self, row: &Row<'_>) -> rusqlite::Result<CaptureSummary> {
@@ -519,6 +619,13 @@ fn error_stage_name(stage: ErrorStage) -> &'static str {
     }
 }
 
+fn interceptor_phase_name(phase: InterceptorKind) -> &'static str {
+    match phase {
+        InterceptorKind::Request => "request",
+        InterceptorKind::Response => "response",
+    }
+}
+
 fn parse_error_stage(stage: &str) -> ErrorStage {
     match stage {
         "tls_handshake" => ErrorStage::TlsHandshake,
@@ -537,7 +644,10 @@ mod tests {
     use flate2::{Compression, write::GzEncoder};
     use tempfile::tempdir;
 
-    use crate::model::{CaptureError, CaptureOutcome, ErrorStage, HeaderValues, RequestData};
+    use crate::model::{
+        CaptureError, CaptureOutcome, ErrorStage, HeaderValues, InterceptorKind, InterceptorRun,
+        RequestData, script_content_hash,
+    };
 
     use super::{BodySide, CaptureStore, decode_body};
 
@@ -633,5 +743,39 @@ mod tests {
         let after = store.get(id).unwrap().unwrap().summary.updated_at;
 
         assert!(after > before);
+    }
+
+    #[test]
+    fn interceptor_source_is_deduplicated_and_runs_are_ordered() {
+        let root = tempdir().unwrap();
+        let store = CaptureStore::open(7, root.path()).unwrap();
+        let id = store
+            .begin("127.0.0.1", &request("http://example.com"), "request")
+            .unwrap();
+        let source = "req.headers:set(\"x-test\", \"1\")";
+        let hash = script_content_hash(source);
+
+        for (position, name) in ["first", "second"].into_iter().enumerate() {
+            store
+                .record_interceptor_run(
+                    id,
+                    &InterceptorRun {
+                        phase: InterceptorKind::Request,
+                        position,
+                        name: name.into(),
+                        script_hash: hash.clone(),
+                        content: source.into(),
+                        modifications: vec![],
+                        error: None,
+                    },
+                )
+                .unwrap();
+        }
+
+        let detail = store.get(id).unwrap().unwrap();
+        assert_eq!(detail.request_interceptors.len(), 2);
+        assert_eq!(detail.request_interceptors[0].name, "first");
+        assert_eq!(detail.request_interceptors[0].content, source);
+        assert_eq!(store.interceptor_source_count().unwrap(), 1);
     }
 }

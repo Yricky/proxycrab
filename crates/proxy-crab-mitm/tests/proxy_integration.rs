@@ -7,7 +7,10 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use proxy_crab_mitm::{
     ProxyCrab,
     log_buffer::LogBuffer,
-    model::{CaptureOutcome, ProxyStatus},
+    model::{
+        CaptureOutcome, ProxyStatus, Script, ScriptKind, SessionInterceptor,
+        SessionInterceptors,
+    },
 };
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use tempfile::tempdir;
@@ -164,6 +167,53 @@ async fn captures_plain_http_and_hot_session_switches() {
 
     assert_eq!(runtime.list_captures(first.id, 10, None).unwrap().len(), 1);
     assert_eq!(runtime.list_captures(second.id, 10, None).unwrap().len(), 1);
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn session_interceptor_chain_executes_and_records_source() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let (upstream_port, upstream) = fixed_http_upstream().await;
+    let session = runtime.ensure_active_session().unwrap();
+    let source = "req.headers:set(\"x-session\", \"one\")";
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "session-header".into(),
+                content: source.into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "session-header".into(),
+                    enabled: true,
+                }],
+                response: vec![],
+            },
+        )
+        .unwrap();
+
+    let response = proxy_get(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/intercepted"),
+        &format!("127.0.0.1:{upstream_port}"),
+    )
+    .await;
+    assert!(response.contains("\r\n\r\nok"));
+
+    let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+    assert_eq!(capture.request.headers["x-session"], vec!["one"]);
+    let detail = runtime.capture(session.id, capture.id).unwrap().unwrap();
+    assert_eq!(detail.request_interceptors.len(), 1);
+    assert_eq!(detail.request_interceptors[0].name, "session-header");
+    assert_eq!(detail.request_interceptors[0].content, source);
+
     runtime.stop_proxy().await.unwrap();
     upstream.abort();
 }

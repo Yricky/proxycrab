@@ -36,7 +36,8 @@ use crate::{
         BodyReplacement, execute_request_lenient, execute_response_lenient, read_body_replacement,
     },
     model::{
-        CaptureError, ErrorStage, HeaderValues, ProxyStatus, RequestData, ResponseData, ScriptKind,
+        CaptureError, ErrorStage, HeaderValues, InterceptorKind, InterceptorRun, ProxyStatus,
+        RequestData, ResponseData, ScriptKind, SessionInterceptor, script_content_hash,
     },
     runtime::SessionPin,
     storage::{BodySide, CaptureStore},
@@ -49,6 +50,19 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CAPTURE_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CLIENT_CONNECTIONS: usize = 256;
 const BINARY_HEADER_PREFIX: &str = "\u{e000}proxy-crab-binary:v1:";
+
+#[derive(Debug, Clone)]
+struct InterceptorSnapshot {
+    name: String,
+    hash: String,
+    content: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SessionInterceptorSnapshot {
+    request: Vec<InterceptorSnapshot>,
+    response: Vec<InterceptorSnapshot>,
+}
 
 pub struct ProxyController {
     status: Arc<RwLock<ProxyStatus>>,
@@ -593,6 +607,16 @@ async fn handle_http_request(
     };
     let _capture_slot = runtime.acquire_capture_slot().await;
     let store = pin.store().clone();
+    let interceptor_snapshot =
+        match snapshot_session_interceptors(&runtime, pin.session_id()) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return text_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("failed to load session interceptors: {error}"),
+                );
+            }
+        };
     let downstream_upgrade = is_upgrade_request(&request).then(|| hyper::upgrade::on(&mut request));
     let (parts, incoming) = request.into_parts();
     let mut request_data = RequestData {
@@ -664,14 +688,9 @@ async fn handle_http_request(
     }
 
     let mut request_modifications = Vec::new();
-    for name in runtime.config().active_request_interceptors {
-        let script = match runtime.script(ScriptKind::RequestInterceptor, &name) {
-            Ok(script) => script,
-            Err(error) => {
-                note_script_error(&store, capture_id, &name, &error.to_string());
-                continue;
-            }
-        };
+    for (position, script) in interceptor_snapshot.request.iter().enumerate() {
+        let mut modifications = Vec::new();
+        let mut run_error = None;
         match execute_request_lenient(&script.content, &request_data) {
             Ok((effects, error)) => {
                 request_data.headers = effects.headers;
@@ -682,16 +701,48 @@ async fn handle_http_request(
                             remove_header_value(&mut request_data.headers, "content-encoding");
                         }
                         Err(error) => {
-                            note_script_error(&store, capture_id, &name, &error.to_string())
+                            let message = error.to_string();
+                            note_script_error(&store, capture_id, &script.name, &message);
+                            append_run_error(&mut run_error, message);
                         }
                     }
                 }
-                request_modifications.extend(effects.modifications);
+                modifications = effects.modifications;
+                request_modifications.extend(modifications.clone());
                 if let Some(error) = error {
-                    note_script_error(&store, capture_id, &name, &error);
+                    note_script_error(&store, capture_id, &script.name, &error);
+                    append_run_error(&mut run_error, error);
                 }
             }
-            Err(error) => note_script_error(&store, capture_id, &name, &error.to_string()),
+            Err(error) => {
+                let message = error.to_string();
+                note_script_error(&store, capture_id, &script.name, &message);
+                run_error = Some(message);
+            }
+        }
+        if let Err(error) = store.record_interceptor_run(
+            capture_id,
+            &InterceptorRun {
+                phase: InterceptorKind::Request,
+                position,
+                name: script.name.clone(),
+                script_hash: script.hash.clone(),
+                content: script.content.clone(),
+                modifications,
+                error: run_error,
+            },
+        ) {
+            fail_capture(
+                &store,
+                capture_id,
+                ErrorStage::Interceptor,
+                "interceptor_history_store_failed",
+                &error.to_string(),
+            );
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "capture storage unavailable",
+            );
         }
     }
     if request_modifications.iter().any(|item| {
@@ -857,14 +908,9 @@ async fn handle_http_request(
     }
 
     let mut response_modifications = Vec::new();
-    for name in runtime.config().active_response_interceptors {
-        let script = match runtime.script(ScriptKind::ResponseInterceptor, &name) {
-            Ok(script) => script,
-            Err(error) => {
-                note_script_error(&store, capture_id, &name, &error.to_string());
-                continue;
-            }
-        };
+    for (position, script) in interceptor_snapshot.response.iter().enumerate() {
+        let mut modifications = Vec::new();
+        let mut run_error = None;
         match execute_response_lenient(&script.content, &response_data) {
             Ok((effects, error)) => {
                 response_data.headers = effects.headers;
@@ -875,16 +921,48 @@ async fn handle_http_request(
                             remove_header_value(&mut response_data.headers, "content-encoding");
                         }
                         Err(error) => {
-                            note_script_error(&store, capture_id, &name, &error.to_string())
+                            let message = error.to_string();
+                            note_script_error(&store, capture_id, &script.name, &message);
+                            append_run_error(&mut run_error, message);
                         }
                     }
                 }
-                response_modifications.extend(effects.modifications);
+                modifications = effects.modifications;
+                response_modifications.extend(modifications.clone());
                 if let Some(error) = error {
-                    note_script_error(&store, capture_id, &name, &error);
+                    note_script_error(&store, capture_id, &script.name, &error);
+                    append_run_error(&mut run_error, error);
                 }
             }
-            Err(error) => note_script_error(&store, capture_id, &name, &error.to_string()),
+            Err(error) => {
+                let message = error.to_string();
+                note_script_error(&store, capture_id, &script.name, &message);
+                run_error = Some(message);
+            }
+        }
+        if let Err(error) = store.record_interceptor_run(
+            capture_id,
+            &InterceptorRun {
+                phase: InterceptorKind::Response,
+                position,
+                name: script.name.clone(),
+                script_hash: script.hash.clone(),
+                content: script.content.clone(),
+                modifications,
+                error: run_error,
+            },
+        ) {
+            fail_capture(
+                &store,
+                capture_id,
+                ErrorStage::Interceptor,
+                "interceptor_history_store_failed",
+                &error.to_string(),
+            );
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "capture storage unavailable",
+            );
         }
     }
     if response_modifications.iter().any(|item| {
@@ -903,6 +981,72 @@ async fn handle_http_request(
         response_body,
         request_data.method.eq_ignore_ascii_case("HEAD"),
     )
+}
+
+fn snapshot_session_interceptors(
+    runtime: &ProxyCrab,
+    session_id: u64,
+) -> Result<SessionInterceptorSnapshot> {
+    let chains = runtime.session_interceptors(session_id)?;
+    Ok(SessionInterceptorSnapshot {
+        request: resolve_interceptor_snapshots(
+            runtime,
+            session_id,
+            InterceptorKind::Request,
+            ScriptKind::RequestInterceptor,
+            chains.request,
+        ),
+        response: resolve_interceptor_snapshots(
+            runtime,
+            session_id,
+            InterceptorKind::Response,
+            ScriptKind::ResponseInterceptor,
+            chains.response,
+        ),
+    })
+}
+
+fn resolve_interceptor_snapshots(
+    runtime: &ProxyCrab,
+    session_id: u64,
+    phase: InterceptorKind,
+    kind: ScriptKind,
+    entries: Vec<SessionInterceptor>,
+) -> Vec<InterceptorSnapshot> {
+    entries
+        .into_iter()
+        .filter(|entry| entry.enabled)
+        .filter_map(|entry| match runtime.script(kind, &entry.name) {
+            Ok(script) => Some(InterceptorSnapshot {
+                name: script.name,
+                hash: script_content_hash(&script.content),
+                content: script.content,
+            }),
+            Err(error) => {
+                let message = format!(
+                    "session {session_id} {} interceptor {} is unavailable and was skipped: {error}",
+                    match phase {
+                        InterceptorKind::Request => "request",
+                        InterceptorKind::Response => "response",
+                    },
+                    entry.name
+                );
+                tracing::warn!("{message}");
+                runtime.log_buffer().push("WARN", message);
+                None
+            }
+        })
+        .collect()
+}
+
+fn append_run_error(current: &mut Option<String>, next: String) {
+    match current {
+        Some(current) => {
+            current.push_str("; ");
+            current.push_str(&next);
+        }
+        None => *current = Some(next),
+    }
 }
 
 async fn tunnel_connect<C>(

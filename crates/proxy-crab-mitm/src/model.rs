@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 pub type HeaderValues = BTreeMap<String, Vec<String>>;
 pub const MAX_SESSION_INTERCEPTORS_PER_KIND: usize = 12;
@@ -267,6 +268,32 @@ pub enum Modification {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InterceptorExecution {
+    pub phase: InterceptorKind,
+    pub position: usize,
+    pub name: String,
+    pub script_hash: String,
+    pub content: String,
+    pub modifications: Vec<Modification>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterceptorRun {
+    pub phase: InterceptorKind,
+    pub position: usize,
+    pub name: String,
+    pub script_hash: String,
+    pub content: String,
+    pub modifications: Vec<Modification>,
+    pub error: Option<String>,
+}
+
+pub fn script_content_hash(content: &str) -> String {
+    format!("{:x}", Sha256::digest(content.as_bytes()))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CaptureSummary {
     pub id: u64,
     pub session_id: u64,
@@ -286,8 +313,8 @@ pub struct CaptureDetail {
     pub summary: CaptureSummary,
     pub request_body: BodyPayload,
     pub response_body: BodyPayload,
-    pub request_modifications: Vec<Modification>,
-    pub response_modifications: Vec<Modification>,
+    pub request_interceptors: Vec<InterceptorExecution>,
+    pub response_interceptors: Vec<InterceptorExecution>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
