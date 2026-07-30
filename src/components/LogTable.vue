@@ -389,7 +389,7 @@ function cellClass(index: number, value: string): string {
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-strong);
 }
-.lt-header-cell {
+.lt-cell.lt-header-cell {
   font-weight: 600;
   color: var(--text-secondary);
   font-size: 12px;
@@ -398,9 +398,15 @@ function cellClass(index: number, value: string): string {
   align-items: center;
   position: relative;
   user-select: none;
+  padding: 0;
+}
+.lt-header-cell:hover {
+  color: var(--text);
+  background: var(--bg-hover);
 }
 .lt-header-cell.sortable {
   cursor: pointer;
+  padding: 0 8px;
 }
 .lt-header-name {
   display: inline-flex;
@@ -427,7 +433,6 @@ function cellClass(index: number, value: string): string {
 }
 .lt-header-menu:hover:not(:disabled) {
   color: var(--text);
-  background: var(--bg-hover);
 }
 .lt-header-menu:disabled {
   cursor: default;

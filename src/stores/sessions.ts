@@ -60,15 +60,17 @@ export const sessionsStore = reactive({
     }
   },
 
-  async rename(id: number, name: string, description?: string | null): Promise<void> {
+  async update(id: number, name: string, description: string | null): Promise<boolean> {
     try {
       await backend.updateSession(id, {
         name,
-        ...(description !== undefined ? { description } : {}),
+        description,
       });
       await this.refresh();
+      return true;
     } catch (error) {
-      reportError(error, "重命名会话失败");
+      reportError(error, "更新会话失败");
+      return false;
     }
   },
 

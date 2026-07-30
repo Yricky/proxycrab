@@ -408,7 +408,7 @@ impl ProxyCrabManager for MitmManager {
             },
             response: detail.summary.response.map(|response| ResponseDetail {
                 status: response.status,
-                status_text: response.status.to_string(),
+                status_text: status_text(response.status),
                 version: response.version,
                 headers: flatten_headers(&response.headers),
                 body: detail.response_body,
@@ -683,6 +683,14 @@ fn flatten_headers(headers: &HeaderValues) -> Vec<HeaderItem> {
         .collect()
 }
 
+fn status_text(status: u16) -> String {
+    axum::http::StatusCode::from_u16(status)
+        .ok()
+        .and_then(|status| status.canonical_reason())
+        .unwrap_or_default()
+        .to_owned()
+}
+
 fn outcome_name(outcome: CaptureOutcome) -> &'static str {
     match outcome {
         CaptureOutcome::InProgress => "in_progress",
@@ -736,7 +744,14 @@ mod tests {
         UpdateScriptRequest,
     };
 
-    use super::{MitmManager, ProxyCrabManager};
+    use super::{MitmManager, ProxyCrabManager, status_text};
+
+    #[test]
+    fn response_status_text_uses_the_canonical_reason() {
+        assert_eq!(status_text(200), "OK");
+        assert_eq!(status_text(404), "Not Found");
+        assert_eq!(status_text(999), "");
+    }
 
     fn request(path: &str) -> RequestData {
         RequestData {

@@ -4,6 +4,7 @@ import { sessionsStore } from "../stores/sessions";
 import { confirmDialog, openContextMenu } from "../stores/dialog";
 import { formatRelativeTime } from "../utils/format";
 import { appStore } from "../stores/app";
+import type { SessionMetadata } from "../api/types";
 import {
   Io5Add,
   Io5Checkmark,
@@ -14,35 +15,39 @@ import {
 } from "vue-icons-plus/io5";
 
 const creating = ref(false);
-const newName = ref("");
-const newDesc = ref("");
-const renamingId = ref<number | null>(null);
-const renameText = ref("");
+const editingId = ref<number | null>(null);
+const editName = ref("");
+const editDesc = ref("");
 
-async function submitCreate(): Promise<void> {
-  const session = await sessionsStore.create(
-    newName.value.trim(),
-    newDesc.value.trim() || null,
+async function createSession(): Promise<void> {
+  if (creating.value) return;
+  creating.value = true;
+  const session = await sessionsStore.create("", null);
+  creating.value = false;
+  if (!session) return;
+  sessionsStore.view(session.id);
+  appStore.toast("会话已创建", "success");
+}
+
+function startEdit(session: SessionMetadata): void {
+  editingId.value = session.id;
+  editName.value = session.name;
+  editDesc.value = session.description ?? "";
+}
+
+async function submitEdit(): Promise<void> {
+  if (editingId.value === null) return;
+  const name = editName.value.trim();
+  if (!name) return;
+  const updated = await sessionsStore.update(
+    editingId.value,
+    name,
+    editDesc.value.trim() || null,
   );
-  if (session) {
-    creating.value = false;
-    newName.value = "";
-    newDesc.value = "";
-    sessionsStore.view(session.id);
-    appStore.toast("会话已创建", "success");
+  if (updated) {
+    editingId.value = null;
+    appStore.toast("会话信息已更新", "success");
   }
-}
-
-function startRename(id: number, current: string): void {
-  renamingId.value = id;
-  renameText.value = current;
-}
-
-async function submitRename(): Promise<void> {
-  if (renamingId.value === null) return;
-  const name = renameText.value.trim();
-  if (name) await sessionsStore.rename(renamingId.value, name);
-  renamingId.value = null;
 }
 
 async function removeSession(id: number, name: string): Promise<void> {
@@ -55,22 +60,22 @@ async function removeSession(id: number, name: string): Promise<void> {
   if (ok) await sessionsStore.remove(id);
 }
 
-function sessionMenu(event: MouseEvent, id: number, name: string): void {
+function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
   openContextMenu(event, [
-    { label: "查看", icon: Io5Eye, action: () => sessionsStore.view(id) },
+    { label: "查看", icon: Io5Eye, action: () => sessionsStore.view(session.id) },
     {
       label: "设为活跃会话",
       icon: Io5RadioButtonOn,
-      disabled: sessionsStore.activeSessionId === id,
-      action: () => void sessionsStore.activate(id),
+      disabled: sessionsStore.activeSessionId === session.id,
+      action: () => void sessionsStore.activate(session.id),
     },
-    { label: "重命名", icon: Io5Create, action: () => startRename(id, name) },
+    { label: "编辑会话", icon: Io5Create, action: () => startEdit(session) },
     {
       label: "删除",
       icon: Io5Trash,
       danger: true,
-      disabled: sessionsStore.activeSessionId === id,
-      action: () => void removeSession(id, name),
+      disabled: sessionsStore.activeSessionId === session.id,
+      action: () => void removeSession(session.id, session.name),
     },
   ]);
 }
@@ -80,18 +85,14 @@ function sessionMenu(event: MouseEvent, id: number, name: string): void {
   <aside class="sidebar">
     <div class="sb-header">
       <span class="sb-title">会话</span>
-      <button class="btn icon" title="新建会话" @click="creating = !creating">
+      <button
+        class="btn icon"
+        title="新建会话"
+        :disabled="creating"
+        @click="createSession"
+      >
         <Io5Add :size="16" />
       </button>
-    </div>
-
-    <div v-if="creating" class="sb-create">
-      <input v-model="newName" class="input" placeholder="会话名称（可选）" @keyup.enter="submitCreate" />
-      <input v-model="newDesc" class="input" placeholder="描述（可选）" @keyup.enter="submitCreate" />
-      <div class="sb-create-actions">
-        <button class="btn" @click="creating = false">取消</button>
-        <button class="btn primary" @click="submitCreate">创建</button>
-      </div>
     </div>
 
     <div class="sb-list">
@@ -103,19 +104,33 @@ function sessionMenu(event: MouseEvent, id: number, name: string): void {
           viewing: sessionsStore.viewingSessionId === session.id,
         }"
         @click="sessionsStore.view(session.id)"
-        @contextmenu="sessionMenu($event, session.id, session.name)"
-        @dblclick="startRename(session.id, session.name)"
+        @contextmenu="sessionMenu($event, session)"
+        @dblclick="startEdit(session)"
       >
-        <template v-if="renamingId === session.id">
-          <input
-            v-model="renameText"
-            class="input sb-rename"
-            autofocus
-            @keyup.enter="submitRename"
-            @keyup.esc="renamingId = null"
-            @blur="submitRename"
-            @click.stop
-          />
+        <template v-if="editingId === session.id">
+          <div class="sb-edit" @click.stop @dblclick.stop>
+            <input
+              v-model="editName"
+              class="input"
+              placeholder="会话名称"
+              autofocus
+              @keyup.enter="submitEdit"
+              @keyup.esc="editingId = null"
+            />
+            <input
+              v-model="editDesc"
+              class="input"
+              placeholder="描述（可选）"
+              @keyup.enter="submitEdit"
+              @keyup.esc="editingId = null"
+            />
+            <div class="sb-edit-actions">
+              <button class="btn" @click="editingId = null">取消</button>
+              <button class="btn primary" :disabled="!editName.trim()" @click="submitEdit">
+                保存
+              </button>
+            </div>
+          </div>
         </template>
         <template v-else>
           <div class="sb-item-top">
@@ -163,14 +178,12 @@ function sessionMenu(event: MouseEvent, id: number, name: string): void {
   font-weight: 600;
   color: var(--text-secondary);
 }
-.sb-create {
+.sb-edit {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 8px;
-  border-bottom: 1px solid var(--border);
 }
-.sb-create-actions {
+.sb-edit-actions {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
@@ -220,7 +233,7 @@ function sessionMenu(event: MouseEvent, id: number, name: string): void {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sb-rename {
+.sb-edit .input {
   width: 100%;
 }
 </style>

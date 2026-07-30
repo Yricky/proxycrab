@@ -4,6 +4,7 @@ import { useBackend } from "../api";
 import type { BodyPayload, HeaderItem, LogDetail, Modification } from "../api/types";
 import { appStore, reportError } from "../stores/app";
 import { formatBytes } from "../utils/format";
+import { bodyLanguage } from "../utils/body-language";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import { Io5Checkmark, Io5Copy, Io5Warning } from "vue-icons-plus/io5";
 
@@ -218,20 +219,9 @@ const queryParams = computed<QueryParam[]>(() => {
 
 // ---------- body viewing ----------
 
-function guessTextLanguage(content: string): string {
-  const trimmed = content.trimStart();
-  return trimmed.startsWith("{") || trimmed.startsWith("[") ? "json" : "plaintext";
-}
-
-function bodyLanguage(body: BodyPayload): string {
-  if (body.type === "json") return "json";
-  if (body.type === "text") return guessTextLanguage(body.content);
-  return "plaintext";
-}
-
 /** 可格式化（pretty/raw 切换）仅适用于“看起来是 JSON 的文本”。 */
-function bodyFormattable(body: BodyPayload): boolean {
-  return body.type === "text" && bodyLanguage(body) === "json";
+function bodyFormattable(body: BodyPayload, headers: HeaderItem[]): boolean {
+  return body.type === "text" && bodyLanguage(body, headers) === "json";
 }
 
 const prettyMode = ref<Record<string, boolean>>({});
@@ -241,10 +231,14 @@ function isPretty(which: "req" | "resp", body: BodyPayload): boolean {
   return prettyMode.value[which] ?? true;
 }
 
-function bodyEditorValue(which: "req" | "resp", body: BodyPayload): string {
+function bodyEditorValue(
+  which: "req" | "resp",
+  body: BodyPayload,
+  headers: HeaderItem[],
+): string {
   if (body.type === "json") return JSON.stringify(body.content, null, 2);
   if (body.type === "text") {
-    if (isPretty(which, body) && bodyLanguage(body) === "json") {
+    if (isPretty(which, body) && bodyLanguage(body, headers) === "json") {
       try {
         return JSON.stringify(JSON.parse(body.content), null, 2);
       } catch {
@@ -411,7 +405,7 @@ function headerCount(headers: HeaderItem[]): string {
           <div class="card-title body-title">
             <span>请求体</span>
             <span class="body-tools">
-              <template v-if="bodyFormattable(detail.request.body)">
+              <template v-if="bodyFormattable(detail.request.body, detail.request.headers)">
                 <button
                   class="tool-btn"
                   :class="{ on: isPretty('req', detail.request.body) }"
@@ -447,8 +441,10 @@ function headerCount(headers: HeaderItem[]): string {
           </div>
           <div v-else class="body-editor">
             <MonacoEditor
-              :model-value="bodyEditorValue('req', detail.request.body)"
-              :language="bodyLanguage(detail.request.body)"
+              :model-value="
+                bodyEditorValue('req', detail.request.body, detail.request.headers)
+              "
+              :language="bodyLanguage(detail.request.body, detail.request.headers)"
               readonly
             />
           </div>
@@ -482,7 +478,7 @@ function headerCount(headers: HeaderItem[]): string {
             <div class="card-title body-title">
               <span>响应体</span>
               <span class="body-tools">
-                <template v-if="bodyFormattable(detail.response.body)">
+                <template v-if="bodyFormattable(detail.response.body, detail.response.headers)">
                   <button
                     class="tool-btn"
                     :class="{ on: isPretty('resp', detail.response.body) }"
@@ -518,8 +514,10 @@ function headerCount(headers: HeaderItem[]): string {
             </div>
             <div v-else class="body-editor">
               <MonacoEditor
-                :model-value="bodyEditorValue('resp', detail.response.body)"
-                :language="bodyLanguage(detail.response.body)"
+                :model-value="
+                  bodyEditorValue('resp', detail.response.body, detail.response.headers)
+                "
+                :language="bodyLanguage(detail.response.body, detail.response.headers)"
                 readonly
               />
             </div>
