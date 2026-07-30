@@ -24,8 +24,11 @@ export interface OpenWindowOptions {
   cascade?: boolean;
 }
 
+export type WindowCloseGuard = () => boolean | Promise<boolean>;
+
 let zCounter = 100;
 let cascadeOffset = 0;
+const closeGuards = new Map<string, WindowCloseGuard>();
 
 export const windowsStore = reactive({
   windows: [] as WindowState[],
@@ -54,9 +57,23 @@ export const windowsStore = reactive({
     return win;
   },
 
-  close(id: string): void {
+  async close(id: string): Promise<boolean> {
+    const guard = closeGuards.get(id);
+    if (guard && !(await guard())) return false;
     const index = this.windows.findIndex((w) => w.id === id);
-    if (index >= 0) this.windows.splice(index, 1);
+    if (index >= 0) {
+      this.windows.splice(index, 1);
+      closeGuards.delete(id);
+    }
+    return index >= 0;
+  },
+
+  registerCloseGuard(id: string, guard: WindowCloseGuard): void {
+    closeGuards.set(id, guard);
+  },
+
+  unregisterCloseGuard(id: string): void {
+    closeGuards.delete(id);
   },
 
   focus(id: string): void {

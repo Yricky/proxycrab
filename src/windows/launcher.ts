@@ -48,8 +48,8 @@ export function openColumnManager(): void {
   windowsStore.open("column-manager", {
     title: "自定义列管理器",
     component: ColumnManagerWindow,
-    width: 560,
-    height: 440,
+    width: 960,
+    height: 600,
   });
 }
 

@@ -64,6 +64,10 @@ function startResize(dir: ResizeDir, event: PointerEvent): void {
 }
 
 const dirs: ResizeDir[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
+
+function closeWindow(): void {
+  void windowsStore.close(props.win.id);
+}
 </script>
 
 <template>
@@ -80,7 +84,7 @@ const dirs: ResizeDir[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
   >
     <div class="fw-titlebar" @pointerdown="startDrag">
       <span class="fw-title">{{ win.title }}</span>
-      <button class="btn icon fw-close" title="关闭" @click="windowsStore.close(win.id)">
+      <button class="btn icon fw-close" title="关闭" @click="closeWindow">
         <Io5Close :size="16" />
       </button>
     </div>

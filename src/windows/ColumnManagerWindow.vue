@@ -1,84 +1,182 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { Io5Add, Io5Trash } from "vue-icons-plus/io5";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  Io5Add,
+  Io5Checkmark,
+  Io5Close,
+  Io5Create,
+  Io5Play,
+  Io5Save,
+  Io5Trash,
+} from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type { Column, Script } from "../api/types";
-import { reportError } from "../stores/app";
+import type { Script } from "../api/types";
+import MonacoEditor from "../components/MonacoEditor.vue";
+import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 import { logsStore } from "../stores/logs";
 import { sessionsStore } from "../stores/sessions";
-import { openScriptEditor } from "./launcher";
+import { windowsStore } from "../stores/windows";
 
+const WINDOW_ID = "column-manager";
 const backend = useBackend();
 
+const root = ref<HTMLElement | null>(null);
+const editor = ref<{ focus: () => void } | null>(null);
+const renameInput = ref<HTMLInputElement | null>(null);
 const scripts = ref<Script[]>([]);
-const columns = ref<Column[]>([]);
+const selectedName = ref<string | null>(null);
+const content = ref("");
 const newScriptName = ref("");
+const dirty = ref(false);
+const saving = ref(false);
+const renamingName = ref<string | null>(null);
+const renameValue = ref("");
+const debugLogId = ref("");
+const debugging = ref(false);
+const debugResult = ref<string | null>(null);
+const debugFailed = ref(false);
 
-type AddKind = "method" | "uri" | "code" | "source" | "stage" | "script";
-const addKind = ref<AddKind>("method");
-const addScriptName = ref("");
-
-const BUILTIN_KINDS: { value: AddKind; label: string }[] = [
-  { value: "method", label: "方法" },
-  { value: "uri", label: "URI" },
-  { value: "code", label: "状态码" },
-  { value: "source", label: "来源" },
-  { value: "stage", label: "阶段" },
-  { value: "script", label: "脚本列" },
-];
-
-const KIND_LABELS: Record<string, string> = {
-  method: "方法",
-  uri: "URI",
-  code: "状态码",
-  source: "来源",
-  stage: "阶段",
-};
-
-const canAdd = computed(
-  () => addKind.value !== "script" || addScriptName.value.length > 0,
+const selectedScript = computed(
+  () => scripts.value.find((script) => script.name === selectedName.value) ?? null,
 );
-
-function columnName(col: Column): string {
-  return col.kind === "script" ? col.script_name : (KIND_LABELS[col.kind] ?? col.kind);
-}
 
 function validateName(name: string): string | null {
   if (!name) return "名称不能为空";
-  if (name.includes("/") || name.includes("\\")) return "名称不能包含路径分隔符（/ 或 \\）";
+  if (name.length > 128) return "名称不能超过 128 个字符";
+  if (name === "." || name === ".." || !/^[\p{L}\p{N}._-]+$/u.test(name)) {
+    return "名称只能包含字母、数字、点、短横线和下划线";
+  }
   return null;
 }
 
-async function refreshScripts(): Promise<void> {
+function clearDebugResult(): void {
+  debugResult.value = null;
+  debugFailed.value = false;
+}
+
+function loadScript(script: Script | null): void {
+  selectedName.value = script?.name ?? null;
+  content.value = script?.content ?? "";
+  dirty.value = false;
+  renamingName.value = null;
+  clearDebugResult();
+  if (script) void nextTick(() => editor.value?.focus());
+}
+
+async function refreshScripts(preferredName?: string): Promise<void> {
   try {
     scripts.value = await backend.listColumnScripts();
-    if (!scripts.value.some((s) => s.name === addScriptName.value)) {
-      addScriptName.value = scripts.value[0]?.name ?? "";
-    }
+    const next =
+      scripts.value.find((script) => script.name === preferredName) ??
+      scripts.value.find((script) => script.name === selectedName.value) ??
+      scripts.value[0] ??
+      null;
+    loadScript(next);
   } catch (error) {
     reportError(error, "加载列脚本失败");
   }
 }
 
-async function refreshColumns(): Promise<void> {
-  const sessionId = sessionsStore.viewingSessionId;
-  if (sessionId === null) {
-    columns.value = [];
-    return;
-  }
+async function confirmDiscard(): Promise<boolean> {
+  if (!dirty.value) return true;
+  return confirmDialog({
+    title: "放弃未保存更改",
+    message: `列脚本「${selectedName.value ?? ""}」包含未保存的更改，确定放弃吗？`,
+    confirmText: "放弃",
+    danger: true,
+  });
+}
+
+async function selectScript(script: Script): Promise<void> {
+  if (script.name === selectedName.value) return;
+  if (!(await confirmDiscard())) return;
+  loadScript(script);
+}
+
+function onContentChange(value: string): void {
+  content.value = value;
+  dirty.value = value !== selectedScript.value?.content;
+  clearDebugResult();
+}
+
+async function persist(showToast: boolean): Promise<{ ok: true } | { ok: false; message: string }> {
+  const name = selectedName.value;
+  if (!name || saving.value) return { ok: false, message: "没有可保存的列脚本" };
+  saving.value = true;
   try {
-    columns.value = (await backend.getSessionView(sessionId)).columns;
+    await backend.updateColumnScript(name, { content: content.value });
+    const item = scripts.value.find((script) => script.name === name);
+    if (item) item.content = content.value;
+    dirty.value = false;
+    if (showToast) appStore.toast("已保存", "success");
+    return { ok: true };
   } catch (error) {
-    reportError(error, "加载可见列失败");
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, message };
+  } finally {
+    saving.value = false;
   }
 }
 
-async function saveColumns(next: Column[]): Promise<void> {
+async function save(): Promise<void> {
+  const result = await persist(true);
+  if (!result.ok) reportError(result.message, "保存失败");
+}
+
+async function saveAndRun(): Promise<void> {
+  if (debugging.value) return;
   const sessionId = sessionsStore.viewingSessionId;
-  if (sessionId === null) return;
-  columns.value = (await backend.replaceSessionView(sessionId, { columns: next })).columns;
-  await logsStore.refreshView();
+  if (sessionId === null) {
+    debugResult.value = "请先选择会话";
+    debugFailed.value = true;
+    return;
+  }
+  const logId = Number(debugLogId.value.trim());
+  if (!Number.isSafeInteger(logId) || logId <= 0) {
+    debugResult.value = "Log ID 必须为正整数";
+    debugFailed.value = true;
+    return;
+  }
+
+  debugging.value = true;
+  clearDebugResult();
+  const saveResult = await persist(false);
+  if (!saveResult.ok) {
+    debugResult.value = saveResult.message;
+    debugFailed.value = true;
+    debugging.value = false;
+    return;
+  }
+
+  try {
+    const payload = await backend.getLogViews({
+      session_id: sessionId,
+      logs: [{ id: logId }],
+      view: {
+        columns: [{ kind: "script", script_name: selectedName.value!, width: 160 }],
+      },
+    });
+    const exception = payload.exceptions.find((item) => item.id === logId);
+    if (exception) {
+      debugResult.value = exception.message;
+      debugFailed.value = true;
+      return;
+    }
+    const row = payload.rows.find((item) => item.id === logId);
+    if (!row) {
+      debugResult.value = `Log ${logId} 不存在`;
+      debugFailed.value = true;
+      return;
+    }
+    debugResult.value = row.cells[0] ?? "";
+    debugFailed.value = false;
+  } catch (error) {
+    debugResult.value = error instanceof Error ? error.message : String(error);
+    debugFailed.value = true;
+  } finally {
+    debugging.value = false;
+  }
 }
 
 async function createScript(): Promise<void> {
@@ -88,140 +186,213 @@ async function createScript(): Promise<void> {
     reportError(problem);
     return;
   }
+  if (!(await confirmDiscard())) return;
   try {
     await backend.createColumnScript({ name, content: "" });
     newScriptName.value = "";
-    await refreshScripts();
-    openScriptEditor("column", name);
+    await refreshScripts(name);
   } catch (error) {
     reportError(error, "创建列脚本失败");
   }
 }
 
+function startRename(script: Script): void {
+  renamingName.value = script.name;
+  renameValue.value = script.name;
+  void nextTick(() => {
+    renameInput.value?.focus();
+    renameInput.value?.select();
+  });
+}
+
+function cancelRename(): void {
+  renamingName.value = null;
+  renameValue.value = "";
+}
+
+async function commitRename(script: Script): Promise<void> {
+  const nextName = renameValue.value.trim();
+  const problem = validateName(nextName);
+  if (problem) {
+    reportError(problem);
+    return;
+  }
+  if (nextName === script.name) {
+    cancelRename();
+    return;
+  }
+  try {
+    await backend.updateColumnScript(script.name, { name: nextName });
+    script.name = nextName;
+    if (selectedName.value === renamingName.value) selectedName.value = nextName;
+    cancelRename();
+    clearDebugResult();
+    await logsStore.refreshView();
+  } catch (error) {
+    reportError(error, "重命名列脚本失败");
+  }
+}
+
 async function removeScript(script: Script): Promise<void> {
+  const selectedAndDirty = script.name === selectedName.value && dirty.value;
   const ok = await confirmDialog({
     title: "删除列脚本",
-    message: `确定删除列脚本「${script.name}」吗？该操作不可撤销。`,
+    message: selectedAndDirty
+      ? `列脚本「${script.name}」包含未保存的更改。确定删除吗？该操作不可撤销。`
+      : `确定删除列脚本「${script.name}」吗？该操作不可撤销。`,
     confirmText: "删除",
     danger: true,
   });
   if (!ok) return;
   try {
     await backend.deleteColumnScript(script.name);
-    await refreshScripts();
+    scripts.value = scripts.value.filter((item) => item.name !== script.name);
+    if (selectedName.value === script.name) loadScript(scripts.value[0] ?? null);
     await logsStore.refreshView();
   } catch (error) {
     reportError(error, "删除列脚本失败");
   }
 }
 
-async function updateWidth(index: number, col: Column, event: Event): Promise<void> {
-  const width = Number((event.target as HTMLInputElement).value);
-  if (!Number.isFinite(width) || width <= 0) {
-    reportError("宽度必须为正数");
-    return;
-  }
-  if (width === col.width) return;
-  try {
-    const next = [...columns.value];
-    next[index] = { ...col, width };
-    await saveColumns(next);
-  } catch (error) {
-    reportError(error, "更新列宽失败");
-    await refreshColumns();
+function onKeydown(event: KeyboardEvent): void {
+  if (
+    (event.metaKey || event.ctrlKey) &&
+    event.key.toLowerCase() === "s" &&
+    root.value?.contains(document.activeElement)
+  ) {
+    event.preventDefault();
+    void save();
   }
 }
 
-async function removeColumn(index: number): Promise<void> {
-  try {
-    await saveColumns(columns.value.filter((_, itemIndex) => itemIndex !== index));
-  } catch (error) {
-    reportError(error, "删除列失败");
-  }
-}
-
-async function addColumn(): Promise<void> {
-  const column: Column =
-    addKind.value === "script"
-      ? { kind: "script", script_name: addScriptName.value, width: 160 }
-      : { kind: addKind.value, width: 160 };
-  try {
-    await saveColumns([...columns.value, column]);
-  } catch (error) {
-    reportError(error, "添加列失败");
-  }
-}
+watch(
+  () => sessionsStore.viewingSessionId,
+  () => clearDebugResult(),
+);
 
 onMounted(() => {
+  windowsStore.registerCloseGuard(WINDOW_ID, confirmDiscard);
+  window.addEventListener("keydown", onKeydown);
   void refreshScripts();
-  void refreshColumns();
+});
+
+onBeforeUnmount(() => {
+  windowsStore.unregisterCloseGuard(WINDOW_ID);
+  window.removeEventListener("keydown", onKeydown);
 });
 </script>
 
 <template>
-  <div class="cm-root">
-    <section class="cm-section">
-      <h3 class="section-title">列脚本</h3>
-      <div class="cm-actions">
+  <div ref="root" class="cm-root">
+    <aside class="cm-sidebar">
+      <div class="cm-sidebar-title">列脚本</div>
+      <div class="cm-create">
         <input
           v-model="newScriptName"
-          class="input cm-name-input"
+          class="input"
           placeholder="新列脚本名"
           @keyup.enter="createScript"
         />
-        <button class="btn primary" @click="createScript"><Io5Add :size="14" /> 新建</button>
+        <button class="btn icon primary" title="新建" @click="createScript">
+          <Io5Add :size="15" />
+        </button>
       </div>
       <div class="cm-script-list">
-        <div v-if="!scripts.length" class="empty-hint">暂无列脚本</div>
-        <div v-for="script in scripts" :key="script.name" class="cm-row">
-          <span
-            class="cm-name mono clickable"
-            :title="`编辑 ${script.name}`"
-            @click="openScriptEditor('column', script.name)"
-          >
-            {{ script.name }}
-          </span>
-          <span class="cm-spacer" />
-          <button class="btn icon cm-danger" title="删除" @click="removeScript(script)">
-            <Io5Trash :size="14" />
-          </button>
+        <div v-if="!scripts.length" class="empty-hint cm-list-empty">暂无列脚本</div>
+        <div
+          v-for="script in scripts"
+          :key="script.name"
+          class="cm-script-row"
+          :class="{ active: selectedName === script.name }"
+          @click="selectScript(script)"
+        >
+          <template v-if="renamingName === script.name">
+            <input
+              ref="renameInput"
+              v-model="renameValue"
+              class="input cm-rename-input mono"
+              @click.stop
+              @keyup.enter="commitRename(script)"
+              @keyup.esc="cancelRename"
+            />
+            <button
+              class="btn icon"
+              title="确认重命名"
+              @click.stop="commitRename(script)"
+            >
+              <Io5Checkmark :size="14" />
+            </button>
+            <button class="btn icon" title="取消" @click.stop="cancelRename">
+              <Io5Close :size="14" />
+            </button>
+          </template>
+          <template v-else>
+            <span class="cm-script-name mono" :title="script.name">{{ script.name }}</span>
+            <span class="cm-row-actions">
+              <button class="btn icon" title="重命名" @click.stop="startRename(script)">
+                <Io5Create :size="14" />
+              </button>
+              <button
+                class="btn icon danger"
+                title="删除"
+                @click.stop="removeScript(script)"
+              >
+                <Io5Trash :size="14" />
+              </button>
+            </span>
+          </template>
         </div>
       </div>
-    </section>
+    </aside>
 
-    <section class="cm-section cm-columns">
-      <h3 class="section-title">可见列</h3>
-      <div class="cm-column-list">
-        <div v-if="!columns.length" class="empty-hint">暂无可见列</div>
-        <div v-for="(col, index) in columns" :key="index" class="cm-row">
-          <span class="cm-col-name">{{ columnName(col) }}</span>
-          <span class="badge">{{ col.kind }}</span>
-          <span class="cm-spacer" />
+    <section class="cm-editor-pane">
+      <template v-if="selectedScript">
+        <div class="cm-editor-toolbar">
+          <span class="cm-current-name mono" :title="selectedName ?? ''">{{ selectedName }}</span>
+          <span v-if="dirty" class="cm-dirty">未保存</span>
+          <span
+            v-if="debugResult !== null"
+            class="cm-debug-result mono"
+            :class="{ error: debugFailed }"
+            :title="debugResult"
+          >
+            {{ debugResult || "（空字符串）" }}
+          </span>
+          <span v-else class="cm-toolbar-spacer" />
           <input
-            type="number"
-            class="input cm-width"
-            :value="col.width"
-            min="1"
-            title="列宽（像素），失焦生效"
-            @change="updateWidth(index, col, $event)"
+            v-model="debugLogId"
+            class="input cm-log-id mono"
+            inputmode="numeric"
+            placeholder="Log ID"
+            title="当前会话中的 Log ID"
+            @input="clearDebugResult"
+            @keyup.enter="saveAndRun"
           />
-          <button class="btn icon cm-danger" title="删除" @click="removeColumn(index)">
-            <Io5Trash :size="14" />
+          <button class="btn" :disabled="saving || debugging" @click="save">
+            <Io5Save :size="14" />
+            {{ saving && !debugging ? "保存中…" : "保存" }}
+          </button>
+          <button
+            class="btn primary"
+            :disabled="saving || debugging"
+            @click="saveAndRun"
+          >
+            <Io5Play :size="14" />
+            {{ debugging ? "运行中…" : "保存并运行" }}
           </button>
         </div>
-      </div>
-      <div class="cm-actions">
-        <select v-model="addKind" class="select">
-          <option v-for="k in BUILTIN_KINDS" :key="k.value" :value="k.value">
-            {{ k.label }}
-          </option>
-        </select>
-        <select v-if="addKind === 'script'" v-model="addScriptName" class="select">
-          <option v-for="s in scripts" :key="s.name" :value="s.name">{{ s.name }}</option>
-        </select>
-        <button class="btn" :disabled="!canAdd" @click="addColumn">
-          <Io5Add :size="14" /> 添加列
-        </button>
+        <MonacoEditor
+          ref="editor"
+          :model-value="content"
+          language="lua"
+          @update:model-value="onContentChange"
+        />
+        <div class="cm-statusbar text-faint">
+          Lua 5.4 沙箱 · 10 万指令上限 · 16 MiB 内存上限
+        </div>
+      </template>
+      <div v-else class="cm-editor-empty">
+        <span class="empty-hint">新建一个列脚本后即可开始编辑</span>
       </div>
     </section>
   </div>
@@ -230,86 +401,162 @@ onMounted(() => {
 <style scoped>
 .cm-root {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-  padding: var(--space-3);
-  gap: var(--space-4);
 }
 
-.cm-section {
+.cm-sidebar {
+  width: 236px;
+  min-width: 190px;
   display: flex;
   flex-direction: column;
-  flex: none;
+  border-right: 1px solid var(--border);
+  background: var(--bg-panel);
 }
 
-.cm-actions {
+.cm-sidebar-title {
+  padding: 10px 12px 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cm-create {
   display: flex;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
+  gap: var(--space-1);
+  padding: 0 var(--space-2) var(--space-2);
 }
 
-.cm-name-input {
-  flex: 1;
+.cm-create .input {
   min-width: 0;
+  flex: 1;
 }
 
 .cm-script-list {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  max-height: 140px;
-  overflow-y: auto;
-}
-
-.cm-columns {
   flex: 1;
   min-height: 0;
-}
-
-.cm-column-list {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  max-height: 180px;
   overflow-y: auto;
-  margin-bottom: var(--space-2);
+  padding: 0 var(--space-1) var(--space-2);
 }
 
-.cm-row {
+.cm-list-empty {
+  padding: var(--space-3);
+  text-align: center;
+}
+
+.cm-script-row {
+  min-height: 32px;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: 4px var(--space-2);
-}
-.cm-row:hover {
-  background: var(--bg-hover);
-}
-.cm-row + .cm-row {
-  border-top: 1px solid var(--border);
+  gap: var(--space-1);
+  padding: 3px 5px 3px 9px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 
-.cm-name {
+.cm-script-row:hover {
+  background: var(--bg-hover);
+}
+
+.cm-script-row.active {
+  background: var(--bg-selected);
+}
+
+.cm-script-name {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.cm-name:hover {
-  color: var(--accent);
+  font-size: 12px;
 }
 
-.cm-col-name {
-  min-width: 72px;
+.cm-row-actions {
+  display: none;
+  flex: none;
+  align-items: center;
+  gap: 1px;
 }
 
-.cm-spacer {
+.cm-script-row:hover .cm-row-actions,
+.cm-script-row.active .cm-row-actions {
+  display: flex;
+}
+
+.cm-rename-input {
+  min-width: 0;
+  flex: 1;
+  height: 25px;
+}
+
+.cm-editor-pane {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.cm-editor-toolbar {
+  min-width: 0;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cm-current-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.cm-dirty {
+  flex: none;
+  color: var(--warning);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.cm-toolbar-spacer {
   flex: 1;
 }
 
-.cm-width {
-  width: 80px;
+.cm-debug-result {
+  min-width: 40px;
+  flex: 1;
+  overflow: hidden;
+  color: var(--success);
+  font-size: 11px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.cm-danger:hover:not(:disabled) {
+.cm-debug-result.error {
   color: var(--danger);
+}
+
+.cm-log-id {
+  width: 104px;
+  flex: none;
+}
+
+.cm-statusbar {
+  flex: none;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.cm-editor-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
 }
 </style>

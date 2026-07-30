@@ -28,6 +28,12 @@ function currentTheme(): string {
   return document.documentElement.dataset.theme === "dark" ? "vs-dark" : "vs";
 }
 
+function focus(): void {
+  editor?.focus();
+}
+
+defineExpose({ focus });
+
 onMounted(async () => {
   const monaco = (await import("../monaco")).default;
   monacoRef = monaco;
