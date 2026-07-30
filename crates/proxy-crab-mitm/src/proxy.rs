@@ -607,16 +607,15 @@ async fn handle_http_request(
     };
     let _capture_slot = runtime.acquire_capture_slot().await;
     let store = pin.store().clone();
-    let interceptor_snapshot =
-        match snapshot_session_interceptors(&runtime, pin.session_id()) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                return text_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("failed to load session interceptors: {error}"),
-                );
-            }
-        };
+    let interceptor_snapshot = match snapshot_session_interceptors(&runtime, pin.session_id()) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to load session interceptors: {error}"),
+            );
+        }
+    };
     let downstream_upgrade = is_upgrade_request(&request).then(|| hyper::upgrade::on(&mut request));
     let (parts, incoming) = request.into_parts();
     let mut request_data = RequestData {

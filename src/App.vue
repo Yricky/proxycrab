@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted } from "vue";
 import AppToolbar from "./components/AppToolbar.vue";
 import SessionSidebar from "./components/SessionSidebar.vue";
 import FilterBar from "./components/FilterBar.vue";
+import InterceptorPipeline from "./components/InterceptorPipeline.vue";
 import LogTable from "./components/LogTable.vue";
 import FloatingWindow from "./components/FloatingWindow.vue";
 import Toast from "./components/Toast.vue";
@@ -31,6 +32,7 @@ onBeforeUnmount(() => {
     <div class="app-main">
       <SessionSidebar />
       <section class="app-content">
+        <InterceptorPipeline />
         <FilterBar />
         <LogTable />
       </section>

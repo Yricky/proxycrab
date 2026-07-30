@@ -1,12 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useBackend } from "../api";
-import type { BodyPayload, HeaderItem, LogDetail, Modification } from "../api/types";
+import type {
+  BodyPayload,
+  HeaderItem,
+  InterceptorExecution,
+  LogDetail,
+  Modification,
+} from "../api/types";
 import { appStore, reportError } from "../stores/app";
 import { formatBytes } from "../utils/format";
 import { bodyLanguage } from "../utils/body-language";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import { Io5Checkmark, Io5Copy, Io5Warning } from "vue-icons-plus/io5";
+import { openScriptSnapshot } from "./launcher";
 
 const props = defineProps<{ sessionId: number; logId: number }>();
 
@@ -55,10 +62,10 @@ onBeforeUnmount(() => {
 type TabKey = "request" | "response" | "modifications";
 const activeTab = ref<TabKey>("request");
 
-const modificationCount = computed(
+const interceptorCount = computed(
   () =>
-    (detail.value?.req_modifications.length ?? 0) +
-    (detail.value?.resp_modifications.length ?? 0),
+    (detail.value?.request_interceptors.length ?? 0) +
+    (detail.value?.response_interceptors.length ?? 0),
 );
 
 const tabs = computed(() => [
@@ -70,9 +77,9 @@ const tabs = computed(() => [
   },
   {
     key: "modifications" as TabKey,
-    label: "修改记录",
-    count: modificationCount.value,
-    disabled: modificationCount.value === 0,
+    label: "拦截器",
+    count: interceptorCount.value,
+    disabled: interceptorCount.value === 0,
   },
 ]);
 
@@ -259,6 +266,7 @@ function bodyRawText(body: BodyPayload): string {
 // ---------- modifications ----------
 
 const modificationKindLabels: Record<string, string> = {
+  snapshot: "执行快照",
   header_append: "追加头",
   header_set: "设置头",
   header_remove: "删除头",
@@ -283,7 +291,17 @@ function modificationDetail(mod: Modification): string {
       return mod.content;
     case "body_replace_file":
       return mod.path;
+    case "snapshot":
+      return `${Object.keys(mod.headers).length} 个请求头`;
   }
+}
+
+function visibleModifications(execution: InterceptorExecution): Modification[] {
+  return execution.modifications.filter((mod) => mod.kind !== "snapshot");
+}
+
+function openExecution(execution: InterceptorExecution): void {
+  openScriptSnapshot(props.sessionId, props.logId, execution);
 }
 
 function headerCount(headers: HeaderItem[]): string {
@@ -525,26 +543,76 @@ function headerCount(headers: HeaderItem[]): string {
         </template>
       </div>
 
-      <!-- 修改记录 -->
+      <!-- 拦截器执行记录 -->
       <div v-show="activeTab === 'modifications'" class="tab-page">
         <div class="pane-top full">
-          <section v-if="detail.req_modifications.length > 0" class="card">
-            <div class="card-title">请求修改</div>
-            <ul class="mod-list">
-              <li v-for="(mod, i) in detail.req_modifications" :key="i" class="mod-item">
-                <span class="mod-badge">{{ modificationLabel(mod) }}</span>
-                <span class="mod-detail mono">{{ modificationDetail(mod) }}</span>
-              </li>
-            </ul>
+          <section v-if="detail.request_interceptors.length > 0" class="execution-section">
+            <div class="execution-section-title">请求拦截器</div>
+            <article
+              v-for="execution in detail.request_interceptors"
+              :key="`request-${execution.position}`"
+              class="card execution-card"
+            >
+              <button class="execution-head" @click="openExecution(execution)">
+                <span class="execution-order">#{{ execution.position + 1 }}</span>
+                <span class="execution-name mono">{{ execution.name }}</span>
+                <span class="execution-hash mono">{{ execution.script_hash.slice(0, 12) }}</span>
+                <span class="execution-open">查看历史脚本</span>
+              </button>
+              <div v-if="execution.error" class="execution-error mono">
+                {{ execution.error }}
+              </div>
+              <div
+                v-if="visibleModifications(execution).length === 0"
+                class="execution-no-change"
+              >
+                已执行，未产生修改
+              </div>
+              <ul v-else class="mod-list">
+                <li
+                  v-for="(mod, i) in visibleModifications(execution)"
+                  :key="i"
+                  class="mod-item"
+                >
+                  <span class="mod-badge">{{ modificationLabel(mod) }}</span>
+                  <span class="mod-detail mono">{{ modificationDetail(mod) }}</span>
+                </li>
+              </ul>
+            </article>
           </section>
-          <section v-if="detail.resp_modifications.length > 0" class="card">
-            <div class="card-title">响应修改</div>
-            <ul class="mod-list">
-              <li v-for="(mod, i) in detail.resp_modifications" :key="i" class="mod-item">
-                <span class="mod-badge">{{ modificationLabel(mod) }}</span>
-                <span class="mod-detail mono">{{ modificationDetail(mod) }}</span>
-              </li>
-            </ul>
+          <section v-if="detail.response_interceptors.length > 0" class="execution-section">
+            <div class="execution-section-title">响应拦截器</div>
+            <article
+              v-for="execution in detail.response_interceptors"
+              :key="`response-${execution.position}`"
+              class="card execution-card"
+            >
+              <button class="execution-head" @click="openExecution(execution)">
+                <span class="execution-order">#{{ execution.position + 1 }}</span>
+                <span class="execution-name mono">{{ execution.name }}</span>
+                <span class="execution-hash mono">{{ execution.script_hash.slice(0, 12) }}</span>
+                <span class="execution-open">查看历史脚本</span>
+              </button>
+              <div v-if="execution.error" class="execution-error mono">
+                {{ execution.error }}
+              </div>
+              <div
+                v-if="visibleModifications(execution).length === 0"
+                class="execution-no-change"
+              >
+                已执行，未产生修改
+              </div>
+              <ul v-else class="mod-list">
+                <li
+                  v-for="(mod, i) in visibleModifications(execution)"
+                  :key="i"
+                  class="mod-item"
+                >
+                  <span class="mod-badge">{{ modificationLabel(mod) }}</span>
+                  <span class="mod-detail mono">{{ modificationDetail(mod) }}</span>
+                </li>
+              </ul>
+            </article>
           </section>
         </div>
       </div>
@@ -920,7 +988,73 @@ function headerCount(headers: HeaderItem[]): string {
   justify-content: center;
 }
 
-/* ---------- 修改记录 ---------- */
+/* ---------- 拦截器执行记录 ---------- */
+
+.execution-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.execution-section-title {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+.execution-card {
+  overflow: visible;
+}
+.execution-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: var(--bg-app);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.execution-head:hover {
+  background: var(--bg-hover);
+}
+.execution-order {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+}
+.execution-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.execution-hash {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+.execution-open {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 10px;
+}
+.execution-error {
+  padding: 7px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border));
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  color: var(--danger);
+  font-size: 10px;
+  word-break: break-all;
+}
+.execution-no-change {
+  padding: 9px 10px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
 
 .mod-list {
   list-style: none;

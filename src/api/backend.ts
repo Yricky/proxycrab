@@ -4,7 +4,7 @@ import type {
   CreateSessionRequest,
   InterceptorCreateRequest,
   InterceptorKind,
-  InterceptorList,
+  InterceptorLibraryList,
   InterceptorUpdateRequest,
   LogDetail,
   LogIdsPayload,
@@ -12,11 +12,12 @@ import type {
   LogViewsPayload,
   LogViewsRequest,
   ProxyStatus,
+  ReplaceSessionInterceptorsRequest,
   ReplaceSessionViewRequest,
   Script,
   ScriptRequest,
   SessionMetadata,
-  SetInterceptorOrderRequest,
+  SessionInterceptorsPayload,
   SessionViewPayload,
   SystemLogEntry,
   SystemLogsQuery,
@@ -68,7 +69,7 @@ export interface Backend {
   deleteColumnScript(name: string): Promise<void>;
 
   // interceptors
-  listInterceptors(kind: InterceptorKind): Promise<InterceptorList>;
+  listInterceptors(kind: InterceptorKind): Promise<InterceptorLibraryList>;
   createInterceptor(request: InterceptorCreateRequest): Promise<void>;
   getInterceptor(kind: InterceptorKind, name: string): Promise<Script>;
   updateInterceptor(
@@ -77,8 +78,11 @@ export interface Backend {
     request: InterceptorUpdateRequest,
   ): Promise<void>;
   deleteInterceptor(kind: InterceptorKind, name: string): Promise<void>;
-  setInterceptorEnabled(kind: InterceptorKind, name: string, enabled: boolean): Promise<void>;
-  setInterceptorOrder(request: SetInterceptorOrderRequest): Promise<string[]>;
+  getSessionInterceptors(sessionId: number | null): Promise<SessionInterceptorsPayload>;
+  replaceSessionInterceptors(
+    sessionId: number | null,
+    request: ReplaceSessionInterceptorsRequest,
+  ): Promise<SessionInterceptorsPayload>;
 
   // filter history
   getFilterHistory(): Promise<string[]>;

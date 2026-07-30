@@ -8,8 +8,7 @@ use proxy_crab_mitm::{
     ProxyCrab,
     log_buffer::LogBuffer,
     model::{
-        CaptureOutcome, ProxyStatus, Script, ScriptKind, SessionInterceptor,
-        SessionInterceptors,
+        CaptureOutcome, ProxyStatus, Script, ScriptKind, SessionInterceptor, SessionInterceptors,
     },
 };
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};

@@ -225,32 +225,22 @@ pub enum BodyPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Modification {
-    #[serde(rename = "snapshot")]
     Snapshot { headers: HeaderValues },
-    #[serde(rename = "header_append")]
     HeaderAppend {
-        #[serde(rename = "key")]
         name: String,
         value: String,
     },
-    #[serde(rename = "header_set")]
     HeaderSet {
-        #[serde(rename = "key")]
         name: String,
         value: String,
     },
-    #[serde(rename = "header_remove")]
     HeaderRemove {
-        #[serde(rename = "key")]
         name: String,
-        #[serde(rename = "removed_values")]
         values: Vec<String>,
     },
-    #[serde(rename = "body_replace_str")]
     BodyReplaceString { content: String },
-    #[serde(rename = "body_replace_file")]
     BodyReplaceFile { path: String },
 }
 

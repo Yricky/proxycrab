@@ -541,9 +541,7 @@ mod tests {
     fn new_session_has_empty_interceptor_chains() {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
-        let session = workspace
-            .create_session(Some("one".into()), None)
-            .unwrap();
+        let session = workspace.create_session(Some("one".into()), None).unwrap();
 
         assert_eq!(
             workspace.session_interceptors(session.id).unwrap(),
@@ -555,9 +553,7 @@ mod tests {
     fn session_interceptors_round_trip_without_resolving_script_files() {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
-        let session = workspace
-            .create_session(Some("one".into()), None)
-            .unwrap();
+        let session = workspace.create_session(Some("one".into()), None).unwrap();
         let value = SessionInterceptors {
             request: vec![
                 SessionInterceptor {

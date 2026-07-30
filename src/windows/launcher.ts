@@ -1,7 +1,7 @@
 // Central launchers for floating windows. Keeping component imports here
 // avoids spreading window ids / default sizes across the UI code.
 import { windowsStore } from "../stores/windows";
-import type { InterceptorKind } from "../api/types";
+import type { InterceptorExecution, InterceptorKind } from "../api/types";
 import LogDetailWindow from "./LogDetailWindow.vue";
 import ScriptEditorWindow from "./ScriptEditorWindow.vue";
 import InterceptorManagerWindow from "./InterceptorManagerWindow.vue";
@@ -10,6 +10,7 @@ import Base64Window from "./Base64Window.vue";
 import CertManagerWindow from "./CertManagerWindow.vue";
 import SystemLogsWindow from "./SystemLogsWindow.vue";
 import SettingsWindow from "./SettingsWindow.vue";
+import ScriptSnapshotWindow from "./ScriptSnapshotWindow.vue";
 
 export type ScriptEditorKind = "column" | InterceptorKind;
 
@@ -33,6 +34,23 @@ export function openScriptEditor(kind: ScriptEditorKind, name: string): void {
     width: 720,
     height: 520,
   });
+}
+
+export function openScriptSnapshot(
+  sessionId: number,
+  logId: number,
+  execution: InterceptorExecution,
+): void {
+  windowsStore.open(
+    `script-snapshot-${sessionId}-${logId}-${execution.phase}-${execution.position}`,
+    {
+      title: `${execution.name} — 历史脚本`,
+      component: ScriptSnapshotWindow,
+      props: { execution },
+      width: 720,
+      height: 520,
+    },
+  );
 }
 
 export function openInterceptorManager(): void {

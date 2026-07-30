@@ -51,6 +51,7 @@ async function save(): Promise<void> {
       await logsStore.refreshView();
     } else {
       await backend.updateInterceptor(props.kind, props.name, { content: content.value });
+      window.dispatchEvent(new CustomEvent("interceptors-changed"));
     }
     dirty.value = false;
     appStore.toast("已保存", "success");

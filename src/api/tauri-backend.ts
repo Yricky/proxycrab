@@ -10,9 +10,9 @@ import type {
   LogIdsRequest,
   LogViewsRequest,
   ManagerError,
+  ReplaceSessionInterceptorsRequest,
   ReplaceSessionViewRequest,
   ScriptRequest,
-  SetInterceptorOrderRequest,
   SystemLogsQuery,
   UpdateScriptRequest,
   UpdateSessionRequest,
@@ -99,10 +99,12 @@ export function createTauriBackend(): Backend {
       call("update_interceptor", { kind, name, request }),
     deleteInterceptor: (kind: InterceptorKind, name: string) =>
       call("delete_interceptor", { kind, name }),
-    setInterceptorEnabled: (kind: InterceptorKind, name: string, enabled: boolean) =>
-      call("set_interceptor_enabled", { kind, name, enabled }),
-    setInterceptorOrder: (request: SetInterceptorOrderRequest) =>
-      call("set_interceptor_order", { request }),
+    getSessionInterceptors: (sessionId: number | null) =>
+      call("get_session_interceptors", { sessionId }),
+    replaceSessionInterceptors: (
+      sessionId: number | null,
+      request: ReplaceSessionInterceptorsRequest,
+    ) => call("replace_session_interceptors", { sessionId, request }),
 
     getFilterHistory: () => call("get_filter_history"),
     addFilterHistory: (script: string) => call("add_filter_history", { script }),

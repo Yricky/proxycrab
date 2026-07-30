@@ -446,9 +446,8 @@ impl CaptureStore {
              WHERE runs.capture_id=?1 AND runs.phase=?2
              ORDER BY runs.position ASC",
         )?;
-        let executions = statement.query_map(
-            params![id as i64, interceptor_phase_name(phase)],
-            |row| {
+        let executions =
+            statement.query_map(params![id as i64, interceptor_phase_name(phase)], |row| {
                 let modifications: String = row.get(4)?;
                 Ok(InterceptorExecution {
                     phase,
@@ -459,8 +458,7 @@ impl CaptureStore {
                     modifications: serde_json::from_str(&modifications).unwrap_or_default(),
                     error: row.get(5)?,
                 })
-            },
-        )?;
+            })?;
         executions
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)

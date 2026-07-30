@@ -24,8 +24,6 @@ export interface AppConfig {
   api_host: string;
   api_port: number;
   active_session_id: number | null;
-  active_request_interceptors: string[];
-  active_response_interceptors: string[];
   filter_history: string[];
 }
 
@@ -43,10 +41,31 @@ export interface Script {
 
 export type InterceptorKind = "request" | "response";
 
-export interface InterceptorInfo {
+export interface InterceptorLibraryItem {
+  name: string;
+  usage_count: number;
+}
+
+export interface InterceptorLibraryList {
+  kind: InterceptorKind;
+  items: InterceptorLibraryItem[];
+}
+
+export interface SessionInterceptorItem {
   name: string;
   enabled: boolean;
-  order: number | null;
+  valid: boolean;
+}
+
+export interface SessionInterceptorsPayload {
+  session_id: number;
+  request: SessionInterceptorItem[];
+  response: SessionInterceptorItem[];
+}
+
+export interface ReplaceSessionInterceptorsRequest {
+  request: Array<{ name: string; enabled: boolean }>;
+  response: Array<{ name: string; enabled: boolean }>;
 }
 
 export type CaptureOutcome = "in_progress" | "success" | "failed" | "tunneled";
@@ -73,6 +92,7 @@ export type BodyPayload =
   | { type: "large"; size: number };
 
 export type Modification =
+  | { kind: "snapshot"; headers: Record<string, string[]> }
   | { kind: "header_append"; name: string; value: string }
   | { kind: "header_set"; name: string; value: string }
   | { kind: "header_remove"; name: string; values: string[] }
@@ -206,8 +226,18 @@ export interface LogDetail {
   error: CaptureError | null;
   request: RequestDetail;
   response: ResponseDetail | null;
-  req_modifications: Modification[];
-  resp_modifications: Modification[];
+  request_interceptors: InterceptorExecution[];
+  response_interceptors: InterceptorExecution[];
+}
+
+export interface InterceptorExecution {
+  phase: InterceptorKind;
+  position: number;
+  name: string;
+  script_hash: string;
+  content: string;
+  modifications: Modification[];
+  error: string | null;
 }
 
 export interface ScriptRequest {
@@ -224,24 +254,11 @@ export interface InterceptorCreateRequest {
   kind: InterceptorKind;
   name: string;
   content?: string;
-  enabled?: boolean;
 }
 
 export interface InterceptorUpdateRequest {
   name?: string | null;
   content?: string | null;
-  enabled?: boolean | null;
-}
-
-export interface InterceptorList {
-  kind: InterceptorKind;
-  active_order: string[];
-  items: InterceptorInfo[];
-}
-
-export interface SetInterceptorOrderRequest {
-  kind: InterceptorKind;
-  order: string[];
 }
 
 export interface SystemLogsQuery {
