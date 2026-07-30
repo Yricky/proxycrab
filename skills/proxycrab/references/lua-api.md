@@ -14,6 +14,78 @@ ProxyCrab syntax-checks every saved script and runs it in a fresh sandbox.
 Do not depend on filesystem or process APIs other than the explicit
 `replace_with_file("/absolute/path")` body method.
 
+## Base64 and JSON globals
+
+Every filter, custom-column, request-interceptor, and response-interceptor sandbox provides
+read-only `base64` and `json` modules. Codec inputs and outputs are limited to 16 MiB. Invalid
+arguments, malformed input, and limit violations raise Lua runtime errors without returning partial
+results.
+
+### Base64
+
+Lua strings are byte strings, so these functions handle arbitrary binary data, including `\0`:
+
+```lua
+local standard = base64.encode("hello")       -- "aGVsbG8="
+local decoded = base64.decode(standard)       -- "hello"
+
+local padded = base64.url_encode("hello", true)
+local unpadded = base64.url_encode("hello", false)
+local original = base64.url_decode(unpadded)
+```
+
+- `base64.encode(data)` uses the standard alphabet and always writes canonical `=` padding.
+- `base64.decode(text)` accepts only the standard alphabet with canonical padding.
+- `base64.url_encode(data, with_padding)` uses the URL-safe alphabet and requires the boolean
+  padding argument.
+- `base64.url_decode(text)` accepts canonical URL-safe text with or without padding.
+- Decoders reject whitespace, mixed alphabets, invalid characters, and invalid padding.
+
+### JSON
+
+```lua
+local text = json.encode({
+  ok = true,
+  missing = json.null,
+  items = json.array({ "a", "b" }),
+})
+local value = json.decode(text)
+```
+
+`json.encode(value)` and `json.decode(text)` support JSON null, booleans, numbers, UTF-8 strings,
+arrays, and objects. `json.encode(nil)` and `json.encode(json.null)` both produce `"null"`. Inside a
+table, use `json.null` to retain an object field or array position because assigning Lua `nil`
+removes the key.
+
+Unmarked Lua tables map as follows:
+
+- consecutive positive integer keys `1..n` become arrays;
+- string-only keys become objects;
+- an empty table becomes `{}`;
+- sparse arrays, mixed integer/string keys, unsupported key types, cycles, functions, threads, and
+  ordinary userdata are rejected;
+- shared non-cyclic tables are serialized independently;
+- object keys are emitted in lexicographic order.
+
+`json.array(table)` and `json.object(table)` force a container type and distinguish empty `[]` from
+`{}`. They mark and return the same table, reject tables that already have metatables, and protect
+the marker from replacement. Decoded arrays and objects carry the same protected marker, so empty
+containers round-trip. Marked tables still support normal indexing, iteration, and `table.insert`.
+
+JSON input must be valid UTF-8 and contain one complete value followed only by whitespace. Duplicate
+object keys use the last value. Signed 64-bit integers stay Lua integers; larger finite numbers
+become Lua floating-point numbers and can lose precision. Across all successful `json.decode` calls
+in one script execution, ProxyCrab emits at most one `WARN` system log when duplicate keys were
+replaced or numbers were converted lossily. It contains script type/name, Capture Log ID when
+available, and counts, but no JSON content, field paths, or original values. Failed decodes do not
+emit conversion warnings.
+
+JSON nesting is limited to 128 containers. Encoding rejects `NaN` and infinities; decoding rejects
+numbers outside the finite `f64` range. Output is compact JSON, not pretty-printed.
+
+These codecs do not add request or response body read access. Interceptors still only expose body
+replacement methods.
+
 ## Filter scripts
 
 The filter-bar input is the Lua chunk's first vararg. `entry` is a read-only global. A filter must

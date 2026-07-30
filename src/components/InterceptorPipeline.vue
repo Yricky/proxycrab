@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  Io5Add,
   Io5ArrowForward,
   Io5Create,
   Io5PhonePortraitOutline,
@@ -88,25 +87,12 @@ function nodeMenu(
   item: SessionInterceptorItem,
   index: number,
 ): void {
-  const x = event.clientX;
-  const y = event.clientY;
   openContextMenu(event, [
     {
       label: "编辑脚本",
       icon: Io5Create,
       disabled: !item.valid,
       action: () => openScriptEditor(kind, item.name),
-    },
-    {
-      label: "在前添加",
-      icon: Io5Add,
-      action: () => openPicker(kind, index, x, y),
-    },
-    {
-      label: "在后添加",
-      icon: Io5Add,
-      disabled: entries(kind).length >= 12,
-      action: () => openPicker(kind, index + 1, x, y),
     },
     ...(item.valid
       ? []
@@ -126,45 +112,6 @@ function nodeMenu(
       action: () => void interceptorsStore.remove(kind, index),
     },
   ]);
-}
-
-function endpointMenu(event: MouseEvent, endpoint: "source" | "server" | "return"): void {
-  const x = event.clientX;
-  const y = event.clientY;
-  const items =
-    endpoint === "source"
-      ? [
-          {
-            label: "添加第一个请求拦截器",
-            icon: Io5Add,
-            disabled: requestItems.value.length >= 12,
-            action: () => openPicker("request", 0, x, y),
-          },
-        ]
-      : endpoint === "return"
-        ? [
-            {
-              label: "添加响应拦截器",
-              icon: Io5Add,
-              disabled: responseItems.value.length >= 12,
-              action: () => openPicker("response", responseItems.value.length, x, y),
-            },
-          ]
-        : [
-            {
-              label: "添加请求拦截器",
-              icon: Io5Add,
-              disabled: requestItems.value.length >= 12,
-              action: () => openPicker("request", requestItems.value.length, x, y),
-            },
-            {
-              label: "添加第一个响应拦截器",
-              icon: Io5Add,
-              disabled: responseItems.value.length >= 12,
-              action: () => openPicker("response", 0, x, y),
-            },
-          ];
-  openContextMenu(event, items);
 }
 
 function dragStart(event: DragEvent, kind: InterceptorKind, index: number): void {
@@ -224,16 +171,25 @@ onBeforeUnmount(() => {
     <div v-else class="pipeline-scroll">
       <div class="pipeline-track" :class="{ saving: interceptorsStore.saving }">
         <AppTooltip title="原设备" detail="请求来源">
-          <button
-            class="pipeline-endpoint"
-            aria-label="原设备"
-            @contextmenu="endpointMenu($event, 'source')"
-          >
+          <span class="pipeline-endpoint" role="img" aria-label="原设备">
             <Io5PhonePortraitOutline :size="17" />
-          </button>
+          </span>
         </AppTooltip>
 
-        <Io5ArrowForward class="pipeline-arrow" :size="13" />
+        <AppTooltip
+          title="添加请求拦截器"
+          detail="点击在此位置插入"
+          :status="requestItems.length >= 12 ? '已达到 12 个上限' : undefined"
+        >
+          <button
+            class="pipeline-arrow-action"
+            :disabled="requestItems.length >= 12"
+            aria-label="在此添加请求拦截器"
+            @click="openPickerAtElement('request', 0, $event)"
+          >
+            <Io5ArrowForward class="pipeline-arrow" :size="13" />
+          </button>
+        </AppTooltip>
 
         <template v-if="requestItems.length">
           <template v-for="(item, index) in requestItems" :key="`request-${item.name}`">
@@ -266,30 +222,43 @@ onBeforeUnmount(() => {
                 <span v-if="!item.valid">!</span>
               </button>
             </AppTooltip>
-            <Io5ArrowForward class="pipeline-arrow" :size="13" />
+            <AppTooltip
+              title="添加请求拦截器"
+              detail="点击在此位置插入"
+              :status="requestItems.length >= 12 ? '已达到 12 个上限' : undefined"
+            >
+              <button
+                class="pipeline-arrow-action"
+                :disabled="requestItems.length >= 12"
+                aria-label="在此添加请求拦截器"
+                @click="openPickerAtElement('request', index + 1, $event)"
+              >
+                <Io5ArrowForward class="pipeline-arrow" :size="13" />
+              </button>
+            </AppTooltip>
           </template>
         </template>
-        <button
-          v-else
-          class="pipeline-add"
-          title="添加请求拦截器"
-          @click="openPickerAtElement('request', 0, $event)"
-        >
-          <Io5Add :size="12" />
-        </button>
-        <Io5ArrowForward v-if="!requestItems.length" class="pipeline-arrow" :size="13" />
 
         <AppTooltip title="服务端" detail="请求实际发送目标">
-          <button
-            class="pipeline-endpoint server"
-            aria-label="服务端"
-            @contextmenu="endpointMenu($event, 'server')"
-          >
+          <span class="pipeline-endpoint server" role="img" aria-label="服务端">
             <Io5ServerOutline :size="17" />
-          </button>
+          </span>
         </AppTooltip>
 
-        <Io5ArrowForward class="pipeline-arrow" :size="13" />
+        <AppTooltip
+          title="添加响应拦截器"
+          detail="点击在此位置插入"
+          :status="responseItems.length >= 12 ? '已达到 12 个上限' : undefined"
+        >
+          <button
+            class="pipeline-arrow-action"
+            :disabled="responseItems.length >= 12"
+            aria-label="在此添加响应拦截器"
+            @click="openPickerAtElement('response', 0, $event)"
+          >
+            <Io5ArrowForward class="pipeline-arrow" :size="13" />
+          </button>
+        </AppTooltip>
 
         <template v-if="responseItems.length">
           <template v-for="(item, index) in responseItems" :key="`response-${item.name}`">
@@ -322,27 +291,27 @@ onBeforeUnmount(() => {
                 <span v-if="!item.valid">!</span>
               </button>
             </AppTooltip>
-            <Io5ArrowForward class="pipeline-arrow" :size="13" />
+            <AppTooltip
+              title="添加响应拦截器"
+              detail="点击在此位置插入"
+              :status="responseItems.length >= 12 ? '已达到 12 个上限' : undefined"
+            >
+              <button
+                class="pipeline-arrow-action"
+                :disabled="responseItems.length >= 12"
+                aria-label="在此添加响应拦截器"
+                @click="openPickerAtElement('response', index + 1, $event)"
+              >
+                <Io5ArrowForward class="pipeline-arrow" :size="13" />
+              </button>
+            </AppTooltip>
           </template>
         </template>
-        <button
-          v-else
-          class="pipeline-add"
-          title="添加响应拦截器"
-          @click="openPickerAtElement('response', 0, $event)"
-        >
-          <Io5Add :size="12" />
-        </button>
-        <Io5ArrowForward v-if="!responseItems.length" class="pipeline-arrow" :size="13" />
 
         <AppTooltip title="原设备" detail="响应返回目标">
-          <button
-            class="pipeline-endpoint"
-            aria-label="响应返回原设备"
-            @contextmenu="endpointMenu($event, 'return')"
-          >
+          <span class="pipeline-endpoint" role="img" aria-label="响应返回原设备">
             <Io5PhonePortraitOutline :size="17" />
-          </button>
+          </span>
         </AppTooltip>
       </div>
     </div>
@@ -396,7 +365,7 @@ onBeforeUnmount(() => {
 }
 .pipeline-endpoint,
 .pipeline-node,
-.pipeline-add {
+.pipeline-arrow-action {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -411,6 +380,7 @@ onBeforeUnmount(() => {
   border-radius: 7px;
   background: transparent;
   color: var(--text-secondary);
+  cursor: default;
 }
 .pipeline-endpoint:hover {
   color: var(--accent);
@@ -421,8 +391,29 @@ onBeforeUnmount(() => {
 }
 .pipeline-arrow {
   flex: none;
-  margin: 0 4px;
   color: var(--text-faint);
+  transition:
+    color 0.14s ease,
+    transform 0.14s ease;
+}
+.pipeline-arrow-action {
+  width: 21px;
+  height: 24px;
+  padding: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+}
+.pipeline-arrow-action:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.pipeline-arrow-action:hover:not(:disabled) .pipeline-arrow {
+  color: var(--accent);
+  transform: scale(1.15);
+}
+.pipeline-arrow-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 .pipeline-node {
   position: relative;
@@ -467,24 +458,10 @@ onBeforeUnmount(() => {
   border-radius: 1px;
   background: var(--accent);
 }
-.pipeline-add {
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 1px dashed var(--border-strong);
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text-faint);
-}
-.pipeline-add:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--bg-selected);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .pipeline-track,
-  .pipeline-node {
+  .pipeline-node,
+  .pipeline-arrow {
     transition: none;
   }
 }

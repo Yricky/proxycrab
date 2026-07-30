@@ -33,7 +33,8 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use crate::{
     ProxyCrab,
     lua::{
-        BodyReplacement, execute_request_lenient, execute_response_lenient, read_body_replacement,
+        BodyReplacement, execute_request_lenient_named, execute_response_lenient_named,
+        read_body_replacement,
     },
     model::{
         CaptureError, ErrorStage, HeaderValues, InterceptorKind, InterceptorRun, ProxyStatus,
@@ -690,7 +691,12 @@ async fn handle_http_request(
     for (position, script) in interceptor_snapshot.request.iter().enumerate() {
         let mut modifications = Vec::new();
         let mut run_error = None;
-        match execute_request_lenient(&script.content, &request_data) {
+        match execute_request_lenient_named(
+            &script.content,
+            &request_data,
+            &script.name,
+            Some(capture_id),
+        ) {
             Ok((effects, error)) => {
                 request_data.headers = effects.headers;
                 if let Some(replacement) = effects.body {
@@ -910,7 +916,12 @@ async fn handle_http_request(
     for (position, script) in interceptor_snapshot.response.iter().enumerate() {
         let mut modifications = Vec::new();
         let mut run_error = None;
-        match execute_response_lenient(&script.content, &response_data) {
+        match execute_response_lenient_named(
+            &script.content,
+            &response_data,
+            &script.name,
+            Some(capture_id),
+        ) {
             Ok((effects, error)) => {
                 response_data.headers = effects.headers;
                 if let Some(replacement) = effects.body {

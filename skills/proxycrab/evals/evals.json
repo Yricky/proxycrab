@@ -18,6 +18,12 @@
       "prompt": "Create a ProxyCrab request interceptor named add-agent-debug-header that sets x-agent-debug: 1, attach it to the active Session without removing existing response interceptors, and verify on a newly captured request that it executed.",
       "expected_output": "The agent saves valid Lua, preserves the response chain, atomically updates both chains, and cites a new capture's historical source and header_set modification as verification.",
       "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Create a ProxyCrab request interceptor named add-codec-metadata that JSON-serializes {source = \"agent\", enabled = true}, URL-safe Base64 encodes it without padding, and sets the result as x-agent-metadata. Attach it to the active Session without changing the response chain, then verify it on a newly captured request.",
+      "expected_output": "The agent uses json.encode and base64.url_encode(value, false) in valid Lua, preserves both existing chains except for the requested request interceptor addition, and cites a new capture's historical source plus the x-agent-metadata header_set modification as verification.",
+      "files": []
     }
   ]
 }

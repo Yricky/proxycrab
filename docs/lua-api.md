@@ -4,6 +4,79 @@ ProxyCrab embeds sandboxed Lua 5.4. `io`, `os`, `package`, `debug`, `dofile`, `l
 
 Scripts are syntax-checked before being saved. Script files use the `.lua` suffix.
 
+## Base64 and JSON
+
+Every filter, custom-column, request-interceptor, and response-interceptor sandbox provides
+read-only `base64` and `json` modules. Codec inputs and outputs are limited to 16 MiB. Errors raise
+a Lua runtime error and never return a partial result.
+
+### Base64
+
+Lua strings are byte strings, so Base64 functions accept and return arbitrary binary data,
+including `\0`:
+
+```lua
+local standard = base64.encode("hello")       -- "aGVsbG8="
+local decoded = base64.decode(standard)       -- "hello"
+
+local padded = base64.url_encode("hello", true)
+local unpadded = base64.url_encode("hello", false)
+local original = base64.url_decode(unpadded)
+```
+
+- `base64.encode(data)` uses the standard alphabet and always writes canonical `=` padding.
+- `base64.decode(text)` accepts only the standard alphabet with canonical padding.
+- `base64.url_encode(data, with_padding)` uses the URL-safe alphabet; the boolean padding argument
+  is required.
+- `base64.url_decode(text)` accepts canonical URL-safe text with or without padding.
+- Decoders reject whitespace, mixed alphabets, invalid characters, and invalid padding.
+
+### JSON
+
+```lua
+local text = json.encode({
+  ok = true,
+  missing = json.null,
+  items = json.array({ "a", "b" }),
+})
+local value = json.decode(text)
+```
+
+`json.encode(value)` and `json.decode(text)` support JSON null, booleans, numbers, UTF-8 strings,
+arrays, and objects. `json.encode(nil)` and `json.encode(json.null)` both return `"null"`. Use
+`json.null` inside a table to preserve an object field or array position; assigning Lua `nil`
+removes the key normally.
+
+Unmarked Lua tables use these encoding rules:
+
+- consecutive positive integer keys `1..n` encode as an array;
+- string-only keys encode as an object;
+- an empty table encodes as `{}`;
+- sparse arrays, mixed integer/string keys, unsupported key types, cycles, functions, threads, and
+  ordinary userdata are rejected;
+- shared non-cyclic tables are serialized independently;
+- object keys are emitted in lexicographic order for stable output.
+
+Use `json.array(table)` or `json.object(table)` to force the container type, including `[]` versus
+`{}` for empty tables. They mark and return the same table, reject a table that already has a
+metatable, and install a protected type marker. Decoded arrays and objects carry the same protected
+markers, so empty containers round-trip without changing type. The tables remain mutable through
+normal indexing, `pairs`, `ipairs`, and `table.insert`, but their metatables cannot be replaced.
+
+JSON input must be valid UTF-8 and contain exactly one value followed only by whitespace. Duplicate
+object keys use the last value. Integers in Lua's signed 64-bit range remain Lua integers; larger
+finite numbers become Lua floating-point numbers and may lose precision. One script execution
+writes at most one aggregated `WARN` system log when its successful decode calls replaced duplicate
+keys or performed lossy numeric conversion. The warning includes script identity, Capture Log ID
+when available, and counts, but never includes JSON content or original values. A failed decode
+does not emit these conversion warnings.
+
+JSON nesting is limited to 128 containers. Encoding rejects `NaN` and infinities; decoding rejects
+numbers outside the finite `f64` range. JSON output is compact rather than pretty-printed.
+
+These codecs do not expose captured request or response body content. Interceptors still only
+replace bodies through the methods documented below.
+
 ## Filter scripts
 
 A global filter script receives the filter-bar input string as the Lua chunk's first vararg (`...`). It must explicitly return a boolean. `entry` remains available as a read-only global:

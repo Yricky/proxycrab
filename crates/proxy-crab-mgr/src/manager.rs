@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 use async_trait::async_trait;
 use proxy_crab_mitm::{
     ProxyCrab,
-    lua::{evaluate_column, evaluate_filter},
+    lua::{evaluate_column_named, evaluate_filter_named},
     model::{
         AppConfig, CaptureOutcome, CaptureSummary, Column, FilterColumn, FilterOption,
         HeaderValues, InterceptorKind, ProxyStatus, Script, ScriptKind, SessionFilter,
@@ -112,12 +112,17 @@ enum PreparedFilter {
         column: FilterColumn,
         input: String,
         case_sensitive: bool,
-        script: Option<String>,
+        script: Option<PreparedScript>,
     },
     Script {
-        source: String,
+        script: PreparedScript,
         input: String,
     },
+}
+
+struct PreparedScript {
+    name: String,
+    source: String,
 }
 
 impl MitmManager {
@@ -164,12 +169,15 @@ impl MitmManager {
                 case_sensitive,
             }) => {
                 let script = match column {
-                    FilterColumn::Script { script_name } => Some(
-                        runtime
+                    FilterColumn::Script { script_name } => {
+                        let script = runtime
                             .script(ScriptKind::Column, script_name)
-                            .map_err(map_error)?
-                            .content,
-                    ),
+                            .map_err(map_error)?;
+                        Some(PreparedScript {
+                            name: script.name,
+                            source: script.content,
+                        })
+                    }
                     _ => None,
                 };
                 Ok(PreparedFilter::Column {
@@ -179,21 +187,26 @@ impl MitmManager {
                     script,
                 })
             }
-            Some(FilterOption::Script { script_name }) => Ok(PreparedFilter::Script {
-                source: runtime
+            Some(FilterOption::Script { script_name }) => {
+                let script = runtime
                     .script(ScriptKind::Filter, script_name)
-                    .map_err(map_error)?
-                    .content,
-                input: filter.input.clone(),
-            }),
+                    .map_err(map_error)?;
+                Ok(PreparedFilter::Script {
+                    script: PreparedScript {
+                        name: script.name,
+                        source: script.content,
+                    },
+                    input: filter.input.clone(),
+                })
+            }
         }
     }
 
     fn matches_filter(filter: &PreparedFilter, item: &CaptureSummary) -> bool {
         match filter {
             PreparedFilter::All => true,
-            PreparedFilter::Script { source, input } => {
-                evaluate_filter(source, input, item).unwrap_or(false)
+            PreparedFilter::Script { script, input } => {
+                evaluate_filter_named(&script.source, input, item, &script.name).unwrap_or(false)
             }
             PreparedFilter::Column {
                 column,
@@ -212,10 +225,11 @@ impl MitmManager {
                     FilterColumn::Source => item.source.clone(),
                     FilterColumn::Stage => item.stage.clone(),
                     FilterColumn::Script { .. } => {
-                        let Some(source) = script else {
+                        let Some(script) = script else {
                             return false;
                         };
-                        let Ok(value) = evaluate_column(source, item) else {
+                        let Ok(value) = evaluate_column_named(&script.source, item, &script.name)
+                        else {
                             return false;
                         };
                         value
@@ -468,9 +482,8 @@ impl ProxyCrabManager for MitmManager {
                     .get(script_name)
                     .expect("every script column is preloaded")
                 {
-                    Ok(content) => {
-                        evaluate_column(content, item).map_err(|error| error.to_string())
-                    }
+                    Ok(content) => evaluate_column_named(content, item, script_name)
+                        .map_err(|error| error.to_string()),
                     Err(message) => Err(message.clone()),
                 };
                 match result {
@@ -683,8 +696,13 @@ impl ProxyCrabManager for MitmManager {
             .capture(session_id, request.log_id)
             .map_err(map_error)?
             .ok_or_else(|| ManagerError::not_found(format!("log {} not found", request.log_id)))?;
-        evaluate_filter(&script.content, &request.input, &detail.summary)
-            .map_err(|error| ManagerError::bad_request(error.to_string()))
+        evaluate_filter_named(
+            &script.content,
+            &request.input,
+            &detail.summary,
+            &script.name,
+        )
+        .map_err(|error| ManagerError::bad_request(error.to_string()))
     }
 
     async fn interceptors(&self, kind: InterceptorKind) -> ManagerResult<InterceptorLibraryList> {

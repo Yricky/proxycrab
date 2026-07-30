@@ -18,9 +18,12 @@ use crate::model::{
     CaptureSummary, HeaderValues, Modification, RequestData, ResponseData, ScriptKind,
 };
 
+mod codec;
+
 pub const INSTRUCTION_LIMIT: u32 = 100_000;
 pub const MEMORY_LIMIT: usize = 16 * 1024 * 1024;
 const MAX_BODY_REPLACEMENT_BYTES: u64 = 64 * 1024 * 1024;
+const ANONYMOUS_SCRIPT_NAME: &str = "<anonymous>";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BodyReplacement {
@@ -36,7 +39,7 @@ pub struct ScriptEffects {
 }
 
 pub fn validate_script(kind: ScriptKind, source: &str) -> Result<()> {
-    let lua = safe_lua()?;
+    let (lua, _) = safe_lua()?;
     lua.load(source)
         .set_name(match kind {
             ScriptKind::Column => "column.lua",
@@ -50,18 +53,39 @@ pub fn validate_script(kind: ScriptKind, source: &str) -> Result<()> {
 }
 
 pub fn evaluate_filter(source: &str, argument: &str, entry: &CaptureSummary) -> Result<bool> {
-    let lua = safe_lua()?;
+    evaluate_filter_named(source, argument, entry, ANONYMOUS_SCRIPT_NAME)
+}
+
+pub fn evaluate_filter_named(
+    source: &str,
+    argument: &str,
+    entry: &CaptureSummary,
+    script_name: &str,
+) -> Result<bool> {
+    let (lua, warnings) = safe_lua()?;
     lua.globals().set("entry", EntryView(entry.clone()))?;
-    match lua.load(source).call::<Value>(argument)? {
+    let result = lua.load(source).call::<Value>(argument);
+    log_json_warnings(&warnings, ScriptKind::Filter, script_name, Some(entry.id));
+    match result? {
         Value::Boolean(value) => Ok(value),
         _ => bail!("filter script must return a boolean"),
     }
 }
 
 pub fn evaluate_column(source: &str, entry: &CaptureSummary) -> Result<String> {
-    let lua = safe_lua()?;
+    evaluate_column_named(source, entry, ANONYMOUS_SCRIPT_NAME)
+}
+
+pub fn evaluate_column_named(
+    source: &str,
+    entry: &CaptureSummary,
+    script_name: &str,
+) -> Result<String> {
+    let (lua, warnings) = safe_lua()?;
     lua.globals().set("entry", EntryView(entry.clone()))?;
-    match lua.load(source).eval::<Value>()? {
+    let result = lua.load(source).eval::<Value>();
+    log_json_warnings(&warnings, ScriptKind::Column, script_name, Some(entry.id));
+    match result? {
         Value::Nil => Ok(String::new()),
         Value::Boolean(value) => Ok(value.to_string()),
         Value::Integer(value) => Ok(value.to_string()),
@@ -83,7 +107,16 @@ pub fn execute_request_lenient(
     source: &str,
     request: &RequestData,
 ) -> Result<(ScriptEffects, Option<String>)> {
-    let lua = safe_lua()?;
+    execute_request_lenient_named(source, request, ANONYMOUS_SCRIPT_NAME, None)
+}
+
+pub fn execute_request_lenient_named(
+    source: &str,
+    request: &RequestData,
+    script_name: &str,
+    capture_log_id: Option<u64>,
+) -> Result<(ScriptEffects, Option<String>)> {
+    let (lua, warnings) = safe_lua()?;
     let state = MutationState::new(request.headers.clone());
     lua.globals().set(
         "req",
@@ -93,6 +126,12 @@ pub fn execute_request_lenient(
         },
     )?;
     let error = lua.load(source).exec().err().map(|error| error.to_string());
+    log_json_warnings(
+        &warnings,
+        ScriptKind::RequestInterceptor,
+        script_name,
+        capture_log_id,
+    );
     Ok((state.into_effects(), error))
 }
 
@@ -108,7 +147,16 @@ pub fn execute_response_lenient(
     source: &str,
     response: &ResponseData,
 ) -> Result<(ScriptEffects, Option<String>)> {
-    let lua = safe_lua()?;
+    execute_response_lenient_named(source, response, ANONYMOUS_SCRIPT_NAME, None)
+}
+
+pub fn execute_response_lenient_named(
+    source: &str,
+    response: &ResponseData,
+    script_name: &str,
+    capture_log_id: Option<u64>,
+) -> Result<(ScriptEffects, Option<String>)> {
+    let (lua, warnings) = safe_lua()?;
     let state = MutationState::new(response.headers.clone());
     lua.globals().set(
         "resp",
@@ -118,10 +166,16 @@ pub fn execute_response_lenient(
         },
     )?;
     let error = lua.load(source).exec().err().map(|error| error.to_string());
+    log_json_warnings(
+        &warnings,
+        ScriptKind::ResponseInterceptor,
+        script_name,
+        capture_log_id,
+    );
     Ok((state.into_effects(), error))
 }
 
-fn safe_lua() -> Result<Lua> {
+fn safe_lua() -> Result<(Lua, codec::JsonWarningState)> {
     let lua = Lua::new();
     lua.set_memory_limit(MEMORY_LIMIT)?;
     for library in [
@@ -140,7 +194,35 @@ fn safe_lua() -> Result<Lua> {
             }
         },
     )?;
-    Ok(lua)
+    let warnings = codec::install(&lua)?;
+    Ok((lua, warnings))
+}
+
+fn log_json_warnings(
+    warnings: &codec::JsonWarningState,
+    kind: ScriptKind,
+    script_name: &str,
+    capture_log_id: Option<u64>,
+) {
+    let counts = warnings.take();
+    if counts.is_empty() {
+        return;
+    }
+    let kind = match kind {
+        ScriptKind::Column => "column script",
+        ScriptKind::Filter => "filter script",
+        ScriptKind::RequestInterceptor => "request interceptor",
+        ScriptKind::ResponseInterceptor => "response interceptor",
+    };
+    let capture = capture_log_id
+        .map(|id| format!("capture_log_id={id}, "))
+        .unwrap_or_default();
+    tracing::warn!(
+        "Lua JSON decode warning in {kind} {script_name:?}: \
+         {capture}lossy_numbers={}, duplicate_keys={}",
+        counts.lossy_numbers,
+        counts.duplicate_keys,
+    );
 }
 
 #[derive(Clone)]
@@ -473,10 +555,20 @@ pub fn read_body_replacement(replacement: &BodyReplacement) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{CaptureOutcome, CaptureSummary, HeaderValues, RequestData, ScriptKind};
+    use std::sync::Arc;
+
+    use tracing_subscriber::prelude::*;
+
+    use crate::{
+        log_buffer::{BufferLayer, LogBuffer},
+        model::{
+            CaptureOutcome, CaptureSummary, HeaderValues, RequestData, ResponseData, ScriptKind,
+        },
+    };
 
     use super::{
-        BodyReplacement, evaluate_column, evaluate_filter, execute_request, validate_script,
+        BodyReplacement, evaluate_column, evaluate_column_named, evaluate_filter,
+        evaluate_filter_named, execute_request, execute_response, validate_script,
     };
 
     fn entry() -> CaptureSummary {
@@ -554,5 +646,250 @@ mod tests {
         assert!(validate_script(ScriptKind::Column, "return (").is_err());
         assert!(validate_script(ScriptKind::Filter, "return (").is_err());
         assert!(evaluate_column("return string.rep('x', 20 * 1024 * 1024)", &entry()).is_err());
+    }
+
+    #[test]
+    fn base64_module_supports_standard_url_safe_and_binary_round_trips() {
+        let entry = entry();
+        assert_eq!(
+            evaluate_column("return base64.encode('hello')", &entry).unwrap(),
+            "aGVsbG8="
+        );
+        assert_eq!(
+            evaluate_column(
+                "return base64.url_encode(string.char(251, 255), false)",
+                &entry,
+            )
+            .unwrap(),
+            "-_8"
+        );
+        assert!(
+            evaluate_filter(
+                r#"local value = base64.url_decode(base64.url_encode(string.char(0, 255), true))
+                   return #value == 2
+                      and string.byte(value, 1) == 0
+                      and string.byte(value, 2) == 255"#,
+                "",
+                &entry,
+            )
+            .unwrap(),
+        );
+        assert!(
+            evaluate_column("return base64.decode('aGV sbG8=')", &entry).is_err(),
+            "standard decoding must reject whitespace",
+        );
+        assert!(
+            evaluate_column("return base64.decode('aGVsbG8')", &entry).is_err(),
+            "standard decoding must require canonical padding",
+        );
+        assert!(
+            evaluate_filter(
+                "local value = base64.url_decode('-_8='); \
+                 return string.byte(value, 1) == 251 and string.byte(value, 2) == 255",
+                "",
+                &entry,
+            )
+            .unwrap(),
+        );
+        assert!(
+            evaluate_column("base64.encode = nil; return ''", &entry).is_err(),
+            "module fields must be read-only",
+        );
+        assert!(
+            evaluate_column("return base64.url_encode('value')", &entry,).is_err(),
+            "URL-safe encoding must require the padding boolean",
+        );
+        assert!(
+            evaluate_column(
+                "return base64.encode(string.rep('x', 12 * 1024 * 1024 + 1))",
+                &entry,
+            )
+            .is_err(),
+            "predicted output larger than 16 MiB must be rejected",
+        );
+    }
+
+    #[test]
+    fn json_module_round_trips_types_and_preserves_empty_containers() {
+        let entry = entry();
+        assert_eq!(
+            evaluate_column(
+                "return json.encode({z = 1, a = json.null, list = json.array({})})",
+                &entry,
+            )
+            .unwrap(),
+            r#"{"a":null,"list":[],"z":1}"#,
+        );
+        assert_eq!(
+            evaluate_column(
+                r#"local value = json.decode('{"array":[],"object":{}}')
+                   return json.encode(value)"#,
+                &entry,
+            )
+            .unwrap(),
+            r#"{"array":[],"object":{}}"#,
+        );
+        assert!(
+            evaluate_column(
+                "local value = {}; value.self = value; return json.encode(value)",
+                &entry,
+            )
+            .is_err(),
+            "cycles must be rejected",
+        );
+        assert_eq!(
+            evaluate_column(
+                "local value = json.array({}); table.insert(value, 1); return json.encode(value)",
+                &entry,
+            )
+            .unwrap(),
+            "[1]",
+        );
+        assert_eq!(
+            evaluate_column(
+                "local shared = {x = 1}; return json.encode({a = shared, b = shared})",
+                &entry,
+            )
+            .unwrap(),
+            r#"{"a":{"x":1},"b":{"x":1}}"#,
+        );
+        assert!(
+            evaluate_column(
+                "return json.encode(json.array(setmetatable({}, {})))",
+                &entry,
+            )
+            .is_err(),
+            "forced containers must reject existing metatables",
+        );
+        assert!(
+            evaluate_column("return json.encode({[1] = true, name = 'mixed'})", &entry).is_err(),
+            "mixed keys must be rejected",
+        );
+        assert!(
+            evaluate_column("return json.encode({[2] = true})", &entry).is_err(),
+            "sparse arrays must be rejected",
+        );
+        assert!(
+            evaluate_column("return json.encode(0 / 0)", &entry).is_err(),
+            "non-finite numbers must be rejected",
+        );
+        assert!(
+            evaluate_column(
+                r#"local root = json.array({})
+                   local current = root
+                   for _ = 1, 128 do
+                     local child = json.array({})
+                     current[1] = child
+                     current = child
+                   end
+                   return json.encode(root)"#,
+                &entry,
+            )
+            .is_err(),
+            "nesting deeper than 128 containers must be rejected",
+        );
+        assert!(
+            evaluate_column(
+                r#"local shared = string.rep("x", 1024 * 1024)
+                   local values = json.array({})
+                   for index = 1, 17 do
+                     values[index] = shared
+                   end
+                   return json.encode(values)"#,
+                &entry,
+            )
+            .is_err(),
+            "repeated references must not expand JSON beyond 16 MiB",
+        );
+        assert!(
+            evaluate_column("json.null = nil; return ''", &entry).is_err(),
+            "JSON module fields must be read-only",
+        );
+    }
+
+    #[test]
+    fn codec_modules_are_available_to_all_script_types() {
+        let entry = entry();
+        assert!(
+            evaluate_filter(
+                "return json.decode('{\"ok\":true}').ok and base64.decode('eA==') == 'x'",
+                "",
+                &entry,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            evaluate_column("return base64.encode(json.encode(json.array({1})))", &entry).unwrap(),
+            "WzFd",
+        );
+
+        let request_effects = execute_request(
+            "req.headers:set('x-codec', base64.encode(json.encode({ok = true})))",
+            &entry.request,
+        )
+        .unwrap();
+        assert_eq!(request_effects.headers["x-codec"], ["eyJvayI6dHJ1ZX0="]);
+
+        let response = ResponseData {
+            status: 200,
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+        };
+        let response_effects = execute_response(
+            "resp.headers:set('x-codec', base64.url_encode(json.encode(json.array({1})), false))",
+            &response,
+        )
+        .unwrap();
+        assert_eq!(response_effects.headers["x-codec"], ["WzFd"]);
+    }
+
+    #[test]
+    fn json_decode_aggregates_contextual_warnings_in_system_logs() {
+        let buffer = Arc::new(LogBuffer::new(8));
+        let subscriber = tracing_subscriber::registry().with(BufferLayer::new(buffer.clone()));
+        let result = tracing::subscriber::with_default(subscriber, || {
+            evaluate_filter_named(
+                r#"local value = json.decode(
+                     '{"large":9223372036854775808,"duplicate":1,"duplicate":2}'
+                   )
+                   return math.type(value.large) == "float" and value.duplicate == 2"#,
+                "",
+                &entry(),
+                "warning-check",
+            )
+        });
+        assert!(result.unwrap());
+
+        let logs = buffer.query(None, 8);
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].level, "WARN");
+        assert!(logs[0].message.contains("filter script \"warning-check\""));
+        assert!(logs[0].message.contains("capture_log_id=1"));
+        assert!(logs[0].message.contains("lossy_numbers=1"));
+        assert!(logs[0].message.contains("duplicate_keys=1"));
+        assert!(!logs[0].message.contains("9223372036854775808"));
+
+        buffer.clear();
+        let subscriber = tracing_subscriber::registry().with(BufferLayer::new(buffer.clone()));
+        let result = tracing::subscriber::with_default(subscriber, || {
+            evaluate_filter_named(
+                r#"json.decode('{"duplicate":1,"duplicate":2} trailing')
+                   return true"#,
+                "",
+                &entry(),
+                "failed-decode",
+            )
+        });
+        assert!(result.is_err());
+        assert!(
+            buffer.query(None, 8).is_empty(),
+            "failed JSON decodes must not emit conversion warnings",
+        );
+
+        // A named column execution uses the same aggregation path.
+        assert_eq!(
+            evaluate_column_named("return json.encode(nil)", &entry(), "null-column").unwrap(),
+            "null",
+        );
     }
 }
