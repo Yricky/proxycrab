@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "proxy-crab-t",
-        "width": 800,
-        "height": 600
+        "title": "ProxyCrab",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 720,
+        "minHeight": 480
       }
     ],
     "security": {

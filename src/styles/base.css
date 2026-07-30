@@ -1,0 +1,273 @@
+/* Design tokens & base styles. Themes are driven by [data-theme] on <html>. */
+
+:root {
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", sans-serif;
+  --font-mono: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+
+  --toolbar-height: 44px;
+  --statusbar-height: 28px;
+}
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-app: #f5f6f8;
+  --bg-panel: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-hover: rgba(0, 0, 0, 0.05);
+  --bg-active: rgba(0, 0, 0, 0.08);
+  --bg-selected: rgba(59, 130, 246, 0.14);
+  --bg-selected-strong: rgba(59, 130, 246, 0.24);
+  --border: #e2e4e9;
+  --border-strong: #c9ccd3;
+  --text: #1f2329;
+  --text-secondary: #646a73;
+  --text-faint: #8f959e;
+  --accent: #3370ff;
+  --accent-hover: #295fe0;
+  --accent-text: #ffffff;
+  --success: #34a853;
+  --warning: #f2994a;
+  --danger: #e34d59;
+  --danger-hover: #c93a46;
+  --shadow-window: 0 8px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1);
+  --shadow-popup: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --stripe: rgba(0, 0, 0, 0.022);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-app: #1a1b1e;
+  --bg-panel: #232428;
+  --bg-elevated: #2b2d33;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-active: rgba(255, 255, 255, 0.1);
+  --bg-selected: rgba(77, 148, 255, 0.2);
+  --bg-selected-strong: rgba(77, 148, 255, 0.32);
+  --border: #36383e;
+  --border-strong: #4a4d55;
+  --text: #e8eaed;
+  --text-secondary: #a8adb5;
+  --text-faint: #757b85;
+  --accent: #4d94ff;
+  --accent-hover: #6aa6ff;
+  --accent-text: #ffffff;
+  --success: #4caf6d;
+  --warning: #e8a552;
+  --danger: #e5636f;
+  --danger-hover: #ef7a85;
+  --shadow-window: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-popup: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --stripe: rgba(255, 255, 255, 0.025);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+  background-clip: content-box;
+  border: 2px solid transparent;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---------- shared controls ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.btn.danger {
+  color: var(--danger);
+}
+.btn.danger:hover:not(:disabled) {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.btn.icon {
+  padding: 5px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+}
+.btn.icon:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.input {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  transition: border-color 0.12s;
+}
+.input:focus {
+  border-color: var(--accent);
+}
+.input::placeholder {
+  color: var(--text-faint);
+}
+
+.select {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 16px;
+  background: var(--bg-active);
+  color: var(--text-secondary);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.clickable {
+  cursor: pointer;
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+.text-faint {
+  color: var(--text-faint);
+}
+.text-danger {
+  color: var(--danger);
+}
+.text-success {
+  color: var(--success);
+}
+
+.section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 var(--space-2);
+}
+
+.empty-hint {
+  color: var(--text-faint);
+  text-align: center;
+  padding: var(--space-4);
+}
+
+/* simple switch */
+.switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--border-strong);
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s;
+  flex: none;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+.switch.on {
+  background: var(--accent);
+}
+.switch.on::after {
+  transform: translateX(14px);
+}

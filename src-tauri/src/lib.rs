@@ -362,9 +362,15 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // 需求：不使用任何系统菜单（含 macOS 全局菜单），UI 全部在页面内实现。
+            app.set_menu(tauri::menu::Menu::new(app)?)?;
             let app_data_dir = app.path().app_data_dir()?;
             let log_buffer = Arc::new(LogBuffer::default());
             let _ = tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                )
                 .with(tracing_subscriber::fmt::layer())
                 .with(BufferLayer::new(log_buffer.clone()))
                 .try_init();
