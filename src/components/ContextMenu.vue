@@ -20,17 +20,21 @@ function run(item: (typeof contextMenuState.items)[number]): void {
         class="ctx-menu"
         :style="{ left: contextMenuState.x + 'px', top: contextMenuState.y + 'px' }"
       >
-        <button
+        <template
           v-for="(item, i) in contextMenuState.items"
           :key="i"
-          class="ctx-item"
-          :class="{ danger: item.danger }"
-          :disabled="item.disabled"
-          @click="run(item)"
         >
-          <component :is="item.icon" v-if="item.icon" :size="14" class="ctx-icon" />
-          <span>{{ item.label }}</span>
-        </button>
+          <div v-if="item.dividerBefore" class="ctx-divider" />
+          <button
+            class="ctx-item"
+            :class="{ danger: item.danger }"
+            :disabled="item.disabled"
+            @click="run(item)"
+          >
+            <component :is="item.icon" v-if="item.icon" :size="14" class="ctx-icon" />
+            <span>{{ item.label }}</span>
+          </button>
+        </template>
       </div>
     </div>
   </Teleport>
@@ -52,6 +56,13 @@ function run(item: (typeof contextMenuState.items)[number]): void {
   box-shadow: var(--shadow-popup);
   display: flex;
   flex-direction: column;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+}
+.ctx-divider {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border);
 }
 .ctx-item {
   display: flex;

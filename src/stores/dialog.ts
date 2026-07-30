@@ -12,6 +12,7 @@ export interface MenuItem {
   icon?: unknown;
   danger?: boolean;
   disabled?: boolean;
+  dividerBefore?: boolean;
   action: () => void;
 }
 
@@ -60,15 +61,24 @@ export const contextMenuState = reactive<ContextMenuState>({
   items: [],
 });
 
+function showContextMenu(x: number, y: number, items: MenuItem[]): void {
+  const width = 180;
+  const height = Math.min(items.length * 32 + 12, window.innerHeight - 16);
+  contextMenuState.x = Math.max(8, Math.min(x, window.innerWidth - width - 8));
+  contextMenuState.y = Math.max(8, Math.min(y, window.innerHeight - height - 8));
+  contextMenuState.items = items;
+  contextMenuState.visible = true;
+}
+
 export function openContextMenu(event: MouseEvent, items: MenuItem[]): void {
   event.preventDefault();
   event.stopPropagation();
-  const width = 180;
-  const height = items.length * 32 + 12;
-  contextMenuState.x = Math.min(event.clientX, window.innerWidth - width - 8);
-  contextMenuState.y = Math.min(event.clientY, window.innerHeight - height - 8);
-  contextMenuState.items = items;
-  contextMenuState.visible = true;
+  showContextMenu(event.clientX, event.clientY, items);
+}
+
+export function openDropdownMenu(anchor: HTMLElement, items: MenuItem[]): void {
+  const rect = anchor.getBoundingClientRect();
+  showContextMenu(rect.left, rect.bottom + 4, items);
 }
 
 export function closeContextMenu(): void {

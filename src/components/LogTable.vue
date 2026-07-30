@@ -4,14 +4,24 @@ import { useBackend } from "../api";
 import { logsStore } from "../stores/logs";
 import { sessionsStore } from "../stores/sessions";
 import { reportError } from "../stores/app";
+import { openDropdownMenu, type MenuItem } from "../stores/dialog";
 import { openLogDetail } from "../windows/launcher";
-import { Io5ArrowDown, Io5ArrowUp } from "vue-icons-plus/io5";
+import type { Column, Script } from "../api/types";
+import {
+  Io5Add,
+  Io5ArrowDown,
+  Io5ArrowUp,
+  Io5Checkmark,
+  Io5ChevronDown,
+  Io5Trash,
+} from "vue-icons-plus/io5";
 
 const backend = useBackend();
 
 const ROW_HEIGHT = 26;
 const BUFFER = 8;
 const ID_COLUMN_WIDTH = 64;
+const ADD_COLUMN_WIDTH = 84;
 const MIN_COLUMN_WIDTH = 48;
 
 const scroller = ref<HTMLElement | null>(null);
@@ -31,13 +41,18 @@ function columnWidth(index: number): number {
 
 const gridTemplate = computed(
   () =>
-    [`${ID_COLUMN_WIDTH}px`, ...columns.value.map((_, i) => `${columnWidth(i)}px`)].join(
-      " ",
-    ),
+    [
+      `${ID_COLUMN_WIDTH}px`,
+      ...columns.value.map((_, i) => `${columnWidth(i)}px`),
+      `${ADD_COLUMN_WIDTH}px`,
+    ].join(" "),
 );
 
 const totalWidth = computed(() =>
-  columns.value.reduce((sum, _, i) => sum + columnWidth(i), ID_COLUMN_WIDTH),
+  columns.value.reduce(
+    (sum, _, i) => sum + columnWidth(i),
+    ID_COLUMN_WIDTH + ADD_COLUMN_WIDTH,
+  ),
 );
 
 const rows = computed(() => logsStore.displayRows);
@@ -90,6 +105,145 @@ function toggleSort(): void {
 function openRow(id: number): void {
   const sessionId = sessionsStore.viewingSessionId;
   if (sessionId !== null) openLogDetail(sessionId, id);
+}
+
+// ---------- column menu ----------
+
+interface ColumnChoice {
+  key: string;
+  label: string;
+  defaultWidth: number;
+  create: (width: number) => Column;
+}
+
+const BUILTIN_COLUMN_CHOICES: ColumnChoice[] = [
+  {
+    key: "method",
+    label: "方法",
+    defaultWidth: 80,
+    create: (width) => ({ kind: "method", width }),
+  },
+  {
+    key: "uri",
+    label: "URI",
+    defaultWidth: 300,
+    create: (width) => ({ kind: "uri", width }),
+  },
+  {
+    key: "code",
+    label: "状态码",
+    defaultWidth: 50,
+    create: (width) => ({ kind: "code", width }),
+  },
+  {
+    key: "source",
+    label: "来源",
+    defaultWidth: 130,
+    create: (width) => ({ kind: "source", width }),
+  },
+  {
+    key: "stage",
+    label: "阶段",
+    defaultWidth: 70,
+    create: (width) => ({ kind: "stage", width }),
+  },
+];
+
+async function columnChoices(): Promise<ColumnChoice[]> {
+  let scripts: Script[] = [];
+  try {
+    scripts = await backend.listColumnScripts();
+  } catch (error) {
+    reportError(error, "加载列脚本失败");
+  }
+  return [
+    ...BUILTIN_COLUMN_CHOICES,
+    ...scripts.map((script) => ({
+      key: `script:${script.name}`,
+      label: `脚本：${script.name}`,
+      defaultWidth: 100,
+      create: (width: number): Column => ({
+        kind: "script",
+        script_name: script.name,
+        width,
+      }),
+    })),
+  ];
+}
+
+async function updateColumns(
+  update: (columns: Column[]) => Column[],
+  errorMessage: string,
+): Promise<void> {
+  const sessionId = sessionsStore.viewingSessionId;
+  if (sessionId === null) return;
+  try {
+    const view = await backend.getSessionView(sessionId);
+    await backend.replaceSessionView(sessionId, { columns: update(view.columns) });
+    widthOverrides.value = {};
+    await logsStore.refreshView();
+  } catch (error) {
+    reportError(error, errorMessage);
+  }
+}
+
+function currentChoiceKey(index: number): string {
+  const column = columns.value[index];
+  return column?.kind === "script" ? `script:${column.script_name}` : (column?.kind ?? "");
+}
+
+async function showColumnMenu(index: number, event: MouseEvent): Promise<void> {
+  const anchor = event.currentTarget as HTMLElement;
+  const choices = await columnChoices();
+  if (!anchor.isConnected) return;
+  const currentKey = currentChoiceKey(index);
+  const items: MenuItem[] = [
+    {
+      label: "移除列",
+      icon: Io5Trash,
+      danger: true,
+      action: () => {
+        void updateColumns(
+          (viewColumns) => viewColumns.filter((_, itemIndex) => itemIndex !== index),
+          "移除列失败",
+        );
+      },
+    },
+    ...choices.map((choice, choiceIndex) => ({
+      label: choice.label,
+      icon: choice.key === currentKey ? Io5Checkmark : undefined,
+      disabled: choice.key === currentKey,
+      dividerBefore: choiceIndex === 0,
+      action: () => {
+        void updateColumns((viewColumns) => {
+          const current = viewColumns[index];
+          if (!current) return viewColumns;
+          const next = [...viewColumns];
+          next[index] = choice.create(current.width);
+          return next;
+        }, "更新列失败");
+      },
+    })),
+  ];
+  openDropdownMenu(anchor, items);
+}
+
+async function showAddColumnMenu(event: MouseEvent): Promise<void> {
+  const anchor = event.currentTarget as HTMLElement;
+  const choices = await columnChoices();
+  if (!anchor.isConnected) return;
+  openDropdownMenu(
+    anchor,
+    choices.map((choice) => ({
+      label: choice.label,
+      action: () => {
+        void updateColumns(
+          (viewColumns) => [...viewColumns, choice.create(choice.defaultWidth)],
+          "添加列失败",
+        );
+      },
+    })),
+  );
 }
 
 // ---------- column resize ----------
@@ -158,10 +312,21 @@ function cellClass(index: number, value: string): string {
           :key="column.key + i"
           class="lt-cell lt-header-cell"
         >
-          <span class="lt-header-name">
-            {{ column.name }}
-          </span>
+          <button class="lt-header-menu" @click="showColumnMenu(i, $event)">
+            <span class="lt-header-name">{{ column.name }}</span>
+            <Io5ChevronDown :size="11" class="lt-header-chevron" />
+          </button>
           <span class="lt-resize" @pointerdown="startResize(i, $event)" @click.stop />
+        </div>
+        <div class="lt-cell lt-header-cell lt-add-cell">
+          <button
+            class="lt-header-menu"
+            :disabled="sessionsStore.viewingSessionId === null"
+            @click="showAddColumnMenu($event)"
+          >
+            <Io5Add :size="13" />
+            <span class="lt-header-name">添加列</span>
+          </button>
         </div>
       </div>
       <div class="lt-body" :style="{ height: rows.length * ROW_HEIGHT + 'px' }">
@@ -192,6 +357,7 @@ function cellClass(index: number, value: string): string {
             >
               {{ cell }}
             </div>
+            <div class="lt-cell lt-spacer-cell" aria-hidden="true" />
           </div>
         </div>
       </div>
@@ -209,6 +375,7 @@ function cellClass(index: number, value: string): string {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: none;
   position: relative;
 }
 .lt-content {
@@ -242,6 +409,37 @@ function cellClass(index: number, value: string): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.lt-header-menu {
+  width: 100%;
+  height: 100%;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  overflow: hidden;
+}
+.lt-header-menu:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.lt-header-menu:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.lt-header-chevron {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-faint);
+}
+.lt-add-cell {
+  padding: 0;
 }
 .lt-resize {
   position: absolute;
@@ -292,6 +490,9 @@ function cellClass(index: number, value: string): string {
 }
 .lt-cell:last-child {
   border-right: none;
+}
+.lt-spacer-cell {
+  padding: 0;
 }
 .lt-empty {
   position: sticky;
