@@ -39,11 +39,9 @@ The server listens on loopback by default at `http://127.0.0.1:18089`. It has no
 | `/api/logs/views` | `POST` batch incremental table-view rendering |
 | `/api/logs/{id}` | `GET` complete log detail |
 | `/api/session-view` | `GET`, `PUT` whole-session table view |
+| `/api/session-interceptors` | `GET`, `PUT` whole-session interceptor chains |
 | `/api/column-scripts`, `/api/column-scripts/{name}` | script CRUD |
-| `/api/interceptors`, `/api/interceptors/{kind}/{name}` | interceptor CRUD |
-| `/api/interceptors/{kind}/{name}/enable` | `POST` |
-| `/api/interceptors/{kind}/{name}/disable` | `POST` |
-| `/api/interceptors/order` | `PUT` |
+| `/api/interceptors`, `/api/interceptors/{kind}/{name}` | global interceptor script CRUD |
 | `/api/filter-history` | `GET`, `POST`, `DELETE` |
 | `/api/ca` | `GET`, `POST` to regenerate while the proxy is stopped |
 | `/api/system-logs` | `GET`, `DELETE` |
@@ -136,7 +134,7 @@ The response columns and cells do not contain the ID column; `row.id` is a separ
 
 ### Read one complete log
 
-`GET /api/logs/{id}?session_id=1` returns request/response metadata and bodies, modifications, error/outcome state, plus `created_at` and `updated_at`.
+`GET /api/logs/{id}?session_id=1` returns request/response metadata and bodies, error/outcome state, plus `created_at`, `updated_at`, and ordered `request_interceptors` / `response_interceptors` execution arrays. Every execution contains the historical script name, phase, zero-based position, SHA-256 hash, exact source content, its own modifications, and an optional runtime error. Scripts that executed without changes are still present. Disabled and missing scripts are not recorded.
 
 ## Session table views
 
@@ -167,6 +165,41 @@ The ID column is not part of the view model. Column widths must be positive. A n
 
 New Sessions clone the active Session's view. When no active/readable view exists, they use the fixed built-in method, URI, status-code, and source columns.
 
+## Session interceptors
+
+Interceptor Lua files are global and separated into request and response libraries. `GET /api/interceptors?kind=request` (or `response`) returns the scripts and the number of Sessions referencing each script. CRUD under `/api/interceptors/{kind}/{name}` changes this global library. Renames update every Session reference. Application-driven deletion removes every Session reference; a file removed directly from disk leaves its references in a missing state.
+
+`GET /api/session-interceptors?session_id=1` returns:
+
+```json
+{
+  "session_id": 1,
+  "request": [
+    { "name": "set-env", "enabled": true, "valid": true }
+  ],
+  "response": [
+    { "name": "missing-script", "enabled": true, "valid": false }
+  ]
+}
+```
+
+`PUT /api/session-interceptors?session_id=1` atomically replaces both chains:
+
+```json
+{
+  "request": [
+    { "name": "set-env", "enabled": true }
+  ],
+  "response": []
+}
+```
+
+Each side may contain at most 12 unique names. The API rejects duplicates and oversized chains with `bad_request`. Missing names are accepted so references remain editable if files are changed outside the application.
+
+New Sessions start with empty chains. At the beginning of every request, the proxy pins the active Session and snapshots the name and exact UTF-8 content of every enabled, present script. The response stage uses the same snapshot even if the Session, chain, or source files change in the meantime. Missing and disabled nodes are skipped.
+
+Executed content is stored in the Session capture database by lowercase SHA-256. `interceptor_script_contents` stores one copy of each unique source, while `capture_interceptor_runs` links captures to ordered executions and per-script modifications.
+
 ## Capture lifecycle
 
 An ordinary HTTP request is inserted into its active Session database before it is forwarded. The Session is pinned for the entire request/response lifecycle even if another Session becomes active.
@@ -186,7 +219,7 @@ Request and response bodies are bounded to 64 MiB with a 60-second read timeout.
 
 ## Workspace and CA
 
-The workspace is locked exclusively for the process lifetime. Active Session ID, proxy/API addresses, interceptor order, and filter history are stored in workspace configuration. Each Session stores its table view in `sessions/<id>/view.json`. Deleting the active Session returns `active_session_delete_forbidden`.
+The workspace is locked exclusively for the process lifetime. Active Session ID, proxy/API addresses, and filter history are stored in workspace configuration. Each Session stores its table view in `sessions/<id>/view.json` and interceptor chains in `sessions/<id>/interceptors.json`. Deleting the active Session returns `active_session_delete_forbidden`.
 
 Each workspace has an independent generated CA. Missing or corrupt CA files are regenerated with a warning, the per-host certificate cache is bounded, and the CA private key is restricted to owner-only permissions on macOS/Unix. Regeneration is serialized with proxy start/stop and rejected while the proxy is running.
 

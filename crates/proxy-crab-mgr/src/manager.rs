@@ -6,18 +6,18 @@ use proxy_crab_mitm::{
     lua::{evaluate_column, evaluate_filter},
     model::{
         AppConfig, CaptureOutcome, CaptureSummary, Column, HeaderValues, InterceptorKind,
-        ProxyStatus, Script, ScriptKind, SessionMetadata, SessionView, SystemLogEntry,
-        WorkspacePaths,
+        ProxyStatus, Script, ScriptKind, SessionInterceptor, SessionInterceptors, SessionMetadata,
+        SessionView, SystemLogEntry, WorkspacePaths,
     },
 };
 
 use crate::dto::{
     CertificateResponse, ColumnView, CreateSessionRequest, HeaderItem, InterceptorCreateRequest,
-    InterceptorDetail, InterceptorList, InterceptorUpdateRequest, LogDetail, LogIdsPayload,
+    InterceptorDetail, InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogIdsPayload,
     LogIdsRequest, LogViewException, LogViewRow, LogViewsPayload, LogViewsRequest, ManagerError,
-    ManagerResult, ReplaceSessionViewRequest, RequestDetail, ResponseDetail, ScriptRequest,
-    SessionViewPayload, SetInterceptorOrderRequest, SystemLogsQuery, UpdateScriptRequest,
-    UpdateSessionRequest,
+    ManagerResult, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, RequestDetail,
+    ResponseDetail, ScriptRequest, SessionInterceptorItem, SessionInterceptorsPayload,
+    SessionViewPayload, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
 };
 
 #[async_trait]
@@ -57,7 +57,7 @@ pub trait ProxyCrabManager: Send + Sync {
         request: UpdateScriptRequest,
     ) -> ManagerResult<()>;
     async fn delete_column_script(&self, name: String) -> ManagerResult<()>;
-    async fn interceptors(&self, kind: InterceptorKind) -> ManagerResult<InterceptorList>;
+    async fn interceptors(&self, kind: InterceptorKind) -> ManagerResult<InterceptorLibraryList>;
     async fn create_interceptor(&self, request: InterceptorCreateRequest) -> ManagerResult<()>;
     async fn interceptor(
         &self,
@@ -71,16 +71,15 @@ pub trait ProxyCrabManager: Send + Sync {
         request: InterceptorUpdateRequest,
     ) -> ManagerResult<()>;
     async fn delete_interceptor(&self, kind: InterceptorKind, name: String) -> ManagerResult<()>;
-    async fn set_interceptor_enabled(
+    async fn session_interceptors(
         &self,
-        kind: InterceptorKind,
-        name: String,
-        enabled: bool,
-    ) -> ManagerResult<()>;
-    async fn set_interceptor_order(
+        session_id: Option<u64>,
+    ) -> ManagerResult<SessionInterceptorsPayload>;
+    async fn replace_session_interceptors(
         &self,
-        request: SetInterceptorOrderRequest,
-    ) -> ManagerResult<Vec<String>>;
+        session_id: Option<u64>,
+        request: ReplaceSessionInterceptorsRequest,
+    ) -> ManagerResult<SessionInterceptorsPayload>;
     async fn filter_history(&self) -> ManagerResult<Vec<String>>;
     async fn add_filter_history(&self, script: String) -> ManagerResult<Vec<String>>;
     async fn remove_filter_history(&self, script: Option<String>) -> ManagerResult<Vec<String>>;
@@ -413,8 +412,8 @@ impl ProxyCrabManager for MitmManager {
                 headers: flatten_headers(&response.headers),
                 body: detail.response_body,
             }),
-            req_modifications: detail.request_modifications,
-            resp_modifications: detail.response_modifications,
+            request_interceptors: detail.request_interceptors,
+            response_interceptors: detail.response_interceptors,
         })
     }
 
@@ -497,18 +496,10 @@ impl ProxyCrabManager for MitmManager {
             .map_err(map_error)
     }
 
-    async fn interceptors(&self, kind: InterceptorKind) -> ManagerResult<InterceptorList> {
-        let items = self.runtime.interceptors(kind).map_err(map_error)?;
-        let active_order = items
-            .iter()
-            .filter_map(|item| item.order.map(|order| (order, item.name.clone())))
-            .collect::<Vec<_>>();
-        let mut active_order = active_order;
-        active_order.sort_by_key(|(order, _)| *order);
-        Ok(InterceptorList {
+    async fn interceptors(&self, kind: InterceptorKind) -> ManagerResult<InterceptorLibraryList> {
+        Ok(InterceptorLibraryList {
             kind,
-            active_order: active_order.into_iter().map(|(_, name)| name).collect(),
-            items,
+            items: self.runtime.interceptor_library(kind).map_err(map_error)?,
         })
     }
 
@@ -523,11 +514,6 @@ impl ProxyCrabManager for MitmManager {
                 },
             )
             .map_err(map_error)?;
-        if request.enabled {
-            self.runtime
-                .set_interceptor_enabled(request.kind, &request.name, true)
-                .map_err(map_error)?;
-        }
         Ok(())
     }
 
@@ -540,16 +526,10 @@ impl ProxyCrabManager for MitmManager {
             .runtime
             .script(interceptor_script_kind(kind), &name)
             .map_err(map_error)?;
-        let enabled = match kind {
-            InterceptorKind::Request => self.runtime.config().active_request_interceptors,
-            InterceptorKind::Response => self.runtime.config().active_response_interceptors,
-        }
-        .contains(&name);
         Ok(InterceptorDetail {
             kind,
             name: script.name,
             content: script.content,
-            enabled,
         })
     }
 
@@ -572,11 +552,6 @@ impl ProxyCrabManager for MitmManager {
                 },
             )
             .map_err(map_error)?;
-        if let Some(enabled) = request.enabled {
-            self.runtime
-                .set_interceptor_enabled(kind, &new_name, enabled)
-                .map_err(map_error)?;
-        }
         Ok(())
     }
 
@@ -586,24 +561,68 @@ impl ProxyCrabManager for MitmManager {
             .map_err(map_error)
     }
 
-    async fn set_interceptor_enabled(
+    async fn session_interceptors(
         &self,
-        kind: InterceptorKind,
-        name: String,
-        enabled: bool,
-    ) -> ManagerResult<()> {
-        self.runtime
-            .set_interceptor_enabled(kind, &name, enabled)
-            .map_err(map_error)
+        session_id: Option<u64>,
+    ) -> ManagerResult<SessionInterceptorsPayload> {
+        let session_id = self.session_id(session_id)?;
+        let value = self
+            .runtime
+            .resolved_session_interceptors(session_id)
+            .map_err(map_error)?;
+        Ok(SessionInterceptorsPayload {
+            session_id,
+            request: value
+                .request
+                .into_iter()
+                .map(|item| SessionInterceptorItem {
+                    name: item.name,
+                    enabled: item.enabled,
+                    valid: item.valid,
+                })
+                .collect(),
+            response: value
+                .response
+                .into_iter()
+                .map(|item| SessionInterceptorItem {
+                    name: item.name,
+                    enabled: item.enabled,
+                    valid: item.valid,
+                })
+                .collect(),
+        })
     }
 
-    async fn set_interceptor_order(
+    async fn replace_session_interceptors(
         &self,
-        request: SetInterceptorOrderRequest,
-    ) -> ManagerResult<Vec<String>> {
+        session_id: Option<u64>,
+        request: ReplaceSessionInterceptorsRequest,
+    ) -> ManagerResult<SessionInterceptorsPayload> {
+        let session_id = self.session_id(session_id)?;
         self.runtime
-            .set_interceptor_order(request.kind, request.order)
-            .map_err(map_error)
+            .replace_session_interceptors(
+                session_id,
+                SessionInterceptors {
+                    request: request
+                        .request
+                        .into_iter()
+                        .map(|item| SessionInterceptor {
+                            name: item.name,
+                            enabled: item.enabled,
+                        })
+                        .collect(),
+                    response: request
+                        .response
+                        .into_iter()
+                        .map(|item| SessionInterceptor {
+                            name: item.name,
+                            enabled: item.enabled,
+                        })
+                        .collect(),
+                },
+            )
+            .map_err(map_error)?;
+        self.session_interceptors(Some(session_id)).await
     }
 
     async fn filter_history(&self) -> ManagerResult<Vec<String>> {
@@ -718,6 +737,8 @@ fn map_error(error: anyhow::Error) -> ManagerError {
         ManagerError::conflict(message)
     } else if message.contains("invalid")
         || message.contains("must ")
+        || message.contains("cannot ")
+        || message.contains("duplicate")
         || message.contains("script")
         || message.contains("Lua")
     {
@@ -734,14 +755,15 @@ mod tests {
     use proxy_crab_mitm::{
         ProxyCrab,
         log_buffer::LogBuffer,
-        model::{Column, HeaderValues, RequestData},
+        model::{Column, HeaderValues, InterceptorKind, RequestData},
         storage::CaptureStore,
     };
     use tempfile::tempdir;
 
     use crate::dto::{
-        LogIdsRequest, LogViewItem, LogViewsRequest, ReplaceSessionViewRequest, ScriptRequest,
-        UpdateScriptRequest,
+        InterceptorCreateRequest, LogIdsRequest, LogViewItem, LogViewsRequest,
+        ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ScriptRequest,
+        SessionInterceptorInput, UpdateScriptRequest,
     };
 
     use super::{MitmManager, ProxyCrabManager, status_text};
@@ -925,5 +947,73 @@ mod tests {
             &stale.columns[0],
             Column::Script { script_name, .. } if script_name == "new"
         ));
+    }
+
+    #[tokio::test]
+    async fn session_interceptors_validate_and_report_global_usage() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let first = runtime.ensure_active_session().unwrap();
+        let second = runtime.create_session(Some("second".into()), None).unwrap();
+        let manager = MitmManager::new(runtime);
+        manager
+            .create_interceptor(InterceptorCreateRequest {
+                kind: InterceptorKind::Request,
+                name: "header".into(),
+                content: String::new(),
+            })
+            .await
+            .unwrap();
+
+        manager
+            .replace_session_interceptors(
+                Some(first.id),
+                ReplaceSessionInterceptorsRequest {
+                    request: vec![SessionInterceptorInput {
+                        name: "header".into(),
+                        enabled: true,
+                    }],
+                    response: vec![],
+                },
+            )
+            .await
+            .unwrap();
+
+        let first_chain = manager.session_interceptors(Some(first.id)).await.unwrap();
+        assert!(first_chain.request[0].valid);
+        assert!(
+            manager
+                .session_interceptors(Some(second.id))
+                .await
+                .unwrap()
+                .request
+                .is_empty()
+        );
+        let library = manager
+            .interceptors(InterceptorKind::Request)
+            .await
+            .unwrap();
+        assert_eq!(library.items[0].usage_count, 1);
+
+        let error = manager
+            .replace_session_interceptors(
+                Some(first.id),
+                ReplaceSessionInterceptorsRequest {
+                    request: vec![
+                        SessionInterceptorInput {
+                            name: "header".into(),
+                            enabled: true,
+                        },
+                        SessionInterceptorInput {
+                            name: "header".into(),
+                            enabled: false,
+                        },
+                    ],
+                    response: vec![],
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "bad_request");
     }
 }

@@ -11,10 +11,10 @@ use crate::{
     ca::CertificateAuthority,
     log_buffer::LogBuffer,
     model::{
-        AppConfig, CaptureDetail, CaptureSummary, Column, InterceptorInfo, InterceptorKind,
-        InterceptorLibraryItem, MAX_SESSION_INTERCEPTORS_PER_KIND, ProxyStatus,
-        ResolvedSessionInterceptor, ResolvedSessionInterceptors, Script, ScriptKind,
-        SessionInterceptors, SessionMetadata, SessionView, SystemLogEntry, WorkspacePaths,
+        AppConfig, CaptureDetail, CaptureSummary, Column, InterceptorKind, InterceptorLibraryItem,
+        MAX_SESSION_INTERCEPTORS_PER_KIND, ProxyStatus, ResolvedSessionInterceptor,
+        ResolvedSessionInterceptors, Script, ScriptKind, SessionInterceptors, SessionMetadata,
+        SessionView, SystemLogEntry, WorkspacePaths,
     },
     proxy::ProxyController,
     storage::CaptureStore,
@@ -275,11 +275,7 @@ impl ProxyCrab {
             let update_result = match kind {
                 ScriptKind::Column => self.rename_column_references(old_name, &script.name),
                 ScriptKind::RequestInterceptor | ScriptKind::ResponseInterceptor => {
-                    self.replace_interceptor_references(
-                        kind,
-                        old_name,
-                        Some(script.name.as_str()),
-                    )
+                    self.replace_interceptor_references(kind, old_name, Some(script.name.as_str()))
                 }
             };
             if let Err(error) = update_result {
@@ -341,14 +337,10 @@ impl ProxyCrab {
         let value = self.session_interceptors(session_id)?;
         Ok(ResolvedSessionInterceptors {
             session_id,
-            request: self.resolve_interceptor_entries(
-                ScriptKind::RequestInterceptor,
-                value.request,
-            ),
-            response: self.resolve_interceptor_entries(
-                ScriptKind::ResponseInterceptor,
-                value.response,
-            ),
+            request: self
+                .resolve_interceptor_entries(ScriptKind::RequestInterceptor, value.request),
+            response: self
+                .resolve_interceptor_entries(ScriptKind::ResponseInterceptor, value.response),
         })
     }
 
@@ -492,70 +484,6 @@ impl ProxyCrab {
         Ok(())
     }
 
-    pub fn interceptors(&self, kind: InterceptorKind) -> Result<Vec<InterceptorInfo>> {
-        let script_kind = interceptor_script_kind(kind);
-        let active = match kind {
-            InterceptorKind::Request => self.config().active_request_interceptors,
-            InterceptorKind::Response => self.config().active_response_interceptors,
-        };
-        Ok(self
-            .workspace
-            .list_scripts(script_kind)?
-            .into_iter()
-            .map(|script| {
-                let order = active.iter().position(|name| name == &script.name);
-                InterceptorInfo {
-                    name: script.name,
-                    enabled: order.is_some(),
-                    order,
-                }
-            })
-            .collect())
-    }
-
-    pub fn set_interceptor_enabled(
-        &self,
-        kind: InterceptorKind,
-        name: &str,
-        enabled: bool,
-    ) -> Result<()> {
-        self.workspace
-            .get_script(interceptor_script_kind(kind), name)?;
-        self.workspace.update_config(|config| {
-            let active = match kind {
-                InterceptorKind::Request => &mut config.active_request_interceptors,
-                InterceptorKind::Response => &mut config.active_response_interceptors,
-            };
-            active.retain(|item| item != name);
-            if enabled {
-                active.push(name.to_string());
-            }
-        })?;
-        Ok(())
-    }
-
-    pub fn set_interceptor_order(
-        &self,
-        kind: InterceptorKind,
-        order: Vec<String>,
-    ) -> Result<Vec<String>> {
-        for name in &order {
-            self.workspace
-                .get_script(interceptor_script_kind(kind), name)?;
-        }
-        let mut unique = order.clone();
-        unique.sort();
-        unique.dedup();
-        if unique.len() != order.len() {
-            bail!("interceptor order contains duplicates");
-        }
-        self.workspace.update_config(|config| match kind {
-            InterceptorKind::Request => config.active_request_interceptors = order.clone(),
-            InterceptorKind::Response => config.active_response_interceptors = order.clone(),
-        })?;
-        Ok(order)
-    }
-
     pub fn filter_history(&self) -> Vec<String> {
         self.config().filter_history
     }
@@ -681,15 +609,15 @@ fn interceptor_script_kind(kind: InterceptorKind) -> ScriptKind {
 }
 
 fn validate_session_interceptors(value: &SessionInterceptors) -> Result<()> {
-    for (label, entries) in [
-        ("request", &value.request),
-        ("response", &value.response),
-    ] {
+    for (label, entries) in [("request", &value.request), ("response", &value.response)] {
         if entries.len() > MAX_SESSION_INTERCEPTORS_PER_KIND {
             bail!("{label} interceptor chain cannot contain more than 12 entries");
         }
         let mut names = HashSet::new();
-        if entries.iter().any(|entry| !names.insert(entry.name.as_str())) {
+        if entries
+            .iter()
+            .any(|entry| !names.insert(entry.name.as_str()))
+        {
             bail!("{label} interceptor chain contains duplicate scripts");
         }
     }
@@ -715,11 +643,8 @@ mod tests {
     #[test]
     fn session_interceptor_chains_enforce_limit_and_uniqueness() {
         let app_data = tempdir().unwrap();
-        let runtime =
-            ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
-        let session = runtime
-            .create_session(Some("one".into()), None)
-            .unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
+        let session = runtime.create_session(Some("one".into()), None).unwrap();
         let duplicate = SessionInterceptors {
             request: vec![
                 SessionInterceptor {
@@ -758,14 +683,9 @@ mod tests {
     #[test]
     fn interceptor_rename_and_delete_update_every_session() {
         let app_data = tempdir().unwrap();
-        let runtime =
-            ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
-        let first = runtime
-            .create_session(Some("one".into()), None)
-            .unwrap();
-        let second = runtime
-            .create_session(Some("two".into()), None)
-            .unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
+        let first = runtime.create_session(Some("one".into()), None).unwrap();
+        let second = runtime.create_session(Some("two".into()), None).unwrap();
         runtime
             .create_script(
                 ScriptKind::RequestInterceptor,

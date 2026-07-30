@@ -4,10 +4,11 @@ use proxy_crab_mgr::{
     MitmManager, ProxyCrabManager,
     dto::{
         CertificateResponse, CreateSessionRequest, HttpServiceStatus, InterceptorCreateRequest,
-        InterceptorDetail, InterceptorList, InterceptorUpdateRequest, LogDetail, LogIdsPayload,
-        LogIdsRequest, LogViewsPayload, LogViewsRequest, ManagerError, ReplaceSessionViewRequest,
-        ScriptRequest, SessionViewPayload, SetInterceptorOrderRequest, SystemLogsQuery,
-        UpdateScriptRequest, UpdateSessionRequest,
+        InterceptorDetail, InterceptorLibraryList, InterceptorUpdateRequest, LogDetail,
+        LogIdsPayload, LogIdsRequest, LogViewsPayload, LogViewsRequest, ManagerError,
+        ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ScriptRequest,
+        SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery, UpdateScriptRequest,
+        UpdateSessionRequest,
     },
     http::{HttpServerHandle, start_http_server},
 };
@@ -199,7 +200,7 @@ async fn delete_column_script(
 async fn list_interceptors(
     state: State<'_, BackendState>,
     kind: InterceptorKind,
-) -> Result<InterceptorList, ManagerError> {
+) -> Result<InterceptorLibraryList, ManagerError> {
     state.manager().interceptors(kind).await
 }
 
@@ -243,24 +244,23 @@ async fn delete_interceptor(
 }
 
 #[tauri::command]
-async fn set_interceptor_enabled(
+async fn get_session_interceptors(
     state: State<'_, BackendState>,
-    kind: InterceptorKind,
-    name: String,
-    enabled: bool,
-) -> Result<(), ManagerError> {
-    state
-        .manager()
-        .set_interceptor_enabled(kind, name, enabled)
-        .await
+    session_id: Option<u64>,
+) -> Result<SessionInterceptorsPayload, ManagerError> {
+    state.manager().session_interceptors(session_id).await
 }
 
 #[tauri::command]
-async fn set_interceptor_order(
+async fn replace_session_interceptors(
     state: State<'_, BackendState>,
-    request: SetInterceptorOrderRequest,
-) -> Result<Vec<String>, ManagerError> {
-    state.manager().set_interceptor_order(request).await
+    session_id: Option<u64>,
+    request: ReplaceSessionInterceptorsRequest,
+) -> Result<SessionInterceptorsPayload, ManagerError> {
+    state
+        .manager()
+        .replace_session_interceptors(session_id, request)
+        .await
 }
 
 #[tauri::command]
@@ -409,8 +409,8 @@ pub fn run() {
             get_interceptor,
             update_interceptor,
             delete_interceptor,
-            set_interceptor_enabled,
-            set_interceptor_order,
+            get_session_interceptors,
+            replace_session_interceptors,
             get_filter_history,
             add_filter_history,
             remove_filter_history,

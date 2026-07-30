@@ -19,10 +19,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub active_session_id: Option<u64>,
     #[serde(default)]
-    pub active_request_interceptors: Vec<String>,
-    #[serde(default)]
-    pub active_response_interceptors: Vec<String>,
-    #[serde(default)]
     pub filter_history: Vec<String>,
 }
 
@@ -34,8 +30,6 @@ impl Default for AppConfig {
             api_host: default_api_host(),
             api_port: default_api_port(),
             active_session_id: None,
-            active_request_interceptors: Vec::new(),
-            active_response_interceptors: Vec::new(),
             filter_history: Vec::new(),
         }
     }
@@ -156,13 +150,6 @@ pub enum ScriptKind {
 pub enum InterceptorKind {
     Request,
     Response,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct InterceptorInfo {
-    pub name: String,
-    pub enabled: bool,
-    pub order: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -22,7 +22,7 @@ use crate::{
     dto::{
         CreateSessionRequest, FilterHistoryRequest, InterceptorCreateRequest,
         InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError,
-        ReplaceSessionViewRequest, ScriptRequest, SessionQuery, SetInterceptorOrderRequest,
+        ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ScriptRequest, SessionQuery,
         SetWorkspaceRequest, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
     },
     manager::ProxyCrabManager,
@@ -153,6 +153,10 @@ pub fn router(manager: ManagerState) -> Router {
             get(session_view).put(replace_session_view),
         )
         .route(
+            "/api/session-interceptors",
+            get(session_interceptors).put(replace_session_interceptors),
+        )
+        .route(
             "/api/column-scripts",
             get(column_scripts).post(create_column_script),
         )
@@ -162,7 +166,6 @@ pub fn router(manager: ManagerState) -> Router {
                 .put(update_column_script)
                 .delete(delete_column_script),
         )
-        .route("/api/interceptors/order", put(set_interceptor_order))
         .route(
             "/api/interceptors",
             get(interceptors).post(create_interceptor),
@@ -172,14 +175,6 @@ pub fn router(manager: ManagerState) -> Router {
             get(interceptor)
                 .put(update_interceptor)
                 .delete(delete_interceptor),
-        )
-        .route(
-            "/api/interceptors/{kind}/{name}/enable",
-            post(enable_interceptor),
-        )
-        .route(
-            "/api/interceptors/{kind}/{name}/disable",
-            post(disable_interceptor),
         )
         .route(
             "/api/filter-history",
@@ -355,6 +350,25 @@ async fn replace_session_view(
     )
 }
 
+async fn session_interceptors(
+    State(manager): State<ManagerState>,
+    ApiQuery(query): ApiQuery<SessionQuery>,
+) -> ApiResult {
+    success(manager.session_interceptors(query.session_id).await?)
+}
+
+async fn replace_session_interceptors(
+    State(manager): State<ManagerState>,
+    ApiQuery(query): ApiQuery<SessionQuery>,
+    ApiJson(request): ApiJson<ReplaceSessionInterceptorsRequest>,
+) -> ApiResult {
+    success(
+        manager
+            .replace_session_interceptors(query.session_id, request)
+            .await?,
+    )
+}
+
 async fn column_scripts(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.column_scripts().await?)
 }
@@ -436,33 +450,6 @@ async fn delete_interceptor(
 ) -> ApiResult {
     manager.delete_interceptor(parse_kind(&kind)?, name).await?;
     success(json!({}))
-}
-
-async fn enable_interceptor(
-    State(manager): State<ManagerState>,
-    ApiPath((kind, name)): ApiPath<(String, String)>,
-) -> ApiResult {
-    manager
-        .set_interceptor_enabled(parse_kind(&kind)?, name, true)
-        .await?;
-    success(json!({}))
-}
-
-async fn disable_interceptor(
-    State(manager): State<ManagerState>,
-    ApiPath((kind, name)): ApiPath<(String, String)>,
-) -> ApiResult {
-    manager
-        .set_interceptor_enabled(parse_kind(&kind)?, name, false)
-        .await?;
-    success(json!({}))
-}
-
-async fn set_interceptor_order(
-    State(manager): State<ManagerState>,
-    ApiJson(request): ApiJson<SetInterceptorOrderRequest>,
-) -> ApiResult {
-    success(manager.set_interceptor_order(request).await?)
 }
 
 async fn filter_history(State(manager): State<ManagerState>) -> ApiResult {
@@ -680,6 +667,12 @@ mod tests {
             ("POST", "/api/logs/views", r#"{"logs":[]}"#),
             ("GET", "/api/session-view", ""),
             ("PUT", "/api/session-view", r#"{"columns":[]}"#),
+            ("GET", "/api/session-interceptors", ""),
+            (
+                "PUT",
+                "/api/session-interceptors",
+                r#"{"request":[],"response":[]}"#,
+            ),
         ] {
             let response = app
                 .clone()
@@ -701,6 +694,9 @@ mod tests {
             ("POST", "/api/logs/filter"),
             ("GET", "/api/sessions/1/logs"),
             ("GET", "/api/columns"),
+            ("PUT", "/api/interceptors/order"),
+            ("POST", "/api/interceptors/request/example/enable"),
+            ("POST", "/api/interceptors/request/example/disable"),
         ] {
             let response = app
                 .clone()

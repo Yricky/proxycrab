@@ -1,6 +1,6 @@
 use proxy_crab_mitm::model::{
-    AppConfig, BodyPayload, CaptureError, Column, InterceptorInfo, InterceptorKind, Modification,
-    ProxyStatus, Script, SessionMetadata, SystemLogEntry, WorkspacePaths,
+    AppConfig, BodyPayload, CaptureError, Column, InterceptorExecution, InterceptorKind,
+    InterceptorLibraryItem, ProxyStatus, Script, SessionMetadata, SystemLogEntry, WorkspacePaths,
 };
 use serde::{Deserialize, Serialize};
 
@@ -180,8 +180,8 @@ pub struct LogDetail {
     pub error: Option<CaptureError>,
     pub request: RequestDetail,
     pub response: Option<ResponseDetail>,
-    pub req_modifications: Vec<Modification>,
-    pub resp_modifications: Vec<Modification>,
+    pub request_interceptors: Vec<InterceptorExecution>,
+    pub response_interceptors: Vec<InterceptorExecution>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,22 +203,18 @@ pub struct InterceptorCreateRequest {
     pub name: String,
     #[serde(default)]
     pub content: String,
-    #[serde(default)]
-    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterceptorUpdateRequest {
     pub name: Option<String>,
     pub content: Option<String>,
-    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InterceptorList {
+pub struct InterceptorLibraryList {
     pub kind: InterceptorKind,
-    pub active_order: Vec<String>,
-    pub items: Vec<InterceptorInfo>,
+    pub items: Vec<InterceptorLibraryItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,13 +222,32 @@ pub struct InterceptorDetail {
     pub kind: InterceptorKind,
     pub name: String,
     pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInterceptorInput {
+    pub name: String,
     pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetInterceptorOrderRequest {
-    pub kind: InterceptorKind,
-    pub order: Vec<String>,
+pub struct ReplaceSessionInterceptorsRequest {
+    pub request: Vec<SessionInterceptorInput>,
+    pub response: Vec<SessionInterceptorInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInterceptorItem {
+    pub name: String,
+    pub enabled: bool,
+    pub valid: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInterceptorsPayload {
+    pub session_id: u64,
+    pub request: Vec<SessionInterceptorItem>,
+    pub response: Vec<SessionInterceptorItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
