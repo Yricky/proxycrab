@@ -75,7 +75,8 @@ impl CaptureStore {
         self.connection()?.execute(
             "UPDATE captures SET
                 method=?2, uri=?3, req_version=?4, req_headers=?5,
-                req_modifications=?6, stage='request', updated_at=?7
+                req_modifications=?6, stage='request',
+                updated_at=MAX(updated_at + 1, ?7)
              WHERE id=?1",
             params![
                 id as i64,
@@ -99,7 +100,8 @@ impl CaptureStore {
         self.connection()?.execute(
             "UPDATE captures SET
                 resp_status=?2, resp_version=?3, resp_headers=?4,
-                resp_modifications=?5, outcome='success', stage='completed', updated_at=?6
+                resp_modifications=?5, outcome='success', stage='completed',
+                updated_at=MAX(updated_at + 1, ?6)
              WHERE id=?1",
             params![
                 id as i64,
@@ -113,10 +115,23 @@ impl CaptureStore {
         Ok(())
     }
 
+    pub fn mitm_established(&self, id: u64) -> Result<()> {
+        self.connection()?.execute(
+            "UPDATE captures SET
+                resp_status=200, resp_version='HTTP/1.1', resp_headers='{}',
+                outcome='success', stage='tls_mitm',
+                updated_at=MAX(updated_at + 1, ?2)
+             WHERE id=?1",
+            params![id as i64, now_millis() as i64],
+        )?;
+        Ok(())
+    }
+
     pub fn fail(&self, id: u64, error: &CaptureError) -> Result<()> {
         self.connection()?.execute(
             "UPDATE captures SET outcome='failed', stage=?2, error_stage=?3,
-                error_kind=?4, error_message=?5, updated_at=?6 WHERE id=?1",
+                error_kind=?4, error_message=?5,
+                updated_at=MAX(updated_at + 1, ?6) WHERE id=?1",
             params![
                 id as i64,
                 error_stage_name(error.stage),
@@ -132,7 +147,7 @@ impl CaptureStore {
     pub fn note_error(&self, id: u64, error: &CaptureError) -> Result<()> {
         self.connection()?.execute(
             "UPDATE captures SET error_stage=?2, error_kind=?3,
-                error_message=?4, updated_at=?5 WHERE id=?1",
+                error_message=?4, updated_at=MAX(updated_at + 1, ?5) WHERE id=?1",
             params![
                 id as i64,
                 error_stage_name(error.stage),
@@ -146,7 +161,8 @@ impl CaptureStore {
 
     pub fn tunneled(&self, id: u64) -> Result<()> {
         self.connection()?.execute(
-            "UPDATE captures SET outcome='tunneled', stage='tunnel', updated_at=?2 WHERE id=?1",
+            "UPDATE captures SET outcome='tunneled', stage='tunnel',
+                updated_at=MAX(updated_at + 1, ?2) WHERE id=?1",
             params![id as i64, now_millis() as i64],
         )?;
         Ok(())
@@ -173,6 +189,10 @@ impl CaptureStore {
             return Ok(());
         }
         fs::write(self.body_path(id, side, modified), bytes)?;
+        self.connection()?.execute(
+            "UPDATE captures SET updated_at=MAX(updated_at + 1, ?2) WHERE id=?1",
+            params![id as i64, now_millis() as i64],
+        )?;
         Ok(())
     }
 
@@ -206,6 +226,59 @@ impl CaptureStore {
             params![before_id.map(|id| id as i64), limit as i64],
             |row| self.summary_from_row(row),
         )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn list_range(
+        &self,
+        limit: usize,
+        min_id: Option<u64>,
+        max_id: Option<u64>,
+        ascending: bool,
+    ) -> Result<Vec<CaptureSummary>> {
+        let connection = self.connection()?;
+        let order = if ascending { "ASC" } else { "DESC" };
+        let sql = format!(
+            "SELECT id, source, method, uri, req_version, req_headers,
+                    resp_status, resp_version, resp_headers, outcome, stage,
+                    error_stage, error_kind, error_message, created_at, updated_at
+             FROM captures
+             WHERE (?1 IS NULL OR id > ?1) AND (?2 IS NULL OR id < ?2)
+             ORDER BY id {order} LIMIT ?3"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(
+            params![
+                min_id.map(|id| id as i64),
+                max_id.map(|id| id as i64),
+                limit as i64
+            ],
+            |row| self.summary_from_row(row),
+        )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn get_many(&self, ids: &[u64]) -> Result<Vec<CaptureSummary>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, source, method, uri, req_version, req_headers,
+                    resp_status, resp_version, resp_headers, outcome, stage,
+                    error_stage, error_kind, error_message, created_at, updated_at
+             FROM captures WHERE id IN ({placeholders})"
+        );
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(&sql)?;
+        let values = ids.iter().map(|id| *id as i64).collect::<Vec<_>>();
+        let rows = statement.query_map(rusqlite::params_from_iter(values), |row| {
+            self.summary_from_row(row)
+        })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
@@ -262,7 +335,8 @@ impl CaptureStore {
         Ok(self.connection()?.execute(
             "UPDATE captures SET outcome='failed', stage='connect',
                 error_stage='connect', error_kind='proxy_shutdown',
-                error_message='proxy stopped before the request completed', updated_at=?1
+                error_message='proxy stopped before the request completed',
+                updated_at=MAX(updated_at + 1, ?1)
              WHERE outcome='in_progress'",
             params![now_millis() as i64],
         )?)
@@ -465,7 +539,16 @@ mod tests {
 
     use crate::model::{CaptureError, CaptureOutcome, ErrorStage, HeaderValues, RequestData};
 
-    use super::{CaptureStore, decode_body};
+    use super::{BodySide, CaptureStore, decode_body};
+
+    fn request(uri: &str) -> RequestData {
+        RequestData {
+            method: "GET".into(),
+            uri: uri.into(),
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+        }
+    }
 
     #[test]
     fn persists_diagnostic_failure() {
@@ -500,5 +583,55 @@ mod tests {
         encoder.write_all(&vec![b'a'; 4096]).unwrap();
         let compressed = encoder.finish().unwrap();
         assert!(decode_body(&compressed, "gzip", 128).is_err());
+    }
+
+    #[test]
+    fn range_queries_use_exclusive_bounds_in_both_directions() {
+        let root = tempdir().unwrap();
+        let store = CaptureStore::open(7, root.path()).unwrap();
+        let ids = (0..5)
+            .map(|index| {
+                store
+                    .begin(
+                        "127.0.0.1",
+                        &request(&format!("http://example.com/{index}")),
+                        "request",
+                    )
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let older = store
+            .list_range(10, None, Some(ids[4]), false)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        let newer = store
+            .list_range(10, Some(ids[1]), None, true)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(older, vec![ids[3], ids[2], ids[1], ids[0]]);
+        assert_eq!(newer, vec![ids[2], ids[3], ids[4]]);
+    }
+
+    #[test]
+    fn body_writes_advance_the_log_version_monotonically() {
+        let root = tempdir().unwrap();
+        let store = CaptureStore::open(7, root.path()).unwrap();
+        let id = store
+            .begin("127.0.0.1", &request("http://example.com"), "request")
+            .unwrap();
+        let before = store.get(id).unwrap().unwrap().summary.updated_at;
+
+        store
+            .save_body(id, BodySide::Request, false, b"body")
+            .unwrap();
+        let after = store.get(id).unwrap().unwrap().summary.updated_at;
+
+        assert!(after > before);
     }
 }

@@ -3,11 +3,11 @@ use std::sync::{Arc, Mutex, RwLock};
 use proxy_crab_mgr::{
     MitmManager, ProxyCrabManager,
     dto::{
-        CertificateResponse, ColumnInput, CreateSessionRequest, FilterLogsRequest,
-        HttpServiceStatus, InterceptorCreateRequest, InterceptorDetail, InterceptorList,
-        InterceptorUpdateRequest, LogDetail, LogsPayload, LogsQuery, ManagerError, ScriptRequest,
-        SetInterceptorOrderRequest, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
-        VisibleColumn,
+        CertificateResponse, CreateSessionRequest, HttpServiceStatus, InterceptorCreateRequest,
+        InterceptorDetail, InterceptorList, InterceptorUpdateRequest, LogDetail, LogIdsPayload,
+        LogIdsRequest, LogViewsPayload, LogViewsRequest, ManagerError, ReplaceSessionViewRequest,
+        ScriptRequest, SessionViewPayload, SetInterceptorOrderRequest, SystemLogsQuery,
+        UpdateScriptRequest, UpdateSessionRequest,
     },
     http::{HttpServerHandle, start_http_server},
 };
@@ -113,11 +113,19 @@ async fn activate_session(
 }
 
 #[tauri::command]
-async fn list_logs(
+async fn get_log_ids(
     state: State<'_, BackendState>,
-    query: LogsQuery,
-) -> Result<LogsPayload, ManagerError> {
-    state.manager().logs(query).await
+    request: LogIdsRequest,
+) -> Result<LogIdsPayload, ManagerError> {
+    state.manager().log_ids(request).await
+}
+
+#[tauri::command]
+async fn get_log_views(
+    state: State<'_, BackendState>,
+    request: LogViewsRequest,
+) -> Result<LogViewsPayload, ManagerError> {
+    state.manager().log_views(request).await
 }
 
 #[tauri::command]
@@ -130,11 +138,23 @@ async fn get_log(
 }
 
 #[tauri::command]
-async fn filter_logs(
+async fn get_session_view(
     state: State<'_, BackendState>,
-    request: FilterLogsRequest,
-) -> Result<LogsPayload, ManagerError> {
-    state.manager().filter_logs(request).await
+    session_id: Option<u64>,
+) -> Result<SessionViewPayload, ManagerError> {
+    state.manager().session_view(session_id).await
+}
+
+#[tauri::command]
+async fn replace_session_view(
+    state: State<'_, BackendState>,
+    session_id: Option<u64>,
+    request: ReplaceSessionViewRequest,
+) -> Result<SessionViewPayload, ManagerError> {
+    state
+        .manager()
+        .replace_session_view(session_id, request)
+        .await
 }
 
 #[tauri::command]
@@ -173,36 +193,6 @@ async fn delete_column_script(
     name: String,
 ) -> Result<(), ManagerError> {
     state.manager().delete_column_script(name).await
-}
-
-#[tauri::command]
-async fn list_columns(state: State<'_, BackendState>) -> Result<Vec<VisibleColumn>, ManagerError> {
-    state.manager().columns().await
-}
-
-#[tauri::command]
-async fn append_column(
-    state: State<'_, BackendState>,
-    input: ColumnInput,
-) -> Result<Vec<VisibleColumn>, ManagerError> {
-    state.manager().append_column(input).await
-}
-
-#[tauri::command]
-async fn replace_column(
-    state: State<'_, BackendState>,
-    index: usize,
-    input: ColumnInput,
-) -> Result<Vec<VisibleColumn>, ManagerError> {
-    state.manager().replace_column(index, input).await
-}
-
-#[tauri::command]
-async fn delete_column(
-    state: State<'_, BackendState>,
-    index: usize,
-) -> Result<Vec<VisibleColumn>, ManagerError> {
-    state.manager().delete_column(index).await
 }
 
 #[tauri::command]
@@ -404,18 +394,16 @@ pub fn run() {
             update_session,
             delete_session,
             activate_session,
-            list_logs,
+            get_log_ids,
+            get_log_views,
             get_log,
-            filter_logs,
+            get_session_view,
+            replace_session_view,
             list_column_scripts,
             create_column_script,
             get_column_script,
             update_column_script,
             delete_column_script,
-            list_columns,
-            append_column,
-            replace_column,
-            delete_column,
             list_interceptors,
             create_interceptor,
             get_interceptor,

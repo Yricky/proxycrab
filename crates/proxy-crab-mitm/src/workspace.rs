@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::model::{AppConfig, Script, ScriptKind, SessionMetadata, WorkspacePaths};
+use crate::model::{AppConfig, Script, ScriptKind, SessionMetadata, SessionView, WorkspacePaths};
 
 const POINTER_FILE: &str = "config.json";
 const WORKSPACE_CONFIG_FILE: &str = "app_config.json";
@@ -172,6 +172,10 @@ impl Workspace {
         name: Option<String>,
         description: Option<String>,
     ) -> Result<SessionMetadata> {
+        let initial_view = self
+            .active_session()
+            .and_then(|session| self.session_view(session.id).ok())
+            .unwrap_or_default();
         let mut sessions = self
             .sessions
             .write()
@@ -189,6 +193,7 @@ impl Workspace {
         let directory = self.session_dir(id);
         fs::create_dir_all(directory.join("blob"))?;
         write_json_atomic(&directory.join("metadata.json"), &session)?;
+        write_json_atomic(&directory.join("view.json"), &initial_view)?;
         sessions.push(session.clone());
         Ok(session)
     }
@@ -267,6 +272,36 @@ impl Workspace {
 
     pub fn session_dir(&self, id: u64) -> PathBuf {
         self.root.join("sessions").join(id.to_string())
+    }
+
+    pub fn session_view(&self, id: u64) -> Result<SessionView> {
+        self.require_session(id)?;
+        let path = self.session_dir(id).join("view.json");
+        match read_json(&path) {
+            Ok(view) => Ok(view),
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                Ok(SessionView::default())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn replace_session_view(&self, id: u64, view: SessionView) -> Result<SessionView> {
+        self.require_session(id)?;
+        write_json_atomic(&self.session_dir(id).join("view.json"), &view)?;
+        Ok(view)
+    }
+
+    fn require_session(&self, id: u64) -> Result<()> {
+        if self.sessions().iter().any(|session| session.id == id) {
+            Ok(())
+        } else {
+            bail!("session {id} not found")
+        }
     }
 
     pub fn list_scripts(&self, kind: ScriptKind) -> Result<Vec<Script>> {
@@ -390,6 +425,8 @@ fn write_bytes_atomic(path: &Path, content: &[u8]) -> Result<()> {
 mod tests {
     use tempfile::tempdir;
 
+    use crate::model::{Column, SessionView};
+
     use super::{Workspace, configure_workspace_for_next_start, resolve_workspace};
 
     #[test]
@@ -424,5 +461,46 @@ mod tests {
         let root = tempdir().unwrap();
         let _first = Workspace::open(root.path()).unwrap();
         assert!(Workspace::open(root.path()).is_err());
+    }
+
+    #[test]
+    fn new_session_clones_the_active_session_view() {
+        let root = tempdir().unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+        let first = workspace
+            .create_session(Some("first".into()), None)
+            .unwrap();
+        workspace
+            .replace_session_view(
+                first.id,
+                SessionView {
+                    columns: vec![Column::Stage { width: 91.0 }],
+                },
+            )
+            .unwrap();
+        workspace.activate_session(first.id).unwrap();
+
+        let second = workspace
+            .create_session(Some("second".into()), None)
+            .unwrap();
+
+        assert_eq!(
+            workspace.session_view(second.id).unwrap().columns,
+            vec![Column::Stage { width: 91.0 }]
+        );
+    }
+
+    #[test]
+    fn missing_session_view_uses_fixed_defaults_without_migration() {
+        let root = tempdir().unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+        let session = workspace.create_session(None, None).unwrap();
+        std::fs::remove_file(workspace.session_dir(session.id).join("view.json")).unwrap();
+
+        assert_eq!(
+            workspace.session_view(session.id).unwrap(),
+            SessionView::default()
+        );
+        assert!(!workspace.session_dir(session.id).join("view.json").exists());
     }
 }

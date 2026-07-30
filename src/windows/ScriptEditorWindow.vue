@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useBackend } from "../api";
 import { appStore, reportError } from "../stores/app";
+import { logsStore } from "../stores/logs";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import { Io5Save } from "vue-icons-plus/io5";
 
@@ -47,6 +48,7 @@ async function save(): Promise<void> {
   try {
     if (props.kind === "column") {
       await backend.updateColumnScript(props.name, { content: content.value });
+      await logsStore.refreshView();
     } else {
       await backend.updateInterceptor(props.kind, props.name, { content: content.value });
     }

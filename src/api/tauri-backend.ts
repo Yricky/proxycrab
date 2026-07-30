@@ -2,15 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Backend } from "./backend";
 import type {
   AppConfig,
-  ColumnInput,
   CreateSessionRequest,
-  FilterLogsRequest,
   InterceptorCreateRequest,
   InterceptorKind,
   InterceptorUpdateRequest,
   LogDetail,
-  LogsQuery,
+  LogIdsRequest,
+  LogViewsRequest,
   ManagerError,
+  ReplaceSessionViewRequest,
   ScriptRequest,
   SetInterceptorOrderRequest,
   SystemLogsQuery,
@@ -74,10 +74,14 @@ export function createTauriBackend(): Backend {
     deleteSession: (id: number) => call("delete_session", { id }),
     activateSession: (id: number) => call("activate_session", { id }),
 
-    listLogs: (query: LogsQuery) => call("list_logs", { query }),
+    getLogIds: (request: LogIdsRequest) => call("get_log_ids", { request }),
+    getLogViews: (request: LogViewsRequest) => call("get_log_views", { request }),
     getLog: (sessionId: number | null, id: number) =>
       call<LogDetail>("get_log", { sessionId, id }),
-    filterLogs: (request: FilterLogsRequest) => call("filter_logs", { request }),
+    getSessionView: (sessionId: number | null) =>
+      call("get_session_view", { sessionId }),
+    replaceSessionView: (sessionId: number | null, request: ReplaceSessionViewRequest) =>
+      call("replace_session_view", { sessionId, request }),
 
     listColumnScripts: () => call("list_column_scripts"),
     createColumnScript: (request: ScriptRequest) => call("create_column_script", { request }),
@@ -85,12 +89,6 @@ export function createTauriBackend(): Backend {
     updateColumnScript: (name: string, request: UpdateScriptRequest) =>
       call("update_column_script", { name, request }),
     deleteColumnScript: (name: string) => call("delete_column_script", { name }),
-
-    listColumns: () => call("list_columns"),
-    appendColumn: (input: ColumnInput) => call("append_column", { input }),
-    replaceColumn: (index: number, input: ColumnInput) =>
-      call("replace_column", { index, input }),
-    deleteColumn: (index: number) => call("delete_column", { index }),
 
     listInterceptors: (kind: InterceptorKind) => call("list_interceptors", { kind }),
     createInterceptor: (request: InterceptorCreateRequest) =>

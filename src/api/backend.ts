@@ -1,22 +1,23 @@
 import type {
   AppConfig,
   CertificateResponse,
-  Column,
-  ColumnInput,
   CreateSessionRequest,
-  FilterLogsRequest,
   InterceptorCreateRequest,
   InterceptorKind,
   InterceptorList,
   InterceptorUpdateRequest,
   LogDetail,
-  LogsPayload,
-  LogsQuery,
+  LogIdsPayload,
+  LogIdsRequest,
+  LogViewsPayload,
+  LogViewsRequest,
   ProxyStatus,
+  ReplaceSessionViewRequest,
   Script,
   ScriptRequest,
   SessionMetadata,
   SetInterceptorOrderRequest,
+  SessionViewPayload,
   SystemLogEntry,
   SystemLogsQuery,
   UpdateScriptRequest,
@@ -50,9 +51,14 @@ export interface Backend {
   activateSession(id: number): Promise<SessionMetadata>;
 
   // capture logs
-  listLogs(query: LogsQuery): Promise<LogsPayload>;
+  getLogIds(request: LogIdsRequest): Promise<LogIdsPayload>;
+  getLogViews(request: LogViewsRequest): Promise<LogViewsPayload>;
   getLog(sessionId: number | null, id: number): Promise<LogDetail>;
-  filterLogs(request: FilterLogsRequest): Promise<LogsPayload>;
+  getSessionView(sessionId: number | null): Promise<SessionViewPayload>;
+  replaceSessionView(
+    sessionId: number | null,
+    request: ReplaceSessionViewRequest,
+  ): Promise<SessionViewPayload>;
 
   // column scripts
   listColumnScripts(): Promise<Script[]>;
@@ -60,12 +66,6 @@ export interface Backend {
   getColumnScript(name: string): Promise<Script>;
   updateColumnScript(name: string, request: UpdateScriptRequest): Promise<void>;
   deleteColumnScript(name: string): Promise<void>;
-
-  // visible columns
-  listColumns(): Promise<Column[]>;
-  appendColumn(input: ColumnInput): Promise<Column[]>;
-  replaceColumn(index: number, input: ColumnInput): Promise<Column[]>;
-  deleteColumn(index: number): Promise<Column[]>;
 
   // interceptors
   listInterceptors(kind: InterceptorKind): Promise<InterceptorList>;

@@ -1,5 +1,5 @@
 use proxy_crab_mitm::model::{
-    AppConfig, BodyPayload, CaptureError, InterceptorInfo, InterceptorKind, Modification,
+    AppConfig, BodyPayload, CaptureError, Column, InterceptorInfo, InterceptorKind, Modification,
     ProxyStatus, Script, SessionMetadata, SystemLogEntry, WorkspacePaths,
 };
 use serde::{Deserialize, Serialize};
@@ -63,17 +63,40 @@ pub struct UpdateSessionRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogsQuery {
+pub struct SessionQuery {
     pub session_id: Option<u64>,
-    pub limit: Option<usize>,
-    pub after_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilterLogsRequest {
+pub struct LogIdsRequest {
     pub session_id: Option<u64>,
+    pub filter: Option<String>,
+    pub min_id: Option<u64>,
+    pub max_id: Option<u64>,
     pub limit: Option<usize>,
-    pub script: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogIdsPayload {
+    pub ids: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogViewItem {
+    pub id: u64,
+    pub updated_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionViewInput {
+    pub columns: Vec<Column>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogViewsRequest {
+    pub session_id: Option<u64>,
+    pub logs: Vec<LogViewItem>,
+    pub view: Option<SessionViewInput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,25 +110,37 @@ pub struct ColumnView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VisibleColumn {
-    pub index: usize,
-    pub key: String,
-    pub name: String,
-    pub kind: String,
-    pub width: f32,
-    pub script_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogRow {
+pub struct LogViewRow {
     pub id: u64,
+    pub updated_at: u64,
     pub cells: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogsPayload {
+pub struct LogViewException {
+    pub id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column_index: Option<usize>,
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogViewsPayload {
     pub columns: Vec<ColumnView>,
-    pub rows: Vec<LogRow>,
+    pub rows: Vec<LogViewRow>,
+    pub exceptions: Vec<LogViewException>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionViewPayload {
+    pub session_id: u64,
+    pub columns: Vec<Column>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplaceSessionViewRequest {
+    pub columns: Vec<Column>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +171,8 @@ pub struct ResponseDetail {
 pub struct LogDetail {
     pub id: u64,
     pub session_id: u64,
+    pub created_at: u64,
+    pub updated_at: u64,
     pub source_type: String,
     pub source_addr: Option<String>,
     pub stage: String,
@@ -158,13 +195,6 @@ pub struct ScriptRequest {
 pub struct UpdateScriptRequest {
     pub name: Option<String>,
     pub content: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ColumnInput {
-    pub kind: String,
-    pub width: Option<f32>,
-    pub script_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,5 +269,4 @@ pub type ConfigResponse = AppConfig;
 pub type ProxyStatusResponse = ProxyStatus;
 pub type SessionsResponse = Vec<SessionMetadata>;
 pub type ScriptsResponse = Vec<Script>;
-pub type ColumnsResponse = Vec<VisibleColumn>;
 pub type SystemLogsResponse = Vec<SystemLogEntry>;

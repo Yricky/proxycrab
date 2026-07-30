@@ -498,12 +498,12 @@ async fn process_connect<C>(
         }
     };
     let is_http2 = tls.get_ref().1.alpn_protocol() == Some(b"h2");
-    if let Err(error) = capture.store.discard(capture.id) {
+    if let Err(error) = capture.store.mitm_established(capture.id) {
         fail_capture(
             &capture.store,
             capture.id,
             ErrorStage::TlsHandshake,
-            "connect_diagnostic_cleanup_failed",
+            "connect_capture_finalize_failed",
             &error.to_string(),
         );
         return;

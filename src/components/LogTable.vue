@@ -18,24 +18,26 @@ const scroller = ref<HTMLElement | null>(null);
 const scrollTop = ref(0);
 const viewportHeight = ref(0);
 
-/** Local width overrides (payload column index → px) for live resize. */
+/** Local width overrides (view column index → px) for live resize. */
 const widthOverrides = ref<Record<number, number>>({});
 
 const columns = computed(() => logsStore.columns);
 
 function columnWidth(index: number): number {
   if (widthOverrides.value[index] !== undefined) return widthOverrides.value[index];
-  if (index === 0) return ID_COLUMN_WIDTH;
   const w = columns.value[index]?.width;
   return w && w > 0 ? w : 160;
 }
 
 const gridTemplate = computed(
-  () => columns.value.map((_, i) => `${columnWidth(i)}px`).join(" "),
+  () =>
+    [`${ID_COLUMN_WIDTH}px`, ...columns.value.map((_, i) => `${columnWidth(i)}px`)].join(
+      " ",
+    ),
 );
 
 const totalWidth = computed(() =>
-  columns.value.reduce((sum, _, i) => sum + columnWidth(i), 0),
+  columns.value.reduce((sum, _, i) => sum + columnWidth(i), ID_COLUMN_WIDTH),
 );
 
 const rows = computed(() => logsStore.displayRows);
@@ -61,6 +63,11 @@ function onScroll(): void {
   if (!el) return;
   scrollTop.value = el.scrollTop;
   viewportHeight.value = el.clientHeight;
+  const threshold = el.clientHeight * 2;
+  const atOldRecordEdge = logsStore.sortDesc
+    ? el.scrollHeight - el.scrollTop - el.clientHeight < threshold
+    : el.scrollTop < threshold;
+  if (atOldRecordEdge) void logsStore.loadOlder();
 }
 
 let resizeObserver: ResizeObserver | null = null;
@@ -107,16 +114,17 @@ function startResize(index: number, event: PointerEvent): void {
 }
 
 async function persistWidth(payloadIndex: number, width: number): Promise<void> {
-  // Payload column 0 is the synthetic id column; config columns start at 1.
-  if (payloadIndex === 0) return;
+  const sessionId = sessionsStore.viewingSessionId;
+  if (sessionId === null) return;
   const column = columns.value[payloadIndex];
   if (!column) return;
   try {
-    await backend.replaceColumn(payloadIndex - 1, {
-      kind: column.kind,
-      width,
-      script_name: column.script_name ?? null,
-    });
+    const view = await backend.getSessionView(sessionId);
+    const current = view.columns[payloadIndex];
+    if (!current) return;
+    const next = [...view.columns];
+    next[payloadIndex] = { ...current, width };
+    await backend.replaceSessionView(sessionId, { columns: next });
   } catch (error) {
     reportError(error, "保存列宽失败");
   }
@@ -138,17 +146,20 @@ function cellClass(index: number, value: string): string {
   <div ref="scroller" class="lt-scroll" @scroll.passive="onScroll">
     <div class="lt-content" :style="{ width: totalWidth + 'px' }">
       <div class="lt-header" :style="{ gridTemplateColumns: gridTemplate }">
+        <div class="lt-cell lt-header-cell sortable" @click="toggleSort()">
+          <span class="lt-header-name">
+            id
+            <Io5ArrowDown v-if="logsStore.sortDesc" :size="11" />
+            <Io5ArrowUp v-else :size="11" />
+          </span>
+        </div>
         <div
           v-for="(column, i) in columns"
           :key="column.key + i"
           class="lt-cell lt-header-cell"
-          :class="{ sortable: i === 0 }"
-          @click="i === 0 && toggleSort()"
         >
           <span class="lt-header-name">
             {{ column.name }}
-            <Io5ArrowDown v-if="i === 0 && logsStore.sortDesc" :size="11" />
-            <Io5ArrowUp v-else-if="i === 0" :size="11" />
           </span>
           <span class="lt-resize" @pointerdown="startResize(i, $event)" @click.stop />
         </div>
@@ -166,12 +177,18 @@ function cellClass(index: number, value: string): string {
             :style="{ gridTemplateColumns: gridTemplate, height: ROW_HEIGHT + 'px' }"
             @click="openRow(entry.row.id)"
           >
+            <div class="lt-cell mono" :title="String(entry.row.id)">
+              {{ entry.row.id }}
+            </div>
             <div
               v-for="(cell, i) in entry.row.cells"
               :key="i"
               class="lt-cell mono"
-              :class="cellClass(i, cell)"
-              :title="cell"
+              :class="[
+                cellClass(i, cell),
+                { 'cell-error': logsStore.cellError(entry.row.id, i) },
+              ]"
+              :title="logsStore.cellError(entry.row.id, i) ?? cell"
             >
               {{ cell }}
             </div>
@@ -258,6 +275,10 @@ function cellClass(index: number, value: string): string {
 }
 .lt-row:hover {
   background: var(--bg-selected);
+}
+.lt-cell.cell-error {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 60%, transparent);
 }
 .lt-cell {
   padding: 0 8px;

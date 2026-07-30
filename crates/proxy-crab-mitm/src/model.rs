@@ -20,8 +20,6 @@ pub struct AppConfig {
     pub active_request_interceptors: Vec<String>,
     #[serde(default)]
     pub active_response_interceptors: Vec<String>,
-    #[serde(default = "default_columns")]
-    pub columns: Vec<Column>,
     #[serde(default)]
     pub filter_history: Vec<String>,
 }
@@ -36,7 +34,6 @@ impl Default for AppConfig {
             active_session_id: None,
             active_request_interceptors: Vec::new(),
             active_response_interceptors: Vec::new(),
-            columns: default_columns(),
             filter_history: Vec::new(),
         }
     }
@@ -58,13 +55,27 @@ const fn default_api_port() -> u16 {
     18089
 }
 
-fn default_columns() -> Vec<Column> {
+pub fn default_columns() -> Vec<Column> {
     vec![
         Column::Method { width: 50.0 },
         Column::Uri { width: 300.0 },
         Column::Code { width: 50.0 },
         Column::Source { width: 100.0 },
     ]
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionView {
+    #[serde(default = "default_columns")]
+    pub columns: Vec<Column>,
+}
+
+impl Default for SessionView {
+    fn default() -> Self {
+        Self {
+            columns: default_columns(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

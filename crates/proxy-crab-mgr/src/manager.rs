@@ -1,21 +1,23 @@
-use std::{path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use proxy_crab_mitm::{
     ProxyCrab,
     lua::{evaluate_column, evaluate_filter},
     model::{
-        AppConfig, CaptureOutcome, Column, HeaderValues, InterceptorKind, ProxyStatus, Script,
-        ScriptKind, SessionMetadata, SystemLogEntry, WorkspacePaths,
+        AppConfig, CaptureOutcome, CaptureSummary, Column, HeaderValues, InterceptorKind,
+        ProxyStatus, Script, ScriptKind, SessionMetadata, SessionView, SystemLogEntry,
+        WorkspacePaths,
     },
 };
 
 use crate::dto::{
-    CertificateResponse, ColumnInput, ColumnView, CreateSessionRequest, FilterLogsRequest,
-    HeaderItem, InterceptorCreateRequest, InterceptorDetail, InterceptorList,
-    InterceptorUpdateRequest, LogDetail, LogRow, LogsPayload, LogsQuery, ManagerError,
-    ManagerResult, RequestDetail, ResponseDetail, ScriptRequest, SetInterceptorOrderRequest,
-    SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest, VisibleColumn,
+    CertificateResponse, ColumnView, CreateSessionRequest, HeaderItem, InterceptorCreateRequest,
+    InterceptorDetail, InterceptorList, InterceptorUpdateRequest, LogDetail, LogIdsPayload,
+    LogIdsRequest, LogViewException, LogViewRow, LogViewsPayload, LogViewsRequest, ManagerError,
+    ManagerResult, ReplaceSessionViewRequest, RequestDetail, ResponseDetail, ScriptRequest,
+    SessionViewPayload, SetInterceptorOrderRequest, SystemLogsQuery, UpdateScriptRequest,
+    UpdateSessionRequest,
 };
 
 #[async_trait]
@@ -37,9 +39,15 @@ pub trait ProxyCrabManager: Send + Sync {
     ) -> ManagerResult<SessionMetadata>;
     async fn delete_session(&self, id: u64) -> ManagerResult<()>;
     async fn activate_session(&self, id: u64) -> ManagerResult<SessionMetadata>;
-    async fn logs(&self, query: LogsQuery) -> ManagerResult<LogsPayload>;
+    async fn log_ids(&self, request: LogIdsRequest) -> ManagerResult<LogIdsPayload>;
+    async fn log_views(&self, request: LogViewsRequest) -> ManagerResult<LogViewsPayload>;
     async fn log(&self, session_id: Option<u64>, id: u64) -> ManagerResult<LogDetail>;
-    async fn filter_logs(&self, request: FilterLogsRequest) -> ManagerResult<LogsPayload>;
+    async fn session_view(&self, session_id: Option<u64>) -> ManagerResult<SessionViewPayload>;
+    async fn replace_session_view(
+        &self,
+        session_id: Option<u64>,
+        request: ReplaceSessionViewRequest,
+    ) -> ManagerResult<SessionViewPayload>;
     async fn column_scripts(&self) -> ManagerResult<Vec<Script>>;
     async fn create_column_script(&self, request: ScriptRequest) -> ManagerResult<()>;
     async fn column_script(&self, name: String) -> ManagerResult<Script>;
@@ -49,14 +57,6 @@ pub trait ProxyCrabManager: Send + Sync {
         request: UpdateScriptRequest,
     ) -> ManagerResult<()>;
     async fn delete_column_script(&self, name: String) -> ManagerResult<()>;
-    async fn columns(&self) -> ManagerResult<Vec<VisibleColumn>>;
-    async fn append_column(&self, input: ColumnInput) -> ManagerResult<Vec<VisibleColumn>>;
-    async fn replace_column(
-        &self,
-        index: usize,
-        input: ColumnInput,
-    ) -> ManagerResult<Vec<VisibleColumn>>;
-    async fn delete_column(&self, index: usize) -> ManagerResult<Vec<VisibleColumn>>;
     async fn interceptors(&self, kind: InterceptorKind) -> ManagerResult<InterceptorList>;
     async fn create_interceptor(&self, request: InterceptorCreateRequest) -> ManagerResult<()>;
     async fn interceptor(
@@ -109,55 +109,18 @@ impl MitmManager {
             .ok_or_else(|| ManagerError::conflict("no active session"))
     }
 
-    fn logs_payload(
-        &self,
-        items: Vec<proxy_crab_mitm::model::CaptureSummary>,
-    ) -> ManagerResult<LogsPayload> {
-        let columns = self.runtime.columns();
-        let mut views = vec![ColumnView {
-            key: "id".into(),
-            name: "id".into(),
-            kind: "id".into(),
-            width: None,
-            script_name: None,
-        }];
-        views.extend(columns.iter().map(column_view));
-        let rows = items
-            .into_iter()
-            .map(|item| {
-                let mut cells = vec![item.id.to_string()];
-                for column in &columns {
-                    cells.push(self.render_cell(column, &item));
-                }
-                LogRow { id: item.id, cells }
-            })
-            .collect();
-        Ok(LogsPayload {
-            columns: views,
-            rows,
-        })
-    }
-
-    fn render_cell(
-        &self,
-        column: &Column,
-        item: &proxy_crab_mitm::model::CaptureSummary,
-    ) -> String {
+    fn render_builtin_cell(column: &Column, item: &CaptureSummary) -> Option<String> {
         match column {
-            Column::Method { .. } => item.request.method.clone(),
-            Column::Uri { .. } => item.request.uri.clone(),
+            Column::Method { .. } => Some(item.request.method.clone()),
+            Column::Uri { .. } => Some(item.request.uri.clone()),
             Column::Code { .. } => item
                 .response
                 .as_ref()
                 .map(|response| response.status.to_string())
-                .unwrap_or_else(|| "...".into()),
-            Column::Source { .. } => item.source.clone(),
-            Column::Stage { .. } => item.stage.clone(),
-            Column::Script { script_name, .. } => self
-                .runtime
-                .script(ScriptKind::Column, script_name)
-                .and_then(|script| evaluate_column(&script.content, item))
-                .unwrap_or_else(|error| error.to_string()),
+                .or_else(|| Some("...".into())),
+            Column::Source { .. } => Some(item.source.clone()),
+            Column::Stage { .. } => Some(item.stage.clone()),
+            Column::Script { .. } => None,
         }
     }
 }
@@ -247,17 +210,175 @@ impl ProxyCrabManager for MitmManager {
         self.runtime.activate_session(id).map_err(map_error)
     }
 
-    async fn logs(&self, query: LogsQuery) -> ManagerResult<LogsPayload> {
-        let session_id = self.session_id(query.session_id)?;
-        let items = self
-            .runtime
-            .list_captures(
-                session_id,
-                query.limit.unwrap_or(100).min(1000),
-                query.after_id,
-            )
-            .map_err(map_error)?;
-        self.logs_payload(items)
+    async fn log_ids(&self, request: LogIdsRequest) -> ManagerResult<LogIdsPayload> {
+        const DEFAULT_LIMIT: usize = 10_000;
+        const SCAN_PAGE_SIZE: usize = 512;
+
+        let session_id = self.session_id(request.session_id)?;
+        let limit = request.limit.unwrap_or(DEFAULT_LIMIT).min(DEFAULT_LIMIT);
+        if limit == 0 {
+            return Ok(LogIdsPayload { ids: Vec::new() });
+        }
+        let ascending = request.min_id.is_some() && request.max_id.is_none();
+        let script = request.filter.unwrap_or_default();
+        let runtime = self.runtime.clone();
+        let ids = tokio::task::spawn_blocking(move || {
+            if script.trim().is_empty() {
+                return runtime
+                    .list_captures_range(
+                        session_id,
+                        limit,
+                        request.min_id,
+                        request.max_id,
+                        ascending,
+                    )
+                    .map(|items| items.into_iter().map(|item| item.id).collect())
+                    .map_err(map_error);
+            }
+
+            let mut ids = Vec::with_capacity(limit);
+            let mut min_id = request.min_id;
+            let mut max_id = request.max_id;
+            loop {
+                let page = runtime
+                    .list_captures_range(session_id, SCAN_PAGE_SIZE, min_id, max_id, ascending)
+                    .map_err(map_error)?;
+                if page.is_empty() {
+                    break;
+                }
+                let page_len = page.len();
+                let cursor = page.last().map(|item| item.id);
+                for item in page {
+                    if evaluate_filter(&script, &item)
+                        .map_err(|error| ManagerError::bad_request(error.to_string()))?
+                    {
+                        ids.push(item.id);
+                        if ids.len() == limit {
+                            return Ok(ids);
+                        }
+                    }
+                }
+                if page_len < SCAN_PAGE_SIZE {
+                    break;
+                }
+                if ascending {
+                    min_id = cursor;
+                } else {
+                    max_id = cursor;
+                }
+            }
+            Ok(ids)
+        })
+        .await
+        .map_err(|error| ManagerError::internal(format!("log ID task failed: {error}")))??;
+        Ok(LogIdsPayload { ids })
+    }
+
+    async fn log_views(&self, request: LogViewsRequest) -> ManagerResult<LogViewsPayload> {
+        const MAX_LOGS: usize = 200;
+
+        if request.logs.len() > MAX_LOGS {
+            return Err(ManagerError::bad_request(format!(
+                "at most {MAX_LOGS} logs may be requested"
+            )));
+        }
+        let session_id = self.session_id(request.session_id)?;
+        let columns = match request.view {
+            Some(view) => view.columns,
+            None => {
+                self.runtime
+                    .session_view(session_id)
+                    .map_err(map_error)?
+                    .columns
+            }
+        };
+        if columns
+            .iter()
+            .any(|column| !column.width().is_finite() || column.width() <= 0.0)
+        {
+            return Err(ManagerError::bad_request("column width must be positive"));
+        }
+        let column_views = columns.iter().map(column_view).collect::<Vec<_>>();
+        let mut requested = HashMap::new();
+        for item in request.logs {
+            requested.insert(item.id, item.updated_at);
+        }
+        let ids = requested.keys().copied().collect::<Vec<_>>();
+        let summaries = self.runtime.captures(session_id, &ids).map_err(map_error)?;
+        let summaries = summaries
+            .into_iter()
+            .map(|item| (item.id, item))
+            .collect::<HashMap<_, _>>();
+        let mut scripts = HashMap::<String, Result<String, String>>::new();
+        for column in &columns {
+            if let Column::Script { script_name, .. } = column {
+                scripts.entry(script_name.clone()).or_insert_with(|| {
+                    self.runtime
+                        .script(ScriptKind::Column, script_name)
+                        .map(|script| script.content)
+                        .map_err(|error| error.to_string())
+                });
+            }
+        }
+
+        let mut rows = Vec::new();
+        let mut exceptions = Vec::new();
+        for (id, client_updated_at) in requested {
+            let Some(item) = summaries.get(&id) else {
+                exceptions.push(LogViewException {
+                    id,
+                    column_index: None,
+                    code: "log_not_found".into(),
+                    message: format!("log {id} not found"),
+                });
+                continue;
+            };
+            if client_updated_at.is_some_and(|updated_at| item.updated_at <= updated_at) {
+                continue;
+            }
+
+            let mut cells = Vec::with_capacity(columns.len());
+            for (column_index, column) in columns.iter().enumerate() {
+                if let Some(value) = Self::render_builtin_cell(column, item) {
+                    cells.push(value);
+                    continue;
+                }
+                let Column::Script { script_name, .. } = column else {
+                    unreachable!("all built-in columns were rendered above");
+                };
+                let result = match scripts
+                    .get(script_name)
+                    .expect("every script column is preloaded")
+                {
+                    Ok(content) => {
+                        evaluate_column(content, item).map_err(|error| error.to_string())
+                    }
+                    Err(message) => Err(message.clone()),
+                };
+                match result {
+                    Ok(value) => cells.push(value),
+                    Err(message) => {
+                        cells.push(String::new());
+                        exceptions.push(LogViewException {
+                            id,
+                            column_index: Some(column_index),
+                            code: "column_script_error".into(),
+                            message,
+                        });
+                    }
+                }
+            }
+            rows.push(LogViewRow {
+                id,
+                updated_at: item.updated_at,
+                cells,
+            });
+        }
+        Ok(LogViewsPayload {
+            columns: column_views,
+            rows,
+            exceptions,
+        })
     }
 
     async fn log(&self, session_id: Option<u64>, id: u64) -> ManagerResult<LogDetail> {
@@ -271,6 +392,8 @@ impl ProxyCrabManager for MitmManager {
         Ok(LogDetail {
             id,
             session_id,
+            created_at: detail.summary.created_at,
+            updated_at: detail.summary.updated_at,
             source_type: "ip".into(),
             source_addr: Some(detail.summary.source),
             stage: detail.summary.stage,
@@ -295,48 +418,34 @@ impl ProxyCrabManager for MitmManager {
         })
     }
 
-    async fn filter_logs(&self, request: FilterLogsRequest) -> ManagerResult<LogsPayload> {
-        let session_id = self.session_id(request.session_id)?;
-        let limit = request.limit.unwrap_or(100).min(1000);
-        if limit == 0 {
-            return self.logs_payload(Vec::new());
-        }
-        if request.script.trim().is_empty() {
-            let items = self
-                .runtime
-                .list_captures(session_id, limit, None)
-                .map_err(map_error)?;
-            return self.logs_payload(items);
-        }
-        let runtime = self.runtime.clone();
-        let script = request.script;
-        let matched = tokio::task::spawn_blocking(move || {
-            let mut matched = Vec::with_capacity(limit);
-            let mut before_id = None;
-            loop {
-                let page = runtime
-                    .list_captures_before(session_id, 256, before_id)
-                    .map_err(map_error)?;
-                if page.is_empty() {
-                    break;
-                }
-                before_id = page.last().map(|item| item.id);
-                for item in page {
-                    if evaluate_filter(&script, &item)
-                        .map_err(|error| ManagerError::bad_request(error.to_string()))?
-                    {
-                        matched.push(item);
-                        if matched.len() == limit {
-                            return Ok::<_, ManagerError>(matched);
-                        }
-                    }
-                }
-            }
-            Ok::<_, ManagerError>(matched)
+    async fn session_view(&self, session_id: Option<u64>) -> ManagerResult<SessionViewPayload> {
+        let session_id = self.session_id(session_id)?;
+        let view = self.runtime.session_view(session_id).map_err(map_error)?;
+        Ok(SessionViewPayload {
+            session_id,
+            columns: view.columns,
         })
-        .await
-        .map_err(|error| ManagerError::internal(format!("filter task failed: {error}")))??;
-        self.logs_payload(matched)
+    }
+
+    async fn replace_session_view(
+        &self,
+        session_id: Option<u64>,
+        request: ReplaceSessionViewRequest,
+    ) -> ManagerResult<SessionViewPayload> {
+        let session_id = self.session_id(session_id)?;
+        let view = self
+            .runtime
+            .replace_session_view(
+                session_id,
+                SessionView {
+                    columns: request.columns,
+                },
+            )
+            .map_err(map_error)?;
+        Ok(SessionViewPayload {
+            session_id,
+            columns: view.columns,
+        })
     }
 
     async fn column_scripts(&self) -> ManagerResult<Vec<Script>> {
@@ -386,41 +495,6 @@ impl ProxyCrabManager for MitmManager {
         self.runtime
             .delete_script(ScriptKind::Column, &name)
             .map_err(map_error)
-    }
-
-    async fn columns(&self) -> ManagerResult<Vec<VisibleColumn>> {
-        Ok(visible_columns(&self.runtime.columns()))
-    }
-
-    async fn append_column(&self, input: ColumnInput) -> ManagerResult<Vec<VisibleColumn>> {
-        let mut columns = self.runtime.columns();
-        columns.push(parse_column(input)?);
-        self.runtime.replace_columns(columns).map_err(map_error)?;
-        self.columns().await
-    }
-
-    async fn replace_column(
-        &self,
-        index: usize,
-        input: ColumnInput,
-    ) -> ManagerResult<Vec<VisibleColumn>> {
-        let mut columns = self.runtime.columns();
-        if index >= columns.len() {
-            return Err(ManagerError::not_found("column index not found"));
-        }
-        columns[index] = parse_column(input)?;
-        self.runtime.replace_columns(columns).map_err(map_error)?;
-        self.columns().await
-    }
-
-    async fn delete_column(&self, index: usize) -> ManagerResult<Vec<VisibleColumn>> {
-        let mut columns = self.runtime.columns();
-        if index >= columns.len() {
-            return Err(ManagerError::not_found("column index not found"));
-        }
-        columns.remove(index);
-        self.runtime.replace_columns(columns).map_err(map_error)?;
-        self.columns().await
     }
 
     async fn interceptors(&self, kind: InterceptorKind) -> ManagerResult<InterceptorList> {
@@ -572,53 +646,6 @@ impl ProxyCrabManager for MitmManager {
     }
 }
 
-fn parse_column(input: ColumnInput) -> ManagerResult<Column> {
-    let width = input.width.unwrap_or(match input.kind.as_str() {
-        "method" => 80.0,
-        "uri" => 300.0,
-        "code" => 50.0,
-        "source" => 130.0,
-        "stage" => 70.0,
-        "script" => 100.0,
-        _ => 100.0,
-    });
-    if !width.is_finite() || width <= 0.0 {
-        return Err(ManagerError::bad_request("column width must be positive"));
-    }
-    Ok(match input.kind.as_str() {
-        "method" => Column::Method { width },
-        "uri" => Column::Uri { width },
-        "code" => Column::Code { width },
-        "source" => Column::Source { width },
-        "stage" => Column::Stage { width },
-        "script" => Column::Script {
-            width,
-            script_name: input
-                .script_name
-                .ok_or_else(|| ManagerError::bad_request("script_name is required"))?,
-        },
-        _ => return Err(ManagerError::bad_request("unknown column kind")),
-    })
-}
-
-fn visible_columns(columns: &[Column]) -> Vec<VisibleColumn> {
-    columns
-        .iter()
-        .enumerate()
-        .map(|(index, column)| {
-            let view = column_view(column);
-            VisibleColumn {
-                index,
-                key: view.key,
-                name: view.name,
-                kind: view.kind,
-                width: view.width.unwrap_or_default(),
-                script_name: view.script_name,
-            }
-        })
-        .collect()
-}
-
 fn column_view(column: &Column) -> ColumnView {
     let kind = match column {
         Column::Method { .. } => "method",
@@ -689,5 +716,199 @@ fn map_error(error: anyhow::Error) -> ManagerError {
         ManagerError::bad_request(message)
     } else {
         ManagerError::internal(message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use proxy_crab_mitm::{
+        ProxyCrab,
+        log_buffer::LogBuffer,
+        model::{Column, HeaderValues, RequestData},
+        storage::CaptureStore,
+    };
+    use tempfile::tempdir;
+
+    use crate::dto::{
+        LogIdsRequest, LogViewItem, LogViewsRequest, ReplaceSessionViewRequest, ScriptRequest,
+        UpdateScriptRequest,
+    };
+
+    use super::{MitmManager, ProxyCrabManager};
+
+    fn request(path: &str) -> RequestData {
+        RequestData {
+            method: "GET".into(),
+            uri: format!("http://example.com/{path}"),
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn log_ids_apply_exclusive_bounds_and_batch_views_report_cell_errors() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.ensure_active_session().unwrap();
+        let store =
+            CaptureStore::open(session.id, &runtime.workspace().session_dir(session.id)).unwrap();
+        let first = store
+            .begin("127.0.0.1", &request("first"), "request")
+            .unwrap();
+        let second = store
+            .begin("127.0.0.1", &request("second"), "request")
+            .unwrap();
+        let third = store
+            .begin("127.0.0.1", &request("third"), "request")
+            .unwrap();
+        let manager = MitmManager::new(runtime);
+
+        let ids = manager
+            .log_ids(LogIdsRequest {
+                session_id: Some(session.id),
+                filter: None,
+                min_id: Some(first),
+                max_id: Some(third),
+                limit: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(ids.ids, vec![second]);
+
+        manager
+            .create_column_script(ScriptRequest {
+                name: "broken".into(),
+                content: "error(\"boom\")".into(),
+            })
+            .await
+            .unwrap();
+        manager
+            .replace_session_view(
+                Some(session.id),
+                ReplaceSessionViewRequest {
+                    columns: vec![
+                        Column::Method { width: 50.0 },
+                        Column::Script {
+                            width: 100.0,
+                            script_name: "broken".into(),
+                        },
+                    ],
+                },
+            )
+            .await
+            .unwrap();
+        let payload = manager
+            .log_views(LogViewsRequest {
+                session_id: Some(session.id),
+                logs: vec![
+                    LogViewItem {
+                        id: second,
+                        updated_at: None,
+                    },
+                    LogViewItem {
+                        id: third + 100,
+                        updated_at: None,
+                    },
+                ],
+                view: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(payload.columns.len(), 2);
+        assert_eq!(payload.rows[0].cells, vec!["GET", ""]);
+        assert_eq!(payload.exceptions.len(), 2);
+        assert!(payload.exceptions.iter().any(|error| {
+            error.id == second
+                && error.column_index == Some(1)
+                && error.code == "column_script_error"
+        }));
+        assert!(
+            payload
+                .exceptions
+                .iter()
+                .any(|error| error.code == "log_not_found")
+        );
+
+        let error = manager
+            .log_views(LogViewsRequest {
+                session_id: Some(session.id),
+                logs: (0..201)
+                    .map(|id| LogViewItem {
+                        id,
+                        updated_at: None,
+                    })
+                    .collect(),
+                view: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "bad_request");
+    }
+
+    #[tokio::test]
+    async fn session_views_validate_new_references_and_script_renames_update_existing_views() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.ensure_active_session().unwrap();
+        let manager = MitmManager::new(runtime);
+
+        let error = manager
+            .replace_session_view(
+                Some(session.id),
+                ReplaceSessionViewRequest {
+                    columns: vec![Column::Script {
+                        width: 100.0,
+                        script_name: "missing".into(),
+                    }],
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "not_found");
+
+        manager
+            .create_column_script(ScriptRequest {
+                name: "old".into(),
+                content: "entry.req().method()".into(),
+            })
+            .await
+            .unwrap();
+        manager
+            .replace_session_view(
+                Some(session.id),
+                ReplaceSessionViewRequest {
+                    columns: vec![Column::Script {
+                        width: 100.0,
+                        script_name: "old".into(),
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        manager
+            .update_column_script(
+                "old".into(),
+                UpdateScriptRequest {
+                    name: Some("new".into()),
+                    content: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let view = manager.session_view(Some(session.id)).await.unwrap();
+        assert!(matches!(
+            &view.columns[0],
+            Column::Script { script_name, .. } if script_name == "new"
+        ));
+        manager.delete_column_script("new".into()).await.unwrap();
+        let stale = manager.session_view(Some(session.id)).await.unwrap();
+        assert!(matches!(
+            &stale.columns[0],
+            Column::Script { script_name, .. } if script_name == "new"
+        ));
     }
 }

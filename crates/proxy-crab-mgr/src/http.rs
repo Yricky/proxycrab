@@ -20,10 +20,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dto::{
-        ColumnInput, CreateSessionRequest, FilterHistoryRequest, FilterLogsRequest,
-        InterceptorCreateRequest, InterceptorUpdateRequest, LogsQuery, ManagerError, ScriptRequest,
-        SetInterceptorOrderRequest, SetWorkspaceRequest, SystemLogsQuery, UpdateScriptRequest,
-        UpdateSessionRequest,
+        CreateSessionRequest, FilterHistoryRequest, InterceptorCreateRequest,
+        InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError,
+        ReplaceSessionViewRequest, ScriptRequest, SessionQuery, SetInterceptorOrderRequest,
+        SetWorkspaceRequest, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
     },
     manager::ProxyCrabManager,
 };
@@ -145,15 +145,13 @@ pub fn router(manager: ManagerState) -> Router {
             put(update_session).delete(delete_session),
         )
         .route("/api/sessions/{id}/activate", post(activate_session))
-        .route("/api/sessions/{session_id}/logs", get(session_logs))
-        .route("/api/sessions/{session_id}/logs/{id}", get(session_log))
+        .route("/api/logs/ids", post(log_ids))
+        .route("/api/logs/views", post(log_views))
+        .route("/api/logs/{id}", get(log))
         .route(
-            "/api/sessions/{session_id}/logs/filter",
-            post(filter_session_logs),
+            "/api/session-view",
+            get(session_view).put(replace_session_view),
         )
-        .route("/api/logs", get(active_logs))
-        .route("/api/logs/filter", post(filter_active_logs))
-        .route("/api/logs/{id}", get(active_log))
         .route(
             "/api/column-scripts",
             get(column_scripts).post(create_column_script),
@@ -163,11 +161,6 @@ pub fn router(manager: ManagerState) -> Router {
             get(column_script)
                 .put(update_column_script)
                 .delete(delete_column_script),
-        )
-        .route("/api/columns", get(columns).post(append_column))
-        .route(
-            "/api/columns/{index}",
-            put(replace_column).delete(delete_column),
         )
         .route("/api/interceptors/order", put(set_interceptor_order))
         .route(
@@ -321,49 +314,45 @@ async fn activate_session(
     success(manager.activate_session(id).await?)
 }
 
-async fn active_logs(
+async fn log_ids(
     State(manager): State<ManagerState>,
-    ApiQuery(mut query): ApiQuery<LogsQuery>,
+    ApiJson(request): ApiJson<LogIdsRequest>,
 ) -> ApiResult {
-    query.session_id = None;
-    success(manager.logs(query).await?)
+    success(manager.log_ids(request).await?)
 }
 
-async fn session_logs(
+async fn log_views(
     State(manager): State<ManagerState>,
-    ApiPath(session_id): ApiPath<u64>,
-    ApiQuery(mut query): ApiQuery<LogsQuery>,
+    ApiJson(request): ApiJson<LogViewsRequest>,
 ) -> ApiResult {
-    query.session_id = Some(session_id);
-    success(manager.logs(query).await?)
+    success(manager.log_views(request).await?)
 }
 
-async fn active_log(State(manager): State<ManagerState>, ApiPath(id): ApiPath<u64>) -> ApiResult {
-    success(manager.log(None, id).await?)
+async fn log(
+    State(manager): State<ManagerState>,
+    ApiPath(id): ApiPath<u64>,
+    ApiQuery(query): ApiQuery<SessionQuery>,
+) -> ApiResult {
+    success(manager.log(query.session_id, id).await?)
 }
 
-async fn session_log(
+async fn session_view(
     State(manager): State<ManagerState>,
-    ApiPath((session_id, id)): ApiPath<(u64, u64)>,
+    ApiQuery(query): ApiQuery<SessionQuery>,
 ) -> ApiResult {
-    success(manager.log(Some(session_id), id).await?)
+    success(manager.session_view(query.session_id).await?)
 }
 
-async fn filter_active_logs(
+async fn replace_session_view(
     State(manager): State<ManagerState>,
-    ApiJson(mut request): ApiJson<FilterLogsRequest>,
+    ApiQuery(query): ApiQuery<SessionQuery>,
+    ApiJson(request): ApiJson<ReplaceSessionViewRequest>,
 ) -> ApiResult {
-    request.session_id = None;
-    success(manager.filter_logs(request).await?)
-}
-
-async fn filter_session_logs(
-    State(manager): State<ManagerState>,
-    ApiPath(session_id): ApiPath<u64>,
-    ApiJson(mut request): ApiJson<FilterLogsRequest>,
-) -> ApiResult {
-    request.session_id = Some(session_id);
-    success(manager.filter_logs(request).await?)
+    success(
+        manager
+            .replace_session_view(query.session_id, request)
+            .await?,
+    )
 }
 
 async fn column_scripts(State(manager): State<ManagerState>) -> ApiResult {
@@ -400,32 +389,6 @@ async fn delete_column_script(
 ) -> ApiResult {
     manager.delete_column_script(name).await?;
     success(json!({}))
-}
-
-async fn columns(State(manager): State<ManagerState>) -> ApiResult {
-    success(manager.columns().await?)
-}
-
-async fn append_column(
-    State(manager): State<ManagerState>,
-    ApiJson(input): ApiJson<ColumnInput>,
-) -> ApiResult {
-    success(manager.append_column(input).await?)
-}
-
-async fn replace_column(
-    State(manager): State<ManagerState>,
-    ApiPath(index): ApiPath<usize>,
-    ApiJson(input): ApiJson<ColumnInput>,
-) -> ApiResult {
-    success(manager.replace_column(index, input).await?)
-}
-
-async fn delete_column(
-    State(manager): State<ManagerState>,
-    ApiPath(index): ApiPath<usize>,
-) -> ApiResult {
-    success(manager.delete_column(index).await?)
 }
 
 #[derive(Deserialize)]
@@ -609,7 +572,6 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::{
-        dto::ColumnInput,
         http::{router, secured_router},
         manager::{MitmManager, ProxyCrabManager},
     };
@@ -707,25 +669,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn columns_keep_legacy_visible_shape_and_width_defaults() {
+    async fn exposes_only_the_new_log_and_session_view_routes() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let manager = MitmManager::new(runtime);
+        runtime.ensure_active_session().unwrap();
+        let app = router(MitmManager::new(runtime));
 
-        let initial = manager.columns().await.unwrap();
-        assert_eq!(initial[0].index, 0);
-        assert_eq!(initial[0].key, "method");
-        assert_eq!(initial[0].width, 50.0);
+        for (method, uri, body) in [
+            ("POST", "/api/logs/ids", r#"{}"#),
+            ("POST", "/api/logs/views", r#"{"logs":[]}"#),
+            ("GET", "/api/session-view", ""),
+            ("PUT", "/api/session-view", r#"{"columns":[]}"#),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK, "{uri}");
+        }
 
-        let columns = manager
-            .append_column(ColumnInput {
-                kind: "source".into(),
-                width: None,
-                script_name: None,
-            })
-            .await
-            .unwrap();
-        assert_eq!(columns.last().unwrap().width, 130.0);
+        for (method, uri) in [
+            ("GET", "/api/logs"),
+            ("POST", "/api/logs/filter"),
+            ("GET", "/api/sessions/1/logs"),
+            ("GET", "/api/columns"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert!(
+                matches!(
+                    response.status(),
+                    axum::http::StatusCode::NOT_FOUND | axum::http::StatusCode::METHOD_NOT_ALLOWED
+                ),
+                "{uri}: {}",
+                response.status()
+            );
+        }
     }
 
     #[tokio::test]

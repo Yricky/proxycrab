@@ -2,9 +2,11 @@
 import { computed, onMounted, ref } from "vue";
 import { Io5Add, Io5Trash } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type { Column, ColumnInput, Script } from "../api/types";
+import type { Column, Script } from "../api/types";
 import { reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
+import { logsStore } from "../stores/logs";
+import { sessionsStore } from "../stores/sessions";
 import { openScriptEditor } from "./launcher";
 
 const backend = useBackend();
@@ -60,11 +62,23 @@ async function refreshScripts(): Promise<void> {
 }
 
 async function refreshColumns(): Promise<void> {
+  const sessionId = sessionsStore.viewingSessionId;
+  if (sessionId === null) {
+    columns.value = [];
+    return;
+  }
   try {
-    columns.value = await backend.listColumns();
+    columns.value = (await backend.getSessionView(sessionId)).columns;
   } catch (error) {
     reportError(error, "加载可见列失败");
   }
+}
+
+async function saveColumns(next: Column[]): Promise<void> {
+  const sessionId = sessionsStore.viewingSessionId;
+  if (sessionId === null) return;
+  columns.value = (await backend.replaceSessionView(sessionId, { columns: next })).columns;
+  await logsStore.refreshView();
 }
 
 async function createScript(): Promise<void> {
@@ -95,6 +109,7 @@ async function removeScript(script: Script): Promise<void> {
   try {
     await backend.deleteColumnScript(script.name);
     await refreshScripts();
+    await logsStore.refreshView();
   } catch (error) {
     reportError(error, "删除列脚本失败");
   }
@@ -107,12 +122,10 @@ async function updateWidth(index: number, col: Column, event: Event): Promise<vo
     return;
   }
   if (width === col.width) return;
-  const input: ColumnInput =
-    col.kind === "script"
-      ? { kind: col.kind, width, script_name: col.script_name }
-      : { kind: col.kind, width };
   try {
-    columns.value = await backend.replaceColumn(index, input);
+    const next = [...columns.value];
+    next[index] = { ...col, width };
+    await saveColumns(next);
   } catch (error) {
     reportError(error, "更新列宽失败");
     await refreshColumns();
@@ -121,19 +134,19 @@ async function updateWidth(index: number, col: Column, event: Event): Promise<vo
 
 async function removeColumn(index: number): Promise<void> {
   try {
-    columns.value = await backend.deleteColumn(index);
+    await saveColumns(columns.value.filter((_, itemIndex) => itemIndex !== index));
   } catch (error) {
     reportError(error, "删除列失败");
   }
 }
 
 async function addColumn(): Promise<void> {
-  const input: ColumnInput =
+  const column: Column =
     addKind.value === "script"
       ? { kind: "script", script_name: addScriptName.value, width: 160 }
       : { kind: addKind.value, width: 160 };
   try {
-    columns.value = await backend.appendColumn(input);
+    await saveColumns([...columns.value, column]);
   } catch (error) {
     reportError(error, "添加列失败");
   }

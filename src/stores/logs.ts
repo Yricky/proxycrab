@@ -1,105 +1,253 @@
-import { computed, reactive, watch } from "vue";
+import { reactive, watch } from "vue";
 import { createTauriBackend } from "../api/tauri-backend";
-import type { ColumnView, LogRow } from "../api/types";
+import type {
+  ColumnView,
+  LogViewRow,
+  LogViewsPayload,
+} from "../api/types";
 import { reportError } from "./app";
 import { sessionsStore } from "./sessions";
 
 const backend = createTauriBackend();
 
-const SNAPSHOT_LIMIT = 300;
-const FILTER_LIMIT = 1000;
-const MAX_ROWS = 5000;
+const VIEW_BATCH_SIZE = 200;
+const ID_PAGE_SIZE = 10_000;
 const POLL_INTERVAL = 1000;
 const FILTER_POLL_INTERVAL = 2000;
 
 let pollTimer: number | undefined;
 let pollInFlight = false;
+let olderInFlight = false;
+
+function cellErrorKey(id: number, columnIndex: number): string {
+  return `${id}:${columnIndex}`;
+}
 
 export const logsStore = reactive({
   columns: [] as ColumnView[],
-  /** Newest first (descending id). */
-  rows: [] as LogRow[],
+  /** IDs are retained newest first regardless of display direction. */
+  ids: [] as number[],
+  rowsById: new Map<number, LogViewRow>(),
+  cellErrors: new Map<string, string>(),
   sortDesc: true,
   filterScript: "",
   appliedFilter: "",
   loading: false,
+  olderExhausted: false,
 
   get filterActive(): boolean {
     return this.appliedFilter.trim().length > 0;
   },
 
-  /** Rows in display order. */
-  displayRows: computed((): LogRow[] => {
-    return logsStore.sortDesc ? logsStore.rows : [...logsStore.rows].reverse();
-  }),
-
-  reset(): void {
-    this.columns = [];
-    this.rows = [];
-    this.filterScript = "";
-    this.appliedFilter = "";
-    this.sortDesc = true;
+  get displayRows(): LogViewRow[] {
+    const ids = this.sortDesc ? this.ids : [...this.ids].reverse();
+    return ids.map(
+      (id) =>
+        this.rowsById.get(id) ?? {
+          id,
+          updated_at: 0,
+          cells: this.columns.map(() => ""),
+        },
+    );
   },
 
-  mergeRows(incoming: LogRow[]): void {
-    if (incoming.length === 0) return;
-    const byId = new Map<number, LogRow>();
-    for (const row of this.rows) byId.set(row.id, row);
-    for (const row of incoming) byId.set(row.id, row);
-    const merged = [...byId.values()].sort((a, b) => b.id - a.id);
-    if (merged.length > MAX_ROWS) merged.length = MAX_ROWS;
-    this.rows = merged;
+  resetData(): void {
+    this.columns = [];
+    this.ids = [];
+    this.rowsById = new Map();
+    this.cellErrors = new Map();
+    this.sortDesc = true;
+    this.olderExhausted = false;
+  },
+
+  reset(): void {
+    this.resetData();
+    this.filterScript = "";
+    this.appliedFilter = "";
+  },
+
+  mergeIds(incoming: number[]): number[] {
+    if (incoming.length === 0) return [];
+    const known = new Set(this.ids);
+    const added = incoming.filter((id) => !known.has(id));
+    this.ids = [...new Set([...this.ids, ...incoming])].sort((left, right) => right - left);
+    return added;
+  },
+
+  replaceNewestIdPage(incoming: number[]): number[] {
+    const known = new Set(this.ids);
+    const oldestIncoming = incoming.reduce(
+      (oldest, id) => Math.min(oldest, id),
+      Number.POSITIVE_INFINITY,
+    );
+    const retainedOlder =
+      incoming.length === ID_PAGE_SIZE
+        ? this.ids.filter((id) => id < oldestIncoming)
+        : [];
+    const next = [...new Set([...incoming, ...retainedOlder])].sort(
+      (left, right) => right - left,
+    );
+    const nextSet = new Set(next);
+    for (const id of this.ids) {
+      if (!nextSet.has(id)) this.removeLog(id);
+    }
+    this.ids = next;
+    return incoming.filter((id) => !known.has(id));
+  },
+
+  removeLog(id: number): void {
+    this.ids = this.ids.filter((item) => item !== id);
+    this.rowsById.delete(id);
+    for (const key of this.cellErrors.keys()) {
+      if (key.startsWith(`${id}:`)) this.cellErrors.delete(key);
+    }
+  },
+
+  mergeViews(payload: LogViewsPayload): void {
+    this.columns = payload.columns;
+    const returnedIds = new Set(payload.rows.map((row) => row.id));
+    for (const id of returnedIds) {
+      for (const key of this.cellErrors.keys()) {
+        if (key.startsWith(`${id}:`)) this.cellErrors.delete(key);
+      }
+    }
+    for (const row of payload.rows) this.rowsById.set(row.id, row);
+    for (const exception of payload.exceptions) {
+      if (exception.code === "log_not_found") {
+        this.removeLog(exception.id);
+      } else if (
+        exception.code === "column_script_error" &&
+        exception.column_index !== undefined &&
+        exception.column_index !== null
+      ) {
+        this.cellErrors.set(
+          cellErrorKey(exception.id, exception.column_index),
+          exception.message,
+        );
+      }
+    }
+  },
+
+  async hydrate(ids: number[], force = false): Promise<void> {
+    const sessionId = sessionsStore.viewingSessionId;
+    if (sessionId === null) return;
+    if (ids.length === 0) {
+      const payload = await backend.getLogViews({
+        session_id: sessionId,
+        logs: [],
+      });
+      if (sessionsStore.viewingSessionId === sessionId) this.mergeViews(payload);
+      return;
+    }
+    for (let index = 0; index < ids.length; index += VIEW_BATCH_SIZE) {
+      if (sessionsStore.viewingSessionId !== sessionId) return;
+      const batch = ids.slice(index, index + VIEW_BATCH_SIZE);
+      const payload = await backend.getLogViews({
+        session_id: sessionId,
+        logs: batch.map((id) => {
+          const updatedAt = this.rowsById.get(id)?.updated_at;
+          return force || updatedAt === undefined ? { id } : { id, updated_at: updatedAt };
+        }),
+      });
+      if (sessionsStore.viewingSessionId !== sessionId) return;
+      this.mergeViews(payload);
+    }
+  },
+
+  async discoverInitial(): Promise<void> {
+    const sessionId = sessionsStore.viewingSessionId;
+    if (sessionId === null) return;
+    const payload = await backend.getLogIds({
+      session_id: sessionId,
+      filter: this.appliedFilter || null,
+    });
+    if (sessionsStore.viewingSessionId !== sessionId) return;
+    const added = this.mergeIds(payload.ids);
+    await this.hydrate(added);
   },
 
   async poll(): Promise<void> {
     const sessionId = sessionsStore.viewingSessionId;
-    if (sessionId === null || pollInFlight) return;
+    if (sessionId === null || pollInFlight || this.loading) return;
     pollInFlight = true;
     try {
       if (this.filterActive) {
-        const payload = await backend.filterLogs({
+        const payload = await backend.getLogIds({
           session_id: sessionId,
-          limit: FILTER_LIMIT,
-          script: this.appliedFilter,
+          filter: this.appliedFilter,
         });
-        this.columns = payload.columns;
-        this.rows = payload.rows;
+        if (sessionsStore.viewingSessionId !== sessionId) return;
+        const added = this.replaceNewestIdPage(payload.ids);
+        await this.hydrate(added);
+        await this.hydrate(this.ids.slice(0, VIEW_BATCH_SIZE));
+      } else if (this.ids.length === 0) {
+        await this.discoverInitial();
       } else {
-        const payload = await backend.listLogs({
+        const payload = await backend.getLogIds({
           session_id: sessionId,
-          limit: SNAPSHOT_LIMIT,
+          filter: this.appliedFilter || null,
+          min_id: this.ids[0],
         });
-        this.columns = payload.columns;
-        this.mergeRows(payload.rows);
+        if (sessionsStore.viewingSessionId !== sessionId) return;
+        const added = this.mergeIds(payload.ids);
+        await this.hydrate(added);
+        await this.hydrate(this.ids.slice(0, VIEW_BATCH_SIZE));
       }
     } catch {
-      // Polling errors are transient (e.g. no active session); stay quiet.
+      // Polling failures are transient (for example, while sessions switch).
     } finally {
       pollInFlight = false;
     }
   },
 
-  async applyFilter(script: string): Promise<void> {
+  async loadOlder(): Promise<void> {
     const sessionId = sessionsStore.viewingSessionId;
-    const trimmed = script.trim();
-    if (trimmed === "") {
-      this.appliedFilter = "";
-      this.rows = [];
-      await this.poll();
+    const oldestId = this.ids[this.ids.length - 1];
+    if (
+      sessionId === null ||
+      oldestId === undefined ||
+      olderInFlight ||
+      this.olderExhausted ||
+      this.loading
+    ) {
       return;
     }
-    if (sessionId === null) return;
+    olderInFlight = true;
+    try {
+      const payload = await backend.getLogIds({
+        session_id: sessionId,
+        filter: this.appliedFilter || null,
+        max_id: oldestId,
+      });
+      if (sessionsStore.viewingSessionId !== sessionId) return;
+      this.olderExhausted = payload.ids.length === 0;
+      const added = this.mergeIds(payload.ids);
+      await this.hydrate(added);
+    } catch (error) {
+      reportError(error, "加载更早记录失败");
+    } finally {
+      olderInFlight = false;
+    }
+  },
+
+  async refreshView(): Promise<void> {
+    this.columns = [];
+    this.cellErrors = new Map();
+    await this.hydrate(this.ids, true);
+  },
+
+  cellError(id: number, columnIndex: number): string | undefined {
+    return this.cellErrors.get(cellErrorKey(id, columnIndex));
+  },
+
+  async applyFilter(script: string): Promise<void> {
+    const trimmed = script.trim();
     this.loading = true;
     try {
-      const payload = await backend.filterLogs({
-        session_id: sessionId,
-        limit: FILTER_LIMIT,
-        script: trimmed,
-      });
-      this.columns = payload.columns;
-      this.rows = payload.rows;
       this.appliedFilter = trimmed;
-      await backend.addFilterHistory(trimmed);
+      this.resetData();
+      await this.discoverInitial();
+      if (trimmed) await backend.addFilterHistory(trimmed);
     } catch (error) {
       reportError(error, "过滤失败");
     } finally {
@@ -134,7 +282,7 @@ watch(
     logsStore.reset();
     if (id !== null) {
       logsStore.loading = true;
-      void logsStore.poll().finally(() => {
+      void logsStore.discoverInitial().finally(() => {
         logsStore.loading = false;
       });
     }

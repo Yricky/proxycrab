@@ -26,7 +26,6 @@ export interface AppConfig {
   active_session_id: number | null;
   active_request_interceptors: string[];
   active_response_interceptors: string[];
-  columns: Column[];
   filter_history: string[];
 }
 
@@ -111,16 +110,31 @@ export interface UpdateSessionRequest {
   description?: string | null;
 }
 
-export interface LogsQuery {
+export interface LogIdsRequest {
   session_id?: number | null;
+  filter?: string | null;
+  min_id?: number | null;
+  max_id?: number | null;
   limit?: number | null;
-  after_id?: number | null;
 }
 
-export interface FilterLogsRequest {
+export interface LogIdsPayload {
+  ids: number[];
+}
+
+export interface LogViewItem {
+  id: number;
+  updated_at?: number | null;
+}
+
+export interface SessionViewInput {
+  columns: Column[];
+}
+
+export interface LogViewsRequest {
   session_id?: number | null;
-  limit?: number | null;
-  script: string;
+  logs: LogViewItem[];
+  view?: SessionViewInput | null;
 }
 
 export interface ColumnView {
@@ -131,14 +145,32 @@ export interface ColumnView {
   script_name?: string;
 }
 
-export interface LogRow {
+export interface LogViewRow {
   id: number;
+  updated_at: number;
   cells: string[];
 }
 
-export interface LogsPayload {
+export interface LogViewException {
+  id: number;
+  column_index?: number | null;
+  code: string;
+  message: string;
+}
+
+export interface LogViewsPayload {
   columns: ColumnView[];
-  rows: LogRow[];
+  rows: LogViewRow[];
+  exceptions: LogViewException[];
+}
+
+export interface SessionViewPayload {
+  session_id: number;
+  columns: Column[];
+}
+
+export interface ReplaceSessionViewRequest {
+  columns: Column[];
 }
 
 export interface HeaderItem {
@@ -165,6 +197,8 @@ export interface ResponseDetail {
 export interface LogDetail {
   id: number;
   session_id: number;
+  created_at: number;
+  updated_at: number;
   source_type: string;
   source_addr: string | null;
   stage: string;
@@ -184,12 +218,6 @@ export interface ScriptRequest {
 export interface UpdateScriptRequest {
   name?: string | null;
   content?: string | null;
-}
-
-export interface ColumnInput {
-  kind: string;
-  width?: number | null;
-  script_name?: string | null;
 }
 
 export interface InterceptorCreateRequest {

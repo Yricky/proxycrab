@@ -12,7 +12,8 @@ use crate::{
     log_buffer::LogBuffer,
     model::{
         AppConfig, CaptureDetail, CaptureSummary, Column, InterceptorInfo, InterceptorKind,
-        ProxyStatus, Script, ScriptKind, SessionMetadata, SystemLogEntry, WorkspacePaths,
+        ProxyStatus, Script, ScriptKind, SessionMetadata, SessionView, SystemLogEntry,
+        WorkspacePaths,
     },
     proxy::ProxyController,
     storage::CaptureStore,
@@ -216,6 +217,30 @@ impl ProxyCrab {
             .list_before(limit, before_id)
     }
 
+    pub fn list_captures_range(
+        &self,
+        session_id: u64,
+        limit: usize,
+        min_id: Option<u64>,
+        max_id: Option<u64>,
+        ascending: bool,
+    ) -> Result<Vec<CaptureSummary>> {
+        let _pins = self
+            .session_pins
+            .lock()
+            .expect("session pins lock poisoned");
+        self.capture_store_locked(session_id)?
+            .list_range(limit, min_id, max_id, ascending)
+    }
+
+    pub fn captures(&self, session_id: u64, ids: &[u64]) -> Result<Vec<CaptureSummary>> {
+        let _pins = self
+            .session_pins
+            .lock()
+            .expect("session pins lock poisoned");
+        self.capture_store_locked(session_id)?.get_many(ids)
+    }
+
     pub fn mark_in_progress_as_shutdown(&self) {
         let _pins = self
             .session_pins
@@ -246,31 +271,29 @@ impl ProxyCrab {
         if old_name != script.name {
             self.workspace.get_script(kind, old_name)?;
             self.workspace.save_script(kind, script.clone(), false)?;
-            let update_result = self.workspace.update_config(|config| match kind {
-                ScriptKind::Column => {
-                    for column in &mut config.columns {
-                        if let Column::Script { script_name, .. } = column
-                            && script_name == old_name
-                        {
-                            *script_name = script.name.clone();
+            let update_result = match kind {
+                ScriptKind::Column => self.rename_column_references(old_name, &script.name),
+                ScriptKind::RequestInterceptor => self
+                    .workspace
+                    .update_config(|config| {
+                        for name in &mut config.active_request_interceptors {
+                            if name == old_name {
+                                *name = script.name.clone();
+                            }
                         }
-                    }
-                }
-                ScriptKind::RequestInterceptor => {
-                    for name in &mut config.active_request_interceptors {
-                        if name == old_name {
-                            *name = script.name.clone();
+                    })
+                    .map(|_| ()),
+                ScriptKind::ResponseInterceptor => self
+                    .workspace
+                    .update_config(|config| {
+                        for name in &mut config.active_response_interceptors {
+                            if name == old_name {
+                                *name = script.name.clone();
+                            }
                         }
-                    }
-                }
-                ScriptKind::ResponseInterceptor => {
-                    for name in &mut config.active_response_interceptors {
-                        if name == old_name {
-                            *name = script.name.clone();
-                        }
-                    }
-                }
-            });
+                    })
+                    .map(|_| ()),
+            };
             if let Err(error) = update_result {
                 let _ = self.workspace.delete_script(kind, &script.name);
                 return Err(error);
@@ -287,17 +310,18 @@ impl ProxyCrab {
 
     pub fn delete_script(&self, kind: ScriptKind, name: &str) -> Result<()> {
         self.workspace.get_script(kind, name)?;
+        if kind == ScriptKind::Column {
+            return self.workspace.delete_script(kind, name);
+        }
         let previous = self.config();
         self.workspace.update_config(|config| match kind {
-            ScriptKind::Column => config.columns.retain(
-                |column| !matches!(column, Column::Script { script_name, .. } if script_name == name),
-            ),
-            ScriptKind::RequestInterceptor => {
-                config.active_request_interceptors.retain(|item| item != name)
-            }
-            ScriptKind::ResponseInterceptor => {
-                config.active_response_interceptors.retain(|item| item != name)
-            }
+            ScriptKind::Column => {}
+            ScriptKind::RequestInterceptor => config
+                .active_request_interceptors
+                .retain(|item| item != name),
+            ScriptKind::ResponseInterceptor => config
+                .active_response_interceptors
+                .retain(|item| item != name),
         })?;
         if let Err(error) = self.workspace.delete_script(kind, name) {
             if let Err(rollback_error) = self.workspace.update_config(|config| {
@@ -312,19 +336,45 @@ impl ProxyCrab {
         Ok(())
     }
 
-    pub fn columns(&self) -> Vec<Column> {
-        self.config().columns
+    pub fn session_view(&self, session_id: u64) -> Result<SessionView> {
+        self.workspace.session_view(session_id)
     }
 
-    pub fn replace_columns(&self, columns: Vec<Column>) -> Result<Vec<Column>> {
-        for column in &columns {
+    pub fn replace_session_view(&self, session_id: u64, view: SessionView) -> Result<SessionView> {
+        for column in &view.columns {
+            if !column.width().is_finite() || column.width() <= 0.0 {
+                bail!("column width must be positive");
+            }
             if let Column::Script { script_name, .. } = column {
                 self.workspace.get_script(ScriptKind::Column, script_name)?;
             }
         }
-        self.workspace
-            .update_config(|config| config.columns = columns.clone())?;
-        Ok(columns)
+        self.workspace.replace_session_view(session_id, view)
+    }
+
+    fn rename_column_references(&self, old_name: &str, new_name: &str) -> Result<()> {
+        let mut changed = Vec::new();
+        for session in self.sessions() {
+            let previous = self.workspace.session_view(session.id)?;
+            let mut next = previous.clone();
+            for column in &mut next.columns {
+                if let Column::Script { script_name, .. } = column
+                    && script_name == old_name
+                {
+                    *script_name = new_name.to_string();
+                }
+            }
+            if next != previous {
+                if let Err(error) = self.workspace.replace_session_view(session.id, next) {
+                    for (id, view) in changed {
+                        let _ = self.workspace.replace_session_view(id, view);
+                    }
+                    return Err(error);
+                }
+                changed.push((session.id, previous));
+            }
+        }
+        Ok(())
     }
 
     pub fn interceptors(&self, kind: InterceptorKind) -> Result<Vec<InterceptorInfo>> {

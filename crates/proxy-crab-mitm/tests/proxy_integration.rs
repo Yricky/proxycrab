@@ -372,6 +372,16 @@ async fn trusted_ca_serves_certificate_and_untrusted_ca_is_diagnostic() {
         .unwrap()
         .unwrap();
     assert!(String::from_utf8_lossy(&response).contains("BEGIN CERTIFICATE"));
+    let captures = runtime.list_captures(session.id, 10, None).unwrap();
+    assert!(captures.iter().any(|capture| {
+        capture.outcome == CaptureOutcome::Success
+            && capture.stage == "tls_mitm"
+            && capture.request.method == "CONNECT"
+            && capture
+                .response
+                .as_ref()
+                .is_some_and(|response| response.status == 200)
+    }));
 
     let empty_roots = RootCertStore::empty();
     let config = ClientConfig::builder()
