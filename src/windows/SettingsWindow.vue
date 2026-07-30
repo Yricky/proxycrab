@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type { AppConfig } from "../api/types";
+import type { AppConfig, HttpApiChange } from "../api/types";
 import { appStore, reportError } from "../stores/app";
+import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { proxyStore } from "../stores/proxy";
 
 const backend = useBackend();
@@ -14,12 +15,24 @@ const config = ref<AppConfig | null>(null);
 const proxyHost = ref("");
 const proxyPort = ref(8080);
 const httpServiceError = ref<string | null>(null);
+const loadedConfiguredPath = ref("");
+const loadedProxyHost = ref("");
+const loadedProxyPort = ref(8080);
+const externalChanged = ref(false);
+
+const dirty = computed(
+  () =>
+    configuredPath.value !== loadedConfiguredPath.value ||
+    proxyHost.value !== loadedProxyHost.value ||
+    Number(proxyPort.value) !== loadedProxyPort.value,
+);
 
 async function refresh(): Promise<void> {
   try {
     const ws = await backend.getWorkspace();
     currentPath.value = ws.current_path;
     configuredPath.value = ws.configured_path;
+    loadedConfiguredPath.value = ws.configured_path;
   } catch (error) {
     reportError(error, "获取工作区信息失败");
   }
@@ -28,6 +41,8 @@ async function refresh(): Promise<void> {
     config.value = cfg;
     proxyHost.value = cfg.proxy_host;
     proxyPort.value = cfg.proxy_port;
+    loadedProxyHost.value = cfg.proxy_host;
+    loadedProxyPort.value = cfg.proxy_port;
   } catch (error) {
     reportError(error, "获取配置失败");
   }
@@ -38,6 +53,28 @@ async function refresh(): Promise<void> {
   }
 }
 
+function onHttpApiChange(event: Event): void {
+  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  if (
+    !resources.includes("all") &&
+    !resources.includes("workspace") &&
+    !resources.includes("config")
+  ) {
+    return;
+  }
+  if (dirty.value) {
+    externalChanged.value = true;
+    return;
+  }
+  externalChanged.value = false;
+  void refresh();
+}
+
+function reloadExternal(): void {
+  externalChanged.value = false;
+  void refresh();
+}
+
 async function saveWorkspace(): Promise<void> {
   const path = configuredPath.value.trim();
   if (!path) {
@@ -45,7 +82,10 @@ async function saveWorkspace(): Promise<void> {
     return;
   }
   try {
-    await backend.setWorkspaceForNextStart(path);
+    const workspace = await backend.setWorkspaceForNextStart(path);
+    configuredPath.value = workspace.configured_path;
+    loadedConfiguredPath.value = workspace.configured_path;
+    externalChanged.value = false;
     appStore.toast("已保存，重启后生效", "success");
   } catch (error) {
     reportError(error, "保存工作区失败");
@@ -67,17 +107,33 @@ async function saveProxyListen(): Promise<void> {
   try {
     const next: AppConfig = { ...config.value, proxy_host: host, proxy_port: port };
     config.value = await backend.replaceConfig(next);
+    proxyHost.value = config.value.proxy_host;
+    proxyPort.value = config.value.proxy_port;
+    loadedProxyHost.value = config.value.proxy_host;
+    loadedProxyPort.value = config.value.proxy_port;
+    externalChanged.value = false;
     appStore.toast("已保存，需重启代理后生效", "success");
   } catch (error) {
     reportError(error, "保存代理配置失败");
   }
 }
 
-onMounted(() => void refresh());
+onMounted(() => {
+  void refresh();
+  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
+});
 </script>
 
 <template>
   <div class="st-root">
+    <div v-if="externalChanged" class="st-external">
+      <span>设置已被外部修改，当前未保存输入仍保留。</span>
+      <button class="btn compact" @click="reloadExternal">重新加载</button>
+    </div>
     <section class="st-section">
       <h3 class="section-title">工作区</h3>
       <div class="st-field">
@@ -141,6 +197,19 @@ onMounted(() => void refresh());
 
 .st-section {
   flex: none;
+}
+.st-external {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-md);
+  color: var(--warning);
+  font-size: 12px;
+}
+.st-external span {
+  flex: 1;
 }
 
 .st-field {

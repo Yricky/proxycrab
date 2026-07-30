@@ -22,6 +22,36 @@ HTTP failures use:
 
 Tauri commands return the data DTO directly or reject with the same `{code,message}` error.
 
+## HTTP changes and desktop UI synchronization
+
+Successful HTTP operations that mutate application-visible state publish an internal change event
+to the Tauri frontend. This event is not a public HTTP endpoint and does not change HTTP response
+envelopes. The frontend coalesces adjacent events, refreshes only affected resources, and keeps
+normal Agent/API activity silent.
+
+| HTTP operation | UI resources affected | Desktop behavior |
+| --- | --- | --- |
+| `PUT /api/workspace` | Workspace settings | Refreshes an open clean settings window |
+| `PUT /api/config` | Settings, active Session marker, proxy status | Refreshes global Session/config state |
+| `POST /api/proxy/start`, `POST /api/proxy/stop` | Proxy status | Refreshes the toolbar state |
+| Session create/update/delete/activate | Session list and active marker | Keeps the viewed Session unless it was deleted |
+| `POST /api/logs/ids` with a changed `filter` | Target Session filter and visible log set | Reloads the table only when that Session is being viewed |
+| `PUT /api/session-view` | Target Session columns | Reloads the table only when that Session is being viewed |
+| Column-script create/update/delete | Column/filter choices and rendered custom columns | Refreshes script lists and the current table view |
+| Filter-script create/update/delete | Filter choices and filtered results | Refreshes script lists and the current table view |
+| Interceptor create/update/delete | Global interceptor library and Session chains | Refreshes the library and current pipeline |
+| `PUT /api/session-interceptors` | Target Session pipeline | Refreshes the pipeline only when that Session is being viewed |
+| `POST /api/ca` | CA manager | Reloads an open CA window |
+| `DELETE /api/system-logs` | System-log viewer | Clears and reloads an open log window |
+
+External activation changes only the active marker; it does not force the user away from the
+Session they are currently viewing. If HTTP deletes the viewed Session, the frontend selects the
+active Session, or the first remaining Session when none is active.
+
+Open script and settings windows automatically reload when clean. If they contain unsaved input,
+the frontend preserves it, displays an external-change warning, and lets the user explicitly reload
+instead of overwriting local edits.
+
 ## HTTP resources
 
 The server listens on loopback by default at `http://127.0.0.1:18089`. It has no authentication and emits no permissive CORS policy. Requests must use a loopback/`localhost` Host, and browser Origin values must also be local (including `tauri://localhost`) to prevent DNS-rebinding and CSRF access.

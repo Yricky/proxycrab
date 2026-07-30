@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   Io5Checkmark,
   Io5ChevronDown,
@@ -12,6 +12,7 @@ import { useBackend } from "../api";
 import type {
   FilterColumn,
   FilterOption,
+  HttpApiChange,
   Script,
   SessionFilter,
 } from "../api/types";
@@ -22,6 +23,7 @@ import {
   logsStore,
 } from "../stores/logs";
 import { sessionsStore } from "../stores/sessions";
+import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 
 interface BuiltinColumnChoice {
   kind: Exclude<FilterColumn["kind"], "script">;
@@ -47,7 +49,7 @@ const columnCaseSensitive = ref(false);
 const draft = ref<SessionFilter>(emptySessionFilter());
 
 const dirty = computed(
-  () => toRaw(draft.value) !== toRaw(logsStore.appliedFilter),
+  () => JSON.stringify(draft.value) !== JSON.stringify(logsStore.appliedFilter),
 );
 const selectedColumn = computed(() =>
   draft.value.option?.kind === "column" ? draft.value.option.column : null,
@@ -164,17 +166,30 @@ function onDocumentPointerDown(event: PointerEvent): void {
   if (!root.value?.contains(event.target as Node)) menuOpen.value = false;
 }
 
+function onHttpApiChange(event: Event): void {
+  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  if (
+    resources.includes("all") ||
+    resources.includes("column_scripts") ||
+    resources.includes("filter_scripts")
+  ) {
+    void refreshScripts();
+  }
+}
+
 onMounted(() => {
   void refreshScripts();
   document.addEventListener("pointerdown", onDocumentPointerDown);
   window.addEventListener("column-scripts-changed", refreshAfterScriptChange);
   window.addEventListener("filter-scripts-changed", refreshAfterScriptChange);
+  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", onDocumentPointerDown);
   window.removeEventListener("column-scripts-changed", refreshAfterScriptChange);
   window.removeEventListener("filter-scripts-changed", refreshAfterScriptChange);
+  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 </script>
 

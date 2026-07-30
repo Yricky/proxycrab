@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{FromRequest, FromRequestParts, Path, Query, Request, State},
     http::{
-        StatusCode,
+        Method, StatusCode,
         header::{HOST, ORIGIN},
         request::Parts,
     },
@@ -15,20 +15,22 @@ use axum::{
 use proxy_crab_mitm::model::{AppConfig, InterceptorKind};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use tokio::task::JoinHandle;
+use tokio::{sync::broadcast, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     dto::{
-        CreateSessionRequest, DebugFilterScriptRequest, InterceptorCreateRequest,
-        InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError,
-        ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ScriptRequest, SessionQuery,
-        SetWorkspaceRequest, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
+        CreateSessionRequest, DebugFilterScriptRequest, HttpApiChange, HttpApiResource,
+        InterceptorCreateRequest, InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest,
+        ManagerError, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ScriptRequest,
+        SessionQuery, SetWorkspaceRequest, SystemLogsQuery, UpdateScriptRequest,
+        UpdateSessionRequest,
     },
     manager::ProxyCrabManager,
 };
 
 type ManagerState = Arc<dyn ProxyCrabManager>;
+type ChangeSender = broadcast::Sender<HttpApiChange>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
 struct ApiJson<T>(T);
@@ -85,6 +87,7 @@ pub struct HttpServerHandle {
     pub port: u16,
     cancellation: CancellationToken,
     task: JoinHandle<()>,
+    changes: ChangeSender,
 }
 
 impl HttpServerHandle {
@@ -95,6 +98,10 @@ impl HttpServerHandle {
     pub async fn shutdown(self) {
         self.cancellation.cancel();
         let _ = self.task.await;
+    }
+
+    pub fn subscribe_changes(&self) -> broadcast::Receiver<HttpApiChange> {
+        self.changes.subscribe()
     }
 }
 
@@ -115,7 +122,8 @@ pub async fn start_http_server(manager: ManagerState) -> Result<HttpServerHandle
         .map_err(|error| ManagerError::internal(format!("failed to bind {address}: {error}")))?;
     let cancellation = CancellationToken::new();
     let shutdown = cancellation.clone();
-    let app = secured_router(manager);
+    let (changes, _) = broadcast::channel(128);
+    let app = secured_router_with_changes(manager, changes.clone());
     let task = tokio::spawn(async move {
         if let Err(error) = axum::serve(listener, app)
             .with_graceful_shutdown(async move { shutdown.cancelled().await })
@@ -129,10 +137,16 @@ pub async fn start_http_server(manager: ManagerState) -> Result<HttpServerHandle
         port: config.api_port,
         cancellation,
         task,
+        changes,
     })
 }
 
 pub fn router(manager: ManagerState) -> Router {
+    let (changes, _) = broadcast::channel(128);
+    router_with_changes(manager, changes)
+}
+
+fn router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
     Router::new()
         .route("/api/workspace", get(get_workspace).put(set_workspace))
         .route("/api/config", get(get_config).put(replace_config))
@@ -197,10 +211,101 @@ pub fn router(manager: ManagerState) -> Router {
         )
         .fallback(not_found)
         .with_state(manager)
+        .layer(Extension(changes.clone()))
+        .layer(middleware::from_fn_with_state(
+            changes,
+            publish_successful_http_changes,
+        ))
 }
 
+#[cfg(test)]
 fn secured_router(manager: ManagerState) -> Router {
-    router(manager).layer(middleware::from_fn(validate_local_browser_request))
+    let (changes, _) = broadcast::channel(128);
+    secured_router_with_changes(manager, changes)
+}
+
+fn secured_router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
+    router_with_changes(manager, changes).layer(middleware::from_fn(validate_local_browser_request))
+}
+
+async fn publish_successful_http_changes(
+    State(changes): State<ChangeSender>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let change = change_for_request(
+        request.method(),
+        request.uri().path(),
+        request.uri().query(),
+    );
+    let response = next.run(request).await;
+    if response.status().is_success()
+        && let Some(change) = change
+    {
+        let _ = changes.send(change);
+    }
+    response
+}
+
+fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Option<HttpApiChange> {
+    let resources = match (method, path) {
+        (&Method::PUT, "/api/workspace") => vec![HttpApiResource::Workspace],
+        (&Method::PUT, "/api/config") => {
+            vec![HttpApiResource::Config, HttpApiResource::Sessions]
+        }
+        (&Method::POST, "/api/proxy/start" | "/api/proxy/stop") => {
+            vec![HttpApiResource::Proxy]
+        }
+        (&Method::POST, "/api/sessions") => vec![HttpApiResource::Sessions],
+        (&Method::PUT | &Method::DELETE, value) if value.starts_with("/api/sessions/") => {
+            vec![HttpApiResource::Sessions]
+        }
+        (&Method::POST, value)
+            if value.starts_with("/api/sessions/") && value.ends_with("/activate") =>
+        {
+            vec![HttpApiResource::Sessions]
+        }
+        (&Method::PUT, "/api/session-view") => vec![HttpApiResource::SessionView],
+        (&Method::POST, "/api/column-scripts") => {
+            vec![HttpApiResource::ColumnScripts, HttpApiResource::SessionView]
+        }
+        (&Method::PUT | &Method::DELETE, value) if value.starts_with("/api/column-scripts/") => {
+            vec![HttpApiResource::ColumnScripts, HttpApiResource::SessionView]
+        }
+        (&Method::POST, "/api/filter-scripts") => {
+            vec![HttpApiResource::FilterScripts, HttpApiResource::SessionView]
+        }
+        (&Method::PUT | &Method::DELETE, value) if value.starts_with("/api/filter-scripts/") => {
+            vec![HttpApiResource::FilterScripts, HttpApiResource::SessionView]
+        }
+        (&Method::POST, "/api/interceptors") => vec![
+            HttpApiResource::Interceptors,
+            HttpApiResource::SessionInterceptors,
+        ],
+        (&Method::PUT | &Method::DELETE, value) if value.starts_with("/api/interceptors/") => {
+            vec![
+                HttpApiResource::Interceptors,
+                HttpApiResource::SessionInterceptors,
+            ]
+        }
+        (&Method::PUT, "/api/session-interceptors") => {
+            vec![HttpApiResource::SessionInterceptors]
+        }
+        (&Method::POST, "/api/ca") => vec![HttpApiResource::Certificate],
+        (&Method::DELETE, "/api/system-logs") => vec![HttpApiResource::SystemLogs],
+        _ => return None,
+    };
+    Some(HttpApiChange {
+        resources,
+        session_id: session_id_from_query(query),
+    })
+}
+
+fn session_id_from_query(query: Option<&str>) -> Option<u64> {
+    query?
+        .split('&')
+        .filter_map(|part| part.split_once('='))
+        .find_map(|(key, value)| (key == "session_id").then(|| value.parse().ok()).flatten())
 }
 
 async fn validate_local_browser_request(request: Request, next: Next) -> Response {
@@ -319,9 +424,31 @@ async fn activate_session(
 
 async fn log_ids(
     State(manager): State<ManagerState>,
+    Extension(changes): Extension<ChangeSender>,
     ApiJson(request): ApiJson<LogIdsRequest>,
 ) -> ApiResult {
-    success(manager.log_ids(request).await?)
+    let requested_filter = request.filter.clone();
+    let affected_session_id = match request.session_id {
+        Some(id) => Some(id),
+        None => manager.config().await?.active_session_id,
+    };
+    let previous_filter = if requested_filter.is_some() {
+        manager
+            .session_view(affected_session_id)
+            .await
+            .ok()
+            .map(|view| view.filter)
+    } else {
+        None
+    };
+    let payload = manager.log_ids(request).await?;
+    if requested_filter.is_some() && previous_filter.as_ref() != Some(&payload.filter) {
+        let _ = changes.send(HttpApiChange {
+            resources: vec![HttpApiResource::SessionView],
+            session_id: affected_session_id,
+        });
+    }
+    success(payload)
 }
 
 async fn log_views(
@@ -581,16 +708,108 @@ mod tests {
 
     use axum::{
         body::{Body, to_bytes},
-        http::Request,
+        http::{Method, Request},
     };
     use proxy_crab_mitm::{ProxyCrab, log_buffer::LogBuffer};
     use tempfile::tempdir;
     use tower::ServiceExt;
 
     use crate::{
-        http::{router, secured_router},
+        dto::HttpApiResource,
+        http::{change_for_request, router, router_with_changes, secured_router},
         manager::{MitmManager, ProxyCrabManager},
     };
+
+    #[test]
+    fn maps_http_mutations_to_their_ui_resources() {
+        let cases = [
+            (
+                "PUT",
+                "/api/workspace",
+                None,
+                vec![HttpApiResource::Workspace],
+                None,
+            ),
+            (
+                "PUT",
+                "/api/config",
+                None,
+                vec![HttpApiResource::Config, HttpApiResource::Sessions],
+                None,
+            ),
+            (
+                "POST",
+                "/api/sessions/42/activate",
+                None,
+                vec![HttpApiResource::Sessions],
+                None,
+            ),
+            (
+                "PUT",
+                "/api/session-view",
+                Some("session_id=42"),
+                vec![HttpApiResource::SessionView],
+                Some(42),
+            ),
+            (
+                "PUT",
+                "/api/column-scripts/host",
+                None,
+                vec![HttpApiResource::ColumnScripts, HttpApiResource::SessionView],
+                None,
+            ),
+            (
+                "DELETE",
+                "/api/filter-scripts/errors",
+                None,
+                vec![HttpApiResource::FilterScripts, HttpApiResource::SessionView],
+                None,
+            ),
+            (
+                "POST",
+                "/api/interceptors",
+                None,
+                vec![
+                    HttpApiResource::Interceptors,
+                    HttpApiResource::SessionInterceptors,
+                ],
+                None,
+            ),
+            (
+                "PUT",
+                "/api/session-interceptors",
+                Some("session_id=42"),
+                vec![HttpApiResource::SessionInterceptors],
+                Some(42),
+            ),
+            (
+                "POST",
+                "/api/ca",
+                None,
+                vec![HttpApiResource::Certificate],
+                None,
+            ),
+            (
+                "DELETE",
+                "/api/system-logs",
+                None,
+                vec![HttpApiResource::SystemLogs],
+                None,
+            ),
+        ];
+
+        for (method, path, query, resources, session_id) in cases {
+            let change =
+                change_for_request(&method.parse().unwrap(), path, query).expect("mapped change");
+            assert_eq!(change.resources, resources, "{method} {path}");
+            assert_eq!(change.session_id, session_id, "{method} {path}");
+        }
+        assert!(change_for_request(&Method::GET, "/api/sessions", None).is_none());
+        assert!(
+            change_for_request(&Method::POST, "/api/filter-scripts/name/debug", None).is_none()
+        );
+        assert!(change_for_request(&Method::POST, "/api/logs/ids", None).is_none());
+    }
 
     #[tokio::test]
     async fn returns_the_standard_success_envelope() {
@@ -658,6 +877,82 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
         assert_eq!(body["ok"], false);
         assert_eq!(body["error"]["code"], "bad_request");
+    }
+
+    #[tokio::test]
+    async fn publishes_ui_resources_only_after_a_successful_http_write() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
+        let app = router_with_changes(MitmManager::new(runtime), changes);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"external"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let change = receiver.try_recv().unwrap();
+        assert_eq!(change.resources, vec![HttpApiResource::Sessions]);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty
+                | tokio::sync::broadcast::error::TryRecvError::Closed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn publishes_session_view_only_when_an_http_log_filter_changes() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.ensure_active_session().unwrap();
+        let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
+        let app = router_with_changes(MitmManager::new(runtime), changes);
+        let body = r#"{"filter":{"option":{"kind":"column","column":{"kind":"uri"},"case_sensitive":false},"input":"example"}}"#;
+
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/logs/ids")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+        }
+
+        let change = receiver.try_recv().unwrap();
+        assert_eq!(change.resources, vec![HttpApiResource::SessionView]);
+        assert_eq!(change.session_id, Some(session.id));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
     }
 
     #[tokio::test]

@@ -18,7 +18,7 @@ function open(event: PointerEvent): void {
     const width = 240;
     position.value = {
       left: Math.max(8, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 8)),
-      top: Math.max(8, rect.top - 8),
+      top: rect.bottom + 8,
     };
     visible.value = true;
   }, 260);
@@ -62,7 +62,6 @@ onBeforeUnmount(close);
   position: fixed;
   z-index: 100004;
   width: 240px;
-  transform: translateY(-100%);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -99,6 +98,6 @@ onBeforeUnmount(close);
 .tooltip-enter-from,
 .tooltip-leave-to {
   opacity: 0;
-  transform: translateY(calc(-100% + 3px));
+  transform: translateY(-3px);
 }
 </style>

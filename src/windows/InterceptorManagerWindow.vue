@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Io5Add, Io5Create, Io5Pencil, Io5Trash } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import type {
   InterceptorKind,
   InterceptorLibraryItem,
   InterceptorLibraryList,
+  HttpApiChange,
 } from "../api/types";
 import { reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
+import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { openScriptEditor } from "./launcher";
 
 const backend = useBackend();
@@ -18,6 +20,7 @@ const list = ref<InterceptorLibraryList | null>(null);
 const newName = ref("");
 const editingName = ref<string | null>(null);
 const nextName = ref("");
+const externalChanged = ref(false);
 
 const sortedItems = computed<InterceptorLibraryItem[]>(() =>
   [...(list.value?.items ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
@@ -33,6 +36,23 @@ async function refresh(): Promise<void> {
   } catch (error) {
     reportError(error, "加载拦截器列表失败");
   }
+}
+
+function onHttpApiChange(event: Event): void {
+  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  if (!resources.includes("all") && !resources.includes("interceptors")) return;
+  if (editingName.value !== null) {
+    externalChanged.value = true;
+    return;
+  }
+  externalChanged.value = false;
+  void refresh();
+}
+
+function reloadExternal(): void {
+  editingName.value = null;
+  externalChanged.value = false;
+  void refresh();
 }
 
 function switchKind(next: InterceptorKind): void {
@@ -113,7 +133,14 @@ async function remove(item: InterceptorLibraryItem): Promise<void> {
   }
 }
 
-onMounted(() => void refresh());
+onMounted(() => {
+  void refresh();
+  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
+});
 </script>
 
 <template>
@@ -133,6 +160,11 @@ onMounted(() => void refresh());
       >
         响应拦截器
       </button>
+    </div>
+
+    <div v-if="externalChanged" class="im-external">
+      <span>拦截器已被外部修改，当前重命名内容尚未覆盖。</span>
+      <button class="btn compact" @click="reloadExternal">重新加载</button>
     </div>
 
     <div class="im-actions">
@@ -218,6 +250,18 @@ onMounted(() => void refresh());
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
+}
+.im-external {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--warning);
+  color: var(--warning);
+  font-size: 12px;
+}
+.im-external span {
+  flex: 1;
 }
 .im-name-input {
   flex: 1;

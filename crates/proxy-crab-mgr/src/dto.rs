@@ -279,6 +279,30 @@ pub struct HttpServiceStatus {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpApiResource {
+    Workspace,
+    Config,
+    Proxy,
+    Sessions,
+    SessionView,
+    ColumnScripts,
+    FilterScripts,
+    Interceptors,
+    SessionInterceptors,
+    Certificate,
+    SystemLogs,
+    All,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HttpApiChange {
+    pub resources: Vec<HttpApiResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<u64>,
+}
+
 pub use proxy_crab_mitm::model::{
     AppConfig as Config, Column as NetLogColumn, InterceptorKind as Kind,
     ProxyStatus as MitmStatus, SessionMetadata as Session, WorkspacePaths as Workspace,

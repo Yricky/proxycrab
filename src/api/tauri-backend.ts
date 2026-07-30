@@ -123,5 +123,10 @@ export function createTauriBackend(): Backend {
     clearSystemLogs: () => call("clear_system_logs"),
 
     getHttpServiceError: () => call("get_http_service_error"),
+
+    getProxyCrabSkillInstallInfo: (parent: string) =>
+      call("get_proxycrab_skill_install_info", { parent }),
+    installProxyCrabSkill: (parent: string, overwrite: boolean) =>
+      call("install_proxycrab_skill", { parent, overwrite }),
   };
 }

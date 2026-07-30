@@ -1,0 +1,23 @@
+{
+  "skill_name": "proxycrab",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use ProxyCrab to find the most recent 5xx request in the active Session and explain the failure using capture evidence. Do not expose credentials in the final report.",
+      "expected_output": "A concise diagnosis citing the Session and log ID, request URI, response status/body evidence, interceptor history when relevant, uncertainty, and a next check.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Wait up to 30 seconds in ProxyCrab for a new POST request whose URI contains /api/checkout, then export the complete capture as a JSON artifact and summarize what happened.",
+      "expected_output": "The agent uses the wait and export tools, produces a capture JSON path, and summarizes the new matching capture without claiming binary body access.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Create a ProxyCrab request interceptor named add-agent-debug-header that sets x-agent-debug: 1, attach it to the active Session without removing existing response interceptors, and verify on a newly captured request that it executed.",
+      "expected_output": "The agent saves valid Lua, preserves the response chain, atomically updates both chains, and cites a new capture's historical source and header_set modification as verification.",
+      "files": []
+    }
+  ]
+}

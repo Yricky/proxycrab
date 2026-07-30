@@ -10,11 +10,12 @@ import {
   Io5Trash,
 } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type { Script } from "../api/types";
+import type { HttpApiChange, Script } from "../api/types";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 import { logsStore } from "../stores/logs";
+import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { sessionsStore } from "../stores/sessions";
 import { windowsStore } from "../stores/windows";
 
@@ -36,6 +37,7 @@ const debugLogId = ref("");
 const debugging = ref(false);
 const debugResult = ref<string | null>(null);
 const debugFailed = ref(false);
+const externalChanged = ref(false);
 
 function notifyChanged(): void {
   window.dispatchEvent(new CustomEvent("column-scripts-changed"));
@@ -82,6 +84,23 @@ async function refreshScripts(preferredName?: string): Promise<void> {
   }
 }
 
+function onHttpApiChange(event: Event): void {
+  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  if (!resources.includes("all") && !resources.includes("column_scripts")) return;
+  if (dirty.value || renamingName.value !== null) {
+    externalChanged.value = true;
+    return;
+  }
+  externalChanged.value = false;
+  void refreshScripts(selectedName.value ?? undefined);
+}
+
+function reloadExternal(): void {
+  externalChanged.value = false;
+  renamingName.value = null;
+  void refreshScripts(selectedName.value ?? undefined);
+}
+
 async function confirmDiscard(): Promise<boolean> {
   if (!dirty.value) return true;
   return confirmDialog({
@@ -113,6 +132,7 @@ async function persist(showToast: boolean): Promise<{ ok: true } | { ok: false; 
     const item = scripts.value.find((script) => script.name === name);
     if (item) item.content = content.value;
     dirty.value = false;
+    externalChanged.value = false;
     notifyChanged();
     if (showToast) appStore.toast("已保存", "success");
     return { ok: true };
@@ -281,12 +301,14 @@ watch(
 onMounted(() => {
   windowsStore.registerCloseGuard(WINDOW_ID, confirmDiscard);
   window.addEventListener("keydown", onKeydown);
+  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
   void refreshScripts();
 });
 
 onBeforeUnmount(() => {
   windowsStore.unregisterCloseGuard(WINDOW_ID);
   window.removeEventListener("keydown", onKeydown);
+  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 </script>
 
@@ -354,6 +376,10 @@ onBeforeUnmount(() => {
     </aside>
 
     <section class="cm-editor-pane">
+      <div v-if="externalChanged" class="cm-external">
+        <span>列脚本已被外部修改，未保存内容仍保留在编辑器中。</span>
+        <button class="btn compact" @click="reloadExternal">重新加载</button>
+      </div>
       <template v-if="selectedScript">
         <div class="cm-editor-toolbar">
           <span class="cm-current-name mono" :title="selectedName ?? ''">{{ selectedName }}</span>
@@ -421,6 +447,19 @@ onBeforeUnmount(() => {
   flex-direction: column;
   border-right: 1px solid var(--border);
   background: var(--bg-panel);
+}
+.cm-external {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--warning);
+  color: var(--warning);
+  font-size: 12px;
+  flex: none;
+}
+.cm-external span {
+  flex: 1;
 }
 
 .cm-sidebar-title {

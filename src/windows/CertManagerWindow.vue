@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { Io5Copy, Io5Download, Io5Refresh, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
+import type { HttpApiChange } from "../api/types";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
+import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { proxyStore } from "../stores/proxy";
 
 const backend = useBackend();
@@ -17,6 +19,13 @@ async function refresh(): Promise<void> {
     pem.value = cert.pem;
   } catch (error) {
     reportError(error, "获取证书失败");
+  }
+}
+
+function onHttpApiChange(event: Event): void {
+  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  if (resources.includes("all") || resources.includes("certificate")) {
+    void refresh();
   }
 }
 
@@ -61,7 +70,14 @@ async function regenerate(): Promise<void> {
   }
 }
 
-onMounted(() => void refresh());
+onMounted(() => {
+  void refresh();
+  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
+});
 </script>
 
 <template>

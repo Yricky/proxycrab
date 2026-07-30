@@ -1,12 +1,14 @@
+mod skill_install;
+
 use std::sync::{Arc, Mutex, RwLock};
 
 use proxy_crab_mgr::{
     MitmManager, ProxyCrabManager,
     dto::{
-        CertificateResponse, CreateSessionRequest, DebugFilterScriptRequest, HttpServiceStatus,
-        InterceptorCreateRequest, InterceptorDetail, InterceptorLibraryList,
-        InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest, LogViewsPayload,
-        LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
+        CertificateResponse, CreateSessionRequest, DebugFilterScriptRequest, HttpApiChange,
+        HttpApiResource, HttpServiceStatus, InterceptorCreateRequest, InterceptorDetail,
+        InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest,
+        LogViewsPayload, LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
         ReplaceSessionViewRequest, ScriptRequest, SessionInterceptorsPayload, SessionViewPayload,
         SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
     },
@@ -20,8 +22,10 @@ use proxy_crab_mitm::{
         WorkspacePaths,
     },
 };
-use tauri::{Manager, RunEvent, State};
+use tauri::{Emitter, Manager, RunEvent, State};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+use crate::skill_install::SkillInstallInfo;
 
 struct BackendState {
     manager: Arc<dyn ProxyCrabManager>,
@@ -347,6 +351,35 @@ fn get_http_service_error(state: State<'_, BackendState>) -> Option<String> {
 }
 
 #[tauri::command]
+fn get_proxycrab_skill_install_info(parent: String) -> Result<SkillInstallInfo, ManagerError> {
+    skill_install::install_info(&parent)
+}
+
+#[tauri::command]
+fn install_proxycrab_skill(
+    app: tauri::AppHandle,
+    parent: String,
+    overwrite: bool,
+) -> Result<SkillInstallInfo, ManagerError> {
+    let bundled = app
+        .path()
+        .resource_dir()
+        .map_err(|error| ManagerError::internal(format!("resolve resource directory: {error}")))?
+        .join("skills")
+        .join("proxycrab");
+    #[cfg(debug_assertions)]
+    let bundled = if bundled.is_dir() {
+        bundled
+    } else {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("skills")
+            .join("proxycrab")
+    };
+    skill_install::install(&bundled, &parent, overwrite)
+}
+
+#[tauri::command]
 async fn get_http_service_status(
     state: State<'_, BackendState>,
 ) -> Result<HttpServiceStatus, ManagerError> {
@@ -400,6 +433,29 @@ pub fn run() {
                         (None, Some(error.to_string()))
                     }
                 };
+            if let Some(http) = http.as_ref() {
+                let mut changes = http.subscribe_changes();
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        let change = match changes.recv().await {
+                            Ok(change) => change,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                HttpApiChange {
+                                    resources: vec![HttpApiResource::All],
+                                    session_id: None,
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        };
+                        if let Err(error) = app_handle.emit("proxycrab://http-api-change", change) {
+                            tracing::warn!(
+                                "failed to emit HTTP API change to the frontend: {error}"
+                            );
+                        }
+                    }
+                });
+            }
             app.manage(BackendState {
                 manager,
                 http: Mutex::new(http),
@@ -449,6 +505,8 @@ pub fn run() {
             clear_system_logs,
             get_http_service_error,
             get_http_service_status,
+            get_proxycrab_skill_install_info,
+            install_proxycrab_skill,
         ]);
 
     let app = builder

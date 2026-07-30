@@ -1,0 +1,9 @@
+{
+  "request": [
+    {
+      "name": "proxycrab-skill-eval-request",
+      "enabled": true
+    }
+  ],
+  "response": []
+}

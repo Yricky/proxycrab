@@ -13,8 +13,10 @@ import { windowsStore } from "./stores/windows";
 import { sessionsStore } from "./stores/sessions";
 import { proxyStore } from "./stores/proxy";
 import { logsStore } from "./stores/logs";
+import { startHttpApiSync, stopHttpApiSync } from "./stores/http-api-sync";
 
 onMounted(async () => {
+  await startHttpApiSync();
   proxyStore.startPolling();
   await sessionsStore.init();
   logsStore.startPolling();
@@ -23,6 +25,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   proxyStore.stopPolling();
   logsStore.stopPolling();
+  stopHttpApiSync();
 });
 </script>
 

@@ -46,6 +46,25 @@ export const sessionsStore = reactive({
     }
   },
 
+  async syncFromBackend(): Promise<void> {
+    try {
+      const [sessions, config] = await Promise.all([
+        backend.listSessions(),
+        backend.getConfig(),
+      ]);
+      this.sessions = sessions;
+      this.activeSessionId = config.active_session_id;
+      if (
+        this.viewingSessionId === null ||
+        !sessions.some((session) => session.id === this.viewingSessionId)
+      ) {
+        this.viewingSessionId = config.active_session_id ?? sessions[0]?.id ?? null;
+      }
+    } catch (error) {
+      reportError(error, "同步会话状态失败");
+    }
+  },
+
   async create(name: string, description: string | null): Promise<SessionMetadata | null> {
     try {
       const session = await backend.createSession({

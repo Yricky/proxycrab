@@ -26,6 +26,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../skills/proxycrab/SKILL.md": "skills/proxycrab/SKILL.md",
+      "../skills/proxycrab/references/": "skills/proxycrab/references/",
+      "../skills/proxycrab/scripts/": "skills/proxycrab/scripts/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

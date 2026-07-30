@@ -2,11 +2,12 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { Io5Refresh, Io5Trash } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type { SystemLogEntry } from "../api/types";
+import type { HttpApiChange, SystemLogEntry } from "../api/types";
 import VirtualList from "../components/VirtualList.vue";
 import { reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 import { formatDateTime } from "../utils/format";
+import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 
 const backend = useBackend();
 
@@ -61,6 +62,14 @@ async function clearLogs(): Promise<void> {
   }
 }
 
+function onHttpApiChange(event: Event): void {
+  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  if (resources.includes("all") || resources.includes("system_logs")) {
+    entries.value = [];
+    void fetchLogs();
+  }
+}
+
 function levelClass(level: string): string {
   switch (level) {
     case "ERROR":
@@ -76,6 +85,7 @@ function levelClass(level: string): string {
 
 onMounted(() => {
   void fetchLogs();
+  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
   timer = window.setInterval(() => {
     if (autoRefresh.value) void fetchLogs();
   }, 2000);
@@ -83,6 +93,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (timer !== undefined) window.clearInterval(timer);
+  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 </script>
 

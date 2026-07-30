@@ -22,6 +22,7 @@ import type {
   SessionViewPayload,
   SystemLogEntry,
   SystemLogsQuery,
+  SkillInstallInfo,
   UpdateScriptRequest,
   UpdateSessionRequest,
   WorkspacePaths,
@@ -103,4 +104,8 @@ export interface Backend {
 
   // management HTTP service status
   getHttpServiceError(): Promise<string | null>;
+
+  // bundled Agent skill
+  getProxyCrabSkillInstallInfo(parent: string): Promise<SkillInstallInfo>;
+  installProxyCrabSkill(parent: string, overwrite: boolean): Promise<SkillInstallInfo>;
 }

@@ -12,6 +12,7 @@ import CertManagerWindow from "./CertManagerWindow.vue";
 import SystemLogsWindow from "./SystemLogsWindow.vue";
 import SettingsWindow from "./SettingsWindow.vue";
 import ScriptSnapshotWindow from "./ScriptSnapshotWindow.vue";
+import SkillInstallWindow from "./SkillInstallWindow.vue";
 
 export type ScriptEditorKind = "column" | InterceptorKind;
 
@@ -114,5 +115,14 @@ export function openSettings(): void {
     component: SettingsWindow,
     width: 560,
     height: 440,
+  });
+}
+
+export function openSkillInstall(): void {
+  windowsStore.open("skill-install", {
+    title: "安装 ProxyCrab Skill",
+    component: SkillInstallWindow,
+    width: 560,
+    height: 360,
   });
 }

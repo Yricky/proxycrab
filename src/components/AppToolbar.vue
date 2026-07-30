@@ -9,6 +9,7 @@ import {
   openFilterManager,
   openInterceptorManager,
   openSettings,
+  openSkillInstall,
   openSystemLogs,
 } from "../windows/launcher";
 import {
@@ -17,6 +18,7 @@ import {
   Io5ChevronDown,
   Io5CodeSlash,
   Io5Desktop,
+  Io5Download,
   Io5Key,
   Io5List,
   Io5Moon,
@@ -173,6 +175,10 @@ onBeforeUnmount(() => {
           <button class="tb-menu-item" @click="runMenuAction(openSystemLogs)">
             <Io5Newspaper :size="14" />
             <span>系统日志</span>
+          </button>
+          <button class="tb-menu-item" @click="runMenuAction(openSkillInstall)">
+            <Io5Download :size="14" />
+            <span>安装 ProxyCrab Skill…</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openSettings)">
             <Io5Settings :size="14" />

@@ -134,6 +134,31 @@ export interface WorkspacePaths {
   configured_path: string;
 }
 
+export type HttpApiResource =
+  | "workspace"
+  | "config"
+  | "proxy"
+  | "sessions"
+  | "session_view"
+  | "column_scripts"
+  | "filter_scripts"
+  | "interceptors"
+  | "session_interceptors"
+  | "certificate"
+  | "system_logs"
+  | "all";
+
+export interface HttpApiChange {
+  resources: HttpApiResource[];
+  session_id?: number;
+}
+
+export interface SkillInstallInfo {
+  parent_path: string;
+  target_path: string;
+  exists: boolean;
+}
+
 // ---------- dto.rs ----------
 
 export interface CreateSessionRequest {
