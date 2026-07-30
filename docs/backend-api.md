@@ -41,8 +41,9 @@ The server listens on loopback by default at `http://127.0.0.1:18089`. It has no
 | `/api/session-view` | `GET`, `PUT` whole-session table view |
 | `/api/session-interceptors` | `GET`, `PUT` whole-session interceptor chains |
 | `/api/column-scripts`, `/api/column-scripts/{name}` | script CRUD |
+| `/api/filter-scripts`, `/api/filter-scripts/{name}` | global filter-script CRUD |
+| `/api/filter-scripts/{name}/debug` | `POST` debug against one log and input |
 | `/api/interceptors`, `/api/interceptors/{kind}/{name}` | global interceptor script CRUD |
-| `/api/filter-history` | `GET`, `POST`, `DELETE` |
 | `/api/ca` | `GET`, `POST` to regenerate while the proxy is stopped |
 | `/api/system-logs` | `GET`, `DELETE` |
 
@@ -59,22 +60,43 @@ All three log operations accept an optional Session. The POST operations accept 
 ```json
 {
   "session_id": 1,
-  "filter": "entry.req().uri().host().contains(\"example.com\")",
+  "filter": {
+    "option": {
+      "kind": "column",
+      "column": { "kind": "uri" },
+      "case_sensitive": false
+    },
+    "input": "example.com"
+  },
   "min_id": 100,
   "max_id": 10000,
   "limit": 10000
 }
 ```
 
-Every field is optional. An absent or blank `filter` matches all logs. The filter uses the same Lua log object documented in the Lua API and must evaluate successfully for every scanned log. `min_id` and `max_id` are exclusive (`id > min_id && id < max_id`). The default and maximum page size are both 10,000.
+Every field is optional. Omitting `filter` reuses the Session's persisted filter. Supplying it applies the draft to this query and persists it only after the ID scan succeeds. `option: null` or an empty `input` matches all logs; an empty input still preserves the selected option.
+
+A column option supports `method`, `uri`, `code`, `source`, `stage`, or `{ "kind": "script", "script_name": "..." }`. Built-in and custom-column output are matched with contains; `case_sensitive` controls Unicode case folding. A script option has the form `{ "kind": "script", "script_name": "..." }` and passes `input` to that global Lua filter script. Custom-column and filter-script execution errors silently count as non-matches.
+
+`min_id` and `max_id` are exclusive (`id > min_id && id < max_id`). The default and maximum page size are both 10,000.
 
 When only `min_id` is supplied, the database scans toward newer IDs. When `max_id` or neither bound is supplied, it scans toward older IDs. Callers page in either direction by passing the relevant edge ID from their current list. Response order is intentionally unspecified:
 
 ```json
 {
-  "ids": [9999, 9998]
+  "ids": [9999, 9998],
+  "filter": {
+    "option": {
+      "kind": "column",
+      "column": { "kind": "uri" },
+      "case_sensitive": false
+    },
+    "input": "example.com"
+  }
 }
 ```
+
+The response always includes the effective persisted filter. If a referenced script was removed outside the application, it is repaired to `{ "option": null, "input": "" }` and returned that way.
 
 ### Batch-render log views
 
@@ -146,7 +168,11 @@ The response columns and cells do not contain the ID column; `row.id` is a separ
   "columns": [
     { "kind": "method", "width": 50.0 },
     { "kind": "uri", "width": 300.0 }
-  ]
+  ],
+  "filter": {
+    "option": null,
+    "input": ""
+  }
 }
 ```
 
@@ -161,9 +187,35 @@ The response columns and cells do not contain the ID column; `row.id` is a separ
 }
 ```
 
-The ID column is not part of the view model. Column widths must be positive. A new/updated view cannot reference a missing global column script. Deleting a referenced script is allowed and deliberately leaves the stale reference; rendering then returns `column_script_error`. Renaming a script updates references in every Session view.
+The ID column is not part of the view model. `PUT` changes only `columns` and preserves the Session filter. Column widths must be positive. A new/updated view cannot reference a missing global column script. Deleting a referenced script is allowed and deliberately leaves the stale table-column reference; rendering then returns `column_script_error`. Renaming a script updates table and filter references in every Session.
 
-New Sessions clone the active Session's view. When no active/readable view exists, they use the fixed built-in method, URI, status-code, and source columns.
+New Sessions always use the fixed built-in method, URI, status-code, and source columns plus an empty filter. They do not clone the active Session.
+
+## Global filter scripts
+
+Filter scripts are stored globally under `scripts/filter`. CRUD follows the same `ScriptRequest` and `UpdateScriptRequest` shapes as custom-column scripts:
+
+```text
+GET    /api/filter-scripts
+POST   /api/filter-scripts
+GET    /api/filter-scripts/{name}
+PUT    /api/filter-scripts/{name}
+DELETE /api/filter-scripts/{name}
+```
+
+Renaming updates every Session filter reference. Deleting a referenced filter script, or deleting a custom-column script used as a filter target, resets those Session filters to no selection.
+
+`POST /api/filter-scripts/{name}/debug` evaluates one script without suppressing errors:
+
+```json
+{
+  "session_id": 1,
+  "log_id": 123,
+  "input": "example.com"
+}
+```
+
+The success payload is a boolean. Runtime errors and non-boolean results return `bad_request`.
 
 ## Session interceptors
 
@@ -219,7 +271,7 @@ Request and response bodies are bounded to 64 MiB with a 60-second read timeout.
 
 ## Workspace and CA
 
-The workspace is locked exclusively for the process lifetime. Active Session ID, proxy/API addresses, and filter history are stored in workspace configuration. Each Session stores its table view in `sessions/<id>/view.json` and interceptor chains in `sessions/<id>/interceptors.json`. Deleting the active Session returns `active_session_delete_forbidden`.
+The workspace is locked exclusively for the process lifetime. Active Session ID and proxy/API addresses are stored in workspace configuration. Each Session stores its table view and filter in `sessions/<id>/view.json`, and interceptor chains in `sessions/<id>/interceptors.json`. Deleting the active Session returns `active_session_delete_forbidden`.
 
 Each workspace has an independent generated CA. Missing or corrupt CA files are regenerated with a warning, the per-host certificate cache is bounded, and the CA private key is restricted to owner-only permissions on macOS/Unix. Regeneration is serialized with proxy start/stop and rejected while the proxy is running.
 

@@ -6,6 +6,7 @@ import {
   openBase64,
   openCertManager,
   openColumnManager,
+  openFilterManager,
   openInterceptorManager,
   openSettings,
   openSystemLogs,
@@ -14,6 +15,7 @@ import {
   Io5Build,
   Io5Checkmark,
   Io5ChevronDown,
+  Io5CodeSlash,
   Io5Desktop,
   Io5Key,
   Io5List,
@@ -127,6 +129,10 @@ onBeforeUnmount(() => {
           <button class="tb-menu-item" @click="runMenuAction(openColumnManager)">
             <Io5List :size="14" />
             <span>自定义列</span>
+          </button>
+          <button class="tb-menu-item" @click="runMenuAction(openFilterManager)">
+            <Io5CodeSlash :size="14" />
+            <span>过滤脚本</span>
           </button>
         </div>
       </div>

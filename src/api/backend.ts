@@ -2,6 +2,7 @@ import type {
   AppConfig,
   CertificateResponse,
   CreateSessionRequest,
+  DebugFilterScriptRequest,
   InterceptorCreateRequest,
   InterceptorKind,
   InterceptorLibraryList,
@@ -68,6 +69,14 @@ export interface Backend {
   updateColumnScript(name: string, request: UpdateScriptRequest): Promise<void>;
   deleteColumnScript(name: string): Promise<void>;
 
+  // filter scripts
+  listFilterScripts(): Promise<Script[]>;
+  createFilterScript(request: ScriptRequest): Promise<void>;
+  getFilterScript(name: string): Promise<Script>;
+  updateFilterScript(name: string, request: UpdateScriptRequest): Promise<void>;
+  deleteFilterScript(name: string): Promise<void>;
+  debugFilterScript(name: string, request: DebugFilterScriptRequest): Promise<boolean>;
+
   // interceptors
   listInterceptors(kind: InterceptorKind): Promise<InterceptorLibraryList>;
   createInterceptor(request: InterceptorCreateRequest): Promise<void>;
@@ -83,11 +92,6 @@ export interface Backend {
     sessionId: number | null,
     request: ReplaceSessionInterceptorsRequest,
   ): Promise<SessionInterceptorsPayload>;
-
-  // filter history
-  getFilterHistory(): Promise<string[]>;
-  addFilterHistory(script: string): Promise<string[]>;
-  removeFilterHistory(script: string | null): Promise<string[]>;
 
   // certificate
   getCertificate(): Promise<CertificateResponse>;

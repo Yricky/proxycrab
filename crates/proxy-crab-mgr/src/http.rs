@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dto::{
-        CreateSessionRequest, FilterHistoryRequest, InterceptorCreateRequest,
+        CreateSessionRequest, DebugFilterScriptRequest, InterceptorCreateRequest,
         InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError,
         ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ScriptRequest, SessionQuery,
         SetWorkspaceRequest, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
@@ -167,6 +167,20 @@ pub fn router(manager: ManagerState) -> Router {
                 .delete(delete_column_script),
         )
         .route(
+            "/api/filter-scripts",
+            get(filter_scripts).post(create_filter_script),
+        )
+        .route(
+            "/api/filter-scripts/{name}/debug",
+            post(debug_filter_script),
+        )
+        .route(
+            "/api/filter-scripts/{name}",
+            get(filter_script)
+                .put(update_filter_script)
+                .delete(delete_filter_script),
+        )
+        .route(
             "/api/interceptors",
             get(interceptors).post(create_interceptor),
         )
@@ -175,12 +189,6 @@ pub fn router(manager: ManagerState) -> Router {
             get(interceptor)
                 .put(update_interceptor)
                 .delete(delete_interceptor),
-        )
-        .route(
-            "/api/filter-history",
-            get(filter_history)
-                .post(add_filter_history)
-                .delete(remove_filter_history),
         )
         .route("/api/ca", get(certificate).post(regenerate_certificate))
         .route(
@@ -405,6 +413,50 @@ async fn delete_column_script(
     success(json!({}))
 }
 
+async fn filter_scripts(State(manager): State<ManagerState>) -> ApiResult {
+    success(manager.filter_scripts().await?)
+}
+
+async fn create_filter_script(
+    State(manager): State<ManagerState>,
+    ApiJson(request): ApiJson<ScriptRequest>,
+) -> ApiResult {
+    manager.create_filter_script(request).await?;
+    success(json!({}))
+}
+
+async fn filter_script(
+    State(manager): State<ManagerState>,
+    ApiPath(name): ApiPath<String>,
+) -> ApiResult {
+    success(manager.filter_script(name).await?)
+}
+
+async fn update_filter_script(
+    State(manager): State<ManagerState>,
+    ApiPath(name): ApiPath<String>,
+    ApiJson(request): ApiJson<UpdateScriptRequest>,
+) -> ApiResult {
+    manager.update_filter_script(name, request).await?;
+    success(json!({}))
+}
+
+async fn delete_filter_script(
+    State(manager): State<ManagerState>,
+    ApiPath(name): ApiPath<String>,
+) -> ApiResult {
+    manager.delete_filter_script(name).await?;
+    success(json!({}))
+}
+
+async fn debug_filter_script(
+    State(manager): State<ManagerState>,
+    ApiPath(name): ApiPath<String>,
+    ApiJson(request): ApiJson<DebugFilterScriptRequest>,
+) -> ApiResult {
+    success(manager.debug_filter_script(name, request).await?)
+}
+
 #[derive(Deserialize)]
 struct KindQuery {
     kind: InterceptorKind,
@@ -450,29 +502,6 @@ async fn delete_interceptor(
 ) -> ApiResult {
     manager.delete_interceptor(parse_kind(&kind)?, name).await?;
     success(json!({}))
-}
-
-async fn filter_history(State(manager): State<ManagerState>) -> ApiResult {
-    success(manager.filter_history().await?)
-}
-
-async fn add_filter_history(
-    State(manager): State<ManagerState>,
-    ApiJson(request): ApiJson<FilterHistoryRequest>,
-) -> ApiResult {
-    success(manager.add_filter_history(request.script).await?)
-}
-
-#[derive(Deserialize)]
-struct FilterHistoryQuery {
-    script: Option<String>,
-}
-
-async fn remove_filter_history(
-    State(manager): State<ManagerState>,
-    ApiQuery(query): ApiQuery<FilterHistoryQuery>,
-) -> ApiResult {
-    success(manager.remove_filter_history(query.script).await?)
 }
 
 async fn certificate(State(manager): State<ManagerState>) -> ApiResult {
@@ -664,6 +693,11 @@ mod tests {
 
         for (method, uri, body) in [
             ("POST", "/api/logs/ids", r#"{}"#),
+            (
+                "POST",
+                "/api/logs/ids",
+                r#"{"filter":{"option":{"kind":"column","column":{"kind":"uri"},"case_sensitive":false},"input":""}}"#,
+            ),
             ("POST", "/api/logs/views", r#"{"logs":[]}"#),
             ("GET", "/api/session-view", ""),
             ("PUT", "/api/session-view", r#"{"columns":[]}"#),
@@ -673,6 +707,12 @@ mod tests {
                 "/api/session-interceptors",
                 r#"{"request":[],"response":[]}"#,
             ),
+            (
+                "POST",
+                "/api/filter-scripts",
+                r#"{"name":"example","content":"return true"}"#,
+            ),
+            ("GET", "/api/filter-scripts", ""),
         ] {
             let response = app
                 .clone()
@@ -695,6 +735,7 @@ mod tests {
             ("GET", "/api/sessions/1/logs"),
             ("GET", "/api/columns"),
             ("PUT", "/api/interceptors/order"),
+            ("GET", "/api/filter-history"),
             ("POST", "/api/interceptors/request/example/enable"),
             ("POST", "/api/interceptors/request/example/disable"),
         ] {

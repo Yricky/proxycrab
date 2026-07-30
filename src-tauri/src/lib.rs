@@ -3,12 +3,12 @@ use std::sync::{Arc, Mutex, RwLock};
 use proxy_crab_mgr::{
     MitmManager, ProxyCrabManager,
     dto::{
-        CertificateResponse, CreateSessionRequest, HttpServiceStatus, InterceptorCreateRequest,
-        InterceptorDetail, InterceptorLibraryList, InterceptorUpdateRequest, LogDetail,
-        LogIdsPayload, LogIdsRequest, LogViewsPayload, LogViewsRequest, ManagerError,
-        ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ScriptRequest,
-        SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery, UpdateScriptRequest,
-        UpdateSessionRequest,
+        CertificateResponse, CreateSessionRequest, DebugFilterScriptRequest, HttpServiceStatus,
+        InterceptorCreateRequest, InterceptorDetail, InterceptorLibraryList,
+        InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest, LogViewsPayload,
+        LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
+        ReplaceSessionViewRequest, ScriptRequest, SessionInterceptorsPayload, SessionViewPayload,
+        SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
     },
     http::{HttpServerHandle, start_http_server},
 };
@@ -197,6 +197,53 @@ async fn delete_column_script(
 }
 
 #[tauri::command]
+async fn list_filter_scripts(state: State<'_, BackendState>) -> Result<Vec<Script>, ManagerError> {
+    state.manager().filter_scripts().await
+}
+
+#[tauri::command]
+async fn create_filter_script(
+    state: State<'_, BackendState>,
+    request: ScriptRequest,
+) -> Result<(), ManagerError> {
+    state.manager().create_filter_script(request).await
+}
+
+#[tauri::command]
+async fn get_filter_script(
+    state: State<'_, BackendState>,
+    name: String,
+) -> Result<Script, ManagerError> {
+    state.manager().filter_script(name).await
+}
+
+#[tauri::command]
+async fn update_filter_script(
+    state: State<'_, BackendState>,
+    name: String,
+    request: UpdateScriptRequest,
+) -> Result<(), ManagerError> {
+    state.manager().update_filter_script(name, request).await
+}
+
+#[tauri::command]
+async fn delete_filter_script(
+    state: State<'_, BackendState>,
+    name: String,
+) -> Result<(), ManagerError> {
+    state.manager().delete_filter_script(name).await
+}
+
+#[tauri::command]
+async fn debug_filter_script(
+    state: State<'_, BackendState>,
+    name: String,
+    request: DebugFilterScriptRequest,
+) -> Result<bool, ManagerError> {
+    state.manager().debug_filter_script(name, request).await
+}
+
+#[tauri::command]
 async fn list_interceptors(
     state: State<'_, BackendState>,
     kind: InterceptorKind,
@@ -261,27 +308,6 @@ async fn replace_session_interceptors(
         .manager()
         .replace_session_interceptors(session_id, request)
         .await
-}
-
-#[tauri::command]
-async fn get_filter_history(state: State<'_, BackendState>) -> Result<Vec<String>, ManagerError> {
-    state.manager().filter_history().await
-}
-
-#[tauri::command]
-async fn add_filter_history(
-    state: State<'_, BackendState>,
-    script: String,
-) -> Result<Vec<String>, ManagerError> {
-    state.manager().add_filter_history(script).await
-}
-
-#[tauri::command]
-async fn remove_filter_history(
-    state: State<'_, BackendState>,
-    script: Option<String>,
-) -> Result<Vec<String>, ManagerError> {
-    state.manager().remove_filter_history(script).await
 }
 
 #[tauri::command]
@@ -404,6 +430,12 @@ pub fn run() {
             get_column_script,
             update_column_script,
             delete_column_script,
+            list_filter_scripts,
+            create_filter_script,
+            get_filter_script,
+            update_filter_script,
+            delete_filter_script,
+            debug_filter_script,
             list_interceptors,
             create_interceptor,
             get_interceptor,
@@ -411,9 +443,6 @@ pub fn run() {
             delete_interceptor,
             get_session_interceptors,
             replace_session_interceptors,
-            get_filter_history,
-            add_filter_history,
-            remove_filter_history,
             get_certificate,
             regenerate_certificate,
             get_system_logs,

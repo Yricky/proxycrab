@@ -18,8 +18,6 @@ pub struct AppConfig {
     pub api_port: u16,
     #[serde(default)]
     pub active_session_id: Option<u64>,
-    #[serde(default)]
-    pub filter_history: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -30,7 +28,6 @@ impl Default for AppConfig {
             api_host: default_api_host(),
             api_port: default_api_port(),
             active_session_id: None,
-            filter_history: Vec::new(),
         }
     }
 }
@@ -64,6 +61,37 @@ pub fn default_columns() -> Vec<Column> {
 pub struct SessionView {
     #[serde(default = "default_columns")]
     pub columns: Vec<Column>,
+    #[serde(default)]
+    pub filter: SessionFilter,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FilterColumn {
+    Method,
+    Uri,
+    Code,
+    Source,
+    Stage,
+    Script { script_name: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FilterOption {
+    Column {
+        column: FilterColumn,
+        case_sensitive: bool,
+    },
+    Script {
+        script_name: String,
+    },
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionFilter {
+    pub option: Option<FilterOption>,
+    pub input: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,6 +112,7 @@ impl Default for SessionView {
     fn default() -> Self {
         Self {
             columns: default_columns(),
+            filter: SessionFilter::default(),
         }
     }
 }
@@ -141,6 +170,7 @@ pub struct Script {
 #[serde(rename_all = "snake_case")]
 pub enum ScriptKind {
     Column,
+    Filter,
     RequestInterceptor,
     ResponseInterceptor,
 }
@@ -228,18 +258,9 @@ pub enum BodyPayload {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Modification {
     Snapshot { headers: HeaderValues },
-    HeaderAppend {
-        name: String,
-        value: String,
-    },
-    HeaderSet {
-        name: String,
-        value: String,
-    },
-    HeaderRemove {
-        name: String,
-        values: Vec<String>,
-    },
+    HeaderAppend { name: String, value: String },
+    HeaderSet { name: String, value: String },
+    HeaderRemove { name: String, values: Vec<String> },
     BodyReplaceString { content: String },
     BodyReplaceFile { path: String },
 }

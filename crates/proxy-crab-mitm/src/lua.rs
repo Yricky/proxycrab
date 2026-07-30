@@ -40,6 +40,7 @@ pub fn validate_script(kind: ScriptKind, source: &str) -> Result<()> {
     lua.load(source)
         .set_name(match kind {
             ScriptKind::Column => "column.lua",
+            ScriptKind::Filter => "filter.lua",
             ScriptKind::RequestInterceptor => "request-interceptor.lua",
             ScriptKind::ResponseInterceptor => "response-interceptor.lua",
         })
@@ -48,10 +49,10 @@ pub fn validate_script(kind: ScriptKind, source: &str) -> Result<()> {
         .map_err(Into::into)
 }
 
-pub fn evaluate_filter(source: &str, entry: &CaptureSummary) -> Result<bool> {
+pub fn evaluate_filter(source: &str, argument: &str, entry: &CaptureSummary) -> Result<bool> {
     let lua = safe_lua()?;
     lua.globals().set("entry", EntryView(entry.clone()))?;
-    match lua.load(source).eval::<Value>()? {
+    match lua.load(source).call::<Value>(argument)? {
         Value::Boolean(value) => Ok(value),
         _ => bail!("filter script must return a boolean"),
     }
@@ -501,11 +502,34 @@ mod tests {
     #[test]
     fn evaluates_filter_and_column() {
         let entry = entry();
-        assert!(evaluate_filter("return entry.req.uri.host == 'example.com'", &entry).unwrap());
+        assert!(
+            evaluate_filter(
+                "local input = ...; return entry.req.uri.host == input",
+                "example.com",
+                &entry
+            )
+            .unwrap()
+        );
+        assert!(
+            !evaluate_filter(
+                "local input = ...; return entry.req.uri.host == input",
+                " example.com ",
+                &entry
+            )
+            .unwrap()
+        );
         assert_eq!(
             evaluate_column("return entry.req.headers:get('x-test')", &entry).unwrap(),
             "old"
         );
+    }
+
+    #[test]
+    fn filter_requires_boolean_and_propagates_runtime_failures() {
+        let entry = entry();
+        assert!(evaluate_filter("return ...", "not-a-boolean", &entry).is_err());
+        assert!(evaluate_filter("error('boom')", "input", &entry).is_err());
+        assert!(evaluate_filter("while true do end", "input", &entry).is_err());
     }
 
     #[test]
@@ -528,7 +552,7 @@ mod tests {
     #[test]
     fn validates_syntax_and_stops_runaway_script() {
         assert!(validate_script(ScriptKind::Column, "return (").is_err());
-        assert!(evaluate_filter("while true do end", &entry()).is_err());
+        assert!(validate_script(ScriptKind::Filter, "return (").is_err());
         assert!(evaluate_column("return string.rep('x', 20 * 1024 * 1024)", &entry()).is_err());
     }
 }

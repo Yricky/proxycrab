@@ -18,13 +18,29 @@ export type Column =
   | { kind: "stage"; width: number }
   | { kind: "script"; width: number; script_name: string };
 
+export type FilterColumn =
+  | { kind: "method" }
+  | { kind: "uri" }
+  | { kind: "code" }
+  | { kind: "source" }
+  | { kind: "stage" }
+  | { kind: "script"; script_name: string };
+
+export type FilterOption =
+  | { kind: "column"; column: FilterColumn; case_sensitive: boolean }
+  | { kind: "script"; script_name: string };
+
+export interface SessionFilter {
+  option: FilterOption | null;
+  input: string;
+}
+
 export interface AppConfig {
   proxy_host: string;
   proxy_port: number;
   api_host: string;
   api_port: number;
   active_session_id: number | null;
-  filter_history: string[];
 }
 
 export interface SessionMetadata {
@@ -132,7 +148,7 @@ export interface UpdateSessionRequest {
 
 export interface LogIdsRequest {
   session_id?: number | null;
-  filter?: string | null;
+  filter?: SessionFilter | null;
   min_id?: number | null;
   max_id?: number | null;
   limit?: number | null;
@@ -140,6 +156,7 @@ export interface LogIdsRequest {
 
 export interface LogIdsPayload {
   ids: number[];
+  filter: SessionFilter;
 }
 
 export interface LogViewItem {
@@ -187,6 +204,7 @@ export interface LogViewsPayload {
 export interface SessionViewPayload {
   session_id: number;
   columns: Column[];
+  filter: SessionFilter;
 }
 
 export interface ReplaceSessionViewRequest {
@@ -248,6 +266,12 @@ export interface ScriptRequest {
 export interface UpdateScriptRequest {
   name?: string | null;
   content?: string | null;
+}
+
+export interface DebugFilterScriptRequest {
+  session_id?: number | null;
+  log_id: number;
+  input: string;
 }
 
 export interface InterceptorCreateRequest {

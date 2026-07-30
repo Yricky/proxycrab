@@ -3,6 +3,7 @@ import type { Backend } from "./backend";
 import type {
   AppConfig,
   CreateSessionRequest,
+  DebugFilterScriptRequest,
   InterceptorCreateRequest,
   InterceptorKind,
   InterceptorUpdateRequest,
@@ -90,6 +91,15 @@ export function createTauriBackend(): Backend {
       call("update_column_script", { name, request }),
     deleteColumnScript: (name: string) => call("delete_column_script", { name }),
 
+    listFilterScripts: () => call("list_filter_scripts"),
+    createFilterScript: (request: ScriptRequest) => call("create_filter_script", { request }),
+    getFilterScript: (name: string) => call("get_filter_script", { name }),
+    updateFilterScript: (name: string, request: UpdateScriptRequest) =>
+      call("update_filter_script", { name, request }),
+    deleteFilterScript: (name: string) => call("delete_filter_script", { name }),
+    debugFilterScript: (name: string, request: DebugFilterScriptRequest) =>
+      call("debug_filter_script", { name, request }),
+
     listInterceptors: (kind: InterceptorKind) => call("list_interceptors", { kind }),
     createInterceptor: (request: InterceptorCreateRequest) =>
       call("create_interceptor", { request }),
@@ -105,11 +115,6 @@ export function createTauriBackend(): Backend {
       sessionId: number | null,
       request: ReplaceSessionInterceptorsRequest,
     ) => call("replace_session_interceptors", { sessionId, request }),
-
-    getFilterHistory: () => call("get_filter_history"),
-    addFilterHistory: (script: string) => call("add_filter_history", { script }),
-    removeFilterHistory: (script: string | null) =>
-      call("remove_filter_history", { script }),
 
     getCertificate: () => call("get_certificate"),
     regenerateCertificate: () => call("regenerate_certificate"),

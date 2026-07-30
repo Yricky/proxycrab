@@ -1,6 +1,7 @@
 use proxy_crab_mitm::model::{
     AppConfig, BodyPayload, CaptureError, Column, InterceptorExecution, InterceptorKind,
-    InterceptorLibraryItem, ProxyStatus, Script, SessionMetadata, SystemLogEntry, WorkspacePaths,
+    InterceptorLibraryItem, ProxyStatus, Script, SessionFilter, SessionMetadata, SystemLogEntry,
+    WorkspacePaths,
 };
 use serde::{Deserialize, Serialize};
 
@@ -70,7 +71,7 @@ pub struct SessionQuery {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogIdsRequest {
     pub session_id: Option<u64>,
-    pub filter: Option<String>,
+    pub filter: Option<SessionFilter>,
     pub min_id: Option<u64>,
     pub max_id: Option<u64>,
     pub limit: Option<usize>,
@@ -79,6 +80,7 @@ pub struct LogIdsRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogIdsPayload {
     pub ids: Vec<u64>,
+    pub filter: SessionFilter,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +138,7 @@ pub struct LogViewsPayload {
 pub struct SessionViewPayload {
     pub session_id: u64,
     pub columns: Vec<Column>,
+    pub filter: SessionFilter,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +201,13 @@ pub struct UpdateScriptRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebugFilterScriptRequest {
+    pub session_id: Option<u64>,
+    pub log_id: u64,
+    pub input: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterceptorCreateRequest {
     pub kind: InterceptorKind,
     pub name: String,
@@ -248,11 +258,6 @@ pub struct SessionInterceptorsPayload {
     pub session_id: u64,
     pub request: Vec<SessionInterceptorItem>,
     pub response: Vec<SessionInterceptorItem>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilterHistoryRequest {
-    pub script: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -108,7 +108,7 @@ impl Workspace {
     pub fn open(root: impl Into<PathBuf>) -> Result<Arc<Self>> {
         let root = root.into();
         fs::create_dir_all(root.join("sessions"))?;
-        for directory in ["column", "request", "response"] {
+        for directory in ["column", "filter", "request", "response"] {
             fs::create_dir_all(root.join("scripts").join(directory))?;
         }
         let lock = OpenOptions::new()
@@ -175,10 +175,7 @@ impl Workspace {
         name: Option<String>,
         description: Option<String>,
     ) -> Result<SessionMetadata> {
-        let initial_view = self
-            .active_session()
-            .and_then(|session| self.session_view(session.id).ok())
-            .unwrap_or_default();
+        let initial_view = SessionView::default();
         let mut sessions = self
             .sessions
             .write()
@@ -398,6 +395,7 @@ impl Workspace {
     fn script_dir(&self, kind: ScriptKind) -> PathBuf {
         let directory = match kind {
             ScriptKind::Column => "column",
+            ScriptKind::Filter => "filter",
             ScriptKind::RequestInterceptor => "request",
             ScriptKind::ResponseInterceptor => "response",
         };
@@ -458,7 +456,10 @@ fn write_bytes_atomic(path: &Path, content: &[u8]) -> Result<()> {
 mod tests {
     use tempfile::tempdir;
 
-    use crate::model::{Column, SessionInterceptor, SessionInterceptors, SessionView};
+    use crate::model::{
+        Column, FilterColumn, FilterOption, SessionFilter, SessionInterceptor, SessionInterceptors,
+        SessionView,
+    };
 
     use super::{Workspace, configure_workspace_for_next_start, resolve_workspace};
 
@@ -497,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn new_session_clones_the_active_session_view() {
+    fn new_session_uses_default_view() {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
         let first = workspace
@@ -508,6 +509,13 @@ mod tests {
                 first.id,
                 SessionView {
                     columns: vec![Column::Stage { width: 91.0 }],
+                    filter: SessionFilter {
+                        option: Some(FilterOption::Column {
+                            column: FilterColumn::Stage,
+                            case_sensitive: true,
+                        }),
+                        input: "response".into(),
+                    },
                 },
             )
             .unwrap();
@@ -518,9 +526,31 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            workspace.session_view(second.id).unwrap().columns,
-            vec![Column::Stage { width: 91.0 }]
+            workspace.session_view(second.id).unwrap(),
+            SessionView::default()
         );
+    }
+
+    #[test]
+    fn session_filter_round_trip() {
+        let root = tempdir().unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+        let session = workspace.create_session(Some("one".into()), None).unwrap();
+        let view = SessionView {
+            columns: vec![Column::Method { width: 72.0 }],
+            filter: SessionFilter {
+                option: Some(FilterOption::Script {
+                    script_name: "host".into(),
+                }),
+                input: " example.com ".into(),
+            },
+        };
+
+        workspace
+            .replace_session_view(session.id, view.clone())
+            .unwrap();
+
+        assert_eq!(workspace.session_view(session.id).unwrap(), view);
     }
 
     #[test]

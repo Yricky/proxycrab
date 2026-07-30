@@ -4,6 +4,7 @@ import type {
   ColumnView,
   LogViewRow,
   LogViewsPayload,
+  SessionFilter,
 } from "../api/types";
 import { reportError } from "./app";
 import { sessionsStore } from "./sessions";
@@ -23,6 +24,14 @@ function cellErrorKey(id: number, columnIndex: number): string {
   return `${id}:${columnIndex}`;
 }
 
+export function emptySessionFilter(): SessionFilter {
+  return { option: null, input: "" };
+}
+
+export function cloneSessionFilter(filter: SessionFilter): SessionFilter {
+  return JSON.parse(JSON.stringify(filter)) as SessionFilter;
+}
+
 export const logsStore = reactive({
   columns: [] as ColumnView[],
   /** IDs are retained newest first regardless of display direction. */
@@ -30,13 +39,12 @@ export const logsStore = reactive({
   rowsById: new Map<number, LogViewRow>(),
   cellErrors: new Map<string, string>(),
   sortDesc: true,
-  filterScript: "",
-  appliedFilter: "",
+  appliedFilter: emptySessionFilter() as SessionFilter,
   loading: false,
   olderExhausted: false,
 
   get filterActive(): boolean {
-    return this.appliedFilter.trim().length > 0;
+    return this.appliedFilter.option !== null && this.appliedFilter.input.length > 0;
   },
 
   get displayRows(): LogViewRow[] {
@@ -51,6 +59,12 @@ export const logsStore = reactive({
     );
   },
 
+  syncAppliedFilter(filter: SessionFilter): void {
+    if (JSON.stringify(this.appliedFilter) !== JSON.stringify(filter)) {
+      this.appliedFilter = cloneSessionFilter(filter);
+    }
+  },
+
   resetData(): void {
     this.columns = [];
     this.ids = [];
@@ -62,8 +76,7 @@ export const logsStore = reactive({
 
   reset(): void {
     this.resetData();
-    this.filterScript = "";
-    this.appliedFilter = "";
+    this.appliedFilter = emptySessionFilter();
   },
 
   mergeIds(incoming: number[]): number[] {
@@ -159,9 +172,9 @@ export const logsStore = reactive({
     if (sessionId === null) return;
     const payload = await backend.getLogIds({
       session_id: sessionId,
-      filter: this.appliedFilter || null,
     });
     if (sessionsStore.viewingSessionId !== sessionId) return;
+    this.syncAppliedFilter(payload.filter);
     const added = this.mergeIds(payload.ids);
     await this.hydrate(added);
   },
@@ -174,9 +187,9 @@ export const logsStore = reactive({
       if (this.filterActive) {
         const payload = await backend.getLogIds({
           session_id: sessionId,
-          filter: this.appliedFilter,
         });
         if (sessionsStore.viewingSessionId !== sessionId) return;
+        this.syncAppliedFilter(payload.filter);
         const added = this.replaceNewestIdPage(payload.ids);
         await this.hydrate(added);
         await this.hydrate(this.ids.slice(0, VIEW_BATCH_SIZE));
@@ -185,10 +198,10 @@ export const logsStore = reactive({
       } else {
         const payload = await backend.getLogIds({
           session_id: sessionId,
-          filter: this.appliedFilter || null,
           min_id: this.ids[0],
         });
         if (sessionsStore.viewingSessionId !== sessionId) return;
+        this.syncAppliedFilter(payload.filter);
         const added = this.mergeIds(payload.ids);
         await this.hydrate(added);
         await this.hydrate(this.ids.slice(0, VIEW_BATCH_SIZE));
@@ -216,10 +229,10 @@ export const logsStore = reactive({
     try {
       const payload = await backend.getLogIds({
         session_id: sessionId,
-        filter: this.appliedFilter || null,
         max_id: oldestId,
       });
       if (sessionsStore.viewingSessionId !== sessionId) return;
+      this.syncAppliedFilter(payload.filter);
       this.olderExhausted = payload.ids.length === 0;
       const added = this.mergeIds(payload.ids);
       await this.hydrate(added);
@@ -240,18 +253,43 @@ export const logsStore = reactive({
     return this.cellErrors.get(cellErrorKey(id, columnIndex));
   },
 
-  async applyFilter(script: string): Promise<void> {
-    const trimmed = script.trim();
+  async loadSession(): Promise<void> {
+    const sessionId = sessionsStore.viewingSessionId;
+    if (sessionId === null) return;
     this.loading = true;
     try {
-      this.appliedFilter = trimmed;
+      const view = await backend.getSessionView(sessionId);
+      if (sessionsStore.viewingSessionId !== sessionId) return;
+      this.appliedFilter = cloneSessionFilter(view.filter);
       this.resetData();
       await this.discoverInitial();
-      if (trimmed) await backend.addFilterHistory(trimmed);
+    } catch (error) {
+      reportError(error, "加载会话记录失败");
+    } finally {
+      if (sessionsStore.viewingSessionId === sessionId) this.loading = false;
+    }
+  },
+
+  async applyFilter(filter: SessionFilter): Promise<boolean> {
+    const sessionId = sessionsStore.viewingSessionId;
+    if (sessionId === null) return false;
+    this.loading = true;
+    try {
+      const payload = await backend.getLogIds({
+        session_id: sessionId,
+        filter: cloneSessionFilter(filter),
+      });
+      if (sessionsStore.viewingSessionId !== sessionId) return false;
+      this.appliedFilter = cloneSessionFilter(payload.filter);
+      this.resetData();
+      const added = this.mergeIds(payload.ids);
+      await this.hydrate(added);
+      return true;
     } catch (error) {
       reportError(error, "过滤失败");
+      return false;
     } finally {
-      this.loading = false;
+      if (sessionsStore.viewingSessionId === sessionId) this.loading = false;
     }
   },
 
@@ -281,10 +319,7 @@ watch(
     if (id === previous) return;
     logsStore.reset();
     if (id !== null) {
-      logsStore.loading = true;
-      void logsStore.discoverInitial().finally(() => {
-        logsStore.loading = false;
-      });
+      void logsStore.loadSession();
     }
   },
 );

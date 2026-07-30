@@ -11,10 +11,10 @@ use crate::{
     ca::CertificateAuthority,
     log_buffer::LogBuffer,
     model::{
-        AppConfig, CaptureDetail, CaptureSummary, Column, InterceptorKind, InterceptorLibraryItem,
-        MAX_SESSION_INTERCEPTORS_PER_KIND, ProxyStatus, ResolvedSessionInterceptor,
-        ResolvedSessionInterceptors, Script, ScriptKind, SessionInterceptors, SessionMetadata,
-        SessionView, SystemLogEntry, WorkspacePaths,
+        AppConfig, CaptureDetail, CaptureSummary, Column, FilterColumn, FilterOption,
+        InterceptorKind, InterceptorLibraryItem, MAX_SESSION_INTERCEPTORS_PER_KIND, ProxyStatus,
+        ResolvedSessionInterceptor, ResolvedSessionInterceptors, Script, ScriptKind, SessionFilter,
+        SessionInterceptors, SessionMetadata, SessionView, SystemLogEntry, WorkspacePaths,
     },
     proxy::ProxyController,
     storage::CaptureStore,
@@ -274,6 +274,9 @@ impl ProxyCrab {
             self.workspace.save_script(kind, script.clone(), false)?;
             let update_result = match kind {
                 ScriptKind::Column => self.rename_column_references(old_name, &script.name),
+                ScriptKind::Filter => {
+                    self.replace_filter_references(kind, old_name, Some(&script.name))
+                }
                 ScriptKind::RequestInterceptor | ScriptKind::ResponseInterceptor => {
                     self.replace_interceptor_references(kind, old_name, Some(script.name.as_str()))
                 }
@@ -294,8 +297,18 @@ impl ProxyCrab {
 
     pub fn delete_script(&self, kind: ScriptKind, name: &str) -> Result<()> {
         self.workspace.get_script(kind, name)?;
-        if kind == ScriptKind::Column {
-            return self.workspace.delete_script(kind, name);
+        if matches!(kind, ScriptKind::Column | ScriptKind::Filter) {
+            let previous = self.session_view_snapshots()?;
+            self.replace_filter_references(kind, name, None)?;
+            if let Err(error) = self.workspace.delete_script(kind, name) {
+                if let Err(rollback_error) = self.restore_session_views(&previous) {
+                    tracing::error!(
+                        "failed to roll back session filters after script delete failed: {rollback_error}"
+                    );
+                }
+                return Err(error);
+            }
+            return Ok(());
         }
         let previous = self.interceptor_reference_snapshots()?;
         self.replace_interceptor_references(kind, name, None)?;
@@ -311,10 +324,20 @@ impl ProxyCrab {
     }
 
     pub fn session_view(&self, session_id: u64) -> Result<SessionView> {
-        self.workspace.session_view(session_id)
+        let mut view = self.workspace.session_view(session_id)?;
+        if self.validate_session_filter(&view.filter).is_err() {
+            view.filter = SessionFilter::default();
+            self.workspace
+                .replace_session_view(session_id, view.clone())?;
+        }
+        Ok(view)
     }
 
-    pub fn replace_session_view(&self, session_id: u64, view: SessionView) -> Result<SessionView> {
+    pub fn replace_session_view(
+        &self,
+        session_id: u64,
+        mut view: SessionView,
+    ) -> Result<SessionView> {
         for column in &view.columns {
             if !column.width().is_finite() || column.width() <= 0.0 {
                 bail!("column width must be positive");
@@ -322,6 +345,11 @@ impl ProxyCrab {
             if let Column::Script { script_name, .. } = column {
                 self.workspace.get_script(ScriptKind::Column, script_name)?;
             }
+        }
+        if view.filter.option.is_none() {
+            view.filter = SessionFilter::default();
+        } else {
+            self.validate_session_filter(&view.filter)?;
         }
         self.workspace.replace_session_view(session_id, view)
     }
@@ -429,7 +457,7 @@ impl ProxyCrab {
             let entries = match kind {
                 ScriptKind::RequestInterceptor => &mut next.request,
                 ScriptKind::ResponseInterceptor => &mut next.response,
-                ScriptKind::Column => return Ok(()),
+                ScriptKind::Column | ScriptKind::Filter => return Ok(()),
             };
             match new_name {
                 Some(new_name) => {
@@ -471,6 +499,12 @@ impl ProxyCrab {
                     *script_name = new_name.to_string();
                 }
             }
+            replace_filter_reference(
+                &mut next.filter,
+                ScriptKind::Column,
+                old_name,
+                Some(new_name),
+            );
             if next != previous {
                 if let Err(error) = self.workspace.replace_session_view(session.id, next) {
                     for (id, view) in changed {
@@ -484,27 +518,67 @@ impl ProxyCrab {
         Ok(())
     }
 
-    pub fn filter_history(&self) -> Vec<String> {
-        self.config().filter_history
+    fn validate_session_filter(&self, filter: &SessionFilter) -> Result<()> {
+        match &filter.option {
+            None => Ok(()),
+            Some(FilterOption::Column {
+                column: FilterColumn::Script { script_name },
+                ..
+            }) => self
+                .workspace
+                .get_script(ScriptKind::Column, script_name)
+                .map(|_| ()),
+            Some(FilterOption::Script { script_name }) => self
+                .workspace
+                .get_script(ScriptKind::Filter, script_name)
+                .map(|_| ()),
+            Some(FilterOption::Column { .. }) => Ok(()),
+        }
     }
 
-    pub fn add_filter_history(&self, source: String) -> Result<Vec<String>> {
-        self.workspace.update_config(|config| {
-            config.filter_history.retain(|item| item != &source);
-            if !source.trim().is_empty() {
-                config.filter_history.insert(0, source);
-                config.filter_history.truncate(20);
+    fn session_view_snapshots(&self) -> Result<Vec<(u64, SessionView)>> {
+        self.sessions()
+            .into_iter()
+            .map(|session| {
+                self.workspace
+                    .session_view(session.id)
+                    .map(|view| (session.id, view))
+            })
+            .collect()
+    }
+
+    fn restore_session_views(&self, snapshots: &[(u64, SessionView)]) -> Result<()> {
+        for (session_id, view) in snapshots {
+            self.workspace
+                .replace_session_view(*session_id, view.clone())?;
+        }
+        Ok(())
+    }
+
+    fn replace_filter_references(
+        &self,
+        kind: ScriptKind,
+        old_name: &str,
+        new_name: Option<&str>,
+    ) -> Result<()> {
+        let snapshots = self.session_view_snapshots()?;
+        let mut changed = Vec::new();
+        for (session_id, previous) in &snapshots {
+            let mut next = previous.clone();
+            replace_filter_reference(&mut next.filter, kind, old_name, new_name);
+            if next != *previous {
+                if let Err(error) = self.workspace.replace_session_view(*session_id, next) {
+                    for (changed_id, changed_view) in changed {
+                        let _ = self
+                            .workspace
+                            .replace_session_view(changed_id, changed_view);
+                    }
+                    return Err(error);
+                }
+                changed.push((*session_id, previous.clone()));
             }
-        })?;
-        Ok(self.filter_history())
-    }
-
-    pub fn remove_filter_history(&self, source: Option<&str>) -> Result<Vec<String>> {
-        self.workspace.update_config(|config| match source {
-            Some(source) => config.filter_history.retain(|item| item != source),
-            None => config.filter_history.clear(),
-        })?;
-        Ok(self.filter_history())
+        }
+        Ok(())
     }
 
     pub fn certificate_pem(&self) -> String {
@@ -608,6 +682,35 @@ fn interceptor_script_kind(kind: InterceptorKind) -> ScriptKind {
     }
 }
 
+fn replace_filter_reference(
+    filter: &mut SessionFilter,
+    kind: ScriptKind,
+    old_name: &str,
+    new_name: Option<&str>,
+) {
+    let referenced_name = match (&mut filter.option, kind) {
+        (
+            Some(FilterOption::Column {
+                column: FilterColumn::Script { script_name },
+                ..
+            }),
+            ScriptKind::Column,
+        ) => Some(script_name),
+        (Some(FilterOption::Script { script_name }), ScriptKind::Filter) => Some(script_name),
+        _ => None,
+    };
+    let Some(script_name) = referenced_name else {
+        return;
+    };
+    if script_name != old_name {
+        return;
+    }
+    match new_name {
+        Some(new_name) => *script_name = new_name.to_string(),
+        None => *filter = SessionFilter::default(),
+    }
+}
+
 fn validate_session_interceptors(value: &SessionInterceptors) -> Result<()> {
     for (label, entries) in [("request", &value.request), ("response", &value.response)] {
         if entries.len() > MAX_SESSION_INTERCEPTORS_PER_KIND {
@@ -633,8 +736,8 @@ mod tests {
     use crate::{
         log_buffer::LogBuffer,
         model::{
-            MAX_SESSION_INTERCEPTORS_PER_KIND, Script, ScriptKind, SessionInterceptor,
-            SessionInterceptors,
+            Column, FilterColumn, FilterOption, MAX_SESSION_INTERCEPTORS_PER_KIND, Script,
+            ScriptKind, SessionFilter, SessionInterceptor, SessionInterceptors, SessionView,
         },
     };
 
@@ -741,6 +844,162 @@ mod tests {
                 .unwrap()
                 .request
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn column_script_rename_and_delete_maintain_filter_references() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
+        let session = runtime.create_session(Some("one".into()), None).unwrap();
+        runtime
+            .create_script(
+                ScriptKind::Column,
+                Script {
+                    name: "old".into(),
+                    content: "return entry.req.uri.host".into(),
+                },
+            )
+            .unwrap();
+        runtime
+            .replace_session_view(
+                session.id,
+                SessionView {
+                    columns: vec![Column::Script {
+                        width: 120.0,
+                        script_name: "old".into(),
+                    }],
+                    filter: SessionFilter {
+                        option: Some(FilterOption::Column {
+                            column: FilterColumn::Script {
+                                script_name: "old".into(),
+                            },
+                            case_sensitive: false,
+                        }),
+                        input: "example".into(),
+                    },
+                },
+            )
+            .unwrap();
+
+        runtime
+            .update_script(
+                ScriptKind::Column,
+                "old",
+                Script {
+                    name: "new".into(),
+                    content: "return entry.req.uri.host".into(),
+                },
+            )
+            .unwrap();
+
+        let renamed = runtime.session_view(session.id).unwrap();
+        assert!(matches!(
+            &renamed.columns[0],
+            Column::Script { script_name, .. } if script_name == "new"
+        ));
+        assert!(matches!(
+            renamed.filter.option,
+            Some(FilterOption::Column {
+                column: FilterColumn::Script { script_name },
+                ..
+            }) if script_name == "new"
+        ));
+
+        runtime.delete_script(ScriptKind::Column, "new").unwrap();
+        let deleted = runtime.session_view(session.id).unwrap();
+        assert!(matches!(
+            &deleted.columns[0],
+            Column::Script { script_name, .. } if script_name == "new"
+        ));
+        assert_eq!(deleted.filter, SessionFilter::default());
+    }
+
+    #[test]
+    fn filter_script_rename_delete_and_external_removal_repair_sessions() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
+        let session = runtime.create_session(Some("one".into()), None).unwrap();
+        runtime
+            .create_script(
+                ScriptKind::Filter,
+                Script {
+                    name: "old".into(),
+                    content: "return true".into(),
+                },
+            )
+            .unwrap();
+        runtime
+            .replace_session_view(
+                session.id,
+                SessionView {
+                    filter: SessionFilter {
+                        option: Some(FilterOption::Script {
+                            script_name: "old".into(),
+                        }),
+                        input: "input".into(),
+                    },
+                    ..SessionView::default()
+                },
+            )
+            .unwrap();
+
+        runtime
+            .update_script(
+                ScriptKind::Filter,
+                "old",
+                Script {
+                    name: "new".into(),
+                    content: "return true".into(),
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            runtime.session_view(session.id).unwrap().filter.option,
+            Some(FilterOption::Script { script_name }) if script_name == "new"
+        ));
+
+        runtime.delete_script(ScriptKind::Filter, "new").unwrap();
+        assert_eq!(
+            runtime.session_view(session.id).unwrap().filter,
+            SessionFilter::default()
+        );
+
+        runtime
+            .create_script(
+                ScriptKind::Filter,
+                Script {
+                    name: "external".into(),
+                    content: "return true".into(),
+                },
+            )
+            .unwrap();
+        runtime
+            .replace_session_view(
+                session.id,
+                SessionView {
+                    filter: SessionFilter {
+                        option: Some(FilterOption::Script {
+                            script_name: "external".into(),
+                        }),
+                        input: "input".into(),
+                    },
+                    ..SessionView::default()
+                },
+            )
+            .unwrap();
+        runtime
+            .workspace
+            .delete_script(ScriptKind::Filter, "external")
+            .unwrap();
+
+        assert_eq!(
+            runtime.session_view(session.id).unwrap().filter,
+            SessionFilter::default()
+        );
+        assert_eq!(
+            runtime.workspace.session_view(session.id).unwrap().filter,
+            SessionFilter::default()
         );
     }
 }

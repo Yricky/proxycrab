@@ -4,15 +4,18 @@ ProxyCrab embeds sandboxed Lua 5.4. `io`, `os`, `package`, `debug`, `dofile`, `l
 
 Scripts are syntax-checked before being saved. Script files use the `.lua` suffix.
 
-## Filters
+## Filter scripts
 
-A filter must explicitly return a boolean:
+A global filter script receives the filter-bar input string as the Lua chunk's first vararg (`...`). It must explicitly return a boolean. `entry` remains available as a read-only global:
 
 ```lua
-return entry.req.uri.host == "example.com"
+local input = ...
+return entry.req.uri.host:find(input, 1, true) ~= nil
    and entry.resp ~= nil
    and entry.resp.status >= 500
 ```
+
+The input is passed exactly, including leading and trailing whitespace. During normal list filtering, runtime errors, instruction exhaustion, and non-boolean results make that record a non-match without logging. The filter-script manager's debug action reports those errors directly.
 
 ## Custom columns
 

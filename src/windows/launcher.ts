@@ -6,6 +6,7 @@ import LogDetailWindow from "./LogDetailWindow.vue";
 import ScriptEditorWindow from "./ScriptEditorWindow.vue";
 import InterceptorManagerWindow from "./InterceptorManagerWindow.vue";
 import ColumnManagerWindow from "./ColumnManagerWindow.vue";
+import FilterManagerWindow from "./FilterManagerWindow.vue";
 import Base64Window from "./Base64Window.vue";
 import CertManagerWindow from "./CertManagerWindow.vue";
 import SystemLogsWindow from "./SystemLogsWindow.vue";
@@ -67,6 +68,15 @@ export function openColumnManager(): void {
     title: "自定义列管理器",
     component: ColumnManagerWindow,
     width: 960,
+    height: 600,
+  });
+}
+
+export function openFilterManager(): void {
+  windowsStore.open("filter-manager", {
+    title: "过滤脚本管理器",
+    component: FilterManagerWindow,
+    width: 1000,
     height: 600,
   });
 }
