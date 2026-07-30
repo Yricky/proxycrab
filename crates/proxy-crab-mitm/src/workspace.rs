@@ -10,7 +10,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::model::{AppConfig, Script, ScriptKind, SessionMetadata, SessionView, WorkspacePaths};
+use crate::model::{
+    AppConfig, Script, ScriptKind, SessionInterceptors, SessionMetadata, SessionView,
+    WorkspacePaths,
+};
 
 const POINTER_FILE: &str = "config.json";
 const WORKSPACE_CONFIG_FILE: &str = "app_config.json";
@@ -194,6 +197,10 @@ impl Workspace {
         fs::create_dir_all(directory.join("blob"))?;
         write_json_atomic(&directory.join("metadata.json"), &session)?;
         write_json_atomic(&directory.join("view.json"), &initial_view)?;
+        write_json_atomic(
+            &directory.join("interceptors.json"),
+            &SessionInterceptors::default(),
+        )?;
         sessions.push(session.clone());
         Ok(session)
     }
@@ -294,6 +301,32 @@ impl Workspace {
         self.require_session(id)?;
         write_json_atomic(&self.session_dir(id).join("view.json"), &view)?;
         Ok(view)
+    }
+
+    pub fn session_interceptors(&self, id: u64) -> Result<SessionInterceptors> {
+        self.require_session(id)?;
+        let path = self.session_dir(id).join("interceptors.json");
+        match read_json(&path) {
+            Ok(value) => Ok(value),
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                Ok(SessionInterceptors::default())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn replace_session_interceptors(
+        &self,
+        id: u64,
+        value: SessionInterceptors,
+    ) -> Result<SessionInterceptors> {
+        self.require_session(id)?;
+        write_json_atomic(&self.session_dir(id).join("interceptors.json"), &value)?;
+        Ok(value)
     }
 
     fn require_session(&self, id: u64) -> Result<()> {
@@ -425,7 +458,7 @@ fn write_bytes_atomic(path: &Path, content: &[u8]) -> Result<()> {
 mod tests {
     use tempfile::tempdir;
 
-    use crate::model::{Column, SessionView};
+    use crate::model::{Column, SessionInterceptor, SessionInterceptors, SessionView};
 
     use super::{Workspace, configure_workspace_for_next_start, resolve_workspace};
 
@@ -502,5 +535,47 @@ mod tests {
             SessionView::default()
         );
         assert!(!workspace.session_dir(session.id).join("view.json").exists());
+    }
+
+    #[test]
+    fn new_session_has_empty_interceptor_chains() {
+        let root = tempdir().unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+        let session = workspace
+            .create_session(Some("one".into()), None)
+            .unwrap();
+
+        assert_eq!(
+            workspace.session_interceptors(session.id).unwrap(),
+            SessionInterceptors::default()
+        );
+    }
+
+    #[test]
+    fn session_interceptors_round_trip_without_resolving_script_files() {
+        let root = tempdir().unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+        let session = workspace
+            .create_session(Some("one".into()), None)
+            .unwrap();
+        let value = SessionInterceptors {
+            request: vec![
+                SessionInterceptor {
+                    name: "present".into(),
+                    enabled: true,
+                },
+                SessionInterceptor {
+                    name: "manually-removed".into(),
+                    enabled: false,
+                },
+            ],
+            response: vec![],
+        };
+
+        workspace
+            .replace_session_interceptors(session.id, value.clone())
+            .unwrap();
+
+        assert_eq!(workspace.session_interceptors(session.id).unwrap(), value);
     }
 }

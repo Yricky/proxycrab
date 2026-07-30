@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub type HeaderValues = BTreeMap<String, Vec<String>>;
+pub const MAX_SESSION_INTERCEPTORS_PER_KIND: usize = 12;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppConfig {
@@ -68,6 +69,20 @@ pub fn default_columns() -> Vec<Column> {
 pub struct SessionView {
     #[serde(default = "default_columns")]
     pub columns: Vec<Column>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionInterceptor {
+    pub name: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionInterceptors {
+    #[serde(default)]
+    pub request: Vec<SessionInterceptor>,
+    #[serde(default)]
+    pub response: Vec<SessionInterceptor>,
 }
 
 impl Default for SessionView {
@@ -147,6 +162,26 @@ pub struct InterceptorInfo {
     pub name: String,
     pub enabled: bool,
     pub order: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvedSessionInterceptor {
+    pub name: String,
+    pub enabled: bool,
+    pub valid: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvedSessionInterceptors {
+    pub session_id: u64,
+    pub request: Vec<ResolvedSessionInterceptor>,
+    pub response: Vec<ResolvedSessionInterceptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InterceptorLibraryItem {
+    pub name: String,
+    pub usage_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

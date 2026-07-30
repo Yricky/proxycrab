@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
 };
@@ -12,8 +12,9 @@ use crate::{
     log_buffer::LogBuffer,
     model::{
         AppConfig, CaptureDetail, CaptureSummary, Column, InterceptorInfo, InterceptorKind,
-        ProxyStatus, Script, ScriptKind, SessionMetadata, SessionView, SystemLogEntry,
-        WorkspacePaths,
+        InterceptorLibraryItem, MAX_SESSION_INTERCEPTORS_PER_KIND, ProxyStatus,
+        ResolvedSessionInterceptor, ResolvedSessionInterceptors, Script, ScriptKind,
+        SessionInterceptors, SessionMetadata, SessionView, SystemLogEntry, WorkspacePaths,
     },
     proxy::ProxyController,
     storage::CaptureStore,
@@ -273,26 +274,13 @@ impl ProxyCrab {
             self.workspace.save_script(kind, script.clone(), false)?;
             let update_result = match kind {
                 ScriptKind::Column => self.rename_column_references(old_name, &script.name),
-                ScriptKind::RequestInterceptor => self
-                    .workspace
-                    .update_config(|config| {
-                        for name in &mut config.active_request_interceptors {
-                            if name == old_name {
-                                *name = script.name.clone();
-                            }
-                        }
-                    })
-                    .map(|_| ()),
-                ScriptKind::ResponseInterceptor => self
-                    .workspace
-                    .update_config(|config| {
-                        for name in &mut config.active_response_interceptors {
-                            if name == old_name {
-                                *name = script.name.clone();
-                            }
-                        }
-                    })
-                    .map(|_| ()),
+                ScriptKind::RequestInterceptor | ScriptKind::ResponseInterceptor => {
+                    self.replace_interceptor_references(
+                        kind,
+                        old_name,
+                        Some(script.name.as_str()),
+                    )
+                }
             };
             if let Err(error) = update_result {
                 let _ = self.workspace.delete_script(kind, &script.name);
@@ -313,22 +301,12 @@ impl ProxyCrab {
         if kind == ScriptKind::Column {
             return self.workspace.delete_script(kind, name);
         }
-        let previous = self.config();
-        self.workspace.update_config(|config| match kind {
-            ScriptKind::Column => {}
-            ScriptKind::RequestInterceptor => config
-                .active_request_interceptors
-                .retain(|item| item != name),
-            ScriptKind::ResponseInterceptor => config
-                .active_response_interceptors
-                .retain(|item| item != name),
-        })?;
+        let previous = self.interceptor_reference_snapshots()?;
+        self.replace_interceptor_references(kind, name, None)?;
         if let Err(error) = self.workspace.delete_script(kind, name) {
-            if let Err(rollback_error) = self.workspace.update_config(|config| {
-                *config = previous;
-            }) {
+            if let Err(rollback_error) = self.restore_interceptor_references(&previous) {
                 tracing::error!(
-                    "failed to roll back config after script delete failed: {rollback_error}"
+                    "failed to roll back session interceptors after script delete failed: {rollback_error}"
                 );
             }
             return Err(error);
@@ -350,6 +328,143 @@ impl ProxyCrab {
             }
         }
         self.workspace.replace_session_view(session_id, view)
+    }
+
+    pub fn session_interceptors(&self, session_id: u64) -> Result<SessionInterceptors> {
+        self.workspace.session_interceptors(session_id)
+    }
+
+    pub fn resolved_session_interceptors(
+        &self,
+        session_id: u64,
+    ) -> Result<ResolvedSessionInterceptors> {
+        let value = self.session_interceptors(session_id)?;
+        Ok(ResolvedSessionInterceptors {
+            session_id,
+            request: self.resolve_interceptor_entries(
+                ScriptKind::RequestInterceptor,
+                value.request,
+            ),
+            response: self.resolve_interceptor_entries(
+                ScriptKind::ResponseInterceptor,
+                value.response,
+            ),
+        })
+    }
+
+    pub fn replace_session_interceptors(
+        &self,
+        session_id: u64,
+        value: SessionInterceptors,
+    ) -> Result<SessionInterceptors> {
+        validate_session_interceptors(&value)?;
+        self.workspace
+            .replace_session_interceptors(session_id, value)
+    }
+
+    pub fn interceptor_library(
+        &self,
+        kind: InterceptorKind,
+    ) -> Result<Vec<InterceptorLibraryItem>> {
+        let script_kind = interceptor_script_kind(kind);
+        let mut counts = HashMap::<String, usize>::new();
+        for session in self.sessions() {
+            let chains = self.session_interceptors(session.id)?;
+            let entries = match kind {
+                InterceptorKind::Request => chains.request,
+                InterceptorKind::Response => chains.response,
+            };
+            for entry in entries {
+                *counts.entry(entry.name).or_default() += 1;
+            }
+        }
+        Ok(self
+            .scripts(script_kind)?
+            .into_iter()
+            .map(|script| InterceptorLibraryItem {
+                usage_count: counts.get(&script.name).copied().unwrap_or_default(),
+                name: script.name,
+            })
+            .collect())
+    }
+
+    fn resolve_interceptor_entries(
+        &self,
+        kind: ScriptKind,
+        entries: Vec<crate::model::SessionInterceptor>,
+    ) -> Vec<ResolvedSessionInterceptor> {
+        entries
+            .into_iter()
+            .map(|entry| ResolvedSessionInterceptor {
+                valid: self.script(kind, &entry.name).is_ok(),
+                name: entry.name,
+                enabled: entry.enabled,
+            })
+            .collect()
+    }
+
+    fn interceptor_reference_snapshots(&self) -> Result<Vec<(u64, SessionInterceptors)>> {
+        self.sessions()
+            .into_iter()
+            .map(|session| {
+                self.session_interceptors(session.id)
+                    .map(|value| (session.id, value))
+            })
+            .collect()
+    }
+
+    fn restore_interceptor_references(
+        &self,
+        snapshots: &[(u64, SessionInterceptors)],
+    ) -> Result<()> {
+        for (session_id, value) in snapshots {
+            self.workspace
+                .replace_session_interceptors(*session_id, value.clone())?;
+        }
+        Ok(())
+    }
+
+    fn replace_interceptor_references(
+        &self,
+        kind: ScriptKind,
+        old_name: &str,
+        new_name: Option<&str>,
+    ) -> Result<()> {
+        let snapshots = self.interceptor_reference_snapshots()?;
+        let mut changed = Vec::new();
+        for (session_id, previous) in &snapshots {
+            let mut next = previous.clone();
+            let entries = match kind {
+                ScriptKind::RequestInterceptor => &mut next.request,
+                ScriptKind::ResponseInterceptor => &mut next.response,
+                ScriptKind::Column => return Ok(()),
+            };
+            match new_name {
+                Some(new_name) => {
+                    for entry in entries {
+                        if entry.name == old_name {
+                            entry.name = new_name.to_string();
+                        }
+                    }
+                }
+                None => entries.retain(|entry| entry.name != old_name),
+            }
+            if next != *previous {
+                if let Err(error) = self
+                    .workspace
+                    .replace_session_interceptors(*session_id, next)
+                {
+                    for (changed_id, changed_value) in changed {
+                        let _ = self
+                            .workspace
+                            .replace_session_interceptors(changed_id, changed_value);
+                    }
+                    return Err(error);
+                }
+                changed.push((*session_id, previous.clone()));
+            }
+        }
+        Ok(())
     }
 
     fn rename_column_references(&self, old_name: &str, new_name: &str) -> Result<()> {
@@ -562,5 +677,150 @@ fn interceptor_script_kind(kind: InterceptorKind) -> ScriptKind {
     match kind {
         InterceptorKind::Request => ScriptKind::RequestInterceptor,
         InterceptorKind::Response => ScriptKind::ResponseInterceptor,
+    }
+}
+
+fn validate_session_interceptors(value: &SessionInterceptors) -> Result<()> {
+    for (label, entries) in [
+        ("request", &value.request),
+        ("response", &value.response),
+    ] {
+        if entries.len() > MAX_SESSION_INTERCEPTORS_PER_KIND {
+            bail!("{label} interceptor chain cannot contain more than 12 entries");
+        }
+        let mut names = HashSet::new();
+        if entries.iter().any(|entry| !names.insert(entry.name.as_str())) {
+            bail!("{label} interceptor chain contains duplicate scripts");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tempfile::tempdir;
+
+    use crate::{
+        log_buffer::LogBuffer,
+        model::{
+            MAX_SESSION_INTERCEPTORS_PER_KIND, Script, ScriptKind, SessionInterceptor,
+            SessionInterceptors,
+        },
+    };
+
+    use super::ProxyCrab;
+
+    #[test]
+    fn session_interceptor_chains_enforce_limit_and_uniqueness() {
+        let app_data = tempdir().unwrap();
+        let runtime =
+            ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
+        let session = runtime
+            .create_session(Some("one".into()), None)
+            .unwrap();
+        let duplicate = SessionInterceptors {
+            request: vec![
+                SessionInterceptor {
+                    name: "a".into(),
+                    enabled: true,
+                },
+                SessionInterceptor {
+                    name: "a".into(),
+                    enabled: false,
+                },
+            ],
+            response: vec![],
+        };
+        assert!(
+            runtime
+                .replace_session_interceptors(session.id, duplicate)
+                .is_err()
+        );
+
+        let too_many = SessionInterceptors {
+            request: (0..=MAX_SESSION_INTERCEPTORS_PER_KIND)
+                .map(|index| SessionInterceptor {
+                    name: format!("script-{index}"),
+                    enabled: true,
+                })
+                .collect(),
+            response: vec![],
+        };
+        assert!(
+            runtime
+                .replace_session_interceptors(session.id, too_many)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn interceptor_rename_and_delete_update_every_session() {
+        let app_data = tempdir().unwrap();
+        let runtime =
+            ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
+        let first = runtime
+            .create_session(Some("one".into()), None)
+            .unwrap();
+        let second = runtime
+            .create_session(Some("two".into()), None)
+            .unwrap();
+        runtime
+            .create_script(
+                ScriptKind::RequestInterceptor,
+                Script {
+                    name: "old".into(),
+                    content: String::new(),
+                },
+            )
+            .unwrap();
+        for id in [first.id, second.id] {
+            runtime
+                .replace_session_interceptors(
+                    id,
+                    SessionInterceptors {
+                        request: vec![SessionInterceptor {
+                            name: "old".into(),
+                            enabled: true,
+                        }],
+                        response: vec![],
+                    },
+                )
+                .unwrap();
+        }
+
+        runtime
+            .update_script(
+                ScriptKind::RequestInterceptor,
+                "old",
+                Script {
+                    name: "new".into(),
+                    content: String::new(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            runtime.session_interceptors(first.id).unwrap().request[0].name,
+            "new"
+        );
+        runtime
+            .delete_script(ScriptKind::RequestInterceptor, "new")
+            .unwrap();
+        assert!(
+            runtime
+                .session_interceptors(first.id)
+                .unwrap()
+                .request
+                .is_empty()
+        );
+        assert!(
+            runtime
+                .session_interceptors(second.id)
+                .unwrap()
+                .request
+                .is_empty()
+        );
     }
 }
