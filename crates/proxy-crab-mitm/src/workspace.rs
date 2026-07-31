@@ -17,10 +17,16 @@ use crate::model::{
 
 const POINTER_FILE: &str = "config.json";
 const WORKSPACE_CONFIG_FILE: &str = "app_config.json";
+const METADATA_TRANSACTION_FILE: &str = ".metadata-transaction.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorkspacePointer {
     workspace_path: PathBuf,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MetadataTransaction {
+    previous: Vec<SessionMetadata>,
 }
 
 pub fn now_millis() -> u64 {
@@ -108,7 +114,7 @@ impl Workspace {
     pub fn open(root: impl Into<PathBuf>) -> Result<Arc<Self>> {
         let root = root.into();
         fs::create_dir_all(root.join("sessions"))?;
-        for directory in ["column", "filter", "request", "response"] {
+        for directory in ["column", "filter", "routing", "request", "response"] {
             fs::create_dir_all(root.join("scripts").join(directory))?;
         }
         let lock = OpenOptions::new()
@@ -120,15 +126,19 @@ impl Workspace {
         lock.try_lock_exclusive()
             .context("workspace is already in use by another ProxyCrab process")?;
 
+        recover_metadata_transaction(&root)?;
         let config_path = root.join(WORKSPACE_CONFIG_FILE);
         let mut config = read_json::<AppConfig>(&config_path).unwrap_or_default();
         let mut sessions = load_sessions(&root)?;
         sessions.sort_by_key(|session| session.created_at);
-        if config
-            .active_session_id
-            .is_some_and(|id| !sessions.iter().any(|session| session.id == id))
-        {
-            config.active_session_id = None;
+        if config.routing_script_name.as_ref().is_some_and(|name| {
+            !root
+                .join("scripts")
+                .join("routing")
+                .join(format!("{name}.lua"))
+                .exists()
+        }) {
+            config.routing_script_name = None;
         }
         write_json_atomic(&config_path, &config)?;
 
@@ -175,11 +185,29 @@ impl Workspace {
         name: Option<String>,
         description: Option<String>,
     ) -> Result<SessionMetadata> {
-        let initial_view = SessionView::default();
         let mut sessions = self
             .sessions
             .write()
             .map_err(|_| anyhow!("workspace sessions lock poisoned"))?;
+        self.ensure_metadata_transaction_resolved()?;
+        let tags = if sessions.is_empty() {
+            vec!["default".to_string()]
+        } else {
+            Vec::new()
+        };
+        let session = self.create_session_locked(&mut sessions, name, description, tags)?;
+        sessions.push(session.clone());
+        Ok(session)
+    }
+
+    fn create_session_locked(
+        &self,
+        sessions: &mut [SessionMetadata],
+        name: Option<String>,
+        description: Option<String>,
+        tags: Vec<String>,
+    ) -> Result<SessionMetadata> {
+        let initial_view = SessionView::default();
         let mut id = now_millis();
         while sessions.iter().any(|session| session.id == id) {
             id += 1;
@@ -189,40 +217,51 @@ impl Workspace {
             name: name.unwrap_or_else(|| format!("Session-{id}")),
             created_at: now_millis(),
             description,
+            tags,
         };
         let directory = self.session_dir(id);
-        fs::create_dir_all(directory.join("blob"))?;
-        write_json_atomic(&directory.join("metadata.json"), &session)?;
-        write_json_atomic(&directory.join("view.json"), &initial_view)?;
-        write_json_atomic(
-            &directory.join("interceptors.json"),
-            &SessionInterceptors::default(),
+        let result = (|| {
+            fs::create_dir_all(directory.join("blob"))?;
+            write_json_atomic(&directory.join("metadata.json"), &session)?;
+            write_json_atomic(&directory.join("view.json"), &initial_view)?;
+            write_json_atomic(
+                &directory.join("interceptors.json"),
+                &SessionInterceptors::default(),
+            )
+        })();
+        if let Err(error) = result {
+            let _ = fs::remove_dir_all(&directory);
+            return Err(error);
+        }
+        Ok(session)
+    }
+
+    pub fn session_for_tag(&self, tag: &str) -> Option<SessionMetadata> {
+        self.sessions()
+            .into_iter()
+            .find(|session| session.tags.iter().any(|candidate| candidate == tag))
+    }
+
+    pub fn resolve_or_create_tag(&self, tag: &str, script_name: &str) -> Result<SessionMetadata> {
+        validate_tag(tag)?;
+        let mut sessions = self
+            .sessions
+            .write()
+            .map_err(|_| anyhow!("workspace sessions lock poisoned"))?;
+        if let Some(session) = sessions
+            .iter()
+            .find(|session| session.tags.iter().any(|candidate| candidate == tag))
+        {
+            return Ok(session.clone());
+        }
+        self.ensure_metadata_transaction_resolved()?;
+        let session = self.create_session_locked(
+            &mut sessions,
+            Some(tag.to_string()),
+            Some(format!("由分流脚本「{script_name}」自动创建")),
+            vec![tag.to_string()],
         )?;
         sessions.push(session.clone());
-        Ok(session)
-    }
-
-    pub fn ensure_active_session(&self) -> Result<SessionMetadata> {
-        if let Some(active) = self.active_session() {
-            return Ok(active);
-        }
-        let session = self.create_session(None, None)?;
-        self.activate_session(session.id)?;
-        Ok(session)
-    }
-
-    pub fn active_session(&self) -> Option<SessionMetadata> {
-        let id = self.config().active_session_id?;
-        self.sessions().into_iter().find(|session| session.id == id)
-    }
-
-    pub fn activate_session(&self, id: u64) -> Result<SessionMetadata> {
-        let session = self
-            .sessions()
-            .into_iter()
-            .find(|session| session.id == id)
-            .ok_or_else(|| anyhow!("session {id} not found"))?;
-        self.update_config(|config| config.active_session_id = Some(id))?;
         Ok(session)
     }
 
@@ -231,15 +270,18 @@ impl Workspace {
         id: u64,
         name: Option<String>,
         description: Option<Option<String>>,
+        tags: Option<Vec<String>>,
     ) -> Result<SessionMetadata> {
         let mut sessions = self
             .sessions
             .write()
             .map_err(|_| anyhow!("workspace sessions lock poisoned"))?;
+        self.ensure_metadata_transaction_resolved()?;
         let index = sessions
             .iter()
             .position(|session| session.id == id)
             .ok_or_else(|| anyhow!("session {id} not found"))?;
+        let previous = sessions.clone();
         let mut next = sessions[index].clone();
         if let Some(name) = name {
             next.name = name;
@@ -247,19 +289,89 @@ impl Workspace {
         if let Some(description) = description {
             next.description = description;
         }
-        write_json_atomic(&self.session_dir(id).join("metadata.json"), &next)?;
+        if let Some(mut tags) = tags {
+            for tag in &tags {
+                validate_tag(tag)?;
+            }
+            tags.sort();
+            tags.dedup();
+            next.tags = tags.clone();
+            for (other_index, session) in sessions.iter_mut().enumerate() {
+                if other_index != index {
+                    session.tags.retain(|tag| !tags.contains(tag));
+                }
+            }
+        }
         sessions[index] = next.clone();
+        if let Err(error) = self.persist_changed_sessions(&previous, &sessions) {
+            *sessions = previous;
+            return Err(error);
+        }
         Ok(next)
     }
 
-    pub fn delete_session(&self, id: u64) -> Result<()> {
-        if self.config().active_session_id == Some(id) {
-            bail!("active session cannot be deleted");
+    fn persist_changed_sessions(
+        &self,
+        previous: &[SessionMetadata],
+        next: &[SessionMetadata],
+    ) -> Result<()> {
+        let transaction_path = self.root.join(METADATA_TRANSACTION_FILE);
+        write_json_atomic(
+            &transaction_path,
+            &MetadataTransaction {
+                previous: previous.to_vec(),
+            },
+        )?;
+        for session in next {
+            let before = previous.iter().find(|candidate| candidate.id == session.id);
+            if before == Some(session) {
+                continue;
+            }
+            if let Err(error) =
+                write_json_atomic(&self.session_dir(session.id).join("metadata.json"), session)
+            {
+                return self.rollback_metadata_transaction(previous, error);
+            }
         }
+        if let Err(error) = fs::remove_file(&transaction_path) {
+            return self.rollback_metadata_transaction(previous, error.into());
+        }
+        Ok(())
+    }
+
+    fn rollback_metadata_transaction(
+        &self,
+        previous: &[SessionMetadata],
+        original_error: anyhow::Error,
+    ) -> Result<()> {
+        for session in previous {
+            if let Err(rollback_error) =
+                write_json_atomic(&self.session_dir(session.id).join("metadata.json"), session)
+            {
+                return Err(anyhow!(
+                    "{original_error}; metadata rollback is pending recovery: {rollback_error}"
+                ));
+            }
+        }
+        fs::remove_file(self.root.join(METADATA_TRANSACTION_FILE))?;
+        Err(original_error)
+    }
+
+    fn ensure_metadata_transaction_resolved(&self) -> Result<()> {
+        if self.root.join(METADATA_TRANSACTION_FILE).exists() {
+            bail!(
+                "session metadata recovery is pending; restart ProxyCrab before changing sessions"
+            );
+        }
+        Ok(())
+    }
+
+    pub fn delete_session(&self, id: u64) -> Result<()> {
         let mut sessions = self
             .sessions
             .write()
             .map_err(|_| anyhow!("workspace sessions lock poisoned"))?;
+        self.ensure_metadata_transaction_resolved()?;
         let index = sessions
             .iter()
             .position(|session| session.id == id)
@@ -381,26 +493,28 @@ impl Workspace {
             .with_context(|| format!("script {name} not found"))
     }
 
-    pub fn rename_script(&self, kind: ScriptKind, old: &str, new: &str) -> Result<()> {
-        validate_script_name(old)?;
-        validate_script_name(new)?;
-        let old_path = self.script_dir(kind).join(format!("{old}.lua"));
-        let new_path = self.script_dir(kind).join(format!("{new}.lua"));
-        if new_path.exists() {
-            bail!("script {new} already exists");
-        }
-        fs::rename(old_path, new_path).with_context(|| format!("script {old} not found"))
-    }
-
     fn script_dir(&self, kind: ScriptKind) -> PathBuf {
         let directory = match kind {
             ScriptKind::Column => "column",
             ScriptKind::Filter => "filter",
+            ScriptKind::Routing => "routing",
             ScriptKind::RequestInterceptor => "request",
             ScriptKind::ResponseInterceptor => "response",
         };
         self.root.join("scripts").join(directory)
     }
+}
+
+pub fn validate_tag(tag: &str) -> Result<()> {
+    if tag.is_empty()
+        || tag.len() > 64
+        || !tag.bytes().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == b'_'
+        })
+    {
+        bail!("tag must match ^[a-z0-9_]{{1,64}}$");
+    }
+    Ok(())
 }
 
 fn validate_script_name(name: &str) -> Result<()> {
@@ -428,6 +542,33 @@ fn load_sessions(root: &Path) -> Result<Vec<SessionMetadata>> {
         }
     }
     Ok(sessions)
+}
+
+fn recover_metadata_transaction(root: &Path) -> Result<()> {
+    let transaction_path = root.join(METADATA_TRANSACTION_FILE);
+    let transaction = match read_json::<MetadataTransaction>(&transaction_path) {
+        Ok(transaction) => transaction,
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(());
+        }
+        Err(error) => return Err(error.context("failed to read pending metadata transaction")),
+    };
+    for session in &transaction.previous {
+        write_json_atomic(
+            &root
+                .join("sessions")
+                .join(session.id.to_string())
+                .join("metadata.json"),
+            session,
+        )
+        .with_context(|| format!("failed to recover metadata for session {}", session.id))?;
+    }
+    fs::remove_file(transaction_path)?;
+    Ok(())
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
@@ -461,7 +602,10 @@ mod tests {
         SessionView,
     };
 
-    use super::{Workspace, configure_workspace_for_next_start, resolve_workspace};
+    use super::{
+        METADATA_TRANSACTION_FILE, MetadataTransaction, Workspace,
+        configure_workspace_for_next_start, resolve_workspace, write_json_atomic,
+    };
 
     #[test]
     fn invalid_pointer_falls_back_to_default() {
@@ -479,15 +623,16 @@ mod tests {
     }
 
     #[test]
-    fn active_session_cannot_be_deleted() {
+    fn first_manual_session_receives_default_tag_and_can_be_deleted() {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
         let session = workspace
             .create_session(Some("capture".into()), None)
             .unwrap();
-        workspace.activate_session(session.id).unwrap();
 
-        assert!(workspace.delete_session(session.id).is_err());
+        assert_eq!(session.tags, vec!["default"]);
+        workspace.delete_session(session.id).unwrap();
+        assert!(workspace.sessions().is_empty());
     }
 
     #[test]
@@ -519,8 +664,6 @@ mod tests {
                 },
             )
             .unwrap();
-        workspace.activate_session(first.id).unwrap();
-
         let second = workspace
             .create_session(Some("second".into()), None)
             .unwrap();
@@ -529,6 +672,127 @@ mod tests {
             workspace.session_view(second.id).unwrap(),
             SessionView::default()
         );
+    }
+
+    #[test]
+    fn tag_updates_move_tags_between_sessions_and_store_them_sorted() {
+        let root = tempdir().unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+        let first = workspace
+            .create_session(Some("first".into()), None)
+            .unwrap();
+        let second = workspace
+            .create_session(Some("second".into()), None)
+            .unwrap();
+
+        let updated = workspace
+            .update_session(
+                second.id,
+                None,
+                None,
+                Some(vec!["zeta".into(), "default".into(), "zeta".into()]),
+            )
+            .unwrap();
+
+        assert_eq!(updated.tags, vec!["default", "zeta"]);
+        assert!(
+            workspace
+                .sessions()
+                .into_iter()
+                .find(|session| session.id == first.id)
+                .unwrap()
+                .tags
+                .is_empty()
+        );
+        assert_eq!(workspace.session_for_tag("default").unwrap().id, second.id);
+
+        drop(workspace);
+        let reopened = Workspace::open(root.path()).unwrap();
+        assert!(
+            reopened
+                .sessions()
+                .into_iter()
+                .find(|session| session.id == first.id)
+                .unwrap()
+                .tags
+                .is_empty()
+        );
+        assert_eq!(reopened.session_for_tag("default").unwrap().id, second.id);
+    }
+
+    #[test]
+    fn pending_metadata_transaction_is_recovered_before_sessions_are_loaded() {
+        let root = tempdir().unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+        let first = workspace
+            .create_session(Some("first".into()), None)
+            .unwrap();
+        let second = workspace
+            .create_session(Some("second".into()), None)
+            .unwrap();
+        let previous = workspace.sessions();
+        write_json_atomic(
+            &root.path().join(METADATA_TRANSACTION_FILE),
+            &MetadataTransaction {
+                previous: previous.clone(),
+            },
+        )
+        .unwrap();
+        assert!(workspace.delete_session(second.id).is_err());
+        assert!(
+            workspace
+                .create_session(Some("blocked".into()), None)
+                .is_err()
+        );
+        assert!(
+            workspace
+                .update_session(first.id, Some("blocked".into()), None, None)
+                .is_err()
+        );
+        assert!(workspace.resolve_or_create_tag("blocked", "route").is_err());
+        let mut interrupted_first = first.clone();
+        interrupted_first.tags.clear();
+        let mut interrupted_second = second.clone();
+        interrupted_second.tags = vec!["default".into()];
+        write_json_atomic(
+            &workspace.session_dir(first.id).join("metadata.json"),
+            &interrupted_first,
+        )
+        .unwrap();
+        write_json_atomic(
+            &workspace.session_dir(second.id).join("metadata.json"),
+            &interrupted_second,
+        )
+        .unwrap();
+        drop(workspace);
+
+        let reopened = Workspace::open(root.path()).unwrap();
+
+        assert_eq!(reopened.sessions(), previous);
+        assert_eq!(reopened.session_for_tag("default").unwrap().id, first.id);
+        assert!(!root.path().join(METADATA_TRANSACTION_FILE).exists());
+    }
+
+    #[test]
+    fn explicit_unbound_tag_creates_exactly_one_session() {
+        let root = tempdir().unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+
+        let created = workspace
+            .resolve_or_create_tag("mobile_2", "route")
+            .unwrap();
+        let resolved = workspace
+            .resolve_or_create_tag("mobile_2", "route")
+            .unwrap();
+
+        assert_eq!(created.id, resolved.id);
+        assert_eq!(created.name, "mobile_2");
+        assert_eq!(created.tags, vec!["mobile_2"]);
+        assert_eq!(
+            created.description.as_deref(),
+            Some("由分流脚本「route」自动创建")
+        );
+        assert_eq!(workspace.sessions().len(), 1);
     }
 
     #[test]

@@ -3,8 +3,8 @@ import { computed, ref, watch } from "vue";
 import { useBackend } from "../api";
 import { logsStore } from "../stores/logs";
 import { sessionsStore } from "../stores/sessions";
-import { reportError } from "../stores/app";
-import { openDropdownMenu, type MenuItem } from "../stores/dialog";
+import { appStore, reportError } from "../stores/app";
+import { openContextMenu, openDropdownMenu, type MenuItem } from "../stores/dialog";
 import { openLogDetail } from "../windows/launcher";
 import type { Column, Script } from "../api/types";
 import {
@@ -13,6 +13,7 @@ import {
   Io5ArrowUp,
   Io5Checkmark,
   Io5ChevronDown,
+  Io5Copy,
   Io5Trash,
 } from "vue-icons-plus/io5";
 
@@ -105,6 +106,25 @@ function toggleSort(): void {
 function openRow(id: number): void {
   const sessionId = sessionsStore.viewingSessionId;
   if (sessionId !== null) openLogDetail(sessionId, id);
+}
+
+async function copyCell(value: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(value);
+    appStore.toast("单元格内容已复制", "success");
+  } catch (error) {
+    reportError(error, "复制单元格失败");
+  }
+}
+
+function showCellMenu(event: MouseEvent, value: string): void {
+  openContextMenu(event, [
+    {
+      label: "复制",
+      icon: Io5Copy,
+      action: () => void copyCell(value),
+    },
+  ]);
 }
 
 // ---------- column menu ----------
@@ -342,7 +362,11 @@ function cellClass(index: number, value: string): string {
             :style="{ gridTemplateColumns: gridTemplate, height: ROW_HEIGHT + 'px' }"
             @click="openRow(entry.row.id)"
           >
-            <div class="lt-cell mono" :title="String(entry.row.id)">
+            <div
+              class="lt-cell mono"
+              :title="String(entry.row.id)"
+              @contextmenu="showCellMenu($event, String(entry.row.id))"
+            >
               {{ entry.row.id }}
             </div>
             <div
@@ -354,6 +378,7 @@ function cellClass(index: number, value: string): string {
                 { 'cell-error': logsStore.cellError(entry.row.id, i) },
               ]"
               :title="logsStore.cellError(entry.row.id, i) ?? cell"
+              @contextmenu="showCellMenu($event, cell)"
             >
               {{ cell }}
             </div>

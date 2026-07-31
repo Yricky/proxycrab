@@ -13,13 +13,13 @@ use proxy_crab_mitm::{
 };
 
 use crate::dto::{
-    CertificateResponse, ColumnView, CreateSessionRequest, DebugFilterScriptRequest, HeaderItem,
-    InterceptorCreateRequest, InterceptorDetail, InterceptorLibraryList, InterceptorUpdateRequest,
-    LogDetail, LogIdsPayload, LogIdsRequest, LogViewException, LogViewRow, LogViewsPayload,
-    LogViewsRequest, ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest,
-    ReplaceSessionViewRequest, RequestDetail, ResponseDetail, ScriptRequest,
-    SessionInterceptorItem, SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery,
-    UpdateScriptRequest, UpdateSessionRequest,
+    BypassPage, BypassQuery, CertificateResponse, ColumnView, CreateSessionRequest,
+    DebugFilterScriptRequest, DeleteCount, HeaderItem, InterceptorCreateRequest, InterceptorDetail,
+    InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest,
+    LogViewException, LogViewRow, LogViewsPayload, LogViewsRequest, ManagerError, ManagerResult,
+    ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, RequestDetail, ResponseDetail,
+    RoutingSelection, ScriptRequest, SessionInterceptorItem, SessionInterceptorsPayload,
+    SessionViewPayload, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
 };
 
 #[async_trait]
@@ -40,7 +40,6 @@ pub trait ProxyCrabManager: Send + Sync {
         request: UpdateSessionRequest,
     ) -> ManagerResult<SessionMetadata>;
     async fn delete_session(&self, id: u64) -> ManagerResult<()>;
-    async fn activate_session(&self, id: u64) -> ManagerResult<SessionMetadata>;
     async fn log_ids(&self, request: LogIdsRequest) -> ManagerResult<LogIdsPayload>;
     async fn log_views(&self, request: LogViewsRequest) -> ManagerResult<LogViewsPayload>;
     async fn log(&self, session_id: Option<u64>, id: u64) -> ManagerResult<LogDetail>;
@@ -73,6 +72,20 @@ pub trait ProxyCrabManager: Send + Sync {
         name: String,
         request: DebugFilterScriptRequest,
     ) -> ManagerResult<bool>;
+    async fn routing_scripts(&self) -> ManagerResult<Vec<Script>>;
+    async fn create_routing_script(&self, request: ScriptRequest) -> ManagerResult<()>;
+    async fn routing_script(&self, name: String) -> ManagerResult<Script>;
+    async fn update_routing_script(
+        &self,
+        name: String,
+        request: UpdateScriptRequest,
+    ) -> ManagerResult<()>;
+    async fn delete_routing_script(&self, name: String) -> ManagerResult<()>;
+    async fn routing_selection(&self) -> ManagerResult<RoutingSelection>;
+    async fn replace_routing_selection(
+        &self,
+        selection: RoutingSelection,
+    ) -> ManagerResult<RoutingSelection>;
     async fn interceptors(&self, kind: InterceptorKind) -> ManagerResult<InterceptorLibraryList>;
     async fn create_interceptor(&self, request: InterceptorCreateRequest) -> ManagerResult<()>;
     async fn interceptor(
@@ -100,6 +113,10 @@ pub trait ProxyCrabManager: Send + Sync {
     async fn regenerate_certificate(&self) -> ManagerResult<CertificateResponse>;
     async fn system_logs(&self, query: SystemLogsQuery) -> ManagerResult<Vec<SystemLogEntry>>;
     async fn clear_system_logs(&self) -> ManagerResult<()>;
+    async fn bypass_entries(&self, query: BypassQuery) -> ManagerResult<BypassPage>;
+    async fn delete_bypass_entry(&self, id: u64) -> ManagerResult<()>;
+    async fn delete_bypass_entries(&self, ids: Vec<u64>) -> ManagerResult<DeleteCount>;
+    async fn clear_bypass_entries(&self) -> ManagerResult<DeleteCount>;
 }
 
 pub struct MitmManager {
@@ -136,8 +153,12 @@ impl MitmManager {
 
     fn session_id(&self, requested: Option<u64>) -> ManagerResult<u64> {
         requested
-            .or_else(|| self.runtime.active_session().map(|session| session.id))
-            .ok_or_else(|| ManagerError::conflict("no active session"))
+            .or_else(|| {
+                self.runtime
+                    .session_for_tag("default")
+                    .map(|session| session.id)
+            })
+            .ok_or_else(|| ManagerError::conflict("no default Session"))
     }
 
     fn render_builtin_cell(column: &Column, item: &CaptureSummary) -> Option<String> {
@@ -267,15 +288,6 @@ impl ProxyCrabManager for MitmManager {
                 "management API host must be a loopback address",
             ));
         }
-        if let Some(id) = config.active_session_id
-            && !self
-                .runtime
-                .sessions()
-                .iter()
-                .any(|session| session.id == id)
-        {
-            return Err(ManagerError::not_found(format!("session {id} not found")));
-        }
         self.runtime.replace_config(config).map_err(map_error)
     }
 
@@ -310,24 +322,20 @@ impl ProxyCrabManager for MitmManager {
         request: UpdateSessionRequest,
     ) -> ManagerResult<SessionMetadata> {
         self.runtime
-            .update_session(id, request.name, request.description)
+            .update_session(id, request.name, request.description, request.tags)
             .map_err(map_error)
     }
 
     async fn delete_session(&self, id: u64) -> ManagerResult<()> {
         self.runtime.delete_session(id).map_err(|error| {
-            if error.to_string().contains("active session") {
-                ManagerError::new("active_session_delete_forbidden", error.to_string())
+            if error.to_string().contains("proxy is running") {
+                ManagerError::new("proxy_running", error.to_string())
             } else if error.to_string().contains("requests in progress") {
                 ManagerError::new("session_in_use", error.to_string())
             } else {
                 map_error(error)
             }
         })
-    }
-
-    async fn activate_session(&self, id: u64) -> ManagerResult<SessionMetadata> {
-        self.runtime.activate_session(id).map_err(map_error)
     }
 
     async fn log_ids(&self, request: LogIdsRequest) -> ManagerResult<LogIdsPayload> {
@@ -610,19 +618,8 @@ impl ProxyCrabManager for MitmManager {
         name: String,
         request: UpdateScriptRequest,
     ) -> ManagerResult<()> {
-        let current = self
-            .runtime
-            .script(ScriptKind::Column, &name)
-            .map_err(map_error)?;
         self.runtime
-            .update_script(
-                ScriptKind::Column,
-                &name,
-                Script {
-                    name: request.name.unwrap_or(current.name),
-                    content: request.content.unwrap_or(current.content),
-                },
-            )
+            .update_script(ScriptKind::Column, &name, request.content)
             .map_err(map_error)
     }
 
@@ -659,19 +656,8 @@ impl ProxyCrabManager for MitmManager {
         name: String,
         request: UpdateScriptRequest,
     ) -> ManagerResult<()> {
-        let current = self
-            .runtime
-            .script(ScriptKind::Filter, &name)
-            .map_err(map_error)?;
         self.runtime
-            .update_script(
-                ScriptKind::Filter,
-                &name,
-                Script {
-                    name: request.name.unwrap_or(current.name),
-                    content: request.content.unwrap_or(current.content),
-                },
-            )
+            .update_script(ScriptKind::Filter, &name, request.content)
             .map_err(map_error)
     }
 
@@ -703,6 +689,67 @@ impl ProxyCrabManager for MitmManager {
             &script.name,
         )
         .map_err(|error| ManagerError::bad_request(error.to_string()))
+    }
+
+    async fn routing_scripts(&self) -> ManagerResult<Vec<Script>> {
+        self.runtime.scripts(ScriptKind::Routing).map_err(map_error)
+    }
+
+    async fn create_routing_script(&self, request: ScriptRequest) -> ManagerResult<()> {
+        self.runtime
+            .create_script(
+                ScriptKind::Routing,
+                Script {
+                    name: request.name,
+                    content: request.content,
+                },
+            )
+            .map_err(map_error)
+    }
+
+    async fn routing_script(&self, name: String) -> ManagerResult<Script> {
+        self.runtime
+            .script(ScriptKind::Routing, &name)
+            .map_err(map_error)
+    }
+
+    async fn update_routing_script(
+        &self,
+        name: String,
+        request: UpdateScriptRequest,
+    ) -> ManagerResult<()> {
+        self.runtime
+            .update_script(ScriptKind::Routing, &name, request.content)
+            .map_err(map_error)
+    }
+
+    async fn delete_routing_script(&self, name: String) -> ManagerResult<()> {
+        self.runtime
+            .delete_script(ScriptKind::Routing, &name)
+            .map_err(map_error)
+    }
+
+    async fn routing_selection(&self) -> ManagerResult<RoutingSelection> {
+        Ok(RoutingSelection {
+            name: self.runtime.config().routing_script_name,
+        })
+    }
+
+    async fn replace_routing_selection(
+        &self,
+        selection: RoutingSelection,
+    ) -> ManagerResult<RoutingSelection> {
+        if let Some(name) = &selection.name {
+            self.runtime
+                .script(ScriptKind::Routing, name)
+                .map_err(map_error)?;
+        }
+        let name = selection.name;
+        self.runtime
+            .workspace()
+            .update_config(|config| config.routing_script_name = name.clone())
+            .map_err(map_error)?;
+        Ok(RoutingSelection { name })
     }
 
     async fn interceptors(&self, kind: InterceptorKind) -> ManagerResult<InterceptorLibraryList> {
@@ -749,17 +796,8 @@ impl ProxyCrabManager for MitmManager {
         request: InterceptorUpdateRequest,
     ) -> ManagerResult<()> {
         let script_kind = interceptor_script_kind(kind);
-        let current = self.runtime.script(script_kind, &name).map_err(map_error)?;
-        let new_name = request.name.unwrap_or(current.name);
         self.runtime
-            .update_script(
-                script_kind,
-                &name,
-                Script {
-                    name: new_name.clone(),
-                    content: request.content.unwrap_or(current.content),
-                },
-            )
+            .update_script(script_kind, &name, request.content)
             .map_err(map_error)?;
         Ok(())
     }
@@ -857,6 +895,35 @@ impl ProxyCrabManager for MitmManager {
     async fn clear_system_logs(&self) -> ManagerResult<()> {
         self.runtime.clear_system_logs();
         Ok(())
+    }
+
+    async fn bypass_entries(&self, query: BypassQuery) -> ManagerResult<BypassPage> {
+        let limit = query.limit.unwrap_or(200).clamp(1, 1000);
+        let mut rows = self
+            .runtime
+            .bypass_entries(limit + 1, query.before_id)
+            .map_err(map_error)?;
+        let has_more = rows.len() > limit;
+        rows.truncate(limit);
+        Ok(BypassPage { rows, has_more })
+    }
+
+    async fn delete_bypass_entry(&self, id: u64) -> ManagerResult<()> {
+        self.runtime.delete_bypass_entry(id).map_err(map_error)
+    }
+
+    async fn delete_bypass_entries(&self, ids: Vec<u64>) -> ManagerResult<DeleteCount> {
+        self.runtime
+            .delete_bypass_entries(&ids)
+            .map(|deleted| DeleteCount { deleted })
+            .map_err(map_error)
+    }
+
+    async fn clear_bypass_entries(&self) -> ManagerResult<DeleteCount> {
+        self.runtime
+            .clear_bypass_entries()
+            .map(|deleted| DeleteCount { deleted })
+            .map_err(map_error)
     }
 }
 
@@ -986,7 +1053,7 @@ mod tests {
     async fn log_ids_apply_exclusive_bounds_and_batch_views_report_cell_errors() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.ensure_active_session().unwrap();
+        let session = runtime.create_session(None, None).unwrap();
         let store =
             CaptureStore::open(session.id, &runtime.workspace().session_dir(session.id)).unwrap();
         let first = store
@@ -1087,7 +1154,7 @@ mod tests {
     async fn structured_filters_persist_and_script_errors_are_non_matches() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.ensure_active_session().unwrap();
+        let session = runtime.create_session(None, None).unwrap();
         let store =
             CaptureStore::open(session.id, &runtime.workspace().session_dir(session.id)).unwrap();
         let first = store
@@ -1345,10 +1412,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_views_validate_new_references_and_script_renames_update_existing_views() {
+    async fn session_views_validate_new_references_and_script_updates_keep_names() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.ensure_active_session().unwrap();
+        let session = runtime.create_session(None, None).unwrap();
         let manager = MitmManager::new(runtime);
 
         let error = manager
@@ -1388,8 +1455,7 @@ mod tests {
             .update_column_script(
                 "old".into(),
                 UpdateScriptRequest {
-                    name: Some("new".into()),
-                    content: None,
+                    content: "return entry.req().uri().host()".into(),
                 },
             )
             .await
@@ -1398,21 +1464,24 @@ mod tests {
         let view = manager.session_view(Some(session.id)).await.unwrap();
         assert!(matches!(
             &view.columns[0],
-            Column::Script { script_name, .. } if script_name == "new"
+            Column::Script { script_name, .. } if script_name == "old"
         ));
-        manager.delete_column_script("new".into()).await.unwrap();
-        let stale = manager.session_view(Some(session.id)).await.unwrap();
-        assert!(matches!(
-            &stale.columns[0],
-            Column::Script { script_name, .. } if script_name == "new"
-        ));
+        manager.delete_column_script("old".into()).await.unwrap();
+        assert!(
+            manager
+                .session_view(Some(session.id))
+                .await
+                .unwrap()
+                .columns
+                .is_empty()
+        );
     }
 
     #[tokio::test]
     async fn session_interceptors_validate_and_report_global_usage() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let first = runtime.ensure_active_session().unwrap();
+        let first = runtime.create_session(None, None).unwrap();
         let second = runtime.create_session(Some("second".into()), None).unwrap();
         let manager = MitmManager::new(runtime);
         manager

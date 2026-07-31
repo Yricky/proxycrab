@@ -16,7 +16,7 @@ Do not depend on filesystem or process APIs other than the explicit
 
 ## Base64 and JSON globals
 
-Every filter, custom-column, request-interceptor, and response-interceptor sandbox provides
+Every routing, filter, custom-column, request-interceptor, and response-interceptor sandbox provides
 read-only `base64` and `json` modules. Codec inputs and outputs are limited to 16 MiB. Invalid
 arguments, malformed input, and limit violations raise Lua runtime errors without returning partial
 results.
@@ -86,6 +86,44 @@ numbers outside the finite `f64` range. Output is compact JSON, not pretty-print
 These codecs do not add request or response body read access. Interceptors still only expose body
 replacement methods.
 
+## Routing scripts
+
+A routing script runs once for every direct HTTP request and once for a CONNECT tunnel. It must
+return a tag string matching `^[a-z0-9_]{1,64}$` or `nil`.
+
+```lua
+if phase == "connect" and req.uri.host == "internal.example.com" then
+  return "internal"
+end
+if source.ip == "127.0.0.1" then
+  return "local_debug"
+end
+return nil
+```
+
+- `nil` means transparent bypass. HTTPS bypass does not perform TLS decryption.
+- A returned tag already bound to a Session selects that Session.
+- An explicit unbound tag atomically creates one Session named after the tag and records the
+  routing script name in its description.
+- A runtime error, invalid tag, or other return type writes a system warning and falls back to the
+  Session tagged `default`; if no such Session exists, it bypasses.
+- With no selected routing script, a bound `default` tag is used, otherwise traffic bypasses.
+
+Routing globals are read-only:
+
+| Global/field | Type | Notes |
+| --- | --- | --- |
+| `phase` | string | `"http"` or `"connect"` |
+| `req.method` | string | HTTP method; CONNECT for tunnels |
+| `req.version` | string | For example `HTTP/1.1` |
+| `req.authority` | string | Request authority or Host |
+| `req.uri` | URI object | Includes `raw`, `scheme`, `host`, `port`, `path`, `query` |
+| `source.ip` | string | Client IP |
+| `source.port` | integer | Client port |
+| `source.address` | string | Socket address |
+
+Headers, body, SNI, and ALPN are deliberately unavailable.
+
 ## Filter scripts
 
 The filter-bar input is the Lua chunk's first vararg. `entry` is a read-only global. A filter must
@@ -145,6 +183,7 @@ return entry.req.headers:get("x-request-id")
 
 | Field | Type | Missing-value behavior |
 | --- | --- | --- |
+| `raw` | string | Exact URI string |
 | `scheme` | string | Empty string |
 | `host` | string | Empty string |
 | `port` | integer or `nil` | `nil` |
@@ -246,7 +285,7 @@ ProxyCrab does not expose the original body content to Lua.
 
 ## Execution and historical evidence
 
-At the beginning of a request, ProxyCrab pins the active Session and snapshots the exact source of
+At the beginning of a routed request, ProxyCrab pins the selected Session and snapshots the exact source of
 every enabled, present request and response interceptor. Response interceptors use the same
 snapshot even if the files or Session chain change while the request is in flight.
 

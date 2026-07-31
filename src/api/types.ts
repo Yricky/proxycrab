@@ -40,7 +40,7 @@ export interface AppConfig {
   proxy_port: number;
   api_host: string;
   api_port: number;
-  active_session_id: number | null;
+  routing_script_name: string | null;
 }
 
 export interface SessionMetadata {
@@ -48,6 +48,7 @@ export interface SessionMetadata {
   name: string;
   created_at: number;
   description: string | null;
+  tags: string[];
 }
 
 export interface Script {
@@ -142,6 +143,9 @@ export type HttpApiResource =
   | "session_view"
   | "column_scripts"
   | "filter_scripts"
+  | "routing_scripts"
+  | "routing_selection"
+  | "bypass"
   | "interceptors"
   | "session_interceptors"
   | "certificate"
@@ -169,6 +173,7 @@ export interface CreateSessionRequest {
 export interface UpdateSessionRequest {
   name?: string | null;
   description?: string | null;
+  tags?: string[] | null;
 }
 
 export interface LogIdsRequest {
@@ -289,8 +294,7 @@ export interface ScriptRequest {
 }
 
 export interface UpdateScriptRequest {
-  name?: string | null;
-  content?: string | null;
+  content: string;
 }
 
 export interface DebugFilterScriptRequest {
@@ -306,8 +310,43 @@ export interface InterceptorCreateRequest {
 }
 
 export interface InterceptorUpdateRequest {
-  name?: string | null;
-  content?: string | null;
+  content: string;
+}
+
+export interface RoutingSelection {
+  name: string | null;
+}
+
+export type BypassOutcome = "in_progress" | "success" | "failed";
+
+export interface BypassEntry {
+  id: number;
+  created_at: number;
+  updated_at: number;
+  source: string;
+  method: string;
+  uri: string;
+  version: string;
+  reason: string;
+  outcome: BypassOutcome;
+  response_status: number | null;
+  error: string | null;
+  upload_bytes: number | null;
+  download_bytes: number | null;
+}
+
+export interface BypassQuery {
+  before_id?: number | null;
+  limit?: number | null;
+}
+
+export interface BypassPage {
+  rows: BypassEntry[];
+  has_more: boolean;
+}
+
+export interface DeleteCount {
+  deleted: number;
 }
 
 export interface SystemLogsQuery {

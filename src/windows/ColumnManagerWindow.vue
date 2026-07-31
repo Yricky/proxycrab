@@ -2,9 +2,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   Io5Add,
-  Io5Checkmark,
-  Io5Close,
-  Io5Create,
   Io5Play,
   Io5Save,
   Io5Trash,
@@ -24,15 +21,12 @@ const backend = useBackend();
 
 const root = ref<HTMLElement | null>(null);
 const editor = ref<{ focus: () => void } | null>(null);
-const renameInput = ref<HTMLInputElement | null>(null);
 const scripts = ref<Script[]>([]);
 const selectedName = ref<string | null>(null);
 const content = ref("");
 const newScriptName = ref("");
 const dirty = ref(false);
 const saving = ref(false);
-const renamingName = ref<string | null>(null);
-const renameValue = ref("");
 const debugLogId = ref("");
 const debugging = ref(false);
 const debugResult = ref<string | null>(null);
@@ -65,7 +59,6 @@ function loadScript(script: Script | null): void {
   selectedName.value = script?.name ?? null;
   content.value = script?.content ?? "";
   dirty.value = false;
-  renamingName.value = null;
   clearDebugResult();
   if (script) void nextTick(() => editor.value?.focus());
 }
@@ -87,7 +80,7 @@ async function refreshScripts(preferredName?: string): Promise<void> {
 function onHttpApiChange(event: Event): void {
   const { resources } = (event as CustomEvent<HttpApiChange>).detail;
   if (!resources.includes("all") && !resources.includes("column_scripts")) return;
-  if (dirty.value || renamingName.value !== null) {
+  if (dirty.value) {
     externalChanged.value = true;
     return;
   }
@@ -97,7 +90,6 @@ function onHttpApiChange(event: Event): void {
 
 function reloadExternal(): void {
   externalChanged.value = false;
-  renamingName.value = null;
   void refreshScripts(selectedName.value ?? undefined);
 }
 
@@ -222,44 +214,6 @@ async function createScript(): Promise<void> {
   }
 }
 
-function startRename(script: Script): void {
-  renamingName.value = script.name;
-  renameValue.value = script.name;
-  void nextTick(() => {
-    renameInput.value?.focus();
-    renameInput.value?.select();
-  });
-}
-
-function cancelRename(): void {
-  renamingName.value = null;
-  renameValue.value = "";
-}
-
-async function commitRename(script: Script): Promise<void> {
-  const nextName = renameValue.value.trim();
-  const problem = validateName(nextName);
-  if (problem) {
-    reportError(problem);
-    return;
-  }
-  if (nextName === script.name) {
-    cancelRename();
-    return;
-  }
-  try {
-    await backend.updateColumnScript(script.name, { name: nextName });
-    script.name = nextName;
-    if (selectedName.value === renamingName.value) selectedName.value = nextName;
-    cancelRename();
-    clearDebugResult();
-    notifyChanged();
-    await logsStore.refreshView();
-  } catch (error) {
-    reportError(error, "重命名列脚本失败");
-  }
-}
-
 async function removeScript(script: Script): Promise<void> {
   const selectedAndDirty = script.name === selectedName.value && dirty.value;
   const ok = await confirmDialog({
@@ -336,41 +290,16 @@ onBeforeUnmount(() => {
           :class="{ active: selectedName === script.name }"
           @click="selectScript(script)"
         >
-          <template v-if="renamingName === script.name">
-            <input
-              ref="renameInput"
-              v-model="renameValue"
-              class="input cm-rename-input mono"
-              @click.stop
-              @keyup.enter="commitRename(script)"
-              @keyup.esc="cancelRename"
-            />
+          <span class="cm-script-name mono" :title="script.name">{{ script.name }}</span>
+          <span class="cm-row-actions">
             <button
-              class="btn icon"
-              title="确认重命名"
-              @click.stop="commitRename(script)"
+              class="btn icon danger"
+              title="删除"
+              @click.stop="removeScript(script)"
             >
-              <Io5Checkmark :size="14" />
+              <Io5Trash :size="14" />
             </button>
-            <button class="btn icon" title="取消" @click.stop="cancelRename">
-              <Io5Close :size="14" />
-            </button>
-          </template>
-          <template v-else>
-            <span class="cm-script-name mono" :title="script.name">{{ script.name }}</span>
-            <span class="cm-row-actions">
-              <button class="btn icon" title="重命名" @click.stop="startRename(script)">
-                <Io5Create :size="14" />
-              </button>
-              <button
-                class="btn icon danger"
-                title="删除"
-                @click.stop="removeScript(script)"
-              >
-                <Io5Trash :size="14" />
-              </button>
-            </span>
-          </template>
+          </span>
         </div>
       </div>
     </aside>
@@ -529,12 +458,6 @@ onBeforeUnmount(() => {
 .cm-script-row:hover .cm-row-actions,
 .cm-script-row.active .cm-row-actions {
   display: flex;
-}
-
-.cm-rename-input {
-  min-width: 0;
-  flex: 1;
-  height: 25px;
 }
 
 .cm-editor-pane {

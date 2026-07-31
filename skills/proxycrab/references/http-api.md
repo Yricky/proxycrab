@@ -11,11 +11,12 @@ This reference documents the complete local HTTP surface used by ProxyCrab agent
 5. [Sessions](#sessions)
 6. [Capture logs](#capture-logs)
 7. [Session views](#session-views)
-8. [Column and filter scripts](#column-and-filter-scripts)
+8. [Column, filter, and routing scripts](#column-filter-and-routing-scripts)
 9. [Interceptors](#interceptors)
-10. [Certificate authority](#certificate-authority)
-11. [System logs](#system-logs)
-12. [Errors and lifecycle notes](#errors-and-lifecycle-notes)
+10. [Bypass traffic](#bypass-traffic)
+11. [Certificate authority](#certificate-authority)
+12. [System logs](#system-logs)
+13. [Errors and lifecycle notes](#errors-and-lifecycle-notes)
 
 ## Connection and envelopes
 
@@ -58,8 +59,9 @@ percent-encoded normally.
 Successful HTTP mutations notify the running Tauri frontend through an internal event channel. The
 HTTP envelope does not change and there is no public event endpoint.
 
-- Session changes refresh the sidebar and active marker. Activating a Session does not force the
-  user to view it.
+- Session changes refresh the sidebar and tags without forcing the user to view another Session.
+- Routing-library and selection changes refresh the routing manager.
+- Bypass deletion and clearing refresh the bypass window.
 - A changed log filter or Session view reloads the table only when that Session is currently viewed.
 - Column/filter/interceptor library changes refresh relevant choices, managers, table rendering, and
   the current interceptor pipeline.
@@ -70,8 +72,7 @@ HTTP envelope does not change and there is no public event endpoint.
 - Adjacent changes are coalesced and normal synchronization is silent.
 
 This means Agent operations become visible in the desktop app shortly after the HTTP success
-response. Do not assume the user wants their current viewed Session changed merely because another
-Session was activated.
+response. Do not assume the user wants their currently viewed Session changed.
 
 ## Shared data types
 
@@ -92,11 +93,11 @@ Session was activated.
   "proxy_port": 8089,
   "api_host": "127.0.0.1",
   "api_port": 18089,
-  "active_session_id": 3
+  "routing_script_name": "route-by-host"
 }
 ```
 
-`active_session_id` can be `null`. The management API host must remain `127.0.0.1` or `::1`.
+`routing_script_name` can be `null`. The management API host must remain `127.0.0.1` or `::1`.
 Changing an API address affects a later service start, not the already-bound listener.
 
 ### SessionMetadata
@@ -106,11 +107,13 @@ Changing an API address affects a later service start, not the already-bound lis
   "id": 3,
   "name": "checkout-debug",
   "created_at": 1785380000000,
-  "description": "Capture checkout failures"
+  "description": "Capture checkout failures",
+  "tags": ["checkout", "default"]
 }
 ```
 
-`description` can be `null`. Timestamps are Unix milliseconds.
+`description` can be `null`. Tags are globally unique, stored sorted, and must match
+`^[a-z0-9_]{1,64}$`. Timestamps are Unix milliseconds.
 
 ### ProxyStatus
 
@@ -240,7 +243,7 @@ Returns `AppConfig`.
 ### `PUT /api/config`
 
 Replaces the complete `AppConfig` and returns the stored value. Read the current config first and
-preserve fields that should not change. A non-existent `active_session_id` returns `not_found`.
+preserve fields that should not change. A non-existent `routing_script_name` returns `not_found`.
 
 ## Proxy lifecycle
 
@@ -276,35 +279,33 @@ Returns `SessionMetadata[]`.
 
 Both fields are optional or `null`. ProxyCrab generates a name when omitted. Returns the created
 `SessionMetadata`. New Sessions use the default table columns, empty filter, and empty interceptor
-chains; they do not clone the active Session.
+chains. The first manually created Session in an empty workspace receives the `default` tag.
 
 ### `PUT /api/sessions/{id}`
 
 ```json
 {
   "name": "new-name",
-  "description": null
+  "description": null,
+  "tags": ["checkout", "default"]
 }
 ```
 
-Both fields are optional. Omitting `description` preserves it; explicit `null` clears it. Returns
-the updated `SessionMetadata`.
+All fields are optional. Omitting `description` preserves it; explicit `null` clears it. Supplying
+`tags` replaces the complete tag set. A tag already bound elsewhere is atomically moved from the
+old Session. Returns the updated `SessionMetadata`.
 
 ### `DELETE /api/sessions/{id}`
 
-Returns `{}`. Deleting the active Session returns `active_session_delete_forbidden`. Deleting a
-Session with pinned in-progress requests returns `session_in_use`.
-
-### `POST /api/sessions/{id}/activate`
-
-Sets the active Session and returns its `SessionMetadata`. New requests pin this Session for their
-entire request/response lifecycle.
+Returns `{}`. Session deletion is rejected while the proxy is starting, running, or stopping.
+Deletion is allowed while stopped or failed. A Session with pinned in-progress requests cannot be
+deleted.
 
 ## Capture logs
 
 All log endpoints accept an optional Session. POST requests use `session_id` in JSON; the detail
-endpoint uses the query string. Omitting it selects the active Session. If none exists, the response
-is `409 conflict`.
+endpoint uses the query string. Omitting it selects the Session tagged `default`. If no Session owns
+that tag, the response is `409 conflict`.
 
 ### `POST /api/logs/ids`
 
@@ -498,11 +499,10 @@ Atomically replaces all columns and preserves the current filter:
 }
 ```
 
-A new view cannot reference a missing custom-column script. Deleting a referenced script later is
-allowed and rendering then returns `column_script_error`. Renaming a script updates Session view and
-filter references.
+A new view cannot reference a missing custom-column script. Deleting a referenced custom-column
+script removes matching table columns and resets filters that reference it.
 
-## Column and filter scripts
+## Column, filter, and routing scripts
 
 ### Column endpoints
 
@@ -522,8 +522,8 @@ Create:
 { "name": "correlation-id", "content": "return entry.req.headers:get(\"x-request-id\")" }
 ```
 
-`content` defaults to an empty string when omitted. Update accepts optional `name` and `content`; an
-omitted field remains unchanged. Successful create/update/delete returns `{}`.
+`content` defaults to an empty string when omitted. Update requires `{ "content": "..." }`.
+Script names cannot be changed. Successful create/update/delete returns `{}`.
 
 ### Filter endpoints
 
@@ -537,8 +537,7 @@ PUT    /api/filter-scripts/{name}
 DELETE /api/filter-scripts/{name}
 ```
 
-Renaming updates every Session filter reference. Deleting a referenced filter or custom-column
-filter resets those Session filters to no selection.
+Deleting a referenced filter or custom-column filter resets those Session filters to no selection.
 
 ### `POST /api/filter-scripts/{name}/debug`
 
@@ -552,6 +551,27 @@ filter resets those Session filters to no selection.
 
 `session_id` is optional. Returns a boolean. Runtime errors and non-boolean results return
 `bad_request`, unlike normal list filtering where they count as non-matches.
+
+### Routing endpoints
+
+```text
+GET    /api/routing-scripts
+POST   /api/routing-scripts
+GET    /api/routing-scripts/{name}
+PUT    /api/routing-scripts/{name}
+DELETE /api/routing-scripts/{name}
+GET    /api/routing-script-selection
+PUT    /api/routing-script-selection
+```
+
+Routing script CRUD uses the same create and content-only update shapes. Selection is nullable:
+
+```json
+{ "name": "route-by-host" }
+```
+
+Use `{ "name": null }` to clear it. Deleting the selected routing script also clears the
+selection. There is no rename or routing-debug endpoint.
 
 ## Interceptors
 
@@ -598,9 +618,9 @@ Detail returns:
 }
 ```
 
-Update accepts optional `name` and `content`. Successful update/delete returns `{}`. Renaming
-updates all Session references. App-driven deletion removes all Session references; deleting a file
-directly can leave an invalid reference.
+Update requires `{ "content": "..." }`. Script names cannot be changed. Successful update/delete
+returns `{}`. App-driven deletion removes all Session references; deleting a file directly can
+leave an invalid reference.
 
 ### `GET /api/session-interceptors?session_id=3`
 
@@ -636,6 +656,49 @@ At request start, ProxyCrab pins the Session and snapshots the exact UTF-8 conte
 present scripts in both chains. The response phase uses that snapshot even if scripts or chains
 change mid-flight. Missing and disabled nodes are skipped.
 
+## Bypass traffic
+
+Bypass metadata is persisted in `<workspace>/bypass.db`. Headers and bodies are never stored.
+
+### `GET /api/bypass?before_id=100&limit=200`
+
+Returns newest-first pagination:
+
+```json
+{
+  "rows": [
+    {
+      "id": 99,
+      "created_at": 1785380000000,
+      "updated_at": 1785380000100,
+      "source": "127.0.0.1:54000",
+      "method": "CONNECT",
+      "uri": "example.com:443",
+      "version": "HTTP/1.1",
+      "reason": "script_nil",
+      "outcome": "success",
+      "response_status": null,
+      "error": null,
+      "upload_bytes": 1200,
+      "download_bytes": 4300
+    }
+  ],
+  "has_more": false
+}
+```
+
+Default limit is 200; valid range is 1–1000. Outcomes are `in_progress`, `success`, and `failed`.
+
+```text
+DELETE /api/bypass/{id}
+POST   /api/bypass/delete      body: {"ids":[1,2,3]}
+DELETE /api/bypass             clears all terminal entries
+```
+
+Single delete returns `{}`. Batch and clear return `{ "deleted": N }`. In-progress entries cannot
+be deleted; clearing skips them. Proxy shutdown marks unfinished rows failed with
+`error: "proxy_shutdown"`.
+
 ## Certificate authority
 
 ### `GET /api/ca`
@@ -646,7 +709,8 @@ Returns:
 { "pem": "-----BEGIN CERTIFICATE-----\n..." }
 ```
 
-The same CA is available through the proxy at `http://proxy.crab/ca.crt`.
+The same CA is available through the proxy at `http://proxy.crab/ca.crt`. This local URL bypasses
+routing, Session capture, and bypass persistence.
 
 ### `POST /api/ca`
 
@@ -685,14 +749,22 @@ HTTP status mapping:
 | `bad_request` | 400 | Invalid JSON, arguments, script, filter, or operation |
 | `forbidden_origin` | 403 | Non-local browser Origin |
 | `not_found` | 404 | Missing endpoint, Session, log, or script |
-| `conflict` | 409 | State conflict, including no active Session |
-| `active_session_delete_forbidden` | 409 | Tried to delete the active Session |
+| `conflict` | 409 | State conflict, including no `default` Session or deleting a Session while proxy runs |
+| `proxy_running` | 409 | Session deletion attempted while proxy is starting/running/stopping |
 | `session_in_use` | 409 | Tried to delete a Session pinned by active requests |
 | `internal_error` | 500 | Storage, runtime, I/O, or other internal failure |
 
-Capture lifecycle details:
+Routing and capture lifecycle details:
 
-- A normal request is inserted before forwarding. If insertion fails, traffic is not forwarded.
+- With no selected routing script, a bound `default` tag captures; otherwise traffic bypasses.
+- Routing runs once per direct HTTP request and once per CONNECT tunnel.
+- A routing script returns a tag string or `nil`. `nil` bypasses. An explicit unbound tag creates
+  exactly one Session named after that tag with a description naming the routing script.
+- Invalid returns and runtime errors emit a system warning, then use a bound `default` Session or
+  bypass when none exists.
+- A routed normal request is inserted before forwarding. If insertion fails, traffic is not
+  forwarded.
+- A bypassed CONNECT is transparently tunneled without TLS decryption.
 - Request/response bodies are bounded to 64 MiB with a 60-second read timeout.
 - ProxyCrab allows at most four concurrent body-materializing exchanges and 256 client connections.
 - CONNECT creates a provisional capture before the tunnel is acknowledged.

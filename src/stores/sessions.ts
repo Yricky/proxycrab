@@ -7,7 +7,6 @@ const backend = createTauriBackend();
 
 export const sessionsStore = reactive({
   sessions: [] as SessionMetadata[],
-  activeSessionId: null as number | null,
   /** The session whose logs are shown in the main table. */
   viewingSessionId: null as number | null,
   loading: false,
@@ -15,14 +14,11 @@ export const sessionsStore = reactive({
   async refresh(): Promise<void> {
     try {
       this.sessions = await backend.listSessions();
-      if (this.activeSessionId === null) {
-        // active session is tracked via config; resolved in init()
-      }
       if (
         this.viewingSessionId !== null &&
         !this.sessions.some((s) => s.id === this.viewingSessionId)
       ) {
-        this.viewingSessionId = this.activeSessionId ?? this.sessions[0]?.id ?? null;
+        this.viewingSessionId = this.sessions[0]?.id ?? null;
       }
     } catch (error) {
       reportError(error, "获取会话列表失败");
@@ -32,13 +28,9 @@ export const sessionsStore = reactive({
   async init(): Promise<void> {
     this.loading = true;
     try {
-      const [sessions, config] = await Promise.all([
-        backend.listSessions(),
-        backend.getConfig(),
-      ]);
+      const sessions = await backend.listSessions();
       this.sessions = sessions;
-      this.activeSessionId = config.active_session_id;
-      this.viewingSessionId = config.active_session_id ?? sessions[0]?.id ?? null;
+      this.viewingSessionId = sessions[0]?.id ?? null;
     } catch (error) {
       reportError(error, "初始化会话失败");
     } finally {
@@ -48,17 +40,13 @@ export const sessionsStore = reactive({
 
   async syncFromBackend(): Promise<void> {
     try {
-      const [sessions, config] = await Promise.all([
-        backend.listSessions(),
-        backend.getConfig(),
-      ]);
+      const sessions = await backend.listSessions();
       this.sessions = sessions;
-      this.activeSessionId = config.active_session_id;
       if (
         this.viewingSessionId === null ||
         !sessions.some((session) => session.id === this.viewingSessionId)
       ) {
-        this.viewingSessionId = config.active_session_id ?? sessions[0]?.id ?? null;
+        this.viewingSessionId = sessions[0]?.id ?? null;
       }
     } catch (error) {
       reportError(error, "同步会话状态失败");
@@ -79,11 +67,17 @@ export const sessionsStore = reactive({
     }
   },
 
-  async update(id: number, name: string, description: string | null): Promise<boolean> {
+  async update(
+    id: number,
+    name: string,
+    description: string | null,
+    tags: string[],
+  ): Promise<boolean> {
     try {
       await backend.updateSession(id, {
         name,
         description,
+        tags,
       });
       await this.refresh();
       return true;
@@ -99,22 +93,12 @@ export const sessionsStore = reactive({
       if (this.viewingSessionId === id) this.viewingSessionId = null;
       await this.refresh();
       if (this.viewingSessionId === null) {
-        this.viewingSessionId = this.activeSessionId ?? this.sessions[0]?.id ?? null;
+        this.viewingSessionId = this.sessions[0]?.id ?? null;
       }
       return true;
     } catch (error) {
       reportError(error, "删除会话失败");
       return false;
-    }
-  },
-
-  async activate(id: number): Promise<void> {
-    try {
-      await backend.activateSession(id);
-      this.activeSessionId = id;
-      await this.refresh();
-    } catch (error) {
-      reportError(error, "激活会话失败");
     }
   },
 

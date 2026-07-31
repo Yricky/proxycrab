@@ -6,6 +6,7 @@ use hyper::{Request, Version};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use proxy_crab_mitm::{
     ProxyCrab,
+    bypass::BypassOutcome,
     log_buffer::LogBuffer,
     model::{
         CaptureOutcome, ProxyStatus, Script, ScriptKind, SessionInterceptor, SessionInterceptors,
@@ -57,6 +58,30 @@ async fn fixed_http_upstream() -> (u16, tokio::task::JoinHandle<()>) {
         }
     });
     (port, task)
+}
+
+async fn staged_http_upstream() -> (
+    u16,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (release, wait_for_release) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        let _ = stream.read(&mut request).await;
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 10\r\nConnection: close\r\n\r\nhello",
+            )
+            .await
+            .unwrap();
+        wait_for_release.await.unwrap();
+        stream.write_all(b"world").await.unwrap();
+    });
+    (port, release, task)
 }
 
 async fn proxy_get(proxy_port: u16, uri: &str, host: &str) -> String {
@@ -141,10 +166,10 @@ async fn upgrade_echo_upstream() -> (u16, tokio::task::JoinHandle<()>) {
 }
 
 #[tokio::test]
-async fn captures_plain_http_and_hot_session_switches() {
+async fn captures_plain_http_and_hot_default_tag_moves() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
-    let first = runtime.ensure_active_session().unwrap();
+    let first = runtime.create_session(None, None).unwrap();
 
     let response = proxy_get(
         proxy_port,
@@ -155,7 +180,9 @@ async fn captures_plain_http_and_hot_session_switches() {
     assert!(response.contains("\r\n\r\nok"));
 
     let second = runtime.create_session(Some("second".into()), None).unwrap();
-    runtime.activate_session(second.id).unwrap();
+    runtime
+        .update_session(second.id, None, None, Some(vec!["default".into()]))
+        .unwrap();
     let response = proxy_get(
         proxy_port,
         &format!("http://127.0.0.1:{upstream_port}/second"),
@@ -171,10 +198,131 @@ async fn captures_plain_http_and_hot_session_switches() {
 }
 
 #[tokio::test]
+async fn forwards_plain_http_to_bypass_when_no_default_tag_exists() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let (upstream_port, upstream) = fixed_http_upstream().await;
+
+    let response = proxy_get(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/bypass"),
+        &format!("127.0.0.1:{upstream_port}"),
+    )
+    .await;
+
+    assert!(response.contains("\r\n\r\nok"));
+    assert!(runtime.sessions().is_empty());
+    let entries = runtime.bypass_entries(10, None).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].reason, "no_default_tag");
+    assert_eq!(entries[0].outcome, BypassOutcome::Success);
+    assert_eq!(entries[0].response_status, Some(200));
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn streams_plain_http_bypass_before_the_upstream_response_finishes() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let (upstream_port, release, upstream) = staged_http_upstream().await;
+    let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    stream
+        .write_all(
+            format!(
+                "GET http://127.0.0.1:{upstream_port}/stream HTTP/1.1\r\n\
+                 Host: 127.0.0.1:{upstream_port}\r\n\
+                 Connection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(1), async {
+        let mut chunk = [0; 1024];
+        while !response.windows(5).any(|window| window == b"hello") {
+            let read = stream.read(&mut chunk).await.unwrap();
+            assert_ne!(read, 0, "response ended before the first body chunk");
+            response.extend_from_slice(&chunk[..read]);
+        }
+    })
+    .await
+    .expect("the proxy buffered the bypass response instead of streaming it");
+
+    release.send(()).unwrap();
+    timeout(Duration::from_secs(2), stream.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(response.windows(10).any(|window| window == b"helloworld"));
+    upstream.await.unwrap();
+
+    timeout(Duration::from_secs(1), async {
+        loop {
+            let entries = runtime.bypass_entries(10, None).unwrap();
+            if entries
+                .first()
+                .is_some_and(|entry| entry.outcome == BypassOutcome::Success)
+            {
+                assert_eq!(entries[0].download_bytes, Some(10));
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn routing_script_receives_http_authority_and_creates_tagged_session() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let (upstream_port, upstream) = fixed_http_upstream().await;
+    runtime
+        .create_script(
+            ScriptKind::Routing,
+            Script {
+                name: "route".into(),
+                content: format!(
+                    "if phase == 'http' and req.authority == '127.0.0.1:{upstream_port}' \
+                     and source.ip == '127.0.0.1' then return 'matched' end return nil"
+                ),
+            },
+        )
+        .unwrap();
+    let mut config = runtime.config();
+    config.routing_script_name = Some("route".into());
+    runtime.replace_config(config).unwrap();
+
+    let response = proxy_get(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/routed"),
+        &format!("127.0.0.1:{upstream_port}"),
+    )
+    .await;
+
+    assert!(response.contains("\r\n\r\nok"));
+    let session = runtime.session_for_tag("matched").unwrap();
+    assert_eq!(session.name, "matched");
+    assert_eq!(
+        session.description.as_deref(),
+        Some("由分流脚本「route」自动创建")
+    );
+    assert_eq!(
+        runtime.list_captures(session.id, 10, None).unwrap().len(),
+        1
+    );
+    assert!(runtime.session_for_tag("default").is_none());
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
 async fn session_interceptor_chain_executes_and_records_source() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
-    let session = runtime.ensure_active_session().unwrap();
+    let session = runtime.create_session(None, None).unwrap();
     let source = "req.headers:set(\"x-session\", \"one\")";
     runtime
         .create_script(
@@ -221,10 +369,8 @@ async fn session_interceptor_chain_executes_and_records_source() {
 async fn pinned_session_cannot_be_deleted_until_request_finishes() {
     let app_data = tempdir().unwrap();
     let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-    let first = runtime.ensure_active_session().unwrap();
-    let pin = runtime.pin_active_session().unwrap();
-    let second = runtime.create_session(Some("second".into()), None).unwrap();
-    runtime.activate_session(second.id).unwrap();
+    let first = runtime.create_session(None, None).unwrap();
+    let pin = runtime.pin_session(first.id).unwrap();
 
     assert!(
         runtime
@@ -238,12 +384,31 @@ async fn pinned_session_cannot_be_deleted_until_request_finishes() {
 }
 
 #[tokio::test]
+async fn session_deletion_is_blocked_while_proxy_runs_and_allowed_after_stop() {
+    let (_app_data, runtime, _proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+
+    assert!(
+        runtime
+            .delete_session(session.id)
+            .unwrap_err()
+            .to_string()
+            .contains("proxy is running")
+    );
+    runtime.stop_proxy().await.unwrap();
+    runtime.delete_session(session.id).unwrap();
+    assert!(runtime.sessions().is_empty());
+}
+
+#[tokio::test]
 async fn connect_diagnostic_stays_in_session_pinned_at_connect() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let first = runtime.ensure_active_session().unwrap();
+    let first = runtime.create_session(None, None).unwrap();
     let stream = connect_tunnel(proxy_port).await;
     let second = runtime.create_session(Some("second".into()), None).unwrap();
-    runtime.activate_session(second.id).unwrap();
+    runtime
+        .update_session(second.id, None, None, Some(vec!["default".into()]))
+        .unwrap();
 
     let config = ClientConfig::builder()
         .with_root_certificates(RootCertStore::empty())
@@ -277,7 +442,7 @@ async fn connect_diagnostic_stays_in_session_pinned_at_connect() {
 #[tokio::test]
 async fn records_and_forwards_non_tls_connect_tunnel() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.ensure_active_session().unwrap();
+    let session = runtime.create_session(None, None).unwrap();
     let (upstream_port, upstream) = echo_upstream().await;
     let mut stream = connect_tunnel_to(proxy_port, &format!("127.0.0.1:{upstream_port}")).await;
     stream.write_all(b"ping").await.unwrap();
@@ -301,9 +466,46 @@ async fn records_and_forwards_non_tls_connect_tunnel() {
 }
 
 #[tokio::test]
+async fn bypass_connect_tunnels_bytes_without_creating_a_session() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let (upstream_port, upstream) = echo_upstream().await;
+    let mut stream = connect_tunnel_to(proxy_port, &format!("127.0.0.1:{upstream_port}")).await;
+    stream.write_all(b"ping").await.unwrap();
+    let mut echoed = [0; 4];
+    timeout(Duration::from_secs(2), stream.read_exact(&mut echoed))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&echoed, b"ping");
+    upstream.await.unwrap();
+    drop(stream);
+
+    assert!(runtime.sessions().is_empty());
+    let entries = timeout(Duration::from_secs(2), async {
+        loop {
+            let entries = runtime.bypass_entries(10, None).unwrap();
+            if entries
+                .first()
+                .is_some_and(|entry| entry.outcome != BypassOutcome::InProgress)
+            {
+                break entries;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].method, "CONNECT");
+    assert_eq!(entries[0].reason, "no_default_tag");
+    assert_eq!(entries[0].outcome, BypassOutcome::Success);
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
 async fn stop_cancels_idle_connect_without_waiting_for_client_payload() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.ensure_active_session().unwrap();
+    let session = runtime.create_session(None, None).unwrap();
     let _idle = connect_tunnel(proxy_port).await;
     timeout(Duration::from_secs(2), runtime.stop_proxy())
         .await
@@ -323,7 +525,7 @@ async fn stop_cancels_idle_connect_without_waiting_for_client_payload() {
 #[tokio::test]
 async fn forwards_http_upgrade_bidirectionally() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.ensure_active_session().unwrap();
+    let session = runtime.create_session(None, None).unwrap();
     let (upstream_port, upstream) = upgrade_echo_upstream().await;
     let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
     stream
@@ -393,9 +595,31 @@ async fn concurrent_lifecycle_calls_are_serialized() {
 }
 
 #[tokio::test]
+async fn origin_form_ca_download_is_local_and_not_recorded() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    stream
+        .write_all(
+            b"GET /ca.crt HTTP/1.1\r\nHost: proxy.crab\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(3), stream.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(String::from_utf8_lossy(&response).contains("BEGIN CERTIFICATE"));
+    assert!(runtime.sessions().is_empty());
+    assert!(runtime.bypass_entries(10, None).unwrap().is_empty());
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
 async fn trusted_ca_serves_certificate_and_untrusted_ca_is_diagnostic() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.ensure_active_session().unwrap();
+    let session = runtime.create_session(None, None).unwrap();
 
     let mut roots = RootCertStore::empty();
     for certificate in rustls_pemfile::certs(&mut Cursor::new(runtime.certificate_pem())) {
@@ -459,9 +683,9 @@ async fn trusted_ca_serves_certificate_and_untrusted_ca_is_diagnostic() {
 }
 
 #[tokio::test]
-async fn serves_decrypted_http2_requests() {
+async fn serves_ca_over_http2_without_recording_the_local_request() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.ensure_active_session().unwrap();
+    let session = runtime.create_session(None, None).unwrap();
     let mut roots = RootCertStore::empty();
     for certificate in rustls_pemfile::certs(&mut Cursor::new(runtime.certificate_pem())) {
         roots.add(certificate.unwrap()).unwrap();
@@ -499,7 +723,8 @@ async fn serves_decrypted_http2_requests() {
             .list_captures(session.id, 10, None)
             .unwrap()
             .iter()
-            .any(|capture| capture.request.version == "HTTP/2")
+            .all(|capture| capture.request.version != "HTTP/2")
     );
+    assert!(runtime.bypass_entries(10, None).unwrap().is_empty());
     runtime.stop_proxy().await.unwrap();
 }

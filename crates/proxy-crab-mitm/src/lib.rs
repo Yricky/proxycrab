@@ -1,5 +1,6 @@
 //! MITM capture runtime used by ProxyCrab frontends and management transports.
 
+pub mod bypass;
 pub mod ca;
 pub mod log_buffer;
 pub mod lua;

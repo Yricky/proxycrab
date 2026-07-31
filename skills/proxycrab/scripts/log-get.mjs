@@ -18,7 +18,7 @@ run(async () => {
     printHelp(`
 Usage: node log-get.mjs --log-id ID [--session-id ID] [--base-url URL]
 
-Read one complete capture detail. Omitting --session-id uses the active Session.
+Read one complete capture detail. Omitting --session-id uses the Session tagged default.
 Raw headers and bodies are not redacted.
 `);
     return;

@@ -5,12 +5,13 @@ use std::sync::{Arc, Mutex, RwLock};
 use proxy_crab_mgr::{
     MitmManager, ProxyCrabManager,
     dto::{
-        CertificateResponse, CreateSessionRequest, DebugFilterScriptRequest, HttpApiChange,
-        HttpApiResource, HttpServiceStatus, InterceptorCreateRequest, InterceptorDetail,
-        InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest,
-        LogViewsPayload, LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
-        ReplaceSessionViewRequest, ScriptRequest, SessionInterceptorsPayload, SessionViewPayload,
-        SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
+        BypassPage, BypassQuery, CertificateResponse, CreateSessionRequest,
+        DebugFilterScriptRequest, DeleteCount, HttpApiChange, HttpApiResource, HttpServiceStatus,
+        InterceptorCreateRequest, InterceptorDetail, InterceptorLibraryList,
+        InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest, LogViewsPayload,
+        LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
+        ReplaceSessionViewRequest, RoutingSelection, ScriptRequest, SessionInterceptorsPayload,
+        SessionViewPayload, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
     },
     http::{HttpServerHandle, start_http_server},
 };
@@ -107,14 +108,6 @@ async fn update_session(
 #[tauri::command]
 async fn delete_session(state: State<'_, BackendState>, id: u64) -> Result<(), ManagerError> {
     state.manager().delete_session(id).await
-}
-
-#[tauri::command]
-async fn activate_session(
-    state: State<'_, BackendState>,
-    id: u64,
-) -> Result<SessionMetadata, ManagerError> {
-    state.manager().activate_session(id).await
 }
 
 #[tauri::command]
@@ -248,6 +241,59 @@ async fn debug_filter_script(
 }
 
 #[tauri::command]
+async fn list_routing_scripts(state: State<'_, BackendState>) -> Result<Vec<Script>, ManagerError> {
+    state.manager().routing_scripts().await
+}
+
+#[tauri::command]
+async fn create_routing_script(
+    state: State<'_, BackendState>,
+    request: ScriptRequest,
+) -> Result<(), ManagerError> {
+    state.manager().create_routing_script(request).await
+}
+
+#[tauri::command]
+async fn get_routing_script(
+    state: State<'_, BackendState>,
+    name: String,
+) -> Result<Script, ManagerError> {
+    state.manager().routing_script(name).await
+}
+
+#[tauri::command]
+async fn update_routing_script(
+    state: State<'_, BackendState>,
+    name: String,
+    request: UpdateScriptRequest,
+) -> Result<(), ManagerError> {
+    state.manager().update_routing_script(name, request).await
+}
+
+#[tauri::command]
+async fn delete_routing_script(
+    state: State<'_, BackendState>,
+    name: String,
+) -> Result<(), ManagerError> {
+    state.manager().delete_routing_script(name).await
+}
+
+#[tauri::command]
+async fn get_routing_selection(
+    state: State<'_, BackendState>,
+) -> Result<RoutingSelection, ManagerError> {
+    state.manager().routing_selection().await
+}
+
+#[tauri::command]
+async fn replace_routing_selection(
+    state: State<'_, BackendState>,
+    selection: RoutingSelection,
+) -> Result<RoutingSelection, ManagerError> {
+    state.manager().replace_routing_selection(selection).await
+}
+
+#[tauri::command]
 async fn list_interceptors(
     state: State<'_, BackendState>,
     kind: InterceptorKind,
@@ -339,6 +385,32 @@ async fn get_system_logs(
 #[tauri::command]
 async fn clear_system_logs(state: State<'_, BackendState>) -> Result<(), ManagerError> {
     state.manager().clear_system_logs().await
+}
+
+#[tauri::command]
+async fn get_bypass_entries(
+    state: State<'_, BackendState>,
+    query: BypassQuery,
+) -> Result<BypassPage, ManagerError> {
+    state.manager().bypass_entries(query).await
+}
+
+#[tauri::command]
+async fn delete_bypass_entry(state: State<'_, BackendState>, id: u64) -> Result<(), ManagerError> {
+    state.manager().delete_bypass_entry(id).await
+}
+
+#[tauri::command]
+async fn delete_bypass_entries(
+    state: State<'_, BackendState>,
+    ids: Vec<u64>,
+) -> Result<DeleteCount, ManagerError> {
+    state.manager().delete_bypass_entries(ids).await
+}
+
+#[tauri::command]
+async fn clear_bypass_entries(state: State<'_, BackendState>) -> Result<DeleteCount, ManagerError> {
+    state.manager().clear_bypass_entries().await
 }
 
 #[tauri::command]
@@ -473,7 +545,6 @@ pub fn run() {
             create_session,
             update_session,
             delete_session,
-            activate_session,
             get_log_ids,
             get_log_views,
             get_log,
@@ -490,6 +561,13 @@ pub fn run() {
             update_filter_script,
             delete_filter_script,
             debug_filter_script,
+            list_routing_scripts,
+            create_routing_script,
+            get_routing_script,
+            update_routing_script,
+            delete_routing_script,
+            get_routing_selection,
+            replace_routing_selection,
             list_interceptors,
             create_interceptor,
             get_interceptor,
@@ -501,6 +579,10 @@ pub fn run() {
             regenerate_certificate,
             get_system_logs,
             clear_system_logs,
+            get_bypass_entries,
+            delete_bypass_entry,
+            delete_bypass_entries,
+            clear_bypass_entries,
             get_http_service_error,
             get_http_service_status,
             get_proxycrab_skill_install_info,

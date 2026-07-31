@@ -1,18 +1,24 @@
 use std::{
     convert::Infallible,
+    error::Error as StdError,
     future::Future,
     net::SocketAddr,
+    pin::Pin,
     str::FromStr,
-    sync::{Arc, Mutex, RwLock},
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    task::{Context as TaskContext, Poll},
     time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited, combinators::UnsyncBoxBody};
 use hyper::{
     HeaderMap, Method, Request, Response, StatusCode, Uri, Version,
-    body::Incoming,
+    body::{Body, Frame, Incoming},
     header::{
         CONNECTION, CONTENT_LENGTH, HOST, HeaderName, HeaderValue, TRANSFER_ENCODING, UPGRADE,
     },
@@ -33,12 +39,13 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use crate::{
     ProxyCrab,
     lua::{
-        BodyReplacement, execute_request_lenient_named, execute_response_lenient_named,
-        read_body_replacement,
+        BodyReplacement, evaluate_routing, execute_request_lenient_named,
+        execute_response_lenient_named, read_body_replacement,
     },
     model::{
         CaptureError, ErrorStage, HeaderValues, InterceptorKind, InterceptorRun, ProxyStatus,
-        RequestData, ResponseData, ScriptKind, SessionInterceptor, script_content_hash,
+        RequestData, ResponseData, ScriptKind, SessionInterceptor, SessionMetadata,
+        script_content_hash,
     },
     runtime::SessionPin,
     storage::{BodySide, CaptureStore},
@@ -51,6 +58,9 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CAPTURE_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CLIENT_CONNECTIONS: usize = 256;
 const BINARY_HEADER_PREFIX: &str = "\u{e000}proxy-crab-binary:v1:";
+
+type BoxError = Box<dyn StdError + Send + Sync>;
+type ProxyBody = UnsyncBoxBody<Bytes, BoxError>;
 
 #[derive(Debug, Clone)]
 struct InterceptorSnapshot {
@@ -70,6 +80,7 @@ pub struct ProxyController {
     cancellation: Mutex<Option<CancellationToken>>,
     task: Mutex<Option<JoinHandle<()>>>,
     operation: tokio::sync::Mutex<()>,
+    lifecycle_transition: Mutex<()>,
 }
 
 impl ProxyController {
@@ -79,6 +90,7 @@ impl ProxyController {
             cancellation: Mutex::new(None),
             task: Mutex::new(None),
             operation: tokio::sync::Mutex::new(()),
+            lifecycle_transition: Mutex::new(()),
         }
     }
 
@@ -89,20 +101,37 @@ impl ProxyController {
             .clone()
     }
 
-    pub async fn start(&self, runtime: Arc<ProxyCrab>) -> Result<ProxyStatus> {
-        let _operation = self.operation.lock().await;
+    pub(crate) fn with_stopped_session_mutation<T>(
+        &self,
+        action: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        let _transition = self
+            .lifecycle_transition
+            .lock()
+            .expect("proxy lifecycle transition lock poisoned");
         if !matches!(
             self.status(),
             ProxyStatus::Stopped | ProxyStatus::Failed { .. }
         ) {
-            bail!("proxy is already running or changing state");
+            bail!("sessions cannot be deleted while the proxy is running");
         }
-        *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Starting;
-        if let Err(error) = runtime.ensure_active_session() {
-            *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Failed {
-                message: error.to_string(),
-            };
-            return Err(error);
+        action()
+    }
+
+    pub async fn start(&self, runtime: Arc<ProxyCrab>) -> Result<ProxyStatus> {
+        let _operation = self.operation.lock().await;
+        {
+            let _transition = self
+                .lifecycle_transition
+                .lock()
+                .expect("proxy lifecycle transition lock poisoned");
+            if !matches!(
+                self.status(),
+                ProxyStatus::Stopped | ProxyStatus::Failed { .. }
+            ) {
+                bail!("proxy is already running or changing state");
+            }
+            *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Starting;
         }
         let config = runtime.config();
         let listener = match TcpListener::bind((config.proxy_host.as_str(), config.proxy_port))
@@ -164,6 +193,7 @@ impl ProxyController {
             task.abort();
         }
         runtime.mark_in_progress_as_shutdown();
+        let _ = runtime.bypass_store().mark_in_progress_as_shutdown();
         *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Stopped;
         Ok(ProxyStatus::Stopped)
     }
@@ -331,7 +361,11 @@ async fn handle_proxy_request(
     runtime: Arc<ProxyCrab>,
     cancellation: CancellationToken,
     tracker: TaskGroup,
-) -> Result<Response<Full<Bytes>>, Infallible> {
+) -> Result<Response<ProxyBody>, Infallible> {
+    let request_data = request_data(&request);
+    if is_ca_download(&request_data) {
+        return Ok(certificate_response(&runtime));
+    }
     if request.method() == Method::CONNECT {
         return Ok(handle_connect(
             &mut request,
@@ -341,7 +375,69 @@ async fn handle_proxy_request(
             tracker,
         ));
     }
-    Ok(handle_http_request(request, source, runtime, cancellation, tracker).await)
+    Ok(handle_http_request(
+        request,
+        request_data,
+        source,
+        runtime,
+        cancellation,
+        tracker,
+    )
+    .await)
+}
+
+enum RouteDecision {
+    Session(SessionMetadata),
+    Bypass(&'static str),
+}
+
+fn resolve_route(
+    runtime: &Arc<ProxyCrab>,
+    request: &RequestData,
+    authority: &str,
+    phase: &str,
+    source: SocketAddr,
+) -> RouteDecision {
+    let script = match runtime.selected_routing_script() {
+        Ok(script) => script,
+        Err(error) => {
+            tracing::warn!("failed to load routing configuration: {error}");
+            None
+        }
+    };
+    let Some(script) = script else {
+        return runtime
+            .session_for_tag("default")
+            .map(RouteDecision::Session)
+            .unwrap_or(RouteDecision::Bypass("no_default_tag"));
+    };
+    match evaluate_routing(
+        &script.content,
+        phase,
+        request,
+        authority,
+        source,
+        &script.name,
+    ) {
+        Ok(None) => RouteDecision::Bypass("script_nil"),
+        Ok(Some(tag)) => match runtime.resolve_or_create_tag(&tag, &script.name) {
+            Ok(session) => RouteDecision::Session(session),
+            Err(error) => {
+                tracing::warn!(
+                    "routing script {} selected tag {tag}, but Session creation failed: {error}",
+                    script.name
+                );
+                RouteDecision::Bypass("session_create_failed")
+            }
+        },
+        Err(error) => {
+            tracing::warn!("routing script {} failed: {error}", script.name);
+            runtime
+                .session_for_tag("default")
+                .map(RouteDecision::Session)
+                .unwrap_or(RouteDecision::Bypass("routing_script_error"))
+        }
+    }
 }
 
 fn handle_connect(
@@ -350,37 +446,54 @@ fn handle_connect(
     runtime: Arc<ProxyCrab>,
     cancellation: CancellationToken,
     tracker: TaskGroup,
-) -> Response<Full<Bytes>> {
-    let pin = match runtime.pin_active_session() {
+) -> Response<ProxyBody> {
+    let Some(authority) = request.uri().authority().cloned() else {
+        return text_response(StatusCode::BAD_REQUEST, "invalid CONNECT authority");
+    };
+    let request_data = request_data(request);
+    let decision = resolve_route(
+        &runtime,
+        &request_data,
+        authority.as_str(),
+        "connect",
+        source,
+    );
+    if let RouteDecision::Bypass(reason) = decision {
+        return handle_bypass_connect(
+            request,
+            BypassConnectContext {
+                request_data,
+                source,
+                authority,
+                reason,
+                runtime,
+                cancellation,
+                tracker,
+            },
+        );
+    }
+    let RouteDecision::Session(session) = decision else {
+        unreachable!()
+    };
+    let pin = match runtime.pin_session(session.id) {
         Ok(pin) => pin,
         Err(error) => {
-            tracing::error!("failed to pin CONNECT session: {error}");
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "capture storage unavailable",
+            tracing::warn!("failed to pin routed CONNECT Session: {error}");
+            return handle_bypass_connect(
+                request,
+                BypassConnectContext {
+                    request_data,
+                    source,
+                    authority,
+                    reason: "session_pin_failed",
+                    runtime,
+                    cancellation,
+                    tracker,
+                },
             );
         }
     };
-    let Some(authority) = request.uri().authority().cloned() else {
-        let capture = match begin_connect_capture(&pin, source, "invalid-authority") {
-            Ok(capture) => capture,
-            Err(error) => {
-                tracing::error!("failed to persist invalid CONNECT request: {error}");
-                return text_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "capture storage unavailable",
-                );
-            }
-        };
-        record_connect_error(
-            &capture,
-            ErrorStage::Connect,
-            "invalid_connect_authority",
-            "CONNECT request did not contain a valid authority",
-        );
-        return text_response(StatusCode::BAD_REQUEST, "invalid CONNECT authority");
-    };
-    let capture = match begin_connect_capture(&pin, source, authority.as_str()) {
+    let capture = match begin_connect_capture(&pin, source, &request_data) {
         Ok(capture) => capture,
         Err(error) => {
             tracing::error!("failed to persist CONNECT request: {error}");
@@ -417,7 +530,112 @@ fn handle_connect(
             ),
         }
     });
-    Response::new(Full::new(Bytes::new()))
+    Response::new(boxed_full(Bytes::new()))
+}
+
+struct BypassConnectContext {
+    request_data: RequestData,
+    source: SocketAddr,
+    authority: hyper::http::uri::Authority,
+    reason: &'static str,
+    runtime: Arc<ProxyCrab>,
+    cancellation: CancellationToken,
+    tracker: TaskGroup,
+}
+
+fn handle_bypass_connect(
+    request: &mut Request<Incoming>,
+    context: BypassConnectContext,
+) -> Response<ProxyBody> {
+    let BypassConnectContext {
+        request_data,
+        source,
+        authority,
+        reason,
+        runtime,
+        cancellation,
+        tracker,
+    } = context;
+    let entry_id = runtime
+        .bypass_store()
+        .begin(
+            &source.to_string(),
+            &request_data.method,
+            &request_data.uri,
+            &request_data.version,
+            reason,
+        )
+        .map_err(|error| tracing::warn!("failed to persist bypass CONNECT: {error}"))
+        .ok();
+    let on_upgrade = hyper::upgrade::on(request);
+    tracker.spawn(async move {
+        let upgraded = tokio::select! {
+            upgraded = on_upgrade => upgraded,
+            _ = cancellation.cancelled() => return,
+        };
+        let mut client = match upgraded {
+            Ok(upgraded) => TokioIo::new(upgraded),
+            Err(error) => {
+                if let Some(id) = entry_id {
+                    let _ = runtime
+                        .bypass_store()
+                        .fail(id, &error.to_string(), None, None);
+                }
+                return;
+            }
+        };
+        let mut upstream =
+            match timeout(CONNECT_TIMEOUT, TcpStream::connect(authority.as_str())).await {
+                Ok(Ok(upstream)) => upstream,
+                Ok(Err(error)) => {
+                    if let Some(id) = entry_id {
+                        let _ = runtime
+                            .bypass_store()
+                            .fail(id, &error.to_string(), None, None);
+                    }
+                    return;
+                }
+                Err(_) => {
+                    if let Some(id) = entry_id {
+                        let _ = runtime.bypass_store().fail(
+                            id,
+                            "upstream connection timed out",
+                            None,
+                            None,
+                        );
+                    }
+                    return;
+                }
+            };
+        tokio::select! {
+            result = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {
+                match result {
+                    Ok((upload, download)) => {
+                        if let Some(id) = entry_id {
+                            let _ = runtime.bypass_store().complete(
+                                id,
+                                None,
+                                Some(upload),
+                                Some(download),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(id) = entry_id {
+                            let _ = runtime.bypass_store().fail(
+                                id,
+                                &error.to_string(),
+                                None,
+                                None,
+                            );
+                        }
+                    }
+                }
+            }
+            _ = cancellation.cancelled() => {}
+        }
+    });
+    Response::new(boxed_full(Bytes::new()))
 }
 
 async fn process_connect<C>(
@@ -523,39 +741,44 @@ async fn process_connect<C>(
         );
         return;
     }
-    drop(pin);
-    serve_mitm_tls(
-        tls,
-        authority,
-        source,
-        runtime,
-        cancellation,
-        tracker,
-        is_http2,
-    )
-    .await;
+    serve_mitm_tls(tls, authority, source, pin, cancellation, tracker, is_http2).await;
 }
 
 async fn serve_mitm_tls<C>(
     tls: C,
     authority: hyper::http::uri::Authority,
     source: SocketAddr,
-    runtime: Arc<ProxyCrab>,
+    pin: SessionPin,
     cancellation: CancellationToken,
     tracker: TaskGroup,
     is_http2: bool,
 ) where
     C: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    let runtime = pin.runtime();
+    let session_id = pin.session_id();
+    let _connection_pin = pin;
     let service_cancellation = cancellation.clone();
     let service = service_fn(move |mut request| {
         inject_https_authority(&mut request, &authority);
+        let local_ca = is_ca_download(&request_data(&request));
         let runtime = runtime.clone();
         let cancellation = service_cancellation.clone();
         let tracker = tracker.clone();
         async move {
+            if local_ca {
+                return Ok::<_, Infallible>(certificate_response(&runtime));
+            }
             Ok::<_, Infallible>(
-                handle_http_request(request, source, runtime, cancellation, tracker).await,
+                handle_session_http_request(
+                    request,
+                    source,
+                    runtime,
+                    session_id,
+                    cancellation,
+                    tracker,
+                )
+                .await,
             )
         }
     });
@@ -596,13 +819,281 @@ async fn serve_mitm_tls<C>(
 }
 
 async fn handle_http_request(
-    mut request: Request<Incoming>,
+    request: Request<Incoming>,
+    request_data: RequestData,
     source: SocketAddr,
     runtime: Arc<ProxyCrab>,
     cancellation: CancellationToken,
     tracker: TaskGroup,
-) -> Response<Full<Bytes>> {
-    let pin = match runtime.pin_active_session() {
+) -> Response<ProxyBody> {
+    let authority = routing_authority(&request_data);
+    match resolve_route(&runtime, &request_data, &authority, "http", source) {
+        RouteDecision::Bypass(reason) => {
+            handle_bypass_http(
+                request,
+                request_data,
+                source,
+                reason,
+                runtime,
+                cancellation,
+                tracker,
+            )
+            .await
+        }
+        RouteDecision::Session(session) => {
+            handle_session_http_request(request, source, runtime, session.id, cancellation, tracker)
+                .await
+        }
+    }
+}
+
+struct BypassTransfer {
+    store: crate::bypass::BypassStore,
+    entry_id: Option<u64>,
+    upload_bytes: AtomicU64,
+    download_bytes: AtomicU64,
+    finalized: AtomicBool,
+}
+
+impl BypassTransfer {
+    fn new(runtime: &ProxyCrab, entry_id: Option<u64>) -> Arc<Self> {
+        Arc::new(Self {
+            store: runtime.bypass_store().clone(),
+            entry_id,
+            upload_bytes: AtomicU64::new(0),
+            download_bytes: AtomicU64::new(0),
+            finalized: AtomicBool::new(false),
+        })
+    }
+
+    fn add_upload(&self, bytes: u64) {
+        self.upload_bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn add_download(&self, bytes: u64) {
+        self.download_bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn complete(&self, response_status: Option<u16>) {
+        if self.finalized.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if let Some(id) = self.entry_id {
+            let _ = self.store.complete(
+                id,
+                response_status,
+                Some(self.upload_bytes.load(Ordering::Relaxed)),
+                Some(self.download_bytes.load(Ordering::Relaxed)),
+            );
+        }
+    }
+
+    fn fail(&self, error: &str) {
+        if self.finalized.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if let Some(id) = self.entry_id {
+            let _ = self.store.fail(
+                id,
+                error,
+                Some(self.upload_bytes.load(Ordering::Relaxed)),
+                Some(self.download_bytes.load(Ordering::Relaxed)),
+            );
+        }
+    }
+}
+
+struct TrackedBody<B> {
+    inner: Pin<Box<B>>,
+    transfer: Arc<BypassTransfer>,
+    response_status: Option<u16>,
+    response_remaining: Option<u64>,
+    reached_eof: bool,
+}
+
+impl<B> TrackedBody<B> {
+    fn request(inner: B, transfer: Arc<BypassTransfer>) -> Self {
+        Self {
+            inner: Box::pin(inner),
+            transfer,
+            response_status: None,
+            response_remaining: None,
+            reached_eof: false,
+        }
+    }
+
+    fn response(inner: B, transfer: Arc<BypassTransfer>, response_status: u16) -> Self
+    where
+        B: Body,
+    {
+        let response_remaining = inner.size_hint().exact();
+        let reached_eof = inner.is_end_stream() || response_remaining == Some(0);
+        if reached_eof {
+            transfer.complete(Some(response_status));
+        }
+        Self {
+            inner: Box::pin(inner),
+            transfer,
+            response_status: Some(response_status),
+            response_remaining,
+            reached_eof,
+        }
+    }
+}
+
+impl<B> Body for TrackedBody<B>
+where
+    B: Body<Data = Bytes>,
+    B::Error: StdError + Send + Sync + 'static,
+{
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        context: &mut TaskContext<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        let this = self.get_mut();
+        match this.inner.as_mut().poll_frame(context) {
+            Poll::Ready(Some(Ok(frame))) => {
+                if let Some(data) = frame.data_ref() {
+                    if this.response_status.is_some() {
+                        this.transfer.add_download(data.len() as u64);
+                        if let Some(remaining) = &mut this.response_remaining {
+                            *remaining = remaining.saturating_sub(data.len() as u64);
+                            if *remaining == 0 {
+                                this.reached_eof = true;
+                                this.transfer.complete(this.response_status);
+                            }
+                        }
+                    } else {
+                        this.transfer.add_upload(data.len() as u64);
+                    }
+                }
+                Poll::Ready(Some(Ok(frame)))
+            }
+            Poll::Ready(Some(Err(error))) => {
+                this.reached_eof = true;
+                this.transfer.fail(&error.to_string());
+                Poll::Ready(Some(Err(Box::new(error))))
+            }
+            Poll::Ready(None) => {
+                this.reached_eof = true;
+                if let Some(status) = this.response_status {
+                    this.transfer.complete(Some(status));
+                }
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+impl<B> Drop for TrackedBody<B> {
+    fn drop(&mut self) {
+        if self.response_status.is_some() && !self.reached_eof {
+            self.transfer
+                .fail("downstream response body closed before completion");
+        }
+    }
+}
+
+async fn handle_bypass_http(
+    mut request: Request<Incoming>,
+    request_data: RequestData,
+    source: SocketAddr,
+    reason: &'static str,
+    runtime: Arc<ProxyCrab>,
+    cancellation: CancellationToken,
+    tracker: TaskGroup,
+) -> Response<ProxyBody> {
+    let entry_id = runtime
+        .bypass_store()
+        .begin(
+            &source.to_string(),
+            &request_data.method,
+            &request_data.uri,
+            &request_data.version,
+            reason,
+        )
+        .map_err(|error| tracing::warn!("failed to persist bypass request: {error}"))
+        .ok();
+    let transfer = BypassTransfer::new(&runtime, entry_id);
+    let downstream_upgrade = is_upgrade_request(&request).then(|| hyper::upgrade::on(&mut request));
+    let upstream_request = match streaming_upstream_request(request, transfer.clone()) {
+        Ok(request) => request,
+        Err(error) => {
+            transfer.fail(&error.to_string());
+            return text_response(StatusCode::BAD_REQUEST, "invalid upstream request");
+        }
+    };
+    let mut upstream_response = match send_upstream(upstream_request, cancellation.clone()).await {
+        Ok(response) => response,
+        Err(error) => {
+            transfer.fail(&error.to_string());
+            return text_response(StatusCode::BAD_GATEWAY, "upstream request failed");
+        }
+    };
+    let response_data = ResponseData {
+        status: upstream_response.status().as_u16(),
+        version: version_name(upstream_response.version()).to_string(),
+        headers: headers_to_values(upstream_response.headers()),
+    };
+    if upstream_response.status() == StatusCode::SWITCHING_PROTOCOLS {
+        if let Some(downstream_upgrade) = downstream_upgrade {
+            let upstream_upgrade = hyper::upgrade::on(&mut upstream_response);
+            let transfer = transfer.clone();
+            tracker.spawn(async move {
+                match (downstream_upgrade.await, upstream_upgrade.await) {
+                    (Ok(downstream), Ok(upstream)) => {
+                        let mut downstream = TokioIo::new(downstream);
+                        let mut upstream = TokioIo::new(upstream);
+                        tokio::select! {
+                            result = tokio::io::copy_bidirectional(&mut downstream, &mut upstream) => {
+                                match result {
+                                    Ok((upload, download)) => {
+                                        transfer.add_upload(upload);
+                                        transfer.add_download(download);
+                                        transfer.complete(Some(response_data.status));
+                                    }
+                                    Err(error) => transfer.fail(&error.to_string()),
+                                }
+                            }
+                            _ = cancellation.cancelled() => {}
+                        }
+                    }
+                    (Err(error), _) | (_, Err(error)) => transfer.fail(&error.to_string()),
+                }
+            });
+        } else {
+            transfer.complete(Some(response_data.status));
+        }
+        return response_from_data(&response_data, Vec::new(), false);
+    }
+    let (mut parts, incoming) = upstream_response.into_parts();
+    strip_hop_by_hop_headers(&mut parts.headers, false);
+    parts.headers.remove(TRANSFER_ENCODING);
+    let body = TrackedBody::response(incoming, transfer, response_data.status).boxed_unsync();
+    Response::from_parts(parts, body)
+}
+
+async fn handle_session_http_request(
+    mut request: Request<Incoming>,
+    source: SocketAddr,
+    runtime: Arc<ProxyCrab>,
+    session_id: u64,
+    cancellation: CancellationToken,
+    tracker: TaskGroup,
+) -> Response<ProxyBody> {
+    let pin = match runtime.pin_session(session_id) {
         Ok(pin) => pin,
         Err(error) => return text_response(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     };
@@ -1103,7 +1594,7 @@ async fn tunnel_connect<C>(
 }
 
 async fn send_upstream(
-    request: Request<Full<Bytes>>,
+    request: Request<ProxyBody>,
     cancellation: CancellationToken,
 ) -> Result<Response<Incoming>> {
     let uri = request.uri().clone();
@@ -1135,7 +1626,7 @@ async fn send_upstream(
 
 async fn send_on_io<T>(
     stream: T,
-    mut request: Request<Full<Bytes>>,
+    mut request: Request<ProxyBody>,
     use_http2: bool,
     cancellation: CancellationToken,
 ) -> Result<Response<Incoming>>
@@ -1181,7 +1672,7 @@ where
     }
 }
 
-fn request_from_data(data: &RequestData, body: Vec<u8>) -> Result<Request<Full<Bytes>>> {
+fn request_from_data(data: &RequestData, body: Vec<u8>) -> Result<Request<ProxyBody>> {
     let uri = Uri::from_str(&data.uri)?;
     let mut builder = Request::builder()
         .method(Method::from_bytes(data.method.as_bytes())?)
@@ -1201,14 +1692,33 @@ fn request_from_data(data: &RequestData, body: Vec<u8>) -> Result<Request<Full<B
         CONTENT_LENGTH,
         HeaderValue::from_str(&body.len().to_string())?,
     );
-    Ok(builder.body(Full::new(Bytes::from(body)))?)
+    Ok(builder.body(boxed_full(Bytes::from(body)))?)
+}
+
+fn streaming_upstream_request(
+    request: Request<Incoming>,
+    transfer: Arc<BypassTransfer>,
+) -> Result<Request<ProxyBody>> {
+    let (mut parts, incoming) = request.into_parts();
+    let uri = parts.uri.clone();
+    let preserve_upgrade = parts.headers.contains_key(UPGRADE);
+    strip_hop_by_hop_headers(&mut parts.headers, preserve_upgrade);
+    if !parts.headers.contains_key(HOST)
+        && let Some(authority) = uri.authority()
+    {
+        parts
+            .headers
+            .insert(HOST, HeaderValue::from_str(authority.as_str())?);
+    }
+    let body = TrackedBody::request(incoming, transfer).boxed_unsync();
+    Ok(Request::from_parts(parts, body))
 }
 
 fn response_from_data(
     data: &ResponseData,
     body: Vec<u8>,
     preserve_content_length: bool,
-) -> Response<Full<Bytes>> {
+) -> Response<ProxyBody> {
     let mut builder = Response::builder()
         .status(data.status)
         .version(parse_version(&data.version));
@@ -1233,8 +1743,14 @@ fn response_from_data(
         }
     }
     builder
-        .body(Full::new(Bytes::from(body)))
+        .body(boxed_full(Bytes::from(body)))
         .unwrap_or_else(|_| text_response(StatusCode::INTERNAL_SERVER_ERROR, "invalid response"))
+}
+
+fn boxed_full(bytes: Bytes) -> ProxyBody {
+    Full::new(bytes)
+        .map_err(|never| match never {})
+        .boxed_unsync()
 }
 
 fn response_status_has_body(status: u16) -> bool {
@@ -1365,19 +1881,38 @@ fn inject_https_authority<B>(request: &mut Request<B>, authority: &hyper::http::
     }
 }
 
+fn request_data<B>(request: &Request<B>) -> RequestData {
+    RequestData {
+        method: request.method().to_string(),
+        uri: request.uri().to_string(),
+        version: version_name(request.version()).to_string(),
+        headers: headers_to_values(request.headers()),
+    }
+}
+
+fn routing_authority(request: &RequestData) -> String {
+    request
+        .uri
+        .parse::<Uri>()
+        .ok()
+        .and_then(|uri| uri.authority().map(ToString::to_string))
+        .or_else(|| {
+            request.headers.iter().find_map(|(name, values)| {
+                name.eq_ignore_ascii_case("host")
+                    .then(|| values.first().cloned())
+                    .flatten()
+            })
+        })
+        .unwrap_or_default()
+}
+
 fn begin_connect_capture(
     pin: &SessionPin,
     source: SocketAddr,
-    authority: &str,
+    request: &RequestData,
 ) -> Result<ConnectCapture> {
     let store = pin.store().clone();
-    let request = RequestData {
-        method: "CONNECT".into(),
-        uri: authority.into(),
-        version: "HTTP/1.1".into(),
-        headers: HeaderValues::new(),
-    };
-    let id = store.begin(&source.to_string(), &request, "connect")?;
+    let id = store.begin(&source.to_string(), request, "connect")?;
     Ok(ConnectCapture { store, id })
 }
 
@@ -1425,12 +1960,32 @@ fn is_upgrade_request(request: &Request<Incoming>) -> bool {
 }
 
 fn is_ca_download(request: &RequestData) -> bool {
-    request.method == "GET"
-        && request
-            .uri
-            .parse::<Uri>()
+    if request.method != "GET" {
+        return false;
+    }
+    let Ok(uri) = request.uri.parse::<Uri>() else {
+        return false;
+    };
+    if uri.path() != "/ca.crt" {
+        return false;
+    }
+    uri.host() == Some("proxy.crab")
+        || routing_authority(request)
+            .parse::<hyper::http::uri::Authority>()
             .ok()
-            .is_some_and(|uri| uri.host() == Some("proxy.crab") && uri.path() == "/ca.crt")
+            .is_some_and(|authority| authority.host() == "proxy.crab")
+}
+
+fn certificate_response(runtime: &ProxyCrab) -> Response<ProxyBody> {
+    let response = ResponseData {
+        status: 200,
+        version: "HTTP/1.1".into(),
+        headers: HeaderValues::from([(
+            "content-type".into(),
+            vec!["application/x-x509-ca-cert".into()],
+        )]),
+    };
+    response_from_data(&response, runtime.certificate_pem().into_bytes(), false)
 }
 
 fn normalize_tls_error(message: &str) -> &'static str {
@@ -1466,11 +2021,11 @@ fn version_name(version: Version) -> &'static str {
     }
 }
 
-fn text_response(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
+fn text_response(status: StatusCode, message: &str) -> Response<ProxyBody> {
     Response::builder()
         .status(status)
         .header("content-type", "text/plain; charset=utf-8")
-        .body(Full::new(Bytes::copy_from_slice(message.as_bytes())))
+        .body(boxed_full(Bytes::copy_from_slice(message.as_bytes())))
         .expect("static error response is valid")
 }
 

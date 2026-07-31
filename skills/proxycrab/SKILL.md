@@ -1,6 +1,6 @@
 ---
 name: proxycrab
-description: Use ProxyCrab's local management API to inspect captured HTTP/HTTPS traffic, isolate failing requests, wait for new matching captures, export debugging evidence, and create or attach Lua filters, custom columns, and request/response interceptors. Use this skill whenever the user mentions ProxyCrab, MITM capture debugging, captured requests or responses, ProxyCrab Sessions, ProxyCrab Lua scripts, traffic filtering, or asks an agent to diagnose an API call through the running ProxyCrab desktop app.
+description: Use ProxyCrab's local management API to inspect captured or bypassed HTTP/HTTPS traffic, isolate failing requests, configure tag-based Lua routing, export evidence, and create or attach Lua filters, custom columns, and request/response interceptors. Use this skill whenever the user mentions ProxyCrab, MITM capture debugging, captured requests or responses, ProxyCrab Sessions, ProxyCrab Lua scripts, traffic filtering, or asks an agent to diagnose an API call through the running ProxyCrab desktop app.
 compatibility: Requires a running ProxyCrab desktop app, Node.js 18 or newer, and access to its loopback management API.
 ---
 
@@ -20,10 +20,12 @@ The default management API is `http://127.0.0.1:18089`. Every script also accept
   management HTTP service is not running.
 - Proxy lifecycle is user-controlled. Do not start or stop the proxy unless the user explicitly
   asks for that separate action.
-- Capturing traffic requires an active Session and a proxy that the user has already started.
+- Capturing traffic requires a routed Session and a proxy that the user has already started. With no
+  selected routing script, traffic uses the Session tagged `default`; if that tag is unbound,
+  traffic is transparently forwarded and recorded in `bypass.db`.
 - Use Node.js 18 or newer. The scripts have no npm dependencies.
-- Successful management mutations synchronize into the open desktop UI. They do not force the user
-  to view an activated Session, and open editors preserve unsaved local changes.
+- Successful management mutations synchronize into the open desktop UI without changing the
+  Session the user is viewing. Open editors preserve unsaved local changes.
 
 ## Choose the smallest workflow
 
@@ -37,6 +39,9 @@ The default management API is `http://127.0.0.1:18089`. Every script also accept
 | Create or update a custom column | `scripts/column-upsert.mjs` |
 | Create or update an interceptor | `scripts/interceptor-upsert.mjs` |
 | Attach interceptor chains to a Session | `scripts/session-interceptors-set.mjs` |
+| Create or update a routing script | `scripts/routing-upsert.mjs` |
+| Select or clear the routing script | `scripts/routing-select.mjs` |
+| Inspect transparent forwarding | `scripts/bypass-list.mjs` |
 | Use a low-frequency endpoint | Read `references/http-api.md` and call it directly |
 | Write or review Lua | Read `references/lua-api.md` |
 
@@ -51,13 +56,14 @@ skill directory.
    node <skill-dir>/scripts/session-list.mjs
    ```
 
-2. If needed, create and activate a dedicated Session. Avoid mixing unrelated traffic:
+2. If needed, create a dedicated Session and assign routing tags with
+   `PUT /api/sessions/{id}`. Moving a tag automatically removes it from its previous Session:
 
    ```bash
    node <skill-dir>/scripts/session-create.mjs \
      --name agent-debug \
      --description "Temporary capture scope for the current investigation"
-   node <skill-dir>/scripts/session-activate.mjs --session-id 3
+   # then PUT {"tags":["agent_debug"]} to /api/sessions/3
    ```
 
 3. Narrow the candidate set before reading full details. Only one ProxyCrab filter option can be
@@ -144,6 +150,11 @@ node <skill-dir>/scripts/session-interceptors-set.mjs \
 Do not claim that an interceptor worked merely because it saved successfully. Capture a new request
 and verify the historical execution and modifications in `log-get.mjs` output.
 
+Routing scripts return a lowercase tag or `nil`. An explicit unbound tag creates a Session bearing
+that tag; `nil` bypasses capture and TLS decryption. Script errors fall back to a bound `default`
+Session, otherwise bypass. Select a routing script only after reviewing
+`references/lua-api.md`.
+
 ## Safety and evidence rules
 
 - Do not delete Sessions or scripts, clear system logs, regenerate the CA, replace application
@@ -153,7 +164,7 @@ and verify the historical execution and modifications in `log-get.mjs` output.
   tokens, and personal data. Redact those values from summaries, chat responses, tickets, and other
   shared artifacts unless the user explicitly needs them.
 - Treat request and response bodies with side effects or credentials as sensitive.
-- Prefer a dedicated Session and tight filters over reading a large unrelated capture history.
+- Prefer a dedicated routing tag and tight filters over reading a large unrelated capture history.
 - Binary and oversized bodies are represented by type and size only; the management API does not
   expose their raw bytes.
 - Interceptor mutations applied before a Lua runtime error remain applied. Inspect both

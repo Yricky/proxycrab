@@ -20,11 +20,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dto::{
-        CreateSessionRequest, DebugFilterScriptRequest, HttpApiChange, HttpApiResource,
-        InterceptorCreateRequest, InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest,
-        ManagerError, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ScriptRequest,
-        SessionQuery, SetWorkspaceRequest, SystemLogsQuery, UpdateScriptRequest,
-        UpdateSessionRequest,
+        BypassQuery, CreateSessionRequest, DebugFilterScriptRequest, DeleteBypassRequest,
+        HttpApiChange, HttpApiResource, InterceptorCreateRequest, InterceptorUpdateRequest,
+        LogIdsRequest, LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
+        ReplaceSessionViewRequest, RoutingSelection, ScriptRequest, SessionQuery,
+        SetWorkspaceRequest, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
     },
     manager::ProxyCrabManager,
 };
@@ -158,7 +158,6 @@ fn router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
             "/api/sessions/{id}",
             put(update_session).delete(delete_session),
         )
-        .route("/api/sessions/{id}/activate", post(activate_session))
         .route("/api/logs/ids", post(log_ids))
         .route("/api/logs/views", post(log_views))
         .route("/api/logs/{id}", get(log))
@@ -195,6 +194,20 @@ fn router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
                 .delete(delete_filter_script),
         )
         .route(
+            "/api/routing-scripts",
+            get(routing_scripts).post(create_routing_script),
+        )
+        .route(
+            "/api/routing-scripts/{name}",
+            get(routing_script)
+                .put(update_routing_script)
+                .delete(delete_routing_script),
+        )
+        .route(
+            "/api/routing-script-selection",
+            get(routing_selection).put(replace_routing_selection),
+        )
+        .route(
             "/api/interceptors",
             get(interceptors).post(create_interceptor),
         )
@@ -208,6 +221,15 @@ fn router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
         .route(
             "/api/system-logs",
             get(system_logs).delete(clear_system_logs),
+        )
+        .route(
+            "/api/bypass",
+            get(bypass_entries).delete(clear_bypass_entries),
+        )
+        .route("/api/bypass/delete", post(delete_bypass_entries))
+        .route(
+            "/api/bypass/{id}",
+            axum::routing::delete(delete_bypass_entry),
         )
         .fallback(not_found)
         .with_state(manager)
@@ -251,18 +273,13 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
     let resources = match (method, path) {
         (&Method::PUT, "/api/workspace") => vec![HttpApiResource::Workspace],
         (&Method::PUT, "/api/config") => {
-            vec![HttpApiResource::Config, HttpApiResource::Sessions]
+            vec![HttpApiResource::Config, HttpApiResource::RoutingSelection]
         }
         (&Method::POST, "/api/proxy/start" | "/api/proxy/stop") => {
             vec![HttpApiResource::Proxy]
         }
         (&Method::POST, "/api/sessions") => vec![HttpApiResource::Sessions],
         (&Method::PUT | &Method::DELETE, value) if value.starts_with("/api/sessions/") => {
-            vec![HttpApiResource::Sessions]
-        }
-        (&Method::POST, value)
-            if value.starts_with("/api/sessions/") && value.ends_with("/activate") =>
-        {
             vec![HttpApiResource::Sessions]
         }
         (&Method::PUT, "/api/session-view") => vec![HttpApiResource::SessionView],
@@ -277,6 +294,16 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
         }
         (&Method::PUT | &Method::DELETE, value) if value.starts_with("/api/filter-scripts/") => {
             vec![HttpApiResource::FilterScripts, HttpApiResource::SessionView]
+        }
+        (&Method::POST, "/api/routing-scripts") => vec![HttpApiResource::RoutingScripts],
+        (&Method::PUT | &Method::DELETE, value) if value.starts_with("/api/routing-scripts/") => {
+            vec![
+                HttpApiResource::RoutingScripts,
+                HttpApiResource::RoutingSelection,
+            ]
+        }
+        (&Method::PUT, "/api/routing-script-selection") => {
+            vec![HttpApiResource::RoutingSelection]
         }
         (&Method::POST, "/api/interceptors") => vec![
             HttpApiResource::Interceptors,
@@ -293,6 +320,12 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
         }
         (&Method::POST, "/api/ca") => vec![HttpApiResource::Certificate],
         (&Method::DELETE, "/api/system-logs") => vec![HttpApiResource::SystemLogs],
+        (&Method::DELETE, "/api/bypass") | (&Method::POST, "/api/bypass/delete") => {
+            vec![HttpApiResource::Bypass]
+        }
+        (&Method::DELETE, value) if value.starts_with("/api/bypass/") => {
+            vec![HttpApiResource::Bypass]
+        }
         _ => return None,
     };
     Some(HttpApiChange {
@@ -415,13 +448,6 @@ async fn delete_session(
     success(json!({}))
 }
 
-async fn activate_session(
-    State(manager): State<ManagerState>,
-    ApiPath(id): ApiPath<u64>,
-) -> ApiResult {
-    success(manager.activate_session(id).await?)
-}
-
 async fn log_ids(
     State(manager): State<ManagerState>,
     Extension(changes): Extension<ChangeSender>,
@@ -430,7 +456,12 @@ async fn log_ids(
     let requested_filter = request.filter.clone();
     let affected_session_id = match request.session_id {
         Some(id) => Some(id),
-        None => manager.config().await?.active_session_id,
+        None => manager
+            .sessions()
+            .await?
+            .into_iter()
+            .find(|session| session.tags.iter().any(|tag| tag == "default"))
+            .map(|session| session.id),
     };
     let previous_filter = if requested_filter.is_some() {
         manager
@@ -584,6 +615,53 @@ async fn debug_filter_script(
     success(manager.debug_filter_script(name, request).await?)
 }
 
+async fn routing_scripts(State(manager): State<ManagerState>) -> ApiResult {
+    success(manager.routing_scripts().await?)
+}
+
+async fn create_routing_script(
+    State(manager): State<ManagerState>,
+    ApiJson(request): ApiJson<ScriptRequest>,
+) -> ApiResult {
+    manager.create_routing_script(request).await?;
+    success(json!({}))
+}
+
+async fn routing_script(
+    State(manager): State<ManagerState>,
+    ApiPath(name): ApiPath<String>,
+) -> ApiResult {
+    success(manager.routing_script(name).await?)
+}
+
+async fn update_routing_script(
+    State(manager): State<ManagerState>,
+    ApiPath(name): ApiPath<String>,
+    ApiJson(request): ApiJson<UpdateScriptRequest>,
+) -> ApiResult {
+    manager.update_routing_script(name, request).await?;
+    success(json!({}))
+}
+
+async fn delete_routing_script(
+    State(manager): State<ManagerState>,
+    ApiPath(name): ApiPath<String>,
+) -> ApiResult {
+    manager.delete_routing_script(name).await?;
+    success(json!({}))
+}
+
+async fn routing_selection(State(manager): State<ManagerState>) -> ApiResult {
+    success(manager.routing_selection().await?)
+}
+
+async fn replace_routing_selection(
+    State(manager): State<ManagerState>,
+    ApiJson(selection): ApiJson<RoutingSelection>,
+) -> ApiResult {
+    success(manager.replace_routing_selection(selection).await?)
+}
+
 #[derive(Deserialize)]
 struct KindQuery {
     kind: InterceptorKind,
@@ -651,6 +729,32 @@ async fn clear_system_logs(State(manager): State<ManagerState>) -> ApiResult {
     success(json!({}))
 }
 
+async fn bypass_entries(
+    State(manager): State<ManagerState>,
+    ApiQuery(query): ApiQuery<BypassQuery>,
+) -> ApiResult {
+    success(manager.bypass_entries(query).await?)
+}
+
+async fn delete_bypass_entry(
+    State(manager): State<ManagerState>,
+    ApiPath(id): ApiPath<u64>,
+) -> ApiResult {
+    manager.delete_bypass_entry(id).await?;
+    success(json!({}))
+}
+
+async fn delete_bypass_entries(
+    State(manager): State<ManagerState>,
+    ApiJson(request): ApiJson<DeleteBypassRequest>,
+) -> ApiResult {
+    success(manager.delete_bypass_entries(request.ids).await?)
+}
+
+async fn clear_bypass_entries(State(manager): State<ManagerState>) -> ApiResult {
+    success(manager.clear_bypass_entries().await?)
+}
+
 async fn not_found() -> ApiResult {
     Err(ApiError(ManagerError::not_found("api endpoint not found")))
 }
@@ -683,9 +787,7 @@ impl IntoResponse for ApiError {
             "bad_request" => StatusCode::BAD_REQUEST,
             "not_found" => StatusCode::NOT_FOUND,
             "forbidden_origin" => StatusCode::FORBIDDEN,
-            "conflict" | "active_session_delete_forbidden" | "session_in_use" => {
-                StatusCode::CONFLICT
-            }
+            "conflict" | "proxy_running" | "session_in_use" => StatusCode::CONFLICT,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (
@@ -734,12 +836,12 @@ mod tests {
                 "PUT",
                 "/api/config",
                 None,
-                vec![HttpApiResource::Config, HttpApiResource::Sessions],
+                vec![HttpApiResource::Config, HttpApiResource::RoutingSelection],
                 None,
             ),
             (
-                "POST",
-                "/api/sessions/42/activate",
+                "PUT",
+                "/api/sessions/42",
                 None,
                 vec![HttpApiResource::Sessions],
                 None,
@@ -766,6 +868,13 @@ mod tests {
                 None,
             ),
             (
+                "PUT",
+                "/api/routing-script-selection",
+                None,
+                vec![HttpApiResource::RoutingSelection],
+                None,
+            ),
+            (
                 "POST",
                 "/api/interceptors",
                 None,
@@ -787,6 +896,13 @@ mod tests {
                 "/api/ca",
                 None,
                 vec![HttpApiResource::Certificate],
+                None,
+            ),
+            (
+                "POST",
+                "/api/bypass/delete",
+                None,
+                vec![HttpApiResource::Bypass],
                 None,
             ),
             (
@@ -925,7 +1041,7 @@ mod tests {
     async fn publishes_session_view_only_when_an_http_log_filter_changes() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.ensure_active_session().unwrap();
+        let session = runtime.create_session(None, None).unwrap();
         let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
         let app = router_with_changes(MitmManager::new(runtime), changes);
         let body = r#"{"filter":{"option":{"kind":"column","column":{"kind":"uri"},"case_sensitive":false},"input":"example"}}"#;
@@ -983,7 +1099,7 @@ mod tests {
     async fn exposes_only_the_new_log_and_session_view_routes() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        runtime.ensure_active_session().unwrap();
+        runtime.create_session(None, None).unwrap();
         let app = router(MitmManager::new(runtime));
 
         for (method, uri, body) in [
@@ -1008,6 +1124,17 @@ mod tests {
                 r#"{"name":"example","content":"return true"}"#,
             ),
             ("GET", "/api/filter-scripts", ""),
+            (
+                "POST",
+                "/api/routing-scripts",
+                r#"{"name":"route","content":"return \"default\""}"#,
+            ),
+            (
+                "PUT",
+                "/api/routing-script-selection",
+                r#"{"name":"route"}"#,
+            ),
+            ("GET", "/api/bypass", ""),
         ] {
             let response = app
                 .clone()
@@ -1031,6 +1158,7 @@ mod tests {
             ("GET", "/api/columns"),
             ("PUT", "/api/interceptors/order"),
             ("GET", "/api/filter-history"),
+            ("POST", "/api/sessions/1/activate"),
             ("POST", "/api/interceptors/request/example/enable"),
             ("POST", "/api/interceptors/request/example/disable"),
         ] {
@@ -1053,6 +1181,34 @@ mod tests {
                 "{uri}: {}",
                 response.status()
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn script_updates_reject_the_removed_rename_shape() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let app = router(MitmManager::new(runtime));
+
+        for uri in [
+            "/api/column-scripts/old",
+            "/api/filter-scripts/old",
+            "/api/routing-scripts/old",
+            "/api/interceptors/request/old",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"name":"new","content":"return true"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
         }
     }
 

@@ -13,6 +13,8 @@ import SystemLogsWindow from "./SystemLogsWindow.vue";
 import SettingsWindow from "./SettingsWindow.vue";
 import ScriptSnapshotWindow from "./ScriptSnapshotWindow.vue";
 import SkillInstallWindow from "./SkillInstallWindow.vue";
+import RoutingManagerWindow from "./RoutingManagerWindow.vue";
+import BypassWindow from "./BypassWindow.vue";
 
 export type ScriptEditorKind = "column" | InterceptorKind;
 
@@ -79,6 +81,24 @@ export function openFilterManager(): void {
     component: FilterManagerWindow,
     width: 1000,
     height: 600,
+  });
+}
+
+export function openRoutingManager(): void {
+  windowsStore.open("routing-manager", {
+    title: "分流规则管理器",
+    component: RoutingManagerWindow,
+    width: 980,
+    height: 600,
+  });
+}
+
+export function openBypass(): void {
+  windowsStore.open("bypass-records", {
+    title: "透明转发记录",
+    component: BypassWindow,
+    width: 1100,
+    height: 560,
   });
 }
 

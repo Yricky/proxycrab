@@ -31,7 +31,7 @@ run(async () => {
     printHelp(`
 Usage: node log-query.mjs [options]
 
-Query capture IDs. Omitting --session-id uses the active Session.
+Query capture IDs. Omitting --session-id uses the Session tagged default.
 
 Bounds:
   --session-id ID

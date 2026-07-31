@@ -1,8 +1,11 @@
 import type {
   AppConfig,
+  BypassPage,
+  BypassQuery,
   CertificateResponse,
   CreateSessionRequest,
   DebugFilterScriptRequest,
+  DeleteCount,
   InterceptorCreateRequest,
   InterceptorKind,
   InterceptorLibraryList,
@@ -15,6 +18,7 @@ import type {
   ProxyStatus,
   ReplaceSessionInterceptorsRequest,
   ReplaceSessionViewRequest,
+  RoutingSelection,
   Script,
   ScriptRequest,
   SessionMetadata,
@@ -51,7 +55,6 @@ export interface Backend {
   createSession(request: CreateSessionRequest): Promise<SessionMetadata>;
   updateSession(id: number, request: UpdateSessionRequest): Promise<SessionMetadata>;
   deleteSession(id: number): Promise<void>;
-  activateSession(id: number): Promise<SessionMetadata>;
 
   // capture logs
   getLogIds(request: LogIdsRequest): Promise<LogIdsPayload>;
@@ -78,6 +81,15 @@ export interface Backend {
   deleteFilterScript(name: string): Promise<void>;
   debugFilterScript(name: string, request: DebugFilterScriptRequest): Promise<boolean>;
 
+  // routing scripts
+  listRoutingScripts(): Promise<Script[]>;
+  createRoutingScript(request: ScriptRequest): Promise<void>;
+  getRoutingScript(name: string): Promise<Script>;
+  updateRoutingScript(name: string, request: UpdateScriptRequest): Promise<void>;
+  deleteRoutingScript(name: string): Promise<void>;
+  getRoutingSelection(): Promise<RoutingSelection>;
+  replaceRoutingSelection(selection: RoutingSelection): Promise<RoutingSelection>;
+
   // interceptors
   listInterceptors(kind: InterceptorKind): Promise<InterceptorLibraryList>;
   createInterceptor(request: InterceptorCreateRequest): Promise<void>;
@@ -101,6 +113,12 @@ export interface Backend {
   // system logs
   getSystemLogs(query: SystemLogsQuery): Promise<SystemLogEntry[]>;
   clearSystemLogs(): Promise<void>;
+
+  // bypass traffic
+  getBypassEntries(query: BypassQuery): Promise<BypassPage>;
+  deleteBypassEntry(id: number): Promise<void>;
+  deleteBypassEntries(ids: number[]): Promise<DeleteCount>;
+  clearBypassEntries(): Promise<DeleteCount>;
 
   // management HTTP service status
   getHttpServiceError(): Promise<string | null>;

@@ -8,6 +8,7 @@ import {
   openColumnManager,
   openFilterManager,
   openInterceptorManager,
+  openRoutingManager,
   openSettings,
   openSkillInstall,
   openSystemLogs,
@@ -24,6 +25,7 @@ import {
   Io5Moon,
   Io5Newspaper,
   Io5Play,
+  Io5RadioButtonOn,
   Io5Settings,
   Io5Stop,
   Io5Flash,
@@ -135,6 +137,10 @@ onBeforeUnmount(() => {
           <button class="tb-menu-item" @click="runMenuAction(openFilterManager)">
             <Io5CodeSlash :size="14" />
             <span>过滤脚本</span>
+          </button>
+          <button class="tb-menu-item" @click="runMenuAction(openRoutingManager)">
+            <Io5RadioButtonOn :size="14" />
+            <span>分流规则</span>
           </button>
         </div>
       </div>

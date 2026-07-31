@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
 import { sessionsStore } from "../stores/sessions";
+import { routingStore } from "../stores/routing";
 import { confirmDialog, openContextMenu } from "../stores/dialog";
 import { formatRelativeTime } from "../utils/format";
 import { appStore } from "../stores/app";
+import { proxyStore } from "../stores/proxy";
+import { openBypass, openRoutingManager } from "../windows/launcher";
 import type { SessionMetadata } from "../api/types";
 import {
   Io5Add,
-  Io5Checkmark,
   Io5Create,
   Io5Eye,
   Io5RadioButtonOn,
@@ -18,6 +20,10 @@ const creating = ref(false);
 const editingId = ref<number | null>(null);
 const editName = ref("");
 const editDesc = ref("");
+const editTags = ref<string[]>([]);
+const tagDraft = ref("");
+const tagError = ref("");
+const TAG_PATTERN = /^[a-z0-9_]{1,64}$/;
 
 async function createSession(): Promise<void> {
   if (creating.value) return;
@@ -33,6 +39,26 @@ function startEdit(session: SessionMetadata): void {
   editingId.value = session.id;
   editName.value = session.name;
   editDesc.value = session.description ?? "";
+  editTags.value = [...session.tags];
+  tagDraft.value = "";
+  tagError.value = "";
+}
+
+function addTag(): void {
+  const tag = tagDraft.value;
+  if (!TAG_PATTERN.test(tag)) {
+    tagError.value = "仅支持 1–64 位小写字母、数字和下划线";
+    return;
+  }
+  if (!editTags.value.includes(tag)) {
+    editTags.value = [...editTags.value, tag].sort();
+  }
+  tagDraft.value = "";
+  tagError.value = "";
+}
+
+function removeTag(tag: string): void {
+  editTags.value = editTags.value.filter((item) => item !== tag);
 }
 
 async function submitEdit(): Promise<void> {
@@ -43,6 +69,7 @@ async function submitEdit(): Promise<void> {
     editingId.value,
     name,
     editDesc.value.trim() || null,
+    editTags.value,
   );
   if (updated) {
     editingId.value = null;
@@ -60,38 +87,75 @@ async function removeSession(id: number, name: string): Promise<void> {
   if (ok) await sessionsStore.remove(id);
 }
 
+async function setDefault(session: SessionMetadata): Promise<void> {
+  if (session.tags.includes("default")) return;
+  const updated = await sessionsStore.update(
+    session.id,
+    session.name,
+    session.description,
+    [...session.tags, "default"],
+  );
+  if (updated) appStore.toast(`「${session.name}」已设为默认会话`, "success");
+}
+
 function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
   openContextMenu(event, [
     { label: "查看", icon: Io5Eye, action: () => sessionsStore.view(session.id) },
-    {
-      label: "设为活跃会话",
-      icon: Io5RadioButtonOn,
-      disabled: sessionsStore.activeSessionId === session.id,
-      action: () => void sessionsStore.activate(session.id),
-    },
     { label: "编辑会话", icon: Io5Create, action: () => startEdit(session) },
+    {
+      label: "设为默认",
+      icon: Io5RadioButtonOn,
+      disabled: session.tags.includes("default"),
+      action: () => void setDefault(session),
+    },
     {
       label: "删除",
       icon: Io5Trash,
       danger: true,
-      disabled: sessionsStore.activeSessionId === session.id,
+      dividerBefore: true,
+      disabled: proxyStore.status.status === "starting" ||
+        proxyStore.status.status === "running" ||
+        proxyStore.status.status === "stopping",
       action: () => void removeSession(session.id, session.name),
     },
   ]);
 }
+
+onMounted(() => {
+  void routingStore.refresh();
+});
 </script>
 
 <template>
   <aside class="sidebar">
-    <div class="sb-header">
-      <span class="sb-title">会话</span>
+    <div class="sb-top">
+      <div class="sb-header">
+        <span class="sb-title">会话</span>
+        <div class="sb-header-actions">
+          <button class="btn icon" title="透明转发记录" @click="openBypass">
+            <Io5Eye :size="15" />
+          </button>
+          <button
+            class="btn icon"
+            title="新建会话"
+            :disabled="creating"
+            @click="createSession"
+          >
+            <Io5Add :size="16" />
+          </button>
+        </div>
+      </div>
       <button
-        class="btn icon"
-        title="新建会话"
-        :disabled="creating"
-        @click="createSession"
+        class="sb-routing"
+        :class="{ empty: !routingStore.selectedName }"
+        title="打开分流规则管理器"
+        @click="openRoutingManager"
       >
-        <Io5Add :size="16" />
+        <Io5RadioButtonOn :size="13" />
+        <span v-if="routingStore.selectedName" class="sb-routing-name">
+          {{ routingStore.selectedName }}
+        </span>
+        <span v-else>未设置分流规则</span>
       </button>
     </div>
 
@@ -117,6 +181,29 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
               @keyup.enter="submitEdit"
               @keyup.esc="editingId = null"
             />
+            <div class="sb-tag-editor">
+              <div v-if="editTags.length" class="sb-tags">
+                <button
+                  v-for="tag in editTags"
+                  :key="tag"
+                  type="button"
+                  class="sb-tag removable"
+                  :class="{ default: tag === 'default' }"
+                  :title="`移除 ${tag}`"
+                  @click="removeTag(tag)"
+                >
+                  {{ tag }} ×
+                </button>
+              </div>
+              <input
+                v-model="tagDraft"
+                class="input mono"
+                placeholder="添加 tag"
+                @keyup.enter="addTag"
+                @keyup.esc="tagDraft = ''"
+              />
+              <span v-if="tagError" class="sb-tag-error">{{ tagError }}</span>
+            </div>
             <input
               v-model="editDesc"
               class="input"
@@ -135,12 +222,16 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
         <template v-else>
           <div class="sb-item-top">
             <span class="sb-name" :title="session.name">{{ session.name }}</span>
-            <Io5Checkmark
-              v-if="sessionsStore.activeSessionId === session.id"
-              :size="14"
-              class="sb-active"
-              title="活跃会话"
-            />
+          </div>
+          <div v-if="session.tags.length" class="sb-tags">
+            <span
+              v-for="tag in session.tags"
+              :key="tag"
+              class="sb-tag"
+              :class="{ default: tag === 'default' }"
+            >
+              {{ tag }}
+            </span>
           </div>
           <div class="sb-item-meta">
             <span>{{ formatRelativeTime(session.created_at) }}</span>
@@ -166,17 +257,59 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
 }
+.sb-top {
+  border-bottom: 1px solid var(--border);
+}
 .sb-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
 }
 .sb-title {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
+}
+.sb-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.sb-routing {
+  width: calc(100% - 16px);
+  box-sizing: border-box;
+  min-height: 30px;
+  margin: 0 8px 7px;
+  padding: 5px 9px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.sb-routing:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.sb-routing.empty {
+  border-style: dashed;
+  background: transparent;
+  color: var(--text-faint);
+}
+.sb-routing-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
 }
 .sb-edit {
   display: flex;
@@ -217,9 +350,42 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sb-active {
-  color: var(--success);
-  flex: none;
+.sb-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+.sb-tag {
+  max-width: 100%;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sb-tag.default {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-input));
+}
+.sb-tag.removable {
+  cursor: pointer;
+}
+.sb-tag-editor .input {
+  margin-top: 5px;
+}
+.sb-tag-error {
+  display: block;
+  margin-top: 3px;
+  color: var(--danger);
+  font-size: 10px;
 }
 .sb-item-meta {
   display: flex;

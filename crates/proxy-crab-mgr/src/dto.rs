@@ -1,7 +1,10 @@
-use proxy_crab_mitm::model::{
-    AppConfig, BodyPayload, CaptureError, Column, InterceptorExecution, InterceptorKind,
-    InterceptorLibraryItem, ProxyStatus, Script, SessionFilter, SessionMetadata, SystemLogEntry,
-    WorkspacePaths,
+use proxy_crab_mitm::{
+    bypass::BypassEntry,
+    model::{
+        AppConfig, BodyPayload, CaptureError, Column, InterceptorExecution, InterceptorKind,
+        InterceptorLibraryItem, ProxyStatus, Script, SessionFilter, SessionMetadata,
+        SystemLogEntry, WorkspacePaths,
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +64,7 @@ pub struct CreateSessionRequest {
 pub struct UpdateSessionRequest {
     pub name: Option<String>,
     pub description: Option<Option<String>>,
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,9 +199,9 @@ pub struct ScriptRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateScriptRequest {
-    pub name: Option<String>,
-    pub content: Option<String>,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,9 +220,36 @@ pub struct InterceptorCreateRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InterceptorUpdateRequest {
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingSelection {
     pub name: Option<String>,
-    pub content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BypassQuery {
+    pub before_id: Option<u64>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BypassPage {
+    pub rows: Vec<BypassEntry>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteBypassRequest {
+    pub ids: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteCount {
+    pub deleted: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,6 +320,9 @@ pub enum HttpApiResource {
     SessionView,
     ColumnScripts,
     FilterScripts,
+    RoutingScripts,
+    RoutingSelection,
+    Bypass,
     Interceptors,
     SessionInterceptors,
     Certificate,

@@ -36,7 +36,7 @@ async function load(showError: boolean): Promise<void> {
     externalMessage.value = "";
   } catch (error) {
     externalChanged.value = true;
-    externalMessage.value = "脚本已被外部重命名或删除，请从管理器重新打开。";
+    externalMessage.value = "脚本已被外部删除，请从管理器重新打开。";
     if (showError) reportError(error, "加载脚本失败");
   }
 }

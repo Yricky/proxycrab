@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     fs::File,
     io::Read,
+    net::SocketAddr,
     path::Path,
     sync::{
         Arc, Mutex,
@@ -17,6 +18,7 @@ use mlua::{
 use crate::model::{
     CaptureSummary, HeaderValues, Modification, RequestData, ResponseData, ScriptKind,
 };
+use crate::workspace::validate_tag;
 
 mod codec;
 
@@ -44,12 +46,45 @@ pub fn validate_script(kind: ScriptKind, source: &str) -> Result<()> {
         .set_name(match kind {
             ScriptKind::Column => "column.lua",
             ScriptKind::Filter => "filter.lua",
+            ScriptKind::Routing => "routing.lua",
             ScriptKind::RequestInterceptor => "request-interceptor.lua",
             ScriptKind::ResponseInterceptor => "response-interceptor.lua",
         })
         .into_function()
         .map(|_| ())
         .map_err(Into::into)
+}
+
+pub fn evaluate_routing(
+    source: &str,
+    phase: &str,
+    request: &RequestData,
+    authority: &str,
+    source_address: SocketAddr,
+    script_name: &str,
+) -> Result<Option<String>> {
+    let (lua, warnings) = safe_lua()?;
+    lua.globals().set("phase", phase)?;
+    lua.globals().set(
+        "req",
+        RoutingRequestView {
+            request: request.clone(),
+            authority: authority.to_string(),
+        },
+    )?;
+    lua.globals()
+        .set("source", SourceView::from(source_address))?;
+    let result = lua.load(source).eval::<Value>();
+    log_json_warnings(&warnings, ScriptKind::Routing, script_name, None);
+    match result? {
+        Value::Nil => Ok(None),
+        Value::String(value) => {
+            let tag = value.to_str()?.to_string();
+            validate_tag(&tag)?;
+            Ok(Some(tag))
+        }
+        _ => bail!("routing script must return a tag string or nil"),
+    }
 }
 
 pub fn evaluate_filter(source: &str, argument: &str, entry: &CaptureSummary) -> Result<bool> {
@@ -211,6 +246,7 @@ fn log_json_warnings(
     let kind = match kind {
         ScriptKind::Column => "column script",
         ScriptKind::Filter => "filter script",
+        ScriptKind::Routing => "routing script",
         ScriptKind::RequestInterceptor => "request interceptor",
         ScriptKind::ResponseInterceptor => "response interceptor",
     };
@@ -263,6 +299,7 @@ impl UserData for ReadResponse {
 
 #[derive(Clone)]
 struct UriView {
+    raw: String,
     scheme: String,
     host: String,
     port: Option<u16>,
@@ -274,6 +311,7 @@ impl UriView {
     fn from(value: &str) -> Self {
         if let Ok(uri) = value.parse::<hyper::Uri>() {
             return Self {
+                raw: value.to_string(),
                 scheme: uri.scheme_str().map(str::to_string).unwrap_or_default(),
                 host: uri.host().map(str::to_string).unwrap_or_default(),
                 port: uri.port_u16(),
@@ -282,6 +320,7 @@ impl UriView {
             };
         }
         Self {
+            raw: value.to_string(),
             scheme: String::new(),
             host: String::new(),
             port: None,
@@ -293,11 +332,52 @@ impl UriView {
 
 impl UserData for UriView {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get("raw", |_, this| Ok(this.raw.clone()));
         fields.add_field_method_get("scheme", |_, this| Ok(this.scheme.clone()));
         fields.add_field_method_get("host", |_, this| Ok(this.host.clone()));
         fields.add_field_method_get("port", |_, this| Ok(this.port));
         fields.add_field_method_get("path", |_, this| Ok(this.path.clone()));
         fields.add_field_method_get("query", |_, this| Ok(this.query.clone()));
+    }
+}
+
+#[derive(Clone)]
+struct RoutingRequestView {
+    request: RequestData,
+    authority: String,
+}
+
+impl UserData for RoutingRequestView {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get("method", |_, this| Ok(this.request.method.clone()));
+        fields.add_field_method_get("version", |_, this| Ok(this.request.version.clone()));
+        fields.add_field_method_get("authority", |_, this| Ok(this.authority.clone()));
+        fields.add_field_method_get("uri", |_, this| Ok(UriView::from(&this.request.uri)));
+    }
+}
+
+#[derive(Clone)]
+struct SourceView {
+    ip: String,
+    port: u16,
+    address: String,
+}
+
+impl From<SocketAddr> for SourceView {
+    fn from(value: SocketAddr) -> Self {
+        Self {
+            ip: value.ip().to_string(),
+            port: value.port(),
+            address: value.to_string(),
+        }
+    }
+}
+
+impl UserData for SourceView {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get("ip", |_, this| Ok(this.ip.clone()));
+        fields.add_field_method_get("port", |_, this| Ok(this.port));
+        fields.add_field_method_get("address", |_, this| Ok(this.address.clone()));
     }
 }
 
@@ -555,7 +635,7 @@ pub fn read_body_replacement(replacement: &BodyReplacement) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{net::SocketAddr, sync::Arc};
 
     use tracing_subscriber::prelude::*;
 
@@ -568,7 +648,8 @@ mod tests {
 
     use super::{
         BodyReplacement, evaluate_column, evaluate_column_named, evaluate_filter,
-        evaluate_filter_named, execute_request, execute_response, validate_script,
+        evaluate_filter_named, evaluate_routing, execute_request, execute_response,
+        validate_script,
     };
 
     fn entry() -> CaptureSummary {
@@ -622,6 +703,43 @@ mod tests {
         assert!(evaluate_filter("return ...", "not-a-boolean", &entry).is_err());
         assert!(evaluate_filter("error('boom')", "input", &entry).is_err());
         assert!(evaluate_filter("while true do end", "input", &entry).is_err());
+    }
+
+    #[test]
+    fn routing_exposes_request_and_source_metadata_and_validates_returns() {
+        let request = entry().request;
+        let source: SocketAddr = "127.0.0.1:4321".parse().unwrap();
+        let script = r#"
+            if phase == "http"
+              and req.method == "GET"
+              and req.version == "HTTP/1.1"
+              and req.authority == "example.com:443"
+              and req.uri.raw == "https://example.com/path?q=1"
+              and req.uri.scheme == "https"
+              and req.uri.host == "example.com"
+              and req.uri.port == nil
+              and req.uri.path == "/path"
+              and req.uri.query == "q=1"
+              and source.ip == "127.0.0.1"
+              and source.port == 4321
+              and source.address == "127.0.0.1:4321"
+            then
+              return "mobile_2"
+            end
+            return nil
+        "#;
+
+        assert_eq!(
+            evaluate_routing(script, "http", &request, "example.com:443", source, "route",)
+                .unwrap(),
+            Some("mobile_2".into())
+        );
+        assert_eq!(
+            evaluate_routing("return nil", "http", &request, "", source, "route").unwrap(),
+            None
+        );
+        assert!(evaluate_routing("return 'Upper'", "http", &request, "", source, "route").is_err());
+        assert!(evaluate_routing("return true", "http", &request, "", source, "route").is_err());
     }
 
     #[test]
@@ -821,6 +939,18 @@ mod tests {
         assert_eq!(
             evaluate_column("return base64.encode(json.encode(json.array({1})))", &entry).unwrap(),
             "WzFd",
+        );
+        assert_eq!(
+            evaluate_routing(
+                "return base64.decode('bW9iaWxl')",
+                "http",
+                &entry.request,
+                "example.com",
+                "127.0.0.1:1".parse().unwrap(),
+                "codec-route",
+            )
+            .unwrap(),
+            Some("mobile".into()),
         );
 
         let request_effects = execute_request(

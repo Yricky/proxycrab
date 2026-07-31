@@ -8,6 +8,7 @@ use anyhow::{Result, bail};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{
+    bypass::{BypassEntry, BypassStore},
     ca::CertificateAuthority,
     log_buffer::LogBuffer,
     model::{
@@ -28,6 +29,7 @@ pub struct ProxyCrab {
     workspace_paths: RwLock<WorkspacePaths>,
     workspace: Arc<Workspace>,
     authority: RwLock<Arc<CertificateAuthority>>,
+    bypass: BypassStore,
     stores: Mutex<HashMap<u64, CaptureStore>>,
     session_pins: Mutex<HashMap<u64, usize>>,
     capture_slots: Arc<Semaphore>,
@@ -41,11 +43,13 @@ impl ProxyCrab {
         let workspace_paths = resolve_workspace(&app_data_dir)?;
         let workspace = Workspace::open(PathBuf::from(&workspace_paths.current_path))?;
         let authority = Arc::new(CertificateAuthority::load_or_generate(workspace.root())?);
+        let bypass = BypassStore::open(workspace.root())?;
         Ok(Arc::new(Self {
             app_data_dir,
             workspace_paths: RwLock::new(workspace_paths),
             workspace,
             authority: RwLock::new(authority),
+            bypass,
             stores: Mutex::new(HashMap::new()),
             session_pins: Mutex::new(HashMap::new()),
             capture_slots: Arc::new(Semaphore::new(4)),
@@ -81,6 +85,9 @@ impl ProxyCrab {
     }
 
     pub fn replace_config(&self, config: AppConfig) -> Result<AppConfig> {
+        if let Some(name) = &config.routing_script_name {
+            self.workspace.get_script(ScriptKind::Routing, name)?;
+        }
         self.workspace.update_config(|current| *current = config)
     }
 
@@ -101,37 +108,51 @@ impl ProxyCrab {
         id: u64,
         name: Option<String>,
         description: Option<Option<String>>,
+        tags: Option<Vec<String>>,
     ) -> Result<SessionMetadata> {
-        self.workspace.update_session(id, name, description)
+        self.workspace.update_session(id, name, description, tags)
     }
 
     pub fn delete_session(&self, id: u64) -> Result<()> {
-        let pins = self
-            .session_pins
-            .lock()
-            .expect("session pins lock poisoned");
-        if pins.get(&id).copied().unwrap_or_default() != 0 {
-            bail!("session {id} has requests in progress");
+        self.proxy.with_stopped_session_mutation(|| {
+            let pins = self
+                .session_pins
+                .lock()
+                .expect("session pins lock poisoned");
+            if pins.get(&id).copied().unwrap_or_default() != 0 {
+                bail!("session {id} has requests in progress");
+            }
+            self.stores
+                .lock()
+                .expect("capture stores lock poisoned")
+                .remove(&id);
+            let result = self.workspace.delete_session(id);
+            drop(pins);
+            result
+        })
+    }
+
+    pub fn session_for_tag(&self, tag: &str) -> Option<SessionMetadata> {
+        self.workspace.session_for_tag(tag)
+    }
+
+    pub fn resolve_or_create_tag(&self, tag: &str, script_name: &str) -> Result<SessionMetadata> {
+        self.workspace.resolve_or_create_tag(tag, script_name)
+    }
+
+    pub fn selected_routing_script(&self) -> Result<Option<Script>> {
+        let Some(name) = self.config().routing_script_name else {
+            return Ok(None);
+        };
+        match self.script(ScriptKind::Routing, &name) {
+            Ok(script) => Ok(Some(script)),
+            Err(error) => {
+                tracing::warn!("selected routing script {name} is unavailable: {error}");
+                self.workspace
+                    .update_config(|config| config.routing_script_name = None)?;
+                Ok(None)
+            }
         }
-        self.stores
-            .lock()
-            .expect("capture stores lock poisoned")
-            .remove(&id);
-        let result = self.workspace.delete_session(id);
-        drop(pins);
-        result
-    }
-
-    pub fn activate_session(&self, id: u64) -> Result<SessionMetadata> {
-        self.workspace.activate_session(id)
-    }
-
-    pub fn active_session(&self) -> Option<SessionMetadata> {
-        self.workspace.active_session()
-    }
-
-    pub fn ensure_active_session(&self) -> Result<SessionMetadata> {
-        self.workspace.ensure_active_session()
     }
 
     fn capture_store_locked(&self, session_id: u64) -> Result<CaptureStore> {
@@ -160,17 +181,16 @@ impl ProxyCrab {
         Ok(store)
     }
 
-    pub fn pin_active_session(self: &Arc<Self>) -> Result<SessionPin> {
+    pub fn pin_session(self: &Arc<Self>, session_id: u64) -> Result<SessionPin> {
         let mut pins = self
             .session_pins
             .lock()
             .expect("session pins lock poisoned");
-        let session = self.ensure_active_session()?;
-        let store = self.capture_store_locked(session.id)?;
-        *pins.entry(session.id).or_default() += 1;
+        let store = self.capture_store_locked(session_id)?;
+        *pins.entry(session_id).or_default() += 1;
         Ok(SessionPin {
             runtime: self.clone(),
-            session_id: session.id,
+            session_id,
             store,
         })
     }
@@ -267,39 +287,24 @@ impl ProxyCrab {
         self.workspace.save_script(kind, script, false)
     }
 
-    pub fn update_script(&self, kind: ScriptKind, old_name: &str, script: Script) -> Result<()> {
-        crate::lua::validate_script(kind, &script.content)?;
-        if old_name != script.name {
-            self.workspace.get_script(kind, old_name)?;
-            self.workspace.save_script(kind, script.clone(), false)?;
-            let update_result = match kind {
-                ScriptKind::Column => self.rename_column_references(old_name, &script.name),
-                ScriptKind::Filter => {
-                    self.replace_filter_references(kind, old_name, Some(&script.name))
-                }
-                ScriptKind::RequestInterceptor | ScriptKind::ResponseInterceptor => {
-                    self.replace_interceptor_references(kind, old_name, Some(script.name.as_str()))
-                }
-            };
-            if let Err(error) = update_result {
-                let _ = self.workspace.delete_script(kind, &script.name);
-                return Err(error);
-            }
-            if let Err(error) = self.workspace.delete_script(kind, old_name) {
-                tracing::warn!(
-                    "script {old_name} was replaced but the old file could not be removed: {error}"
-                );
-            }
-            return Ok(());
-        }
-        self.workspace.save_script(kind, script, true)
+    pub fn update_script(&self, kind: ScriptKind, name: &str, content: String) -> Result<()> {
+        crate::lua::validate_script(kind, &content)?;
+        self.workspace.get_script(kind, name)?;
+        self.workspace.save_script(
+            kind,
+            Script {
+                name: name.to_string(),
+                content,
+            },
+            true,
+        )
     }
 
     pub fn delete_script(&self, kind: ScriptKind, name: &str) -> Result<()> {
         self.workspace.get_script(kind, name)?;
         if matches!(kind, ScriptKind::Column | ScriptKind::Filter) {
             let previous = self.session_view_snapshots()?;
-            self.replace_filter_references(kind, name, None)?;
+            self.remove_view_references(kind, name)?;
             if let Err(error) = self.workspace.delete_script(kind, name) {
                 if let Err(rollback_error) = self.restore_session_views(&previous) {
                     tracing::error!(
@@ -310,8 +315,24 @@ impl ProxyCrab {
             }
             return Ok(());
         }
+        if kind == ScriptKind::Routing {
+            let selected = self.config().routing_script_name;
+            if selected.as_deref() == Some(name) {
+                self.workspace
+                    .update_config(|config| config.routing_script_name = None)?;
+            }
+            if let Err(error) = self.workspace.delete_script(kind, name) {
+                if selected.as_deref() == Some(name) {
+                    let _ = self
+                        .workspace
+                        .update_config(|config| config.routing_script_name = selected.clone());
+                }
+                return Err(error);
+            }
+            return Ok(());
+        }
         let previous = self.interceptor_reference_snapshots()?;
-        self.replace_interceptor_references(kind, name, None)?;
+        self.remove_interceptor_references(kind, name)?;
         if let Err(error) = self.workspace.delete_script(kind, name) {
             if let Err(rollback_error) = self.restore_interceptor_references(&previous) {
                 tracing::error!(
@@ -444,12 +465,7 @@ impl ProxyCrab {
         Ok(())
     }
 
-    fn replace_interceptor_references(
-        &self,
-        kind: ScriptKind,
-        old_name: &str,
-        new_name: Option<&str>,
-    ) -> Result<()> {
+    fn remove_interceptor_references(&self, kind: ScriptKind, name: &str) -> Result<()> {
         let snapshots = self.interceptor_reference_snapshots()?;
         let mut changed = Vec::new();
         for (session_id, previous) in &snapshots {
@@ -457,18 +473,9 @@ impl ProxyCrab {
             let entries = match kind {
                 ScriptKind::RequestInterceptor => &mut next.request,
                 ScriptKind::ResponseInterceptor => &mut next.response,
-                ScriptKind::Column | ScriptKind::Filter => return Ok(()),
+                ScriptKind::Column | ScriptKind::Filter | ScriptKind::Routing => return Ok(()),
             };
-            match new_name {
-                Some(new_name) => {
-                    for entry in entries {
-                        if entry.name == old_name {
-                            entry.name = new_name.to_string();
-                        }
-                    }
-                }
-                None => entries.retain(|entry| entry.name != old_name),
-            }
+            entries.retain(|entry| entry.name != name);
             if next != *previous {
                 if let Err(error) = self
                     .workspace
@@ -482,37 +489,6 @@ impl ProxyCrab {
                     return Err(error);
                 }
                 changed.push((*session_id, previous.clone()));
-            }
-        }
-        Ok(())
-    }
-
-    fn rename_column_references(&self, old_name: &str, new_name: &str) -> Result<()> {
-        let mut changed = Vec::new();
-        for session in self.sessions() {
-            let previous = self.workspace.session_view(session.id)?;
-            let mut next = previous.clone();
-            for column in &mut next.columns {
-                if let Column::Script { script_name, .. } = column
-                    && script_name == old_name
-                {
-                    *script_name = new_name.to_string();
-                }
-            }
-            replace_filter_reference(
-                &mut next.filter,
-                ScriptKind::Column,
-                old_name,
-                Some(new_name),
-            );
-            if next != previous {
-                if let Err(error) = self.workspace.replace_session_view(session.id, next) {
-                    for (id, view) in changed {
-                        let _ = self.workspace.replace_session_view(id, view);
-                    }
-                    return Err(error);
-                }
-                changed.push((session.id, previous));
             }
         }
         Ok(())
@@ -555,17 +531,20 @@ impl ProxyCrab {
         Ok(())
     }
 
-    fn replace_filter_references(
-        &self,
-        kind: ScriptKind,
-        old_name: &str,
-        new_name: Option<&str>,
-    ) -> Result<()> {
+    fn remove_view_references(&self, kind: ScriptKind, name: &str) -> Result<()> {
         let snapshots = self.session_view_snapshots()?;
         let mut changed = Vec::new();
         for (session_id, previous) in &snapshots {
             let mut next = previous.clone();
-            replace_filter_reference(&mut next.filter, kind, old_name, new_name);
+            replace_filter_reference(&mut next.filter, kind, name);
+            if kind == ScriptKind::Column {
+                next.columns.retain(|column| {
+                    !matches!(
+                        column,
+                        Column::Script { script_name, .. } if script_name == name
+                    )
+                });
+            }
             if next != *previous {
                 if let Err(error) = self.workspace.replace_session_view(*session_id, next) {
                     for (changed_id, changed_view) in changed {
@@ -626,6 +605,26 @@ impl ProxyCrab {
         self.log_buffer.clear();
     }
 
+    pub fn bypass_entries(&self, limit: usize, before_id: Option<u64>) -> Result<Vec<BypassEntry>> {
+        self.bypass.list(limit, before_id)
+    }
+
+    pub fn delete_bypass_entry(&self, id: u64) -> Result<()> {
+        self.bypass.delete(id)
+    }
+
+    pub fn delete_bypass_entries(&self, ids: &[u64]) -> Result<usize> {
+        self.bypass.delete_many(ids)
+    }
+
+    pub fn clear_bypass_entries(&self) -> Result<usize> {
+        self.bypass.clear_terminal()
+    }
+
+    pub(crate) fn bypass_store(&self) -> &BypassStore {
+        &self.bypass
+    }
+
     pub async fn start_proxy(self: &Arc<Self>) -> Result<ProxyStatus> {
         self.proxy.start(self.clone()).await
     }
@@ -682,12 +681,7 @@ fn interceptor_script_kind(kind: InterceptorKind) -> ScriptKind {
     }
 }
 
-fn replace_filter_reference(
-    filter: &mut SessionFilter,
-    kind: ScriptKind,
-    old_name: &str,
-    new_name: Option<&str>,
-) {
+fn replace_filter_reference(filter: &mut SessionFilter, kind: ScriptKind, name: &str) {
     let referenced_name = match (&mut filter.option, kind) {
         (
             Some(FilterOption::Column {
@@ -702,13 +696,10 @@ fn replace_filter_reference(
     let Some(script_name) = referenced_name else {
         return;
     };
-    if script_name != old_name {
+    if script_name != name {
         return;
     }
-    match new_name {
-        Some(new_name) => *script_name = new_name.to_string(),
-        None => *filter = SessionFilter::default(),
-    }
+    *filter = SessionFilter::default();
 }
 
 fn validate_session_interceptors(value: &SessionInterceptors) -> Result<()> {
@@ -784,7 +775,7 @@ mod tests {
     }
 
     #[test]
-    fn interceptor_rename_and_delete_update_every_session() {
+    fn interceptor_delete_updates_every_session() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
         let first = runtime.create_session(Some("one".into()), None).unwrap();
@@ -814,22 +805,7 @@ mod tests {
         }
 
         runtime
-            .update_script(
-                ScriptKind::RequestInterceptor,
-                "old",
-                Script {
-                    name: "new".into(),
-                    content: String::new(),
-                },
-            )
-            .unwrap();
-
-        assert_eq!(
-            runtime.session_interceptors(first.id).unwrap().request[0].name,
-            "new"
-        );
-        runtime
-            .delete_script(ScriptKind::RequestInterceptor, "new")
+            .delete_script(ScriptKind::RequestInterceptor, "old")
             .unwrap();
         assert!(
             runtime
@@ -848,7 +824,7 @@ mod tests {
     }
 
     #[test]
-    fn column_script_rename_and_delete_maintain_filter_references() {
+    fn column_script_delete_removes_view_references() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
         let session = runtime.create_session(Some("one".into()), None).unwrap();
@@ -882,41 +858,14 @@ mod tests {
             )
             .unwrap();
 
-        runtime
-            .update_script(
-                ScriptKind::Column,
-                "old",
-                Script {
-                    name: "new".into(),
-                    content: "return entry.req.uri.host".into(),
-                },
-            )
-            .unwrap();
-
-        let renamed = runtime.session_view(session.id).unwrap();
-        assert!(matches!(
-            &renamed.columns[0],
-            Column::Script { script_name, .. } if script_name == "new"
-        ));
-        assert!(matches!(
-            renamed.filter.option,
-            Some(FilterOption::Column {
-                column: FilterColumn::Script { script_name },
-                ..
-            }) if script_name == "new"
-        ));
-
-        runtime.delete_script(ScriptKind::Column, "new").unwrap();
+        runtime.delete_script(ScriptKind::Column, "old").unwrap();
         let deleted = runtime.session_view(session.id).unwrap();
-        assert!(matches!(
-            &deleted.columns[0],
-            Column::Script { script_name, .. } if script_name == "new"
-        ));
+        assert!(deleted.columns.is_empty());
         assert_eq!(deleted.filter, SessionFilter::default());
     }
 
     #[test]
-    fn filter_script_rename_delete_and_external_removal_repair_sessions() {
+    fn filter_script_delete_and_external_removal_repair_sessions() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
         let session = runtime.create_session(Some("one".into()), None).unwrap();
@@ -944,22 +893,7 @@ mod tests {
             )
             .unwrap();
 
-        runtime
-            .update_script(
-                ScriptKind::Filter,
-                "old",
-                Script {
-                    name: "new".into(),
-                    content: "return true".into(),
-                },
-            )
-            .unwrap();
-        assert!(matches!(
-            runtime.session_view(session.id).unwrap().filter.option,
-            Some(FilterOption::Script { script_name }) if script_name == "new"
-        ));
-
-        runtime.delete_script(ScriptKind::Filter, "new").unwrap();
+        runtime.delete_script(ScriptKind::Filter, "old").unwrap();
         assert_eq!(
             runtime.session_view(session.id).unwrap().filter,
             SessionFilter::default()

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { Io5Add, Io5Create, Io5Pencil, Io5Trash } from "vue-icons-plus/io5";
+import { Io5Add, Io5Create, Io5Trash } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import type {
   InterceptorKind,
@@ -18,9 +18,6 @@ const backend = useBackend();
 const kind = ref<InterceptorKind>("request");
 const list = ref<InterceptorLibraryList | null>(null);
 const newName = ref("");
-const editingName = ref<string | null>(null);
-const nextName = ref("");
-const externalChanged = ref(false);
 
 const sortedItems = computed<InterceptorLibraryItem[]>(() =>
   [...(list.value?.items ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
@@ -41,24 +38,12 @@ async function refresh(): Promise<void> {
 function onHttpApiChange(event: Event): void {
   const { resources } = (event as CustomEvent<HttpApiChange>).detail;
   if (!resources.includes("all") && !resources.includes("interceptors")) return;
-  if (editingName.value !== null) {
-    externalChanged.value = true;
-    return;
-  }
-  externalChanged.value = false;
-  void refresh();
-}
-
-function reloadExternal(): void {
-  editingName.value = null;
-  externalChanged.value = false;
   void refresh();
 }
 
 function switchKind(next: InterceptorKind): void {
   if (kind.value === next) return;
   kind.value = next;
-  editingName.value = null;
   void refresh();
 }
 
@@ -83,32 +68,6 @@ async function create(): Promise<void> {
     openScriptEditor(kind.value, name);
   } catch (error) {
     reportError(error, "创建拦截器失败");
-  }
-}
-
-function startRename(item: InterceptorLibraryItem): void {
-  editingName.value = item.name;
-  nextName.value = item.name;
-}
-
-async function rename(item: InterceptorLibraryItem): Promise<void> {
-  const name = nextName.value.trim();
-  const problem = validateName(name);
-  if (problem) {
-    reportError(problem);
-    return;
-  }
-  if (name === item.name) {
-    editingName.value = null;
-    return;
-  }
-  try {
-    await backend.updateInterceptor(kind.value, item.name, { name });
-    editingName.value = null;
-    await refresh();
-    notifyChanged();
-  } catch (error) {
-    reportError(error, "重命名拦截器失败");
   }
 }
 
@@ -162,11 +121,6 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <div v-if="externalChanged" class="im-external">
-      <span>拦截器已被外部修改，当前重命名内容尚未覆盖。</span>
-      <button class="btn compact" @click="reloadExternal">重新加载</button>
-    </div>
-
     <div class="im-actions">
       <input
         v-model="newName"
@@ -181,35 +135,19 @@ onBeforeUnmount(() => {
       <div v-if="!sortedItems.length" class="empty-hint">暂无全局拦截器脚本</div>
       <div v-for="item in sortedItems" :key="item.name" class="im-row">
         <Io5Create :size="14" class="im-script-icon" />
-        <template v-if="editingName === item.name">
-          <input
-            v-model="nextName"
-            class="input im-rename-input mono"
-            autofocus
-            @keyup.enter="rename(item)"
-            @keyup.esc="editingName = null"
-          />
-          <button class="btn primary compact" @click="rename(item)">保存</button>
-          <button class="btn compact" @click="editingName = null">取消</button>
-        </template>
-        <template v-else>
-          <button class="im-name mono" @click="openScriptEditor(kind, item.name)">
-            {{ item.name }}
-          </button>
-          <span class="im-usage">
-            {{ item.usage_count ? `${item.usage_count} 个会话使用` : "未使用" }}
-          </span>
-          <span class="im-spacer" />
-          <button class="btn icon" title="重命名" @click="startRename(item)">
-            <Io5Pencil :size="14" />
-          </button>
-          <button class="btn icon" title="编辑脚本" @click="openScriptEditor(kind, item.name)">
-            <Io5Create :size="14" />
-          </button>
-          <button class="btn icon danger" title="删除" @click="remove(item)">
-            <Io5Trash :size="14" />
-          </button>
-        </template>
+        <button class="im-name mono" @click="openScriptEditor(kind, item.name)">
+          {{ item.name }}
+        </button>
+        <span class="im-usage">
+          {{ item.usage_count ? `${item.usage_count} 个会话使用` : "未使用" }}
+        </span>
+        <span class="im-spacer" />
+        <button class="btn icon" title="编辑脚本" @click="openScriptEditor(kind, item.name)">
+          <Io5Create :size="14" />
+        </button>
+        <button class="btn icon danger" title="删除" @click="remove(item)">
+          <Io5Trash :size="14" />
+        </button>
       </div>
     </div>
   </div>
@@ -308,10 +246,6 @@ onBeforeUnmount(() => {
 }
 .im-spacer {
   flex: 1;
-}
-.im-rename-input {
-  flex: 1;
-  min-width: 0;
 }
 .btn.compact {
   padding: 4px 9px;

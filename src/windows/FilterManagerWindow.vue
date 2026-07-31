@@ -2,9 +2,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   Io5Add,
-  Io5Checkmark,
-  Io5Close,
-  Io5Create,
   Io5Play,
   Io5Save,
   Io5Trash,
@@ -24,15 +21,12 @@ const backend = useBackend();
 
 const root = ref<HTMLElement | null>(null);
 const editor = ref<{ focus: () => void } | null>(null);
-const renameInput = ref<HTMLInputElement | null>(null);
 const scripts = ref<Script[]>([]);
 const selectedName = ref<string | null>(null);
 const content = ref("");
 const newScriptName = ref("");
 const dirty = ref(false);
 const saving = ref(false);
-const renamingName = ref<string | null>(null);
-const renameValue = ref("");
 const debugLogId = ref("");
 const debugInput = ref("");
 const debugging = ref(false);
@@ -66,7 +60,6 @@ function loadScript(script: Script | null): void {
   selectedName.value = script?.name ?? null;
   content.value = script?.content ?? "";
   dirty.value = false;
-  renamingName.value = null;
   clearDebugResult();
   if (script) void nextTick(() => editor.value?.focus());
 }
@@ -88,7 +81,7 @@ async function refreshScripts(preferredName?: string): Promise<void> {
 function onHttpApiChange(event: Event): void {
   const { resources } = (event as CustomEvent<HttpApiChange>).detail;
   if (!resources.includes("all") && !resources.includes("filter_scripts")) return;
-  if (dirty.value || renamingName.value !== null) {
+  if (dirty.value) {
     externalChanged.value = true;
     return;
   }
@@ -98,7 +91,6 @@ function onHttpApiChange(event: Event): void {
 
 function reloadExternal(): void {
   externalChanged.value = false;
-  renamingName.value = null;
   void refreshScripts(selectedName.value ?? undefined);
 }
 
@@ -208,43 +200,6 @@ async function createScript(): Promise<void> {
   }
 }
 
-function startRename(script: Script): void {
-  renamingName.value = script.name;
-  renameValue.value = script.name;
-  void nextTick(() => {
-    renameInput.value?.focus();
-    renameInput.value?.select();
-  });
-}
-
-function cancelRename(): void {
-  renamingName.value = null;
-  renameValue.value = "";
-}
-
-async function commitRename(script: Script): Promise<void> {
-  const nextName = renameValue.value.trim();
-  const problem = validateName(nextName);
-  if (problem) {
-    reportError(problem);
-    return;
-  }
-  if (nextName === script.name) {
-    cancelRename();
-    return;
-  }
-  try {
-    await backend.updateFilterScript(script.name, { name: nextName });
-    script.name = nextName;
-    if (selectedName.value === renamingName.value) selectedName.value = nextName;
-    cancelRename();
-    clearDebugResult();
-    notifyChanged();
-  } catch (error) {
-    reportError(error, "重命名过滤脚本失败");
-  }
-}
-
 async function removeScript(script: Script): Promise<void> {
   const ok = await confirmDialog({
     title: "删除过滤脚本",
@@ -312,33 +267,12 @@ onBeforeUnmount(() => {
           :class="{ active: selectedName === script.name }"
           @click="selectScript(script)"
         >
-          <template v-if="renamingName === script.name">
-            <input
-              ref="renameInput"
-              v-model="renameValue"
-              class="input fm-rename-input mono"
-              @click.stop
-              @keyup.enter="commitRename(script)"
-              @keyup.esc="cancelRename"
-            />
-            <button class="btn icon" title="确认重命名" @click.stop="commitRename(script)">
-              <Io5Checkmark :size="14" />
+          <span class="fm-script-name mono" :title="script.name">{{ script.name }}</span>
+          <span class="fm-row-actions">
+            <button class="btn icon danger" title="删除" @click.stop="removeScript(script)">
+              <Io5Trash :size="14" />
             </button>
-            <button class="btn icon" title="取消" @click.stop="cancelRename">
-              <Io5Close :size="14" />
-            </button>
-          </template>
-          <template v-else>
-            <span class="fm-script-name mono" :title="script.name">{{ script.name }}</span>
-            <span class="fm-row-actions">
-              <button class="btn icon" title="重命名" @click.stop="startRename(script)">
-                <Io5Create :size="14" />
-              </button>
-              <button class="btn icon danger" title="删除" @click.stop="removeScript(script)">
-                <Io5Trash :size="14" />
-              </button>
-            </span>
-          </template>
+          </span>
         </div>
       </div>
     </aside>
@@ -489,11 +423,6 @@ onBeforeUnmount(() => {
 .fm-script-row:hover .fm-row-actions,
 .fm-script-row.active .fm-row-actions {
   display: flex;
-}
-.fm-rename-input {
-  min-width: 0;
-  flex: 1;
-  height: 25px;
 }
 .fm-editor-pane {
   min-width: 0;

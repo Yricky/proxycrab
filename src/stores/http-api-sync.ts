@@ -5,6 +5,8 @@ import { interceptorsStore } from "./interceptors";
 import { logsStore } from "./logs";
 import { proxyStore } from "./proxy";
 import { sessionsStore } from "./sessions";
+import { routingStore } from "./routing";
+import { bypassStore } from "./bypass";
 
 export const HTTP_API_CHANGE_EVENT = "proxycrab-http-api-change";
 const TAURI_EVENT = "proxycrab://http-api-change";
@@ -16,6 +18,9 @@ const ALL_RESOURCES: HttpApiResource[] = [
   "session_view",
   "column_scripts",
   "filter_scripts",
+  "routing_scripts",
+  "routing_selection",
+  "bypass",
   "interceptors",
   "session_interceptors",
   "certificate",
@@ -62,6 +67,12 @@ async function flush(): Promise<void> {
   }
   if (batch.has("proxy") || batch.has("config")) {
     await proxyStore.refresh();
+  }
+  if (batch.has("routing_scripts") || batch.has("routing_selection")) {
+    await routingStore.refresh();
+  }
+  if (batch.has("bypass")) {
+    await bypassStore.refresh();
   }
 
   const viewingSessionId = sessionsStore.viewingSessionId;

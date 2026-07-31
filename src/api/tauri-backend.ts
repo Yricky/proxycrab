@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Backend } from "./backend";
 import type {
   AppConfig,
+  BypassQuery,
   CreateSessionRequest,
   DebugFilterScriptRequest,
   InterceptorCreateRequest,
@@ -13,6 +14,7 @@ import type {
   ManagerError,
   ReplaceSessionInterceptorsRequest,
   ReplaceSessionViewRequest,
+  RoutingSelection,
   ScriptRequest,
   SystemLogsQuery,
   UpdateScriptRequest,
@@ -73,7 +75,6 @@ export function createTauriBackend(): Backend {
     updateSession: (id: number, request: UpdateSessionRequest) =>
       call("update_session", { id, request }),
     deleteSession: (id: number) => call("delete_session", { id }),
-    activateSession: (id: number) => call("activate_session", { id }),
 
     getLogIds: (request: LogIdsRequest) => call("get_log_ids", { request }),
     getLogViews: (request: LogViewsRequest) => call("get_log_views", { request }),
@@ -100,6 +101,17 @@ export function createTauriBackend(): Backend {
     debugFilterScript: (name: string, request: DebugFilterScriptRequest) =>
       call("debug_filter_script", { name, request }),
 
+    listRoutingScripts: () => call("list_routing_scripts"),
+    createRoutingScript: (request: ScriptRequest) =>
+      call("create_routing_script", { request }),
+    getRoutingScript: (name: string) => call("get_routing_script", { name }),
+    updateRoutingScript: (name: string, request: UpdateScriptRequest) =>
+      call("update_routing_script", { name, request }),
+    deleteRoutingScript: (name: string) => call("delete_routing_script", { name }),
+    getRoutingSelection: () => call("get_routing_selection"),
+    replaceRoutingSelection: (selection: RoutingSelection) =>
+      call("replace_routing_selection", { selection }),
+
     listInterceptors: (kind: InterceptorKind) => call("list_interceptors", { kind }),
     createInterceptor: (request: InterceptorCreateRequest) =>
       call("create_interceptor", { request }),
@@ -121,6 +133,11 @@ export function createTauriBackend(): Backend {
 
     getSystemLogs: (query: SystemLogsQuery) => call("get_system_logs", { query }),
     clearSystemLogs: () => call("clear_system_logs"),
+
+    getBypassEntries: (query: BypassQuery) => call("get_bypass_entries", { query }),
+    deleteBypassEntry: (id: number) => call("delete_bypass_entry", { id }),
+    deleteBypassEntries: (ids: number[]) => call("delete_bypass_entries", { ids }),
+    clearBypassEntries: () => call("clear_bypass_entries"),
 
     getHttpServiceError: () => call("get_http_service_error"),
 

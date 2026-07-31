@@ -2,9 +2,9 @@
 
 ## Scope first
 
-Use a dedicated Session when possible. Record the Session ID in notes and commands so an active
-Session change cannot silently redirect later reads. Activate a Session only when new traffic must
-be captured into it.
+Use a dedicated routing tag and Session when possible. Record the Session ID in notes and commands
+so later tag changes cannot silently redirect reads. Remember that direct HTTP routing runs per
+request, while a CONNECT result pins one Session for the whole tunnel.
 
 Start with the narrowest stable discriminator available:
 
@@ -49,6 +49,8 @@ Common stages:
 
 For CONNECT traffic, a successful TLS MITM handshake retains a CONNECT capture and records decrypted
 requests as additional captures. Do not mistake the CONNECT row for the application request.
+Bypassed CONNECT traffic has no decrypted request detail; inspect the bypass table for source,
+authority, reason, outcome, byte counts, and errors.
 
 ## Handle bodies accurately
 
