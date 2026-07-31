@@ -228,7 +228,7 @@ reference it. Script names cannot be changed.
 
 New Sessions always use the fixed built-in method, URI, status-code, and source columns plus an
 empty filter. The first manually created Session in an empty workspace receives the `default` tag.
-Tags match `^[a-z0-9_]{1,64}$`, are globally unique, and move atomically between Sessions.
+Tags match `^[a-z0-9_]{1,20}$`, are globally unique, and move atomically between Sessions.
 
 ## Global filter scripts
 

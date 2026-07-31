@@ -335,8 +335,6 @@ onBeforeUnmount(() => {
   flex: none;
   display: flex;
   align-items: stretch;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-panel) 72%, var(--bg-app));
 }
 .pipeline-empty {
   display: flex;

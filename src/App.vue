@@ -35,8 +35,10 @@ onBeforeUnmount(() => {
     <div class="app-main">
       <SessionSidebar />
       <section class="app-content">
-        <InterceptorPipeline />
-        <FilterBar />
+        <div class="traffic-controls">
+          <FilterBar />
+          <InterceptorPipeline />
+        </div>
         <LogTable />
       </section>
     </div>
@@ -65,5 +67,12 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   background: var(--bg-app);
+}
+.traffic-controls {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-panel) 72%, var(--bg-app));
 }
 </style>

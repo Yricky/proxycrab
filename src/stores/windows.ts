@@ -12,6 +12,9 @@ export interface WindowState {
   width: number;
   height: number;
   z: number;
+  maximized: boolean;
+  /** Geometry to restore when un-maximizing. */
+  restore?: { x: number; y: number; width: number; height: number };
 }
 
 export interface OpenWindowOptions {
@@ -52,6 +55,7 @@ export const windowsStore = reactive({
       width: options.width ?? 720,
       height: options.height ?? 480,
       z: ++zCounter,
+      maximized: false,
     };
     this.windows.push(win);
     return win;
@@ -89,5 +93,27 @@ export const windowsStore = reactive({
       win.width = width;
       win.height = height;
     }
+  },
+
+  toggleMaximize(id: string): void {
+    const win = this.windows.find((w) => w.id === id);
+    if (!win) return;
+    if (!win.maximized) {
+      win.restore = { x: win.x, y: win.y, width: win.width, height: win.height };
+      win.maximized = true;
+      win.x = 0;
+      win.y = 0;
+      win.width = window.innerWidth;
+      win.height = window.innerHeight;
+    } else {
+      const restored = win.restore ?? { x: 120, y: 80, width: win.width, height: win.height };
+      win.maximized = false;
+      win.restore = undefined;
+      win.x = restored.x;
+      win.y = restored.y;
+      win.width = restored.width;
+      win.height = restored.height;
+    }
+    win.z = ++zCounter;
   },
 });

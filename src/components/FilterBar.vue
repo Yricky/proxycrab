@@ -194,7 +194,15 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="root" class="filter-bar">
+  <div
+    ref="root"
+    class="filter-bar"
+    :class="{
+      empty: !draft.option,
+      applied: logsStore.filterActive && !dirty,
+      dirty: dirty && draft.option,
+    }"
+  >
     <div class="fb-target">
       <button
         class="btn fb-target-trigger"
@@ -329,17 +337,51 @@ onBeforeUnmount(() => {
 .filter-bar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 8px 10px;
+  min-height: 32px;
+  margin: 8px 10px 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
   flex: none;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.filter-bar.empty {
+  border-style: dashed;
+  background: transparent;
+}
+.filter-bar:hover {
+  border-color: var(--border-strong);
+}
+.filter-bar:focus-within,
+.filter-bar.dirty {
+  border-color: var(--accent);
+}
+.filter-bar.applied {
+  border-color: var(--accent);
+  background: var(--bg-selected);
 }
 .fb-target {
   position: relative;
   flex: none;
+  align-self: stretch;
+  display: flex;
+  border-right: 1px solid var(--border);
 }
 .fb-target-trigger {
   width: 178px;
+  height: 100%;
   justify-content: space-between;
+  border: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  background: transparent;
+}
+.fb-target-trigger:hover:not(:disabled),
+.fb-target-trigger.active {
+  border-color: transparent;
+  background: var(--bg-hover);
 }
 .fb-target-label {
   min-width: 0;
@@ -433,19 +475,25 @@ onBeforeUnmount(() => {
   position: relative;
   flex: 1;
   display: flex;
+  align-self: stretch;
   min-width: 0;
 }
 .fb-input {
   flex: 1;
   min-width: 0;
+  border: 0;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: transparent;
   padding-right: 28px;
+}
+.fb-input:focus {
+  border-color: transparent;
 }
 .fb-input.dirty {
   padding-left: 31px;
 }
 .fb-input.active {
-  border-color: var(--accent);
-  background: var(--bg-selected);
+  background: transparent;
 }
 .fb-enter-hint {
   position: absolute;

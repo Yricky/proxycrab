@@ -113,7 +113,7 @@ Changing an API address affects a later service start, not the already-bound lis
 ```
 
 `description` can be `null`. Tags are globally unique, stored sorted, and must match
-`^[a-z0-9_]{1,64}$`. Timestamps are Unix milliseconds.
+`^[a-z0-9_]{1,20}$`. Timestamps are Unix milliseconds.
 
 ### ProxyStatus
 

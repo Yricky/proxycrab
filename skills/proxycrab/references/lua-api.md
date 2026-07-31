@@ -89,7 +89,7 @@ replacement methods.
 ## Routing scripts
 
 A routing script runs once for every direct HTTP request and once for a CONNECT tunnel. It must
-return a tag string matching `^[a-z0-9_]{1,64}$` or `nil`.
+return a tag string matching `^[a-z0-9_]{1,20}$` or `nil`.
 
 ```lua
 if phase == "connect" and req.uri.host == "internal.example.com" then

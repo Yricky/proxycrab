@@ -23,7 +23,7 @@ const editDesc = ref("");
 const editTags = ref<string[]>([]);
 const tagDraft = ref("");
 const tagError = ref("");
-const TAG_PATTERN = /^[a-z0-9_]{1,64}$/;
+const TAG_PATTERN = /^[a-z0-9_]{1,20}$/;
 
 async function createSession(): Promise<void> {
   if (creating.value) return;
@@ -47,7 +47,7 @@ function startEdit(session: SessionMetadata): void {
 function addTag(): void {
   const tag = tagDraft.value;
   if (!TAG_PATTERN.test(tag)) {
-    tagError.value = "仅支持 1–64 位小写字母、数字和下划线";
+    tagError.value = "仅支持 1–20 位小写字母、数字和下划线";
     return;
   }
   if (!editTags.value.includes(tag)) {
@@ -175,7 +175,7 @@ onMounted(() => {
           <div class="sb-edit" @click.stop @dblclick.stop>
             <input
               v-model="editName"
-              class="input"
+              class="input sb-edit-name"
               placeholder="会话名称"
               autofocus
               @keyup.enter="submitEdit"
@@ -197,7 +197,7 @@ onMounted(() => {
               </div>
               <input
                 v-model="tagDraft"
-                class="input mono"
+                class="input mono sb-tag-input"
                 placeholder="添加 tag"
                 @keyup.enter="addTag"
                 @keyup.esc="tagDraft = ''"
@@ -206,7 +206,7 @@ onMounted(() => {
             </div>
             <input
               v-model="editDesc"
-              class="input"
+              class="input sb-edit-desc"
               placeholder="描述（可选）"
               @keyup.enter="submitEdit"
               @keyup.esc="editingId = null"
@@ -223,21 +223,22 @@ onMounted(() => {
           <div class="sb-item-top">
             <span class="sb-name" :title="session.name">{{ session.name }}</span>
           </div>
-          <div v-if="session.tags.length" class="sb-tags">
-            <span
-              v-for="tag in session.tags"
-              :key="tag"
-              class="sb-tag"
-              :class="{ default: tag === 'default' }"
-            >
-              {{ tag }}
-            </span>
-          </div>
           <div class="sb-item-meta">
             <span>{{ formatRelativeTime(session.created_at) }}</span>
             <span v-if="session.description" class="sb-desc" :title="session.description">
               {{ session.description }}
             </span>
+            <div v-if="session.tags.length" class="sb-tags">
+              <span
+                v-for="(tag, index) in session.tags"
+                :key="tag"
+                class="sb-tag"
+                :class="{ default: tag === 'default' }"
+                :title="tag"
+              >
+                {{ index === 0 ? tag : tag.charAt(0) }}
+              </span>
+            </div>
           </div>
         </template>
       </div>
@@ -314,12 +315,30 @@ onMounted(() => {
 .sb-edit {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
+  padding: 1px 0 2px;
 }
 .sb-edit-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 2px;
+  margin-top: 1px;
+}
+.sb-edit-actions .btn {
+  padding: 1px 6px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 11px;
+}
+.sb-edit-actions .btn.primary {
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent);
+}
+.sb-edit-actions .btn.primary:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--bg-hover);
+  color: var(--accent-hover);
 }
 .sb-list {
   flex: 1;
@@ -358,48 +377,120 @@ onMounted(() => {
 }
 .sb-tag {
   max-width: 100%;
-  padding: 1px 5px;
-  border: 1px solid var(--border);
+  padding: 0 5px;
   border-radius: 4px;
-  background: var(--bg-input);
-  color: var(--text-secondary);
+  background: #6b7280;
+  color: #fff;
   font: inherit;
   font-family: var(--font-mono);
   font-size: 10px;
   line-height: 16px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sb-tag.default {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 9%, var(--bg-input));
+  background: var(--accent);
 }
 .sb-tag.removable {
+  border: 0;
   cursor: pointer;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
-.sb-tag-editor .input {
-  margin-top: 5px;
+.sb-tag-editor {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  padding: 1px 3px;
+}
+.sb-tag-editor .sb-tags {
+  display: contents;
+}
+.sb-tag-editor .sb-tag {
+  flex: none;
+  max-width: 100%;
+  margin: 0;
+}
+.sb-tag-editor .sb-tag-input {
+  flex: 1 1 64px;
+  width: auto;
+  min-width: 64px;
+  height: 20px;
+  margin: 0;
+  padding: 0 4px;
+  font-size: 10px;
 }
 .sb-tag-error {
   display: block;
+  flex-basis: 100%;
   margin-top: 3px;
   color: var(--danger);
   font-size: 10px;
 }
 .sb-item-meta {
   display: flex;
+  align-items: center;
   gap: 8px;
+  min-width: 0;
   font-size: 11px;
   color: var(--text-faint);
   margin-top: 2px;
 }
 .sb-desc {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.sb-item-meta .sb-tags {
+  flex: none;
+  min-width: 0;
+  max-width: 60%;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: nowrap;
+  margin-top: 0;
+  margin-left: auto;
+}
+.sb-item-meta .sb-tag {
+  flex-shrink: 1;
+  min-width: 0;
+}
+.sb-item-meta .sb-tag:not(:first-child) {
+  flex: none;
+}
 .sb-edit .input {
   width: 100%;
+  border-color: transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+.sb-edit .input:hover {
+  border-color: var(--border);
+  background: var(--bg-panel);
+}
+.sb-edit .input:focus {
+  border-color: var(--accent);
+  background: var(--bg-panel);
+}
+.sb-edit-name {
+  height: 24px;
+  padding: 1px 3px;
+  font-weight: 500;
+}
+.sb-edit-desc {
+  height: 22px;
+  padding: 1px 3px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.sb-edit .sb-tag-input {
+  width: auto;
 }
 </style>

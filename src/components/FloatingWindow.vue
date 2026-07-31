@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted } from "vue";
 import { Io5Close } from "vue-icons-plus/io5";
 import { windowsStore, type WindowState } from "../stores/windows";
 
@@ -10,7 +11,7 @@ const MIN_H = props.minHeight ?? 180;
 type ResizeDir = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
 function startDrag(event: PointerEvent): void {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || props.win.maximized) return;
   const startX = event.clientX;
   const startY = event.clientY;
   const origX = props.win.x;
@@ -32,7 +33,7 @@ function startDrag(event: PointerEvent): void {
 }
 
 function startResize(dir: ResizeDir, event: PointerEvent): void {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || props.win.maximized) return;
   const startX = event.clientX;
   const startY = event.clientY;
   const { x: ox, y: oy, width: ow, height: oh } = props.win;
@@ -68,6 +69,24 @@ const dirs: ResizeDir[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 function closeWindow(): void {
   void windowsStore.close(props.win.id);
 }
+
+function toggleMaximize(): void {
+  windowsStore.toggleMaximize(props.win.id);
+}
+
+function syncMaximizedGeometry(): void {
+  if (!props.win.maximized) return;
+  props.win.width = window.innerWidth;
+  props.win.height = window.innerHeight;
+}
+
+onMounted(() => {
+  window.addEventListener("resize", syncMaximizedGeometry);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", syncMaximizedGeometry);
+});
 </script>
 
 <template>
@@ -82,9 +101,21 @@ function closeWindow(): void {
     }"
     @pointerdown="windowsStore.focus(win.id)"
   >
-    <div class="fw-titlebar" @pointerdown="startDrag">
+    <div
+      class="fw-titlebar"
+      :class="{ 'fw-titlebar-max': win.maximized }"
+      :title="win.maximized ? '双击还原' : '双击最大化'"
+      @pointerdown="startDrag"
+      @dblclick="toggleMaximize"
+    >
       <span class="fw-title">{{ win.title }}</span>
-      <button class="btn icon fw-close" title="关闭" @click="closeWindow">
+      <button
+        class="btn icon fw-close"
+        title="关闭"
+        @click="closeWindow"
+        @pointerdown.stop
+        @dblclick.stop
+      >
         <Io5Close :size="16" />
       </button>
     </div>
@@ -93,6 +124,7 @@ function closeWindow(): void {
     </div>
     <div
       v-for="dir in dirs"
+      v-show="!win.maximized"
       :key="dir"
       class="fw-resize"
       :class="'fw-resize-' + dir"
@@ -123,6 +155,11 @@ function closeWindow(): void {
   border-bottom: 1px solid var(--border);
   cursor: move;
   flex: none;
+  user-select: none;
+}
+
+.fw-titlebar-max {
+  cursor: default;
 }
 
 .fw-title {

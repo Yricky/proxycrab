@@ -507,12 +507,12 @@ impl Workspace {
 
 pub fn validate_tag(tag: &str) -> Result<()> {
     if tag.is_empty()
-        || tag.len() > 64
+        || tag.len() > 20
         || !tag.bytes().all(|character| {
             character.is_ascii_lowercase() || character.is_ascii_digit() || character == b'_'
         })
     {
-        bail!("tag must match ^[a-z0-9_]{{1,64}}$");
+        bail!("tag must match ^[a-z0-9_]{{1,20}}$");
     }
     Ok(())
 }
