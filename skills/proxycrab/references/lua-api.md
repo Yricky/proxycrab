@@ -253,25 +253,38 @@ before response interceptors run.
 
 ## Response interceptors
 
-A response interceptor receives mutable global `resp` plus tag-only global `req`:
+A response interceptor receives mutable global `resp` plus request global `req`. Request metadata
+and headers are read-only; tags remain mutable proxy-local metadata:
 
 | Field | Access | Type |
 | --- | --- | --- |
-| `resp.status` | read-only | integer |
+| `resp.status` | mutable | integer from 100 through 999 |
 | `resp.version` | read-only | string |
 | `resp.headers` | mutable methods | headers |
 | `resp.body` | mutable methods | body |
+| `req.method` | read-only | string |
+| `req.version` | read-only | string |
+| `req.uri` | read-only | URI object |
+| `req.headers` | read-only methods | headers |
 | `req:getTag(key)` | read-only method | string or `nil` |
 | `req:setTag(key, value)` | mutable method | tag |
 
 Example:
 
 ```lua
+if req.method == "GET"
+  and req.uri.path == "/api/example"
+  and req.headers:get("user-agent") ~= nil
+then
+  resp.status = 777
+end
 resp.headers:append("x-proxycrab-debug", "1")
 resp.body:replace_with_file("/absolute/path/to/response.json")
 ```
 
-Status and version cannot be changed.
+Status accepts the full range representable by the HTTP stack, including non-standard codes and
+status/body combinations. Values outside 100 through 999 raise a Lua runtime error. Version and
+request metadata cannot be changed. Request bodies are not exposed to response interceptors.
 
 ## Breakpoints
 
@@ -312,7 +325,7 @@ Each executed script records:
 - historical name;
 - lowercase SHA-256 of exact source;
 - exact source content;
-- the initial header snapshot and ordered mutations;
+- the initial header snapshot and ordered status/header/body/tag mutations;
 - an optional runtime error.
 - execution ID, saved/temporary origin, and completion state.
 

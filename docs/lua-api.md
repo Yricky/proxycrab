@@ -150,14 +150,19 @@ upstream request, creates an empty HTTP/1.1 200 response, and continues through 
 ## Response interceptors
 
 ```lua
+if req.method == "GET" and req.uri.path == "/api/example" then
+  resp.status = 777
+end
 resp.headers:append("x-proxy-crab-debug", "1")
 req:setTag("response-debugged", "")
 resp.body:replace_with_file("/absolute/path/to/body.bin")
 ```
 
-Response interceptors also receive tag-only global `req`, with `setTag` and `getTag` but no request
-headers/body access. `resp.status` and `resp.version` are read-only. File replacement requires an
-absolute path and is limited to 64 MiB.
+Response interceptors receive read-only `req.method`, `req.version`, `req.uri`, and `req.headers`,
+plus mutable request tags through `setTag` and `getTag`; request bodies remain unavailable.
+`resp.status` is mutable and accepts any integer from 100 through 999, including non-standard
+status codes and status/body combinations. `resp.version` remains read-only. File replacement
+requires an absolute path and is limited to 64 MiB.
 
 `breakpoint(timeoutMs)` is available in saved request and response interceptors. Zero returns
 immediately. A positive value pauses the current request until the timeout or manual release; the

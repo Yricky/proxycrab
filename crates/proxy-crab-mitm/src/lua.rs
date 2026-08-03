@@ -38,6 +38,7 @@ pub enum BodyReplacement {
 
 #[derive(Debug, Clone)]
 pub struct ScriptEffects {
+    pub status: Option<u16>,
     pub headers: HeaderValues,
     pub body: Option<BodyReplacement>,
     pub tags: RequestTags,
@@ -48,6 +49,12 @@ pub struct ScriptEffects {
 pub(crate) struct BreakpointHook {
     pub registry: Arc<BreakpointRegistry>,
     pub context: BreakpointContext,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ResponseScriptContext<'a> {
+    pub request: &'a RequestData,
+    pub response: &'a ResponseData,
 }
 
 pub fn validate_script(kind: ScriptKind, source: &str) -> Result<()> {
@@ -236,11 +243,25 @@ pub fn execute_response_lenient_named_with_tags(
     script_name: &str,
     capture_log_id: Option<u64>,
 ) -> Result<(ScriptEffects, Option<String>)> {
-    let state = SharedInterceptorState::new(response.headers.clone(), request_tags.clone());
+    let request = RequestData {
+        method: String::new(),
+        uri: String::new(),
+        version: String::new(),
+        headers: HeaderValues::new(),
+        tags: request_tags.clone(),
+    };
+    let state = SharedInterceptorState::new_response(
+        response.status,
+        response.headers.clone(),
+        request_tags.clone(),
+    );
     let journal = ModificationJournal::new(response.headers.clone());
     execute_response_with_state(
         source,
-        response,
+        ResponseScriptContext {
+            request: &request,
+            response,
+        },
         state,
         journal,
         script_name,
@@ -251,7 +272,7 @@ pub fn execute_response_lenient_named_with_tags(
 
 pub(crate) fn execute_response_with_state(
     source: &str,
-    response: &ResponseData,
+    context: ResponseScriptContext<'_>,
     state: SharedInterceptorState,
     journal: ModificationJournal,
     script_name: &str,
@@ -262,7 +283,7 @@ pub(crate) fn execute_response_with_state(
     lua.globals().set(
         "resp",
         ResponseView {
-            response: response.clone(),
+            response: context.response.clone(),
             state: state.clone(),
             journal: journal.clone(),
         },
@@ -270,7 +291,8 @@ pub(crate) fn execute_response_with_state(
     install_breakpoint(&lua, breakpoint)?;
     lua.globals().set(
         "req",
-        TagRequestView {
+        ResponseRequestView {
+            request: context.request.clone(),
             state: state.clone(),
             journal: journal.clone(),
         },
@@ -498,6 +520,7 @@ impl UserData for ReadHeaders {
 
 #[derive(Clone)]
 pub(crate) struct SharedInterceptorState {
+    status: Arc<Mutex<Option<u16>>>,
     headers: Arc<Mutex<HeaderValues>>,
     body: Arc<Mutex<Option<BodyReplacement>>>,
     tags: Arc<Mutex<RequestTags>>,
@@ -506,14 +529,22 @@ pub(crate) struct SharedInterceptorState {
 impl SharedInterceptorState {
     pub(crate) fn new(headers: HeaderValues, tags: RequestTags) -> Self {
         Self {
+            status: Arc::new(Mutex::new(None)),
             headers: Arc::new(Mutex::new(headers)),
             body: Arc::new(Mutex::new(None)),
             tags: Arc::new(Mutex::new(tags)),
         }
     }
 
+    pub(crate) fn new_response(status: u16, headers: HeaderValues, tags: RequestTags) -> Self {
+        let state = Self::new(headers, tags);
+        *state.status.lock().expect("Lua status state lock poisoned") = Some(status);
+        state
+    }
+
     pub(crate) fn effects(&self, journal: &ModificationJournal) -> ScriptEffects {
         ScriptEffects {
+            status: *self.status.lock().expect("Lua status state lock poisoned"),
             headers: self
                 .headers
                 .lock()
@@ -538,6 +569,10 @@ impl SharedInterceptorState {
             .lock()
             .expect("Lua tag state lock poisoned")
             .clone()
+    }
+
+    pub(crate) fn status(&self) -> Option<u16> {
+        *self.status.lock().expect("Lua status state lock poisoned")
     }
 
     pub(crate) fn headers(&self) -> HeaderValues {
@@ -620,7 +655,27 @@ struct ResponseView {
 
 impl UserData for ResponseView {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get("status", |_, this| Ok(this.response.status));
+        fields.add_field_method_get("status", |_, this| {
+            Ok(this
+                .state
+                .status()
+                .expect("response Lua state always has a status"))
+        });
+        fields.add_field_method_set("status", |_, this, status: i64| {
+            if !(100..=999).contains(&status) {
+                return Err(LuaError::runtime(
+                    "response status must be an integer between 100 and 999",
+                ));
+            }
+            let status = status as u16;
+            *this
+                .state
+                .status
+                .lock()
+                .expect("Lua status state lock poisoned") = Some(status);
+            this.journal.push(Modification::StatusSet { status });
+            Ok(())
+        });
         fields.add_field_method_get("version", |_, this| Ok(this.response.version.clone()));
         fields.add_field_method_get("headers", |_, this| {
             Ok(MutableHeaders {
@@ -638,12 +693,22 @@ impl UserData for ResponseView {
 }
 
 #[derive(Clone)]
-struct TagRequestView {
+struct ResponseRequestView {
+    request: RequestData,
     state: SharedInterceptorState,
     journal: ModificationJournal,
 }
 
-impl UserData for TagRequestView {
+impl UserData for ResponseRequestView {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get("method", |_, this| Ok(this.request.method.clone()));
+        fields.add_field_method_get("version", |_, this| Ok(this.request.version.clone()));
+        fields.add_field_method_get("uri", |_, this| Ok(UriView::from(&this.request.uri)));
+        fields.add_field_method_get("headers", |_, this| {
+            Ok(ReadHeaders(this.request.headers.clone()))
+        });
+    }
+
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         add_mutable_tag_methods(methods);
     }
@@ -659,7 +724,7 @@ impl MutableTagView for RequestView {
     }
 }
 
-impl MutableTagView for TagRequestView {
+impl MutableTagView for ResponseRequestView {
     fn tag_state(&self) -> (&SharedInterceptorState, &ModificationJournal) {
         (&self.state, &self.journal)
     }
@@ -860,15 +925,15 @@ mod tests {
     use crate::{
         log_buffer::{BufferLayer, LogBuffer},
         model::{
-            CaptureOutcome, CaptureSummary, HeaderValues, RequestData, RequestTags, ResponseData,
-            ScriptKind,
+            CaptureOutcome, CaptureSummary, HeaderValues, RequestData, ResponseData, ScriptKind,
         },
     };
 
     use super::{
-        BodyReplacement, evaluate_column, evaluate_column_named, evaluate_filter,
-        evaluate_filter_named, evaluate_routing, execute_request, execute_response,
-        execute_response_lenient_named_with_tags, validate_script,
+        BodyReplacement, ModificationJournal, ResponseScriptContext, SharedInterceptorState,
+        evaluate_column, evaluate_column_named, evaluate_filter, evaluate_filter_named,
+        evaluate_routing, execute_request, execute_response, execute_response_with_state,
+        validate_script,
     };
 
     fn entry() -> CaptureSummary {
@@ -993,31 +1058,79 @@ mod tests {
     }
 
     #[test]
-    fn response_request_view_only_exposes_mutable_tags() {
+    fn response_script_mutates_status_and_reads_request_context() {
+        let mut request = entry().request;
+        request.tags.insert("team".into(), "checkout".into());
         let response = ResponseData {
             status: 200,
             version: "HTTP/1.1".into(),
             headers: HeaderValues::new(),
         };
-        let tags = RequestTags::from([("team".into(), "checkout".into())]);
-        let (effects, error) = execute_response_lenient_named_with_tags(
-            "assert(req:getTag('team') == 'checkout'); \
-             assert(req.headers == nil and req.body == nil and req.method == nil and req.uri == nil); \
+        let state = SharedInterceptorState::new_response(
+            response.status,
+            response.headers.clone(),
+            request.tags.clone(),
+        );
+        let journal = ModificationJournal::new(response.headers.clone());
+        let (effects, error) = execute_response_with_state(
+            "assert(req.method == 'GET'); \
+             assert(req.version == 'HTTP/1.1'); \
+             assert(req.uri.path == '/path' and req.uri.query == 'q=1'); \
+             assert(req.headers:get('x-test') == 'old'); \
+             assert(req.body == nil and req:getTag('team') == 'checkout'); \
+             assert(resp.status == 200); resp.status = 777; \
              req:setTag('empty', ''); error('boom')",
-            &response,
-            &tags,
+            ResponseScriptContext {
+                request: &request,
+                response: &response,
+            },
+            state,
+            journal,
             "response-tags",
             Some(1),
+            None,
         )
         .unwrap();
 
+        assert_eq!(effects.status, Some(777));
         assert_eq!(effects.tags["empty"], "");
         assert!(error.unwrap().contains("boom"));
+        assert!(effects.modifications.iter().any(|modification| matches!(
+            modification,
+            crate::model::Modification::StatusSet { status: 777 }
+        )));
         assert!(matches!(
             effects.modifications.last(),
             Some(crate::model::Modification::TagSet { key, value })
                 if key == "empty" && value.is_empty()
         ));
+    }
+
+    #[test]
+    fn response_status_accepts_http_type_range_and_rejects_unrepresentable_values() {
+        let response = ResponseData {
+            status: 200,
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+        };
+        assert_eq!(
+            execute_response("resp.status = 100; resp.status = 999", &response)
+                .unwrap()
+                .status,
+            Some(999)
+        );
+        assert!(
+            execute_response("resp.status = 99", &response)
+                .unwrap_err()
+                .to_string()
+                .contains("between 100 and 999")
+        );
+        assert!(
+            execute_response("resp.status = 1000", &response)
+                .unwrap_err()
+                .to_string()
+                .contains("between 100 and 999")
+        );
     }
 
     #[test]

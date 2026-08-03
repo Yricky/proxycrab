@@ -48,6 +48,12 @@
       "prompt": "Use ProxyCrab to inspect the most recent failed request while respecting the active workspace Agent instructions and without changing the user's current filter unless those instructions allow it.",
       "expected_output": "The agent reads /api/agents.md before any other ProxyCrab API, follows the active policy unless the user's request overrides it, and uses persist_filter=false for a stateless filtered ID query.",
       "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "Create a ProxyCrab response interceptor named mock-mobile-error that checks the read-only request method, URI path, and user-agent header, then changes matching responses to status 777. Attach it without changing the request chain and verify it on a new capture.",
+      "expected_output": "The agent uses req.method, req.uri.path, and req.headers:get from response Lua, assigns resp.status = 777, preserves the request chain, and cites a new capture whose response status is 777 and whose interceptor history contains status_set.",
+      "files": []
     }
   ]
 }

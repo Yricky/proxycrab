@@ -277,6 +277,11 @@ impl ProxyCrab {
             }
             InterceptorKind::Response => {
                 if let Some(response) = &mut capture.summary.response {
+                    response.status = live
+                        .context
+                        .state
+                        .status()
+                        .expect("response breakpoint state always has a status");
                     response.headers = headers.clone();
                 }
                 if let Some(replacement) = live.context.state.body()

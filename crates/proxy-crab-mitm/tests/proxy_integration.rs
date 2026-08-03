@@ -10,7 +10,8 @@ use proxy_crab_mitm::{
     log_buffer::LogBuffer,
     model::{
         BodyPayload, BreakpointListFilter, CaptureOutcome, InterceptorExecutionOrigin,
-        InterceptorKind, ProxyStatus, Script, ScriptKind, SessionInterceptor, SessionInterceptors,
+        InterceptorKind, Modification, ProxyStatus, Script, ScriptKind, SessionInterceptor,
+        SessionInterceptors,
     },
 };
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
@@ -432,7 +433,12 @@ async fn crab_skip_avoids_upstream_and_runs_response_interceptors() {
             ScriptKind::ResponseInterceptor,
             Script {
                 name: "build-response".into(),
-                content: "assert(req:getTag('team') == 'checkout'); \
+                content: "assert(req.method == 'GET'); \
+                          assert(req.version == 'HTTP/1.1'); \
+                          assert(req.uri.path == '/skipped'); \
+                          assert(req.headers:get('host') ~= nil); \
+                          assert(req:getTag('team') == 'checkout'); \
+                          resp.status = 777; \
                           resp.headers:set('x-skipped', '1'); \
                           resp.body:replace_with_string('mocked')"
                     .into(),
@@ -462,7 +468,7 @@ async fn crab_skip_avoids_upstream_and_runs_response_interceptors() {
         &format!("127.0.0.1:{unreachable_port}"),
     )
     .await;
-    assert!(response.starts_with("HTTP/1.1 200"));
+    assert!(response.starts_with("HTTP/1.1 777"), "{response}");
     assert!(
         response.to_ascii_lowercase().contains("x-skipped: 1"),
         "{response}"
@@ -474,6 +480,13 @@ async fn crab_skip_avoids_upstream_and_runs_response_interceptors() {
     assert_eq!(capture.request.tags["team"], "checkout");
     let detail = runtime.capture(session.id, capture.id).unwrap().unwrap();
     assert_eq!(detail.response_interceptors.len(), 1);
+    assert_eq!(detail.summary.response.as_ref().unwrap().status, 777);
+    assert!(
+        detail.response_interceptors[0]
+            .modifications
+            .iter()
+            .any(|modification| matches!(modification, Modification::StatusSet { status: 777 }))
+    );
     runtime.stop_proxy().await.unwrap();
 }
 
@@ -617,10 +630,17 @@ async fn response_breakpoint_exposes_live_response_and_applies_temporary_body() 
     runtime
         .execute_breakpoint_script(
             breakpoint.id,
-            "req:setTag('temp', 'yes'); resp.body:replace_with_string('changed')",
+            "assert(req.method == 'GET'); \
+             assert(req.uri.path == '/response-breakpoint'); \
+             req:setTag('temp', 'yes'); resp.status = 599; \
+             resp.body:replace_with_string('changed')",
         )
         .unwrap();
     let changed = runtime.breakpoint(breakpoint.id).unwrap();
+    assert_eq!(
+        changed.capture.summary.response.as_ref().unwrap().status,
+        599
+    );
     assert_eq!(
         changed.capture.response_body,
         BodyPayload::Text {
@@ -630,6 +650,7 @@ async fn response_breakpoint_exposes_live_response_and_applies_temporary_body() 
 
     runtime.release_breakpoint(breakpoint.id).unwrap();
     let response = request_task.await.unwrap();
+    assert!(response.starts_with("HTTP/1.1 599"), "{response}");
     assert!(response.to_ascii_lowercase().contains("x-after: yes"));
     assert!(response.ends_with("changed"));
     let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();

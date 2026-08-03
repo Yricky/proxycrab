@@ -11,8 +11,8 @@ use anyhow::{Result, anyhow};
 
 use crate::{
     lua::{
-        ModificationJournal, SharedInterceptorState, execute_request_with_state,
-        execute_response_with_state,
+        ModificationJournal, ResponseScriptContext, SharedInterceptorState,
+        execute_request_with_state, execute_response_with_state,
     },
     model::{
         BreakpointListFilter, BreakpointSummary, CaptureError, ErrorStage, InterceptorExecution,
@@ -276,10 +276,13 @@ impl BreakpointRegistry {
             )?,
             InterceptorKind::Response => execute_response_with_state(
                 content,
-                context
-                    .response
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("response breakpoint is missing response state"))?,
+                ResponseScriptContext {
+                    request: &context.request,
+                    response: context
+                        .response
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("response breakpoint is missing response state"))?,
+                },
                 context.state.clone(),
                 journal.clone(),
                 "临时脚本",

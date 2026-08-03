@@ -265,6 +265,7 @@ pub enum BodyPayload {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Modification {
     Snapshot { headers: HeaderValues },
+    StatusSet { status: u16 },
     HeaderAppend { name: String, value: String },
     HeaderSet { name: String, value: String },
     HeaderRemove { name: String, values: Vec<String> },

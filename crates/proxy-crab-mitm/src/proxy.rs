@@ -40,9 +40,9 @@ use crate::{
     ProxyCrab,
     breakpoint::BreakpointContext,
     lua::{
-        BodyReplacement, BreakpointHook, ModificationJournal, SharedInterceptorState,
-        evaluate_routing, execute_request_with_state, execute_response_with_state,
-        read_body_replacement,
+        BodyReplacement, BreakpointHook, ModificationJournal, ResponseScriptContext,
+        SharedInterceptorState, evaluate_routing, execute_request_with_state,
+        execute_response_with_state, read_body_replacement,
     },
     model::{
         CaptureError, ErrorStage, HeaderValues, InterceptorExecutionOrigin, InterceptorKind,
@@ -1536,8 +1536,11 @@ async fn finish_session_response(
     let mut response_modifications = Vec::new();
     let mut response_body_modified = false;
     for (position, script) in scripts.iter().enumerate() {
-        let state =
-            SharedInterceptorState::new(response_data.headers.clone(), request_data.tags.clone());
+        let state = SharedInterceptorState::new_response(
+            response_data.status,
+            response_data.headers.clone(),
+            request_data.tags.clone(),
+        );
         let journal = ModificationJournal::new(response_data.headers.clone());
         let execution_id = match store.begin_interceptor_run(
             capture_id,
@@ -1583,6 +1586,7 @@ async fn finish_session_response(
         };
         let source = script.content.clone();
         let script_name = script.name.clone();
+        let request_snapshot = request_data.clone();
         let response_snapshot = response_data.clone();
         let execution_state = state.clone();
         let execution_journal = journal.clone();
@@ -1594,7 +1598,10 @@ async fn finish_session_response(
         let execution = tokio::task::spawn_blocking(move || {
             execute_response_with_state(
                 &source,
-                &response_snapshot,
+                ResponseScriptContext {
+                    request: &request_snapshot,
+                    response: &response_snapshot,
+                },
                 execution_state,
                 execution_journal,
                 &script_name,
@@ -1605,6 +1612,9 @@ async fn finish_session_response(
         .await;
         match execution {
             Ok(Ok((effects, error))) => {
+                response_data.status = effects
+                    .status
+                    .expect("response interceptor effects always include a status");
                 response_data.headers = effects.headers;
                 request_data.tags = effects.tags;
                 if let Some(replacement) = effects.body {
