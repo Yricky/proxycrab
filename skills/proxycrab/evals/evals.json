@@ -60,6 +60,12 @@
       "prompt": "Create a ProxyCrab request interceptor named reroute-probe that changes matching requests to method PROBE and reroutes them to https://alternate.example.com/health without changing Host automatically. Attach it without changing the response chain and verify it on a new capture.",
       "expected_output": "The agent assigns req.method and req.uri using valid Lua, preserves the response chain, explains that Host is independent, and cites a new capture whose request metadata changed and whose interceptor history contains method_set and uri_set.",
       "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "Use ProxyCrab to save the complete response body for log 42 in Session 3 to /tmp/proxycrab-response.bin, allowing at most 32 MiB of stored body data, then report the saved path and stored size without printing the body bytes.",
+      "expected_output": "The agent uses body-get.mjs with session 3, log 42, response side, max-size 33554432, and the requested output file; it reports the machine-readable path and stored size or accurately surfaces body_too_large with actual_size.",
+      "files": []
     }
   ]
 }

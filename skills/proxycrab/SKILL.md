@@ -47,6 +47,7 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
 | Read active Agent instructions | `scripts/agents-get.mjs` |
 | Find existing traffic | `scripts/session-list.mjs`, then `scripts/log-query.mjs` |
 | Inspect one capture | `scripts/log-get.mjs` |
+| Save a complete request/response body | `scripts/body-get.mjs` |
 | Wait for a new matching capture | `scripts/log-wait.mjs` |
 | Save a diagnostic artifact | `scripts/log-export.mjs` |
 | Create or update a Lua filter | `scripts/filter-upsert.mjs`, then `scripts/filter-debug.mjs` |
@@ -199,8 +200,10 @@ and script errors emit a system warning and bypass. Select a routing script only
 - Treat request and response bodies with side effects or credentials as sensitive.
 - Prefer a dedicated active Session and tight filters over reading a large unrelated capture
   history.
-- Binary and oversized bodies are represented by type and size only; the management API does not
-  expose their raw bytes.
+- Log detail embeds at most 64 KiB of decoded text/JSON. Every non-empty persisted body includes its
+  stored-byte size and local capture path. Use `body-get.mjs` for complete, normally client-decoded
+  binary or oversized bytes;
+  always set a deliberate maximum and output path because bodies can contain credentials or personal data.
 - Interceptor mutations applied before a Lua runtime error remain applied. Inspect both
   `modifications` and `error`.
 - Request tags are capture-local metadata. Presence of `_crab_skip`, including an empty value,

@@ -14,6 +14,10 @@ use serde::{Deserialize, Serialize};
 pub struct ManagerError {
     pub code: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_size: Option<u64>,
 }
 
 impl std::fmt::Display for ManagerError {
@@ -29,6 +33,17 @@ impl ManagerError {
         Self {
             code: code.into(),
             message: message.into(),
+            actual_size: None,
+            max_size: None,
+        }
+    }
+
+    pub fn body_too_large(actual_size: u64, max_size: u64) -> Self {
+        Self {
+            code: "body_too_large".into(),
+            message: format!("body size {actual_size} exceeds the requested {max_size} byte limit"),
+            actual_size: Some(actual_size),
+            max_size: Some(max_size),
         }
     }
 
@@ -100,6 +115,19 @@ pub struct ActiveSession {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionQuery {
     pub session_id: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BodyQuery {
+    pub session_id: Option<u64>,
+    pub side: String,
+    #[serde(default)]
+    pub decompress: bool,
+    pub max_size: Option<u64>,
+}
+
+pub const fn default_body_max_size() -> u64 {
+    16 * 1024 * 1024
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -255,10 +255,24 @@ pub struct ResponseData {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BodyPayload {
     Empty,
-    Text { content: String },
-    Json { content: serde_json::Value },
-    Binary { size: u64 },
-    Large { size: u64 },
+    Text {
+        content: String,
+        size: u64,
+        path: Option<String>,
+    },
+    Json {
+        content: serde_json::Value,
+        size: u64,
+        path: Option<String>,
+    },
+    Binary {
+        size: u64,
+        path: Option<String>,
+    },
+    Large {
+        size: u64,
+        path: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

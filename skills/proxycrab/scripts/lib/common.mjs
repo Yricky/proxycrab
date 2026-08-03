@@ -6,11 +6,12 @@ export const DEFAULT_BASE_URL = "http://127.0.0.1:18089";
 export class UsageError extends Error {}
 
 export class ApiError extends Error {
-  constructor(status, code, message) {
+  constructor(status, code, message, details = {}) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    Object.assign(this, details);
   }
 }
 
@@ -81,7 +82,7 @@ export function requiredInteger(args, key, range) {
   return value;
 }
 
-function normalizeBaseUrl(args) {
+export function normalizeBaseUrl(args) {
   const raw = args["base-url"] ?? process.env.PROXYCRAB_API_URL ?? DEFAULT_BASE_URL;
   let url;
   try {
@@ -194,6 +195,8 @@ export function run(main) {
           type: error.name || "Error",
           ...(error.code ? { code: error.code } : {}),
           ...(error.status ? { status: error.status } : {}),
+          ...(error.actual_size !== undefined ? { actual_size: error.actual_size } : {}),
+          ...(error.max_size !== undefined ? { max_size: error.max_size } : {}),
           message: error.message,
         },
       };

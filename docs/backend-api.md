@@ -2,7 +2,7 @@
 
 ## Shared management contract
 
-HTTP handlers and Tauri commands call the same `ProxyCrabManager` trait and use the same request/response DTOs. Except for `GET /api/agents.md`, HTTP successes use:
+HTTP handlers and Tauri commands call the same `ProxyCrabManager` trait and use the same request/response DTOs. Except for raw `GET /api/agents.md` and body reads, HTTP successes use:
 
 ```json
 { "ok": true, "data": {} }
@@ -70,8 +70,10 @@ The server listens on loopback by default at `http://127.0.0.1:18089`. It has no
 | `/api/logs/ids` | `POST` bounded/filterable log ID query |
 | `/api/logs/views` | `POST` batch incremental table-view rendering |
 | `/api/logs/{id}` | `GET` complete log detail |
+| `/api/logs/{id}/body` | `GET` raw stored or streaming-decoded request/response body |
 | `/api/breakpoints` | `GET` active breakpoints for one Session |
 | `/api/breakpoints/{id}` | `GET` live detail at the paused interceptor |
+| `/api/breakpoints/{id}/body` | `GET` raw stored or streaming-decoded live body |
 | `/api/breakpoints/{id}/extend`, `/release`, `/execute` | `POST` breakpoint controls |
 | `/api/session-view` | `GET`, `PUT` whole-session table view |
 | `/api/session-interceptors` | `GET`, `PUT` whole-session interceptor chains |
@@ -229,6 +231,15 @@ Request-line changes use `method_set` with `method` and `uri_set` with `uri`, st
 `status_set` with `status`, and tag changes use `tag_set` with `key` and `value`. Scripts that
 executed without changes are still present.
 Disabled and missing scripts are not recorded.
+
+Log detail embeds decoded text/JSON only through 64 KiB. Every non-empty body includes the stored
+byte size and selected absolute capture path; compressed bodies therefore report their compressed
+file size. `GET /api/logs/{id}/body?session_id=1&side=request&decompress=false&max_size=16777216`
+returns the stored byte stream, preserves `Content-Encoding`, and applies `max_size` to stored bytes.
+The default limit is 16 MiB and there is no server maximum. `decompress=true` forbids `max_size` and
+performs one streaming server decode for gzip, br, deflate, zstd, or stacked encodings, without a
+pre-scan or decoded `Content-Length`. Active breakpoints expose the same contract at
+`GET /api/breakpoints/{id}/body` and include current replacements for the paused phase.
 
 ## Session table views
 

@@ -4,6 +4,8 @@
 export interface ManagerError {
   code: string;
   message: string;
+  actual_size?: number;
+  max_size?: number;
 }
 
 // ---------- model.rs ----------
@@ -114,10 +116,10 @@ export interface CaptureError {
 
 export type BodyPayload =
   | { type: "empty" }
-  | { type: "text"; content: string }
-  | { type: "json"; content: unknown }
-  | { type: "binary"; size: number }
-  | { type: "large"; size: number };
+  | { type: "text"; content: string; size: number; path: string | null }
+  | { type: "json"; content: unknown; size: number; path: string | null }
+  | { type: "binary"; size: number; path: string | null }
+  | { type: "large"; size: number; path: string | null };
 
 export type Modification =
   | { kind: "snapshot"; headers: Record<string, string[]> }

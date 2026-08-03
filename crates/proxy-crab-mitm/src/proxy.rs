@@ -1174,7 +1174,6 @@ async fn handle_session_http_request(
     }
 
     let mut request_modifications = Vec::new();
-    let mut request_body_modified = false;
     for (position, script) in interceptor_snapshot.request.iter().enumerate() {
         let state = SharedInterceptorState::new_request(
             request_data.method.clone(),
@@ -1261,8 +1260,17 @@ async fn handle_session_http_request(
                     match apply_body_replacement(&replacement) {
                         Ok(body) => {
                             request_body = body;
-                            request_body_modified = true;
                             remove_header_value(&mut request_data.headers, "content-encoding");
+                            if let Err(error) =
+                                store.save_body(capture_id, BodySide::Request, true, &request_body)
+                            {
+                                note_script_error(
+                                    &store,
+                                    capture_id,
+                                    "request-body",
+                                    &error.to_string(),
+                                );
+                            }
                         }
                         Err(error) => {
                             let message = error.to_string();
@@ -1317,11 +1325,6 @@ async fn handle_session_http_request(
                 "capture storage unavailable",
             );
         }
-    }
-    if request_body_modified
-        && let Err(error) = store.save_body(capture_id, BodySide::Request, true, &request_body)
-    {
-        note_script_error(&store, capture_id, "request-body", &error.to_string());
     }
     if let Err(error) = store.update_request(capture_id, &request_data, &request_modifications) {
         fail_capture(
@@ -1544,7 +1547,6 @@ async fn finish_session_response(
     }
 
     let mut response_modifications = Vec::new();
-    let mut response_body_modified = false;
     for (position, script) in scripts.iter().enumerate() {
         let state = SharedInterceptorState::new_response(
             response_data.status,
@@ -1631,8 +1633,20 @@ async fn finish_session_response(
                     match apply_body_replacement(&replacement) {
                         Ok(body) => {
                             response_body = body;
-                            response_body_modified = true;
                             remove_header_value(&mut response_data.headers, "content-encoding");
+                            if let Err(error) = store.save_body(
+                                capture_id,
+                                BodySide::Response,
+                                true,
+                                &response_body,
+                            ) {
+                                note_script_error(
+                                    &store,
+                                    capture_id,
+                                    "response-body",
+                                    &error.to_string(),
+                                );
+                            }
                         }
                         Err(error) => {
                             let message = error.to_string();
@@ -1689,11 +1703,6 @@ async fn finish_session_response(
                 "capture storage unavailable",
             );
         }
-    }
-    if response_body_modified
-        && let Err(error) = store.save_body(capture_id, BodySide::Response, true, &response_body)
-    {
-        note_script_error(&store, capture_id, "response-body", &error.to_string());
     }
     let _ = store.complete(capture_id, &response_data, &response_modifications);
     response_from_data(

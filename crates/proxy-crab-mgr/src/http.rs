@@ -1,32 +1,44 @@
-use std::sync::Arc;
+use std::{io, pin::Pin, sync::Arc};
 
+use async_compression::tokio::bufread::{BrotliDecoder, GzipDecoder, ZlibDecoder, ZstdDecoder};
 use axum::{
     Extension, Json, Router,
+    body::Body,
     extract::{FromRequest, FromRequestParts, Path, Query, Request, State},
     http::{
-        Method, StatusCode,
-        header::{CONTENT_TYPE, HOST, ORIGIN},
+        HeaderValue, Method, StatusCode,
+        header::{
+            ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HOST,
+            ORIGIN, VARY,
+        },
         request::Parts,
     },
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
+use bytes::Bytes;
+use futures::stream;
 use proxy_crab_mitm::model::{AppConfig, InterceptorKind};
+use proxy_crab_mitm::storage::{BodySide, BodySource, BodySourceData};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
+use tokio::io::{AsyncRead, BufReader};
 use tokio::{sync::broadcast, task::JoinHandle};
-use tokio_util::sync::CancellationToken;
+use tokio_util::{
+    io::{ReaderStream, StreamReader},
+    sync::CancellationToken,
+};
 
 use crate::{
     dto::{
-        ActiveSession, BreakpointQuery, BypassQuery, CreateSessionRequest,
+        ActiveSession, BodyQuery, BreakpointQuery, BypassQuery, CreateSessionRequest,
         DebugFilterScriptRequest, DeleteBypassRequest, ExecuteTemporaryScriptRequest,
         ExtendBreakpointRequest, HttpApiChange, HttpApiResource, InterceptorCreateRequest,
-        InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError,
+        InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError, ManagerResult,
         ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, RoutingSelection,
         ScriptRequest, SessionQuery, SetWorkspaceRequest, SystemLogsQuery, UpdateScriptRequest,
-        UpdateSessionRequest,
+        UpdateSessionRequest, default_body_max_size,
     },
     manager::ProxyCrabManager,
 };
@@ -167,8 +179,10 @@ fn router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
         )
         .route("/api/logs/ids", post(log_ids))
         .route("/api/logs/views", post(log_views))
+        .route("/api/logs/{id}/body", get(log_body))
         .route("/api/logs/{id}", get(log))
         .route("/api/breakpoints", get(breakpoints))
+        .route("/api/breakpoints/{id}/body", get(breakpoint_body))
         .route("/api/breakpoints/{id}", get(breakpoint))
         .route("/api/breakpoints/{id}/extend", post(extend_breakpoint))
         .route("/api/breakpoints/{id}/release", post(release_breakpoint))
@@ -381,7 +395,8 @@ async fn validate_local_browser_request(request: Request, next: Next) -> Respons
         ))
         .into_response();
     }
-    if let Some(origin) = request.headers().get(ORIGIN) {
+    let allowed_origin = request.headers().get(ORIGIN).cloned();
+    if let Some(origin) = &allowed_origin {
         let local_origin = origin
             .to_str()
             .ok()
@@ -398,7 +413,16 @@ async fn validate_local_browser_request(request: Request, next: Next) -> Respons
             .into_response();
         }
     }
-    next.run(request).await
+    let mut response = next.run(request).await;
+    if let Some(origin) = allowed_origin {
+        response
+            .headers_mut()
+            .insert(ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+        response
+            .headers_mut()
+            .insert(VARY, HeaderValue::from_static("Origin"));
+    }
+    response
 }
 
 fn is_local_host(host: &str) -> bool {
@@ -539,6 +563,19 @@ async fn log(
     success(manager.log(query.session_id, id).await?)
 }
 
+async fn log_body(
+    State(manager): State<ManagerState>,
+    ApiPath(id): ApiPath<u64>,
+    ApiQuery(query): ApiQuery<BodyQuery>,
+) -> Result<Response, ApiError> {
+    let side = parse_body_side(&query.side)?;
+    validate_body_query(&query)?;
+    let source = manager.log_body_source(query.session_id, id, side).await?;
+    body_response(source, query.decompress, query.max_size)
+        .await
+        .map_err(ApiError)
+}
+
 async fn breakpoints(
     State(manager): State<ManagerState>,
     ApiQuery(query): ApiQuery<BreakpointQuery>,
@@ -548,6 +585,19 @@ async fn breakpoints(
 
 async fn breakpoint(State(manager): State<ManagerState>, ApiPath(id): ApiPath<u64>) -> ApiResult {
     success(manager.breakpoint(id).await?)
+}
+
+async fn breakpoint_body(
+    State(manager): State<ManagerState>,
+    ApiPath(id): ApiPath<u64>,
+    ApiQuery(query): ApiQuery<BodyQuery>,
+) -> Result<Response, ApiError> {
+    let side = parse_body_side(&query.side)?;
+    validate_body_query(&query)?;
+    let source = manager.breakpoint_body_source(id, side).await?;
+    body_response(source, query.decompress, query.max_size)
+        .await
+        .map_err(ApiError)
 }
 
 async fn extend_breakpoint(
@@ -846,6 +896,113 @@ fn parse_kind(kind: &str) -> Result<InterceptorKind, ApiError> {
     }
 }
 
+fn parse_body_side(side: &str) -> Result<BodySide, ApiError> {
+    match side {
+        "request" => Ok(BodySide::Request),
+        "response" => Ok(BodySide::Response),
+        _ => Err(ApiError(ManagerError::bad_request(
+            "body side must be request or response",
+        ))),
+    }
+}
+
+fn validate_body_query(query: &BodyQuery) -> Result<(), ApiError> {
+    if query.decompress && query.max_size.is_some() {
+        return Err(ApiError(ManagerError::bad_request(
+            "max_size is not supported when decompress=true",
+        )));
+    }
+    if query.max_size == Some(0) {
+        Err(ApiError(ManagerError::bad_request(
+            "max_size must be greater than zero",
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+type DynBodyReader = Pin<Box<dyn AsyncRead + Send>>;
+
+async fn body_reader(source: &BodySource, decompress: bool) -> Result<DynBodyReader, ManagerError> {
+    let mut reader: DynBodyReader = match &source.data {
+        BodySourceData::File(path) => Box::pin(
+            tokio::fs::File::open(path)
+                .await
+                .map_err(|error| ManagerError::new("body_read_failed", error.to_string()))?,
+        ),
+        BodySourceData::Bytes(bytes) => {
+            let stream = stream::once({
+                let bytes = Bytes::copy_from_slice(bytes);
+                async move { Ok::<Bytes, io::Error>(bytes) }
+            });
+            Box::pin(StreamReader::new(stream))
+        }
+    };
+    if !decompress {
+        return Ok(reader);
+    }
+    for encoding in source.content_encodings.iter().rev() {
+        let buffered = BufReader::new(reader);
+        reader = match encoding.as_str() {
+            "gzip" => Box::pin(GzipDecoder::new(buffered)),
+            "br" => Box::pin(BrotliDecoder::new(buffered)),
+            "deflate" => Box::pin(ZlibDecoder::new(buffered)),
+            "zstd" => Box::pin(ZstdDecoder::new(buffered)),
+            other => {
+                return Err(ManagerError::new(
+                    "body_decode_failed",
+                    format!("unsupported content encoding {other}"),
+                ));
+            }
+        };
+    }
+    Ok(reader)
+}
+
+async fn body_response(
+    source: BodySource,
+    decompress: bool,
+    max_size: Option<u64>,
+) -> ManagerResult<Response> {
+    if !decompress {
+        let max_size = max_size.unwrap_or_else(default_body_max_size);
+        if source.stored_size > max_size {
+            return Err(ManagerError::body_too_large(source.stored_size, max_size));
+        }
+    }
+
+    let reader = body_reader(&source, decompress).await?;
+    let stream = ReaderStream::new(reader);
+    let mut response = Response::new(Body::from_stream(stream));
+    *response.status_mut() = StatusCode::OK;
+    let content_type = source
+        .content_type
+        .as_deref()
+        .and_then(|value| HeaderValue::from_str(value).ok())
+        .unwrap_or_else(|| HeaderValue::from_static("application/octet-stream"));
+    response.headers_mut().insert(CONTENT_TYPE, content_type);
+    if !decompress {
+        response.headers_mut().insert(
+            CONTENT_LENGTH,
+            HeaderValue::from_str(&source.stored_size.to_string())
+                .expect("u64 is always a valid Content-Length"),
+        );
+        if !source.content_encodings.is_empty() {
+            response.headers_mut().insert(
+                CONTENT_ENCODING,
+                HeaderValue::from_str(&source.content_encodings.join(", "))
+                    .map_err(|error| ManagerError::new("body_read_failed", error.to_string()))?,
+            );
+        }
+    }
+    response.headers_mut().insert(
+        "x-proxycrab-body-size",
+        HeaderValue::from_str(&source.stored_size.to_string())
+            .expect("u64 is always a valid header value"),
+    );
+    Ok(response)
+}
+
 fn success(value: impl serde::Serialize) -> ApiResult {
     Ok(Json(json!({ "ok": true, "data": value })))
 }
@@ -862,19 +1019,18 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match self.0.code.as_str() {
             "bad_request" => StatusCode::BAD_REQUEST,
-            "not_found" => StatusCode::NOT_FOUND,
+            "not_found" | "log_not_found" | "body_not_found" => StatusCode::NOT_FOUND,
             "forbidden_origin" => StatusCode::FORBIDDEN,
             "conflict" | "proxy_running" | "session_in_use" => StatusCode::CONFLICT,
+            "body_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
+            "body_decode_failed" => StatusCode::UNPROCESSABLE_ENTITY,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (
             status,
             Json(json!({
                 "ok": false,
-                "error": {
-                    "code": self.0.code,
-                    "message": self.0.message,
-                }
+                "error": self.0
             })),
         )
             .into_response()
@@ -883,21 +1039,168 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{io::Write, sync::Arc};
 
     use axum::{
         body::{Body, to_bytes},
         http::{Method, Request},
+        response::IntoResponse,
+    };
+    use flate2::{
+        Compression,
+        write::{GzEncoder, ZlibEncoder},
     };
     use proxy_crab_mitm::{ProxyCrab, log_buffer::LogBuffer};
+    use proxy_crab_mitm::{
+        model::{HeaderValues, RequestData},
+        storage::{BodySide, BodySource, BodySourceData, CaptureStore},
+    };
     use tempfile::tempdir;
     use tower::ServiceExt;
 
     use crate::{
         dto::HttpApiResource,
-        http::{change_for_request, router, router_with_changes, secured_router},
+        http::{
+            ApiError, body_response, change_for_request, router, router_with_changes,
+            secured_router,
+        },
         manager::{MitmManager, ProxyCrabManager},
     };
+
+    #[tokio::test]
+    async fn raw_body_response_defaults_to_stored_bytes_and_optionally_decodes() {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(b"decoded body").unwrap();
+        let compressed = encoder.finish().unwrap();
+        let source = BodySource {
+            stored_size: compressed.len() as u64,
+            data: BodySourceData::Bytes(compressed),
+            path: None,
+            content_type: Some("text/plain; charset=utf-8".into()),
+            content_encodings: vec!["gzip".into()],
+        };
+
+        let response = body_response(source.clone(), false, Some(64))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-length"],
+            source.stored_size.to_string()
+        );
+        assert_eq!(
+            response.headers()["x-proxycrab-body-size"],
+            source.stored_size.to_string()
+        );
+        assert_eq!(response.headers()["content-encoding"], "gzip");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.len() as u64, source.stored_size);
+
+        let response = body_response(source.clone(), true, None).await.unwrap();
+        assert!(response.headers().get("content-length").is_none());
+        assert!(response.headers().get("content-encoding").is_none());
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), b"decoded body");
+
+        let error = body_response(source.clone(), false, Some(4))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "body_too_large");
+        assert_eq!(error.actual_size, Some(source.stored_size));
+        assert_eq!(error.max_size, Some(4));
+        let response = ApiError(error).into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn server_decompression_supports_brotli_deflate_zstd_and_stacks() {
+        let original = b"all encodings";
+        let mut brotli = Vec::new();
+        {
+            let mut writer = brotli::CompressorWriter::new(&mut brotli, 4096, 5, 22);
+            writer.write_all(original).unwrap();
+        }
+        let mut deflate = ZlibEncoder::new(Vec::new(), Compression::default());
+        deflate.write_all(original).unwrap();
+        let deflate = deflate.finish().unwrap();
+        let zstd = zstd::stream::encode_all(original.as_slice(), 1).unwrap();
+
+        for (encoding, bytes) in [("br", brotli), ("deflate", deflate), ("zstd", zstd)] {
+            let source = BodySource {
+                stored_size: bytes.len() as u64,
+                data: BodySourceData::Bytes(bytes),
+                path: None,
+                content_type: None,
+                content_encodings: vec![encoding.into()],
+            };
+            let response = body_response(source, true, None).await.unwrap();
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(body.as_ref(), original, "{encoding}");
+        }
+
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(original).unwrap();
+        let gzip = gzip.finish().unwrap();
+        let mut stacked = Vec::new();
+        {
+            let mut writer = brotli::CompressorWriter::new(&mut stacked, 4096, 5, 22);
+            writer.write_all(&gzip).unwrap();
+        }
+        let source = BodySource {
+            stored_size: stacked.len() as u64,
+            data: BodySourceData::Bytes(stacked),
+            path: None,
+            content_type: None,
+            content_encodings: vec!["gzip".into(), "br".into()],
+        };
+        let response = body_response(source, true, None).await.unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), original);
+    }
+
+    #[tokio::test]
+    async fn log_body_route_returns_the_capture_file() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
+        let session_dir = std::path::Path::new(&runtime.workspace_paths().current_path)
+            .join("sessions")
+            .join(session.id.to_string());
+        let store = CaptureStore::open(session.id, &session_dir).unwrap();
+        let request = RequestData {
+            method: "POST".into(),
+            uri: "https://example.com/body".into(),
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::from([(
+                "content-type".into(),
+                vec!["application/octet-stream".into()],
+            )]),
+            tags: Default::default(),
+        };
+        let id = store.begin("127.0.0.1", &request, "request").unwrap();
+        store
+            .save_body(id, BodySide::Request, false, b"captured bytes")
+            .unwrap();
+        let app = router(MitmManager::new(runtime));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/logs/{id}/body?session_id={}&side=request&decompress=false&max_size=64",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.headers()["x-proxycrab-body-size"], "14");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), b"captured bytes");
+    }
 
     #[test]
     fn maps_http_mutations_to_their_ui_resources() {
@@ -1416,6 +1719,7 @@ mod tests {
         let app = secured_router(manager);
 
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/proxy/status")
@@ -1428,5 +1732,22 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/proxy/status")
+                    .header("host", "127.0.0.1:18089")
+                    .header("origin", "tauri://localhost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response.headers()["access-control-allow-origin"],
+            "tauri://localhost"
+        );
     }
 }

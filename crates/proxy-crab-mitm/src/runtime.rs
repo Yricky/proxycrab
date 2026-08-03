@@ -21,7 +21,7 @@ use crate::{
         TemporaryExecutionResult, WorkspacePaths,
     },
     proxy::ProxyController,
-    storage::{CaptureStore, body_payload},
+    storage::{BodySide, BodySource, BodySourceData, CaptureStore, body_payload},
     workspace::{
         Workspace, configure_workspace_for_next_start, configured_workspace, resolve_workspace,
     },
@@ -254,6 +254,60 @@ impl ProxyCrab {
         self.pin_capture_store(session_id)?.store.get(id)
     }
 
+    pub fn has_capture(&self, session_id: u64, id: u64) -> Result<bool> {
+        self.pin_capture_store(session_id)?.store.contains(id)
+    }
+
+    pub fn capture_body_source(
+        &self,
+        session_id: u64,
+        id: u64,
+        side: BodySide,
+    ) -> Result<Option<BodySource>> {
+        self.pin_capture_store(session_id)?
+            .store
+            .body_source(id, side)
+    }
+
+    pub fn breakpoint_body_source(&self, id: u64, side: BodySide) -> Result<Option<BodySource>> {
+        let live = self.breakpoints.detail(id)?;
+        let mut source =
+            self.capture_body_source(live.summary.session_id, live.summary.capture_id, side)?;
+        let live_side = match live.summary.phase {
+            InterceptorKind::Request => BodySide::Request,
+            InterceptorKind::Response => BodySide::Response,
+        };
+        if side != live_side {
+            return Ok(source);
+        }
+        let headers = live.context.state.headers();
+        if let Some(replacement) = live.context.state.body() {
+            source = Some(match replacement {
+                crate::lua::BodyReplacement::String(content) => BodySource {
+                    stored_size: content.len() as u64,
+                    data: BodySourceData::Bytes(content.into_bytes()),
+                    path: None,
+                    content_type: first_header(&headers, "content-type").map(str::to_owned),
+                    content_encodings: Vec::new(),
+                },
+                crate::lua::BodyReplacement::File(path) => {
+                    let metadata = std::fs::metadata(&path)?;
+                    BodySource {
+                        stored_size: metadata.len(),
+                        data: BodySourceData::File(path.clone().into()),
+                        path: Some(path),
+                        content_type: first_header(&headers, "content-type").map(str::to_owned),
+                        content_encodings: Vec::new(),
+                    }
+                }
+            });
+        } else if let Some(source) = &mut source {
+            source.content_type = first_header(&headers, "content-type").map(str::to_owned);
+            source.content_encodings = header_tokens(&headers, "content-encoding");
+        }
+        Ok(source)
+    }
+
     pub fn breakpoints(&self, filter: &BreakpointListFilter) -> Vec<BreakpointSummary> {
         self.breakpoints.list(filter)
     }
@@ -282,7 +336,7 @@ impl ProxyCrab {
                 if let Some(replacement) = live.context.state.body()
                     && let Ok(bytes) = crate::lua::read_body_replacement(&replacement)
                 {
-                    capture.request_body = body_payload(&bytes, &headers);
+                    capture.request_body = body_payload(&bytes, &headers, bytes.len() as u64, None);
                 }
             }
             InterceptorKind::Response => {
@@ -297,7 +351,8 @@ impl ProxyCrab {
                 if let Some(replacement) = live.context.state.body()
                     && let Ok(bytes) = crate::lua::read_body_replacement(&replacement)
                 {
-                    capture.response_body = body_payload(&bytes, &headers);
+                    capture.response_body =
+                        body_payload(&bytes, &headers, bytes.len() as u64, None);
                 }
             }
         }
@@ -726,6 +781,25 @@ impl ProxyCrab {
     pub fn proxy_status(&self) -> ProxyStatus {
         self.proxy.status()
     }
+}
+
+fn first_header<'a>(headers: &'a crate::model::HeaderValues, name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .and_then(|(_, values)| values.first())
+        .map(String::as_str)
+}
+
+fn header_tokens(headers: &crate::model::HeaderValues, name: &str) -> Vec<String> {
+    headers
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+        .flat_map(|(_, values)| values)
+        .flat_map(|value| value.split(','))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty() && value != "identity")
+        .collect()
 }
 
 pub struct SessionPin {

@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Result, anyhow};
 use brotli::Decompressor;
-use flate2::read::GzDecoder;
+use flate2::read::{GzDecoder, ZlibDecoder};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::{
@@ -19,12 +19,27 @@ use crate::{
     workspace::now_millis,
 };
 
-const BODY_DETAIL_LIMIT: u64 = 16 * 1024 * 1024;
+const BODY_DETAIL_LIMIT: u64 = 64 * 1024;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodySide {
     Request,
     Response,
+}
+
+#[derive(Debug, Clone)]
+pub enum BodySourceData {
+    File(PathBuf),
+    Bytes(Vec<u8>),
+}
+
+#[derive(Debug, Clone)]
+pub struct BodySource {
+    pub data: BodySourceData,
+    pub path: Option<String>,
+    pub stored_size: u64,
+    pub content_type: Option<String>,
+    pub content_encodings: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -67,6 +82,14 @@ impl CaptureStore {
             ],
         )?;
         Ok(connection.last_insert_rowid() as u64)
+    }
+
+    pub fn contains(&self, id: u64) -> Result<bool> {
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM captures WHERE id=?1)",
+            params![id as i64],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn update_request(
@@ -217,6 +240,49 @@ impl CaptureStore {
             params![id as i64, now_millis() as i64],
         )?;
         Ok(())
+    }
+
+    pub fn body_source(&self, id: u64, side: BodySide) -> Result<Option<BodySource>> {
+        let row = self
+            .connection()?
+            .query_row(
+                "SELECT req_headers, resp_status, resp_headers FROM captures WHERE id=?1",
+                params![id as i64],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<u16>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((request_headers, response_status, response_headers)) = row else {
+            return Ok(None);
+        };
+        let headers = match side {
+            BodySide::Request => serde_json::from_str::<HeaderValues>(&request_headers)?,
+            BodySide::Response => {
+                if response_status.is_none() {
+                    return Ok(None);
+                }
+                serde_json::from_str::<HeaderValues>(response_headers.as_deref().unwrap_or("{}"))?
+            }
+        };
+        let modified = self.body_path(id, side, true).exists();
+        let path = self.body_path(id, side, modified);
+        let metadata = match fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        Ok(Some(BodySource {
+            data: BodySourceData::File(path.clone()),
+            path: Some(path.to_string_lossy().into_owned()),
+            stored_size: metadata.len(),
+            content_type: first_header(&headers, "content-type").map(str::to_owned),
+            content_encodings: content_encodings(&headers),
+        }))
     }
 
     pub fn begin_interceptor_run(&self, id: u64, run: &InterceptorRun) -> Result<u64> {
@@ -630,20 +696,47 @@ impl CaptureStore {
         if metadata.len() > BODY_DETAIL_LIMIT {
             return Ok(BodyPayload::Large {
                 size: metadata.len(),
+                path: Some(path.to_string_lossy().into_owned()),
             });
         }
         let mut bytes = fs::read(&path)?;
-        if let Some(encoding) = first_header(headers, "content-encoding") {
-            bytes = decode_body(&bytes, encoding, BODY_DETAIL_LIMIT).unwrap_or(bytes);
+        let encodings = content_encodings(headers);
+        if !encodings.is_empty() {
+            bytes = match decode_body(&bytes, &encodings.join(","), BODY_DETAIL_LIMIT) {
+                Ok(bytes) => bytes,
+                Err(DecodeBodyError::TooLarge) => {
+                    return Ok(BodyPayload::Large {
+                        size: metadata.len(),
+                        path: Some(path.to_string_lossy().into_owned()),
+                    });
+                }
+                Err(DecodeBodyError::Failed) => {
+                    return Ok(BodyPayload::Binary {
+                        size: metadata.len(),
+                        path: Some(path.to_string_lossy().into_owned()),
+                    });
+                }
+            };
         }
-        Ok(body_payload(&bytes, headers))
+        Ok(body_payload(
+            &bytes,
+            headers,
+            metadata.len(),
+            Some(path.to_string_lossy().into_owned()),
+        ))
     }
 }
 
-pub(crate) fn body_payload(bytes: &[u8], headers: &HeaderValues) -> BodyPayload {
+pub(crate) fn body_payload(
+    bytes: &[u8],
+    headers: &HeaderValues,
+    stored_size: u64,
+    path: Option<String>,
+) -> BodyPayload {
     if bytes.len() as u64 > BODY_DETAIL_LIMIT {
         return BodyPayload::Large {
-            size: bytes.len() as u64,
+            size: stored_size,
+            path,
         };
     }
     if bytes.is_empty() {
@@ -653,15 +746,24 @@ pub(crate) fn body_payload(bytes: &[u8], headers: &HeaderValues) -> BodyPayload 
     if content_type.contains("json")
         && let Ok(content) = serde_json::from_slice(bytes)
     {
-        return BodyPayload::Json { content };
+        return BodyPayload::Json {
+            content,
+            size: stored_size,
+            path,
+        };
     }
     if is_textual(content_type)
         && let Ok(content) = String::from_utf8(bytes.to_vec())
     {
-        return BodyPayload::Text { content };
+        return BodyPayload::Text {
+            content,
+            size: stored_size,
+            path,
+        };
     }
     BodyPayload::Binary {
-        size: bytes.len() as u64,
+        size: stored_size,
+        path,
     }
 }
 
@@ -680,21 +782,70 @@ fn is_textual(content_type: &str) -> bool {
             .any(|kind| content_type.contains(kind))
 }
 
-fn decode_body(bytes: &[u8], encoding: &str, limit: u64) -> Result<Vec<u8>> {
-    let mut decoded = Vec::new();
-    match encoding.trim().to_ascii_lowercase().as_str() {
-        "gzip" => GzDecoder::new(bytes)
-            .take(limit + 1)
-            .read_to_end(&mut decoded)?,
-        "br" => Decompressor::new(bytes, 4096)
-            .take(limit + 1)
-            .read_to_end(&mut decoded)?,
-        _ => return Err(anyhow!("unsupported content encoding")),
-    };
-    if decoded.len() as u64 > limit {
-        return Err(anyhow!("decoded body exceeds detail limit"));
+fn content_encodings(headers: &HeaderValues) -> Vec<String> {
+    headers
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case("content-encoding"))
+        .flat_map(|(_, values)| values)
+        .flat_map(|value| value.split(','))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty() && value != "identity")
+        .collect()
+}
+
+#[derive(Debug)]
+enum DecodeBodyError {
+    TooLarge,
+    Failed,
+}
+
+fn decode_body(
+    bytes: &[u8],
+    encoding: &str,
+    limit: u64,
+) -> std::result::Result<Vec<u8>, DecodeBodyError> {
+    let mut current = bytes.to_vec();
+    let encodings = encoding
+        .split(',')
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty() && value != "identity")
+        .collect::<Vec<_>>();
+    for encoding in encodings.iter().rev() {
+        let mut decoded = Vec::new();
+        let result = match encoding.as_str() {
+            "gzip" => GzDecoder::new(current.as_slice())
+                .take(limit + 1)
+                .read_to_end(&mut decoded)
+                .map_err(anyhow::Error::from),
+            "br" => Decompressor::new(current.as_slice(), 4096)
+                .take(limit + 1)
+                .read_to_end(&mut decoded)
+                .map_err(anyhow::Error::from),
+            "deflate" => ZlibDecoder::new(current.as_slice())
+                .take(limit + 1)
+                .read_to_end(&mut decoded)
+                .map_err(anyhow::Error::from),
+            "zstd" => zstd::stream::read::Decoder::new(current.as_slice())
+                .map_err(anyhow::Error::from)
+                .and_then(|reader| {
+                    reader
+                        .take(limit + 1)
+                        .read_to_end(&mut decoded)
+                        .map_err(anyhow::Error::from)
+                })
+                .map(|_| 0),
+            other => {
+                let _ = other;
+                return Err(DecodeBodyError::Failed);
+            }
+        };
+        result.map_err(|_| DecodeBodyError::Failed)?;
+        if decoded.len() as u64 > limit {
+            return Err(DecodeBodyError::TooLarge);
+        }
+        current = decoded;
     }
-    Ok(decoded)
+    Ok(current)
 }
 
 fn error_stage_name(stage: ErrorStage) -> &'static str {
@@ -749,8 +900,9 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::model::{
-        CaptureError, CaptureOutcome, ErrorStage, HeaderValues, InterceptorExecutionOrigin,
-        InterceptorKind, InterceptorRun, RequestData, script_content_hash,
+        BodyPayload, CaptureError, CaptureOutcome, ErrorStage, HeaderValues,
+        InterceptorExecutionOrigin, InterceptorKind, InterceptorRun, RequestData,
+        script_content_hash,
     };
 
     use super::{BodySide, CaptureStore, decode_body};
@@ -799,6 +951,44 @@ mod tests {
         encoder.write_all(&vec![b'a'; 4096]).unwrap();
         let compressed = encoder.finish().unwrap();
         assert!(decode_body(&compressed, "gzip", 128).is_err());
+    }
+
+    #[test]
+    fn detail_embeds_at_most_64_kib_and_exposes_capture_path() {
+        let root = tempdir().unwrap();
+        let store = CaptureStore::open(7, root.path()).unwrap();
+        let mut request = request("http://example.com/body");
+        request.headers.insert(
+            "content-type".into(),
+            vec!["text/plain; charset=utf-8".into()],
+        );
+
+        let small_id = store.begin("127.0.0.1", &request, "request").unwrap();
+        store
+            .save_body(small_id, BodySide::Request, false, &vec![b'a'; 64 * 1024])
+            .unwrap();
+        let small = store.get(small_id).unwrap().unwrap();
+        assert!(matches!(
+            small.request_body,
+            BodyPayload::Text { size: 65_536, ref path, .. }
+                if path.as_deref().is_some_and(|path| path.ends_with("-request.body"))
+        ));
+
+        let large_id = store.begin("127.0.0.1", &request, "request").unwrap();
+        store
+            .save_body(
+                large_id,
+                BodySide::Request,
+                false,
+                &vec![b'a'; 64 * 1024 + 1],
+            )
+            .unwrap();
+        let large = store.get(large_id).unwrap().unwrap();
+        assert!(matches!(
+            large.request_body,
+            BodyPayload::Large { size: 65_537, ref path }
+                if path.as_deref().is_some_and(|path| path.ends_with("-request.body"))
+        ));
     }
 
     #[test]

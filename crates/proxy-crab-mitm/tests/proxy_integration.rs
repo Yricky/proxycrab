@@ -13,6 +13,7 @@ use proxy_crab_mitm::{
         InterceptorKind, Modification, ProxyStatus, Script, ScriptKind, SessionInterceptor,
         SessionInterceptors,
     },
+    storage::{BodySide, BodySourceData},
 };
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use tempfile::tempdir;
@@ -623,6 +624,15 @@ async fn breakpoint_accepts_temporary_changes_and_resumes_saved_script() {
         .create_script(
             ScriptKind::RequestInterceptor,
             Script {
+                name: "replace-before-hold".into(),
+                content: "req.headers:set('content-type', 'text/plain'); req.body:replace_with_string('before hold')".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
                 name: "hold-request".into(),
                 content: "breakpoint(5000); req.headers:set('x-after', req:getTag('temp'))".into(),
             },
@@ -632,10 +642,16 @@ async fn breakpoint_accepts_temporary_changes_and_resumes_saved_script() {
         .replace_session_interceptors(
             session.id,
             SessionInterceptors {
-                request: vec![SessionInterceptor {
-                    name: "hold-request".into(),
-                    enabled: true,
-                }],
+                request: vec![
+                    SessionInterceptor {
+                        name: "replace-before-hold".into(),
+                        enabled: true,
+                    },
+                    SessionInterceptor {
+                        name: "hold-request".into(),
+                        enabled: true,
+                    },
+                ],
                 response: vec![],
             },
         )
@@ -659,6 +675,15 @@ async fn breakpoint_accepts_temporary_changes_and_resumes_saved_script() {
     })
     .await
     .unwrap();
+
+    let source = runtime
+        .breakpoint_body_source(breakpoint.id, BodySide::Request)
+        .unwrap()
+        .unwrap();
+    let BodySourceData::File(path) = source.data else {
+        panic!("prior interceptor replacement should be persisted for breakpoint preview");
+    };
+    assert_eq!(std::fs::read(path).unwrap(), b"before hold");
 
     let temporary = runtime
         .execute_breakpoint_script(
@@ -690,15 +715,13 @@ async fn breakpoint_accepts_temporary_changes_and_resumes_saved_script() {
     assert_eq!(capture.request.headers["x-after"], ["applied"]);
     assert_eq!(capture.request.tags["temp"], "applied");
     let detail = runtime.capture(session.id, capture.id).unwrap().unwrap();
-    assert_eq!(
+    assert!(matches!(
         detail.request_body,
-        BodyPayload::Text {
-            content: "temporary request body".into()
-        }
-    );
-    assert_eq!(detail.request_interceptors.len(), 2);
+        BodyPayload::Text { ref content, .. } if content == "temporary request body"
+    ));
+    assert_eq!(detail.request_interceptors.len(), 3);
     assert_eq!(
-        detail.request_interceptors[1].origin,
+        detail.request_interceptors[2].origin,
         InterceptorExecutionOrigin::Temporary
     );
 
@@ -754,12 +777,10 @@ async fn response_breakpoint_exposes_live_response_and_applies_temporary_body() 
 
     let live = runtime.breakpoint(breakpoint.id).unwrap();
     assert_eq!(live.capture.summary.response.as_ref().unwrap().status, 200);
-    assert_eq!(
+    assert!(matches!(
         live.capture.response_body,
-        BodyPayload::Text {
-            content: "ok".into()
-        }
-    );
+        BodyPayload::Text { ref content, .. } if content == "ok"
+    ));
     runtime
         .execute_breakpoint_script(
             breakpoint.id,
@@ -774,12 +795,10 @@ async fn response_breakpoint_exposes_live_response_and_applies_temporary_body() 
         changed.capture.summary.response.as_ref().unwrap().status,
         599
     );
-    assert_eq!(
+    assert!(matches!(
         changed.capture.response_body,
-        BodyPayload::Text {
-            content: "changed".into()
-        }
-    );
+        BodyPayload::Text { ref content, .. } if content == "changed"
+    ));
 
     runtime.release_breakpoint(breakpoint.id).unwrap();
     let response = request_task.await.unwrap();
@@ -788,12 +807,10 @@ async fn response_breakpoint_exposes_live_response_and_applies_temporary_body() 
     assert!(response.ends_with("changed"));
     let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
     let persisted = runtime.capture(session.id, capture.id).unwrap().unwrap();
-    assert_eq!(
+    assert!(matches!(
         persisted.response_body,
-        BodyPayload::Text {
-            content: "changed".into()
-        }
-    );
+        BodyPayload::Text { ref content, .. } if content == "changed"
+    ));
     runtime.stop_proxy().await.unwrap();
     upstream.abort();
 }

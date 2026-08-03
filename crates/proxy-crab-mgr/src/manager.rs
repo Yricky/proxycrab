@@ -10,6 +10,7 @@ use proxy_crab_mitm::{
         ProxyStatus, Script, ScriptKind, SessionFilter, SessionInterceptor, SessionInterceptors,
         SessionMetadata, SessionView, SystemLogEntry, TemporaryExecutionResult, WorkspacePaths,
     },
+    storage::{BodySide, BodySource},
 };
 
 use crate::{
@@ -68,8 +69,15 @@ pub trait ProxyCrabManager: Send + Sync {
     async fn log_ids(&self, request: LogIdsRequest) -> ManagerResult<LogIdsPayload>;
     async fn log_views(&self, request: LogViewsRequest) -> ManagerResult<LogViewsPayload>;
     async fn log(&self, session_id: Option<u64>, id: u64) -> ManagerResult<LogDetail>;
+    async fn log_body_source(
+        &self,
+        session_id: Option<u64>,
+        id: u64,
+        side: BodySide,
+    ) -> ManagerResult<BodySource>;
     async fn breakpoints(&self, query: BreakpointQuery) -> ManagerResult<Vec<BreakpointSummary>>;
     async fn breakpoint(&self, id: u64) -> ManagerResult<BreakpointDetailPayload>;
+    async fn breakpoint_body_source(&self, id: u64, side: BodySide) -> ManagerResult<BodySource>;
     async fn extend_breakpoint(
         &self,
         id: u64,
@@ -674,6 +682,31 @@ impl ProxyCrabManager for MitmManager {
         .await
     }
 
+    async fn log_body_source(
+        &self,
+        session_id: Option<u64>,
+        id: u64,
+        side: BodySide,
+    ) -> ManagerResult<BodySource> {
+        let session_id = self.session_id(session_id)?;
+        let runtime = self.runtime.clone();
+        self.run_blocking("log body source", move || {
+            if !runtime.has_capture(session_id, id).map_err(map_error)? {
+                return Err(ManagerError::new(
+                    "log_not_found",
+                    format!("log {id} not found"),
+                ));
+            }
+            runtime
+                .capture_body_source(session_id, id, side)
+                .map_err(|error| ManagerError::new("body_read_failed", error.to_string()))?
+                .ok_or_else(|| {
+                    ManagerError::new("body_not_found", format!("{side:?} body not found"))
+                })
+        })
+        .await
+    }
+
     async fn breakpoints(&self, query: BreakpointQuery) -> ManagerResult<Vec<BreakpointSummary>> {
         let session_id = self.session_id(query.session_id)?;
         Ok(self.runtime.breakpoints(&BreakpointListFilter {
@@ -691,6 +724,19 @@ impl ProxyCrabManager for MitmManager {
                 breakpoint: detail.breakpoint,
                 log: log_detail_from_capture(detail.capture),
             })
+        })
+        .await
+    }
+
+    async fn breakpoint_body_source(&self, id: u64, side: BodySide) -> ManagerResult<BodySource> {
+        let runtime = self.runtime.clone();
+        self.run_blocking("breakpoint body source", move || {
+            runtime
+                .breakpoint_body_source(id, side)
+                .map_err(map_error)?
+                .ok_or_else(|| {
+                    ManagerError::new("body_not_found", format!("{side:?} body not found"))
+                })
         })
         .await
     }

@@ -12,10 +12,13 @@ import type {
 import { BackendError } from "../api/tauri-backend";
 import { appStore, reportError } from "../stores/app";
 import { formatBytes } from "../utils/format";
-import { bodyLanguage } from "../utils/body-language";
 import MonacoEditor from "../components/MonacoEditor.vue";
-import { Io5Checkmark, Io5Copy, Io5Warning } from "vue-icons-plus/io5";
+import BodyViewer from "../components/BodyViewer.vue";
+import { Io5Checkmark, Io5ChevronDown, Io5Copy, Io5Warning } from "vue-icons-plus/io5";
 import { openScriptSnapshot } from "./launcher";
+import { openDropdownMenu } from "../stores/dialog";
+import { fullCurl } from "../utils/curl";
+import type { BodyTarget } from "../api/body";
 
 const props = defineProps<{
   sessionId?: number;
@@ -32,6 +35,7 @@ const breakpoint = ref<BreakpointSummary | null>(null);
 const temporaryScript = ref("");
 const scriptPanelOpen = ref(false);
 const executingScript = ref(false);
+const bodyRevision = ref(0);
 const releasing = ref(false);
 const extending = ref(false);
 const extensionSeconds = ref(60);
@@ -119,6 +123,7 @@ async function executeTemporaryScript(): Promise<void> {
       content: temporaryScript.value,
     });
     breakpoint.value = result.breakpoint;
+    bodyRevision.value += 1;
     await load(true);
     if (result.execution.error) {
       appStore.toast(`临时脚本报错：${result.execution.error}`, "error", 5000);
@@ -189,6 +194,17 @@ const tabs = computed(() => [
     disabled: interceptorCount.value === 0,
   },
 ]);
+
+const bodyTarget = computed<BodyTarget>(() => {
+  if (breakpoint.value && props.breakpointId !== undefined) {
+    return { kind: "breakpoint", id: props.breakpointId };
+  }
+  return {
+    kind: "log",
+    id: detail.value?.id ?? props.logId ?? 0,
+    sessionId: detail.value?.session_id ?? props.sessionId ?? 0,
+  };
+});
 
 // ---------- 信息区 / Body 分隔条 ----------
 
@@ -286,9 +302,7 @@ function bodySize(body: BodyPayload): string {
     case "empty":
       return "0 B";
     case "text":
-      return formatBytes(new TextEncoder().encode(body.content).length);
     case "json":
-      return formatBytes(new TextEncoder().encode(JSON.stringify(body.content)).length);
     case "binary":
     case "large":
       return formatBytes(body.size);
@@ -311,6 +325,26 @@ async function copyText(key: string, text: string): Promise<void> {
   }
 }
 
+function openCopyMenu(event: MouseEvent): void {
+  if (!detail.value) return;
+  const current = detail.value;
+  const items = [
+    {
+      label: "复制 URL",
+      icon: Io5Copy,
+      action: () => void copyText("url", current.request.uri),
+    },
+  ];
+  if (props.breakpointId === undefined) {
+    items.push({
+      label: "复制完整 cURL",
+      icon: Io5Copy,
+      action: () => void copyText("curl", fullCurl(current)),
+    });
+  }
+  openDropdownMenu(event.currentTarget as HTMLElement, items);
+}
+
 // ---------- query params ----------
 
 interface QueryParam {
@@ -330,45 +364,6 @@ const queryParams = computed<QueryParam[]>(() => {
     return [];
   }
 });
-
-// ---------- body viewing ----------
-
-/** 可格式化（pretty/raw 切换）仅适用于“看起来是 JSON 的文本”。 */
-function bodyFormattable(body: BodyPayload, headers: HeaderItem[]): boolean {
-  return body.type === "text" && bodyLanguage(body, headers) === "json";
-}
-
-const prettyMode = ref<Record<string, boolean>>({});
-
-function isPretty(which: "req" | "resp", body: BodyPayload): boolean {
-  if (body.type === "json") return true;
-  return prettyMode.value[which] ?? true;
-}
-
-function bodyEditorValue(
-  which: "req" | "resp",
-  body: BodyPayload,
-  headers: HeaderItem[],
-): string {
-  if (body.type === "json") return JSON.stringify(body.content, null, 2);
-  if (body.type === "text") {
-    if (isPretty(which, body) && bodyLanguage(body, headers) === "json") {
-      try {
-        return JSON.stringify(JSON.parse(body.content), null, 2);
-      } catch {
-        return body.content;
-      }
-    }
-    return body.content;
-  }
-  return "";
-}
-
-function bodyRawText(body: BodyPayload): string {
-  if (body.type === "json") return JSON.stringify(body.content, null, 2);
-  if (body.type === "text") return body.content;
-  return "";
-}
 
 // ---------- modifications ----------
 
@@ -456,9 +451,10 @@ function headerCount(headers: HeaderItem[]): string {
           </span>
           <span v-if="loading" class="refreshing text-faint">刷新中…</span>
           <span class="summary-spacer" />
-          <button class="btn icon" title="复制 URL" @click="copyText('url', detail.request.uri)">
-            <Io5Checkmark v-if="copiedKey === 'url'" :size="14" class="text-success" />
+          <button class="btn icon copy-menu-button" title="复制" @click="openCopyMenu">
+            <Io5Checkmark v-if="copiedKey === 'url' || copiedKey === 'curl'" :size="14" class="text-success" />
             <Io5Copy v-else :size="14" />
+            <Io5ChevronDown :size="10" />
           </button>
         </div>
         <div class="url mono" :title="detail.request.uri">
@@ -581,54 +577,14 @@ function headerCount(headers: HeaderItem[]): string {
 
         <div class="splitter" title="拖动调整区域大小" @pointerdown="startSplit" />
 
-        <section class="card body-card">
-          <div class="card-title body-title">
-            <span>请求体</span>
-            <span class="body-tools">
-              <template v-if="bodyFormattable(detail.request.body, detail.request.headers)">
-                <button
-                  class="tool-btn"
-                  :class="{ on: isPretty('req', detail.request.body) }"
-                  @click="prettyMode = { ...prettyMode, req: true }"
-                >
-                  格式化
-                </button>
-                <button
-                  class="tool-btn"
-                  :class="{ on: !isPretty('req', detail.request.body) }"
-                  @click="prettyMode = { ...prettyMode, req: false }"
-                >
-                  原文
-                </button>
-              </template>
-              <button
-                v-if="detail.request.body.type === 'text' || detail.request.body.type === 'json'"
-                class="btn icon"
-                title="复制请求体"
-                @click="copyText('req-body', bodyRawText(detail.request.body))"
-              >
-                <Io5Checkmark v-if="copiedKey === 'req-body'" :size="13" class="text-success" />
-                <Io5Copy v-else :size="13" />
-              </button>
-            </span>
-          </div>
-          <div v-if="detail.request.body.type === 'empty'" class="empty-hint">无请求体</div>
-          <div
-            v-else-if="detail.request.body.type === 'binary' || detail.request.body.type === 'large'"
-            class="empty-hint"
-          >
-            二进制数据（{{ bodySize(detail.request.body) }}），暂不支持预览
-          </div>
-          <div v-else class="body-editor">
-            <MonacoEditor
-              :model-value="
-                bodyEditorValue('req', detail.request.body, detail.request.headers)
-              "
-              :language="bodyLanguage(detail.request.body, detail.request.headers)"
-              readonly
-            />
-          </div>
-        </section>
+        <BodyViewer
+          label="请求体"
+          :body="detail.request.body"
+          :headers="detail.request.headers"
+          side="request"
+          :target="bodyTarget"
+          :revision="bodyRevision"
+        />
       </div>
 
       <!-- 响应 -->
@@ -654,54 +610,14 @@ function headerCount(headers: HeaderItem[]): string {
 
           <div class="splitter" title="拖动调整区域大小" @pointerdown="startSplit" />
 
-          <section class="card body-card">
-            <div class="card-title body-title">
-              <span>响应体</span>
-              <span class="body-tools">
-                <template v-if="bodyFormattable(detail.response.body, detail.response.headers)">
-                  <button
-                    class="tool-btn"
-                    :class="{ on: isPretty('resp', detail.response.body) }"
-                    @click="prettyMode = { ...prettyMode, resp: true }"
-                  >
-                    格式化
-                  </button>
-                  <button
-                    class="tool-btn"
-                    :class="{ on: !isPretty('resp', detail.response.body) }"
-                    @click="prettyMode = { ...prettyMode, resp: false }"
-                  >
-                    原文
-                  </button>
-                </template>
-                <button
-                  v-if="detail.response.body.type === 'text' || detail.response.body.type === 'json'"
-                  class="btn icon"
-                  title="复制响应体"
-                  @click="copyText('resp-body', bodyRawText(detail.response.body))"
-                >
-                  <Io5Checkmark v-if="copiedKey === 'resp-body'" :size="13" class="text-success" />
-                  <Io5Copy v-else :size="13" />
-                </button>
-              </span>
-            </div>
-            <div v-if="detail.response.body.type === 'empty'" class="empty-hint">无响应体</div>
-            <div
-              v-else-if="detail.response.body.type === 'binary' || detail.response.body.type === 'large'"
-              class="empty-hint"
-            >
-              二进制数据（{{ bodySize(detail.response.body) }}），暂不支持预览
-            </div>
-            <div v-else class="body-editor">
-              <MonacoEditor
-                :model-value="
-                  bodyEditorValue('resp', detail.response.body, detail.response.headers)
-                "
-                :language="bodyLanguage(detail.response.body, detail.response.headers)"
-                readonly
-              />
-            </div>
-          </section>
+          <BodyViewer
+            label="响应体"
+            :body="detail.response.body"
+            :headers="detail.response.headers"
+            side="response"
+            :target="bodyTarget"
+            :revision="bodyRevision"
+          />
         </template>
       </div>
 
@@ -1124,57 +1040,6 @@ function headerCount(headers: HeaderItem[]): string {
 .kv-value {
   color: var(--success);
   word-break: break-all;
-}
-
-/* ---------- Body 查看器 ---------- */
-
-.body-card {
-  flex: 1;
-  min-height: 80px;
-  display: flex;
-  flex-direction: column;
-  margin-top: 3px;
-}
-.body-title {
-  flex: none;
-}
-.body-tools {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-.tool-btn {
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 10px;
-  padding: 1px 8px;
-  cursor: pointer;
-}
-.tool-btn:first-child {
-  border-radius: 6px 0 0 6px;
-}
-.tool-btn:nth-child(2) {
-  border-radius: 0 6px 6px 0;
-  border-left: none;
-}
-.tool-btn.on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-text);
-}
-.body-editor {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-.body-card .empty-hint {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 /* ---------- 拦截器执行记录 ---------- */

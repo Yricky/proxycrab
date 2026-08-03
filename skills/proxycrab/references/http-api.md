@@ -32,7 +32,7 @@ The desktop app starts the management service. It has no authentication, binds t
 no permissive CORS policy, requires a loopback/`localhost` Host, and accepts browser Origin values
 only from local `http`, `https`, or `tauri` origins.
 
-Except for the raw AGENTS.md endpoint documented below, every success is:
+Except for the raw AGENTS.md and body endpoints documented below, every success is:
 
 ```json
 {
@@ -222,13 +222,15 @@ Exactly one of:
 
 ```json
 { "type": "empty" }
-{ "type": "text", "content": "plain text" }
-{ "type": "json", "content": { "key": "value" } }
-{ "type": "binary", "size": 2048 }
-{ "type": "large", "size": 73400320 }
+{ "type": "text", "content": "plain text", "size": 10, "path": "/workspace/sessions/3/blob/42-request.body" }
+{ "type": "json", "content": { "key": "value" }, "size": 15, "path": "/workspace/sessions/3/blob/42-response.body" }
+{ "type": "binary", "size": 2048, "path": "/workspace/sessions/3/blob/42-response.body" }
+{ "type": "large", "size": 73400320, "path": "/workspace/sessions/3/blob/42-response.body" }
 ```
 
-Raw bytes for `binary` and `large` are not available from this API.
+Text/JSON content is embedded only when its decoded representation is at most 64 KiB. `size` and
+`path` describe stored bytes, which may still be content-encoded. Active breakpoint string
+replacements use `path: null` until persisted. Retrieve body bytes through the raw endpoints below.
 
 ### CaptureError
 
@@ -515,6 +517,35 @@ Other modification variants are `method_set` with `method`, `uri_set` with `uri`
 may share the same phase and position; use `execution_id` and array order rather than treating
 position as unique.
 
+### `GET /api/logs/{id}/body?session_id=3&side=request&decompress=false&max_size=16777216`
+
+Returns an unwrapped raw byte stream. `side` is required and must be `request` or `response`.
+`decompress` defaults to `false`.
+
+With `decompress=false`, ProxyCrab streams the stored bytes without decoding, preserves the captured
+`Content-Encoding`, and limits the stored/compressed size. `max_size` defaults to 16 MiB and has no
+server maximum. Oversized bodies return 413 with the stored sizes:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "body_too_large",
+    "message": "body size 20971520 exceeds the requested 16777216 byte limit",
+    "actual_size": 20971520,
+    "max_size": 16777216
+  }
+}
+```
+
+Browsers and Node fetch normally decode the preserved `Content-Encoding` themselves without using
+ProxyCrab CPU. With `decompress=true`, `max_size` is forbidden and ProxyCrab performs one streaming
+decode pass for gzip, br, deflate, zstd, or stacked encodings. That response omits both
+`Content-Encoding` and `Content-Length`; a malformed stream can terminate after HTTP 200 has begun.
+`X-ProxyCrab-Body-Size` always reports the stored byte count. Empty body files return 200 with zero
+bytes. Missing/not-yet-produced bodies return `body_not_found`; unreadable files return
+`body_read_failed`; unsupported encodings requested with decompression return `body_decode_failed`.
+
 ## Session views
 
 ### `GET /api/session-view?session_id=3`
@@ -713,6 +744,13 @@ capture IDs, phase/position/name, method/URI, timestamps, and `remaining_ms`.
 Returns `{ "breakpoint": <summary>, "log": <live LogDetail> }`. The log reflects mutations up to
 the current paused point.
 
+### `GET /api/breakpoints/{id}/body?side=request&decompress=false&max_size=16777216`
+
+Uses the same raw response and query rules as the log body endpoint. It reads the persisted original
+body unless the paused phase has a live replacement. String replacements come from breakpoint
+memory; file replacements are read from their current absolute path. The result is a point-in-time
+snapshot and a referenced external file can change.
+
 ### Breakpoint controls
 
 ```text
@@ -819,10 +857,15 @@ HTTP status mapping:
 | `bad_request` | 400 | Invalid JSON, arguments, script, filter, or operation |
 | `forbidden_origin` | 403 | Non-local browser Origin |
 | `not_found` | 404 | Missing endpoint, Session, log, or script |
+| `log_not_found` | 404 | Missing capture for a body request |
+| `body_not_found` | 404 | Requested side has not produced a body file |
 | `conflict` | 409 | State conflict, including no active Session or deleting a Session while proxy runs |
+| `body_too_large` | 413 | Stored body exceeds `max_size`; includes both sizes |
+| `body_decode_failed` | 422 | Unsupported encoding when server decompression is requested |
 | `proxy_running` | 409 | Session deletion attempted while proxy is starting/running/stopping |
 | `session_in_use` | 409 | Tried to delete a Session pinned by active requests |
 | `internal_error` | 500 | Storage, runtime, I/O, or other internal failure |
+| `body_read_failed` | 500 | Body file cannot be opened or read |
 
 Routing and capture lifecycle details:
 
