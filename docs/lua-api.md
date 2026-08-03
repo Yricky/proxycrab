@@ -133,6 +133,8 @@ local tag = entry.req:getTag("trace")              -- string or nil
 ## Request interceptors
 
 ```lua
+req.method = "BREW"
+req.uri = "https://alternate.example.com/new-path?q=1"
 req.headers:remove("x-env")
 req.headers:append("x-env", "staging")
 req.headers:set("x-use-staging", "1")
@@ -141,7 +143,11 @@ req.body:replace_with_string("new request body")
 breakpoint(30000)
 ```
 
-`req.method`, `req.version`, and `req.uri` are read-only. `req.headers` and `req.body` are mutable.
+`req.method`, `req.uri`, `req.headers`, and `req.body` are mutable; `req.version` remains read-only.
+Method accepts standard or extension HTTP tokens. URI accepts any value representable by the HTTP
+stack; normal upstream forwarding requires an absolute URI with a host. Changing URI does not
+automatically rewrite the `Host` header, so scripts can either preserve a mismatched Host or update
+it explicitly.
 `req:setTag(key, value)` stores a proxy-local string tag and `req:getTag(key)` returns its value or
 `nil`; an empty value still means the tag exists. Tags are persisted with the capture but are never
 sent to the server. After all request interceptors finish, the presence of `_crab_skip` skips the

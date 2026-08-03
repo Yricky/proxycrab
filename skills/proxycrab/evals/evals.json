@@ -54,6 +54,12 @@
       "prompt": "Create a ProxyCrab response interceptor named mock-mobile-error that checks the read-only request method, URI path, and user-agent header, then changes matching responses to status 777. Attach it without changing the request chain and verify it on a new capture.",
       "expected_output": "The agent uses req.method, req.uri.path, and req.headers:get from response Lua, assigns resp.status = 777, preserves the request chain, and cites a new capture whose response status is 777 and whose interceptor history contains status_set.",
       "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "Create a ProxyCrab request interceptor named reroute-probe that changes matching requests to method PROBE and reroutes them to https://alternate.example.com/health without changing Host automatically. Attach it without changing the response chain and verify it on a new capture.",
+      "expected_output": "The agent assigns req.method and req.uri using valid Lua, preserves the response chain, explains that Host is independent, and cites a new capture whose request metadata changed and whose interceptor history contains method_set and uri_set.",
+      "files": []
     }
   ]
 }

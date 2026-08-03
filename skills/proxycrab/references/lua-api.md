@@ -228,9 +228,9 @@ A request interceptor receives mutable global `req`:
 
 | Field | Access | Type |
 | --- | --- | --- |
-| `req.method` | read-only | string |
+| `req.method` | mutable | string |
 | `req.version` | read-only | string |
-| `req.uri` | read-only | URI object |
+| `req.uri` | mutable | URI object when read; string when assigned |
 | `req.headers` | mutable methods | headers |
 | `req.body` | mutable methods | body |
 | `req:getTag(key)` | read-only method | string or `nil` |
@@ -239,6 +239,8 @@ A request interceptor receives mutable global `req`:
 Example:
 
 ```lua
+req.method = "BREW"
+req.uri = "https://alternate.example.com/new-path?q=1"
 req.headers:remove("x-old-debug")
 req.headers:set("x-debug-mode", "1")
 req:setTag("debug", "")
@@ -246,10 +248,13 @@ req.body:replace_with_string('{"debug":true}')
 breakpoint(30000)
 ```
 
-Method, version, and URI cannot be changed. Tags are string key/value metadata stored with the
-capture and never sent upstream. An empty value still counts as present. After the full request
-chain, presence of `_crab_skip` skips upstream and produces a default empty HTTP/1.1 200 response
-before response interceptors run.
+Method accepts any standard or extension HTTP token. URI accepts any string representable by the
+HTTP stack; normal upstream forwarding requires an absolute URI with a host. URI changes do not
+automatically rewrite `Host`, allowing scripts to preserve a mismatched Host or update it explicitly.
+Version cannot be changed. Tags are string key/value metadata stored with the capture and never sent
+upstream. An empty value still counts as present. After the full request chain, presence of
+`_crab_skip` skips upstream and produces a default empty HTTP/1.1 200 response before response
+interceptors run.
 
 ## Response interceptors
 
@@ -325,7 +330,7 @@ Each executed script records:
 - historical name;
 - lowercase SHA-256 of exact source;
 - exact source content;
-- the initial header snapshot and ordered status/header/body/tag mutations;
+- the initial header snapshot and ordered method/URI/status/header/body/tag mutations;
 - an optional runtime error.
 - execution ID, saved/temporary origin, and completion state.
 

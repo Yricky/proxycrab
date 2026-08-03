@@ -509,10 +509,11 @@ Each interceptor execution is:
 }
 ```
 
-Other modification variants are `status_set` with `status`, `header_append`, `header_remove` with
-`values`, `body_replace_string` with `content`, `body_replace_file` with `path`, and `tag_set` with
-`key` and `value`. Multiple temporary executions may share the same phase and position; use
-`execution_id` and array order rather than treating position as unique.
+Other modification variants are `method_set` with `method`, `uri_set` with `uri`, `status_set` with
+`status`, `header_append`, `header_remove` with `values`, `body_replace_string` with `content`,
+`body_replace_file` with `path`, and `tag_set` with `key` and `value`. Multiple temporary executions
+may share the same phase and position; use `execution_id` and array order rather than treating
+position as unique.
 
 ## Session views
 

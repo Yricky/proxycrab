@@ -408,7 +408,12 @@ mod tests {
             tags: Default::default(),
         };
         let capture_id = store.begin("127.0.0.1", &request, "request").unwrap();
-        let state = SharedInterceptorState::new(request.headers.clone(), request.tags.clone());
+        let state = SharedInterceptorState::new_request(
+            request.method.clone(),
+            request.uri.clone(),
+            request.headers.clone(),
+            request.tags.clone(),
+        );
         let journal = ModificationJournal::new(request.headers.clone());
         let source = "breakpoint(1000)";
         let parent_execution_id = store

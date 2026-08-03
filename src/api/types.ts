@@ -121,6 +121,8 @@ export type BodyPayload =
 
 export type Modification =
   | { kind: "snapshot"; headers: Record<string, string[]> }
+  | { kind: "method_set"; method: string }
+  | { kind: "uri_set"; uri: string }
   | { kind: "status_set"; status: number }
   | { kind: "header_append"; name: string; value: string }
   | { kind: "header_set"; name: string; value: string }

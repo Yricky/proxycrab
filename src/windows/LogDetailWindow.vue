@@ -374,6 +374,8 @@ function bodyRawText(body: BodyPayload): string {
 
 const modificationKindLabels: Record<string, string> = {
   snapshot: "执行快照",
+  method_set: "设置 Method",
+  uri_set: "设置 URI",
   status_set: "设置状态码",
   header_append: "追加头",
   header_set: "设置头",
@@ -389,6 +391,10 @@ function modificationLabel(mod: Modification): string {
 
 function modificationDetail(mod: Modification): string {
   switch (mod.kind) {
+    case "method_set":
+      return mod.method;
+    case "uri_set":
+      return mod.uri;
     case "status_set":
       return String(mod.status);
     case "header_append":

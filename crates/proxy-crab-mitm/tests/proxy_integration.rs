@@ -62,6 +62,39 @@ async fn fixed_http_upstream() -> (u16, tokio::task::JoinHandle<()>) {
     (port, task)
 }
 
+async fn recording_http_upstream() -> (
+    u16,
+    tokio::sync::oneshot::Receiver<String>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        loop {
+            let mut bytes = [0; 1024];
+            let count = stream.read(&mut bytes).await.unwrap();
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&bytes[..count]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let _ = request_tx.send(String::from_utf8_lossy(&request).into_owned());
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+            )
+            .await
+            .unwrap();
+    });
+    (port, request_rx, task)
+}
+
 async fn staged_http_upstream() -> (
     u16,
     tokio::sync::oneshot::Sender<()>,
@@ -416,6 +449,97 @@ async fn session_interceptor_chain_executes_and_records_source() {
 }
 
 #[tokio::test]
+async fn request_interceptor_rewrites_method_and_upstream_uri() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let (target_port, target_request, target) = recording_http_upstream().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let request_source =
+        format!("req.method = 'BREW'; req.uri = 'http://127.0.0.1:{target_port}/rewritten?q=1'");
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "rewrite-request-line".into(),
+                content: request_source,
+            },
+        )
+        .unwrap();
+    runtime
+        .create_script(
+            ScriptKind::ResponseInterceptor,
+            Script {
+                name: "verify-rewritten-request".into(),
+                content: "assert(req.method == 'BREW'); \
+                          assert(req.uri.path == '/rewritten' and req.uri.query == 'q=1'); \
+                          resp.headers:set('x-rewritten-request', '1')"
+                    .into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "rewrite-request-line".into(),
+                    enabled: true,
+                }],
+                response: vec![SessionInterceptor {
+                    name: "verify-rewritten-request".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+
+    let original_port = unused_port();
+    let response = proxy_get(
+        proxy_port,
+        &format!("http://127.0.0.1:{original_port}/original"),
+        &format!("127.0.0.1:{original_port}"),
+    )
+    .await;
+    assert!(
+        response
+            .to_ascii_lowercase()
+            .contains("x-rewritten-request: 1"),
+        "{response}"
+    );
+    let upstream_request = timeout(Duration::from_secs(2), target_request)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        upstream_request.starts_with("BREW /rewritten?q=1 HTTP/1.1"),
+        "{upstream_request}"
+    );
+
+    let detail = runtime
+        .capture(
+            session.id,
+            runtime.list_captures(session.id, 1, None).unwrap()[0].id,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.summary.request.method, "BREW");
+    assert_eq!(
+        detail.summary.request.uri,
+        format!("http://127.0.0.1:{target_port}/rewritten?q=1")
+    );
+    assert!(detail.request_interceptors[0]
+        .modifications
+        .iter()
+        .any(|modification| matches!(modification, Modification::MethodSet { method } if method == "BREW")));
+    assert!(detail.request_interceptors[0]
+        .modifications
+        .iter()
+        .any(|modification| matches!(modification, Modification::UriSet { uri } if uri.ends_with("/rewritten?q=1"))));
+
+    runtime.stop_proxy().await.unwrap();
+    target.abort();
+}
+
+#[tokio::test]
 async fn crab_skip_avoids_upstream_and_runs_response_interceptors() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let session = runtime.create_session(None, None).unwrap();
@@ -539,9 +663,13 @@ async fn breakpoint_accepts_temporary_changes_and_resumes_saved_script() {
     let temporary = runtime
         .execute_breakpoint_script(
             breakpoint.id,
-            "req:setTag('temp', 'applied'); \
-             req.headers:set('content-type', 'text/plain'); \
-             req.body:replace_with_string('temporary request body')",
+            &format!(
+                "req.method = 'PATCH'; \
+                 req.uri = 'http://127.0.0.1:{upstream_port}/temporary'; \
+                 req:setTag('temp', 'applied'); \
+                 req.headers:set('content-type', 'text/plain'); \
+                 req.body:replace_with_string('temporary request body')"
+            ),
         )
         .unwrap();
     assert_eq!(
@@ -549,11 +677,16 @@ async fn breakpoint_accepts_temporary_changes_and_resumes_saved_script() {
         InterceptorExecutionOrigin::Temporary
     );
     assert_eq!(runtime.breakpoints(&filter).len(), 1);
+    let live = runtime.breakpoint(breakpoint.id).unwrap();
+    assert_eq!(live.capture.summary.request.method, "PATCH");
+    assert!(live.capture.summary.request.uri.ends_with("/temporary"));
     runtime.release_breakpoint(breakpoint.id).unwrap();
     let response = request_task.await.unwrap();
     assert!(response.contains("\r\n\r\nok"));
 
     let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+    assert_eq!(capture.request.method, "PATCH");
+    assert!(capture.request.uri.ends_with("/temporary"));
     assert_eq!(capture.request.headers["x-after"], ["applied"]);
     assert_eq!(capture.request.tags["temp"], "applied");
     let detail = runtime.capture(session.id, capture.id).unwrap().unwrap();

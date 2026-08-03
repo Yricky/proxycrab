@@ -38,6 +38,8 @@ pub enum BodyReplacement {
 
 #[derive(Debug, Clone)]
 pub struct ScriptEffects {
+    pub method: Option<String>,
+    pub uri: Option<String>,
     pub status: Option<u16>,
     pub headers: HeaderValues,
     pub body: Option<BodyReplacement>,
@@ -164,7 +166,12 @@ pub fn execute_request_lenient_named(
     script_name: &str,
     capture_log_id: Option<u64>,
 ) -> Result<(ScriptEffects, Option<String>)> {
-    let state = SharedInterceptorState::new(request.headers.clone(), request.tags.clone());
+    let state = SharedInterceptorState::new_request(
+        request.method.clone(),
+        request.uri.clone(),
+        request.headers.clone(),
+        request.tags.clone(),
+    );
     let journal = ModificationJournal::new(request.headers.clone());
     execute_request_with_state(
         source,
@@ -520,6 +527,8 @@ impl UserData for ReadHeaders {
 
 #[derive(Clone)]
 pub(crate) struct SharedInterceptorState {
+    method: Arc<Mutex<Option<String>>>,
+    uri: Arc<Mutex<Option<String>>>,
     status: Arc<Mutex<Option<u16>>>,
     headers: Arc<Mutex<HeaderValues>>,
     body: Arc<Mutex<Option<BodyReplacement>>>,
@@ -529,11 +538,25 @@ pub(crate) struct SharedInterceptorState {
 impl SharedInterceptorState {
     pub(crate) fn new(headers: HeaderValues, tags: RequestTags) -> Self {
         Self {
+            method: Arc::new(Mutex::new(None)),
+            uri: Arc::new(Mutex::new(None)),
             status: Arc::new(Mutex::new(None)),
             headers: Arc::new(Mutex::new(headers)),
             body: Arc::new(Mutex::new(None)),
             tags: Arc::new(Mutex::new(tags)),
         }
+    }
+
+    pub(crate) fn new_request(
+        method: String,
+        uri: String,
+        headers: HeaderValues,
+        tags: RequestTags,
+    ) -> Self {
+        let state = Self::new(headers, tags);
+        *state.method.lock().expect("Lua method state lock poisoned") = Some(method);
+        *state.uri.lock().expect("Lua URI state lock poisoned") = Some(uri);
+        state
     }
 
     pub(crate) fn new_response(status: u16, headers: HeaderValues, tags: RequestTags) -> Self {
@@ -544,6 +567,16 @@ impl SharedInterceptorState {
 
     pub(crate) fn effects(&self, journal: &ModificationJournal) -> ScriptEffects {
         ScriptEffects {
+            method: self
+                .method
+                .lock()
+                .expect("Lua method state lock poisoned")
+                .clone(),
+            uri: self
+                .uri
+                .lock()
+                .expect("Lua URI state lock poisoned")
+                .clone(),
             status: *self.status.lock().expect("Lua status state lock poisoned"),
             headers: self
                 .headers
@@ -573,6 +606,20 @@ impl SharedInterceptorState {
 
     pub(crate) fn status(&self) -> Option<u16> {
         *self.status.lock().expect("Lua status state lock poisoned")
+    }
+
+    pub(crate) fn method(&self) -> Option<String> {
+        self.method
+            .lock()
+            .expect("Lua method state lock poisoned")
+            .clone()
+    }
+
+    pub(crate) fn uri(&self) -> Option<String> {
+        self.uri
+            .lock()
+            .expect("Lua URI state lock poisoned")
+            .clone()
     }
 
     pub(crate) fn headers(&self) -> HeaderValues {
@@ -624,9 +671,39 @@ struct RequestView {
 
 impl UserData for RequestView {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get("method", |_, this| Ok(this.request.method.clone()));
+        fields.add_field_method_get("method", |_, this| {
+            Ok(this
+                .state
+                .method()
+                .expect("request Lua state always has a method"))
+        });
+        fields.add_field_method_set("method", |_, this, method: String| {
+            hyper::Method::from_bytes(method.as_bytes())
+                .map_err(|error| LuaError::runtime(error.to_string()))?;
+            *this
+                .state
+                .method
+                .lock()
+                .expect("Lua method state lock poisoned") = Some(method.clone());
+            this.journal.push(Modification::MethodSet { method });
+            Ok(())
+        });
         fields.add_field_method_get("version", |_, this| Ok(this.request.version.clone()));
-        fields.add_field_method_get("uri", |_, this| Ok(UriView::from(&this.request.uri)));
+        fields.add_field_method_get("uri", |_, this| {
+            Ok(UriView::from(
+                &this
+                    .state
+                    .uri()
+                    .expect("request Lua state always has a URI"),
+            ))
+        });
+        fields.add_field_method_set("uri", |_, this, uri: String| {
+            uri.parse::<hyper::Uri>()
+                .map_err(|error| LuaError::runtime(error.to_string()))?;
+            *this.state.uri.lock().expect("Lua URI state lock poisoned") = Some(uri.clone());
+            this.journal.push(Modification::UriSet { uri });
+            Ok(())
+        });
         fields.add_field_method_get("headers", |_, this| {
             Ok(MutableHeaders {
                 state: this.state.clone(),
@@ -1037,24 +1114,40 @@ mod tests {
     }
 
     #[test]
-    fn request_script_mutates_headers_and_body() {
+    fn request_script_mutates_method_uri_headers_and_body() {
         let effects = execute_request(
-            "req.headers:set('x-test', 'new'); req.body:replace_with_string('body'); \
+            "req.method = 'BREW'; \
+             req.uri = 'http://alternate.example/new-path?q=2'; \
+             assert(req.method == 'BREW'); \
+             assert(req.uri.host == 'alternate.example' and req.uri.path == '/new-path'); \
+             req.headers:set('x-test', 'new'); req.body:replace_with_string('body'); \
              assert(req:getTag('missing') == nil); req:setTag('empty', ''); \
              req:setTag('team', 'one'); req:setTag('team', 'two')",
             &entry().request,
         )
         .unwrap();
+        assert_eq!(effects.method.as_deref(), Some("BREW"));
+        assert_eq!(
+            effects.uri.as_deref(),
+            Some("http://alternate.example/new-path?q=2")
+        );
         assert_eq!(effects.headers["x-test"], vec!["new"]);
         assert_eq!(effects.body, Some(BodyReplacement::String("body".into())));
         assert_eq!(effects.tags["empty"], "");
         assert_eq!(effects.tags["team"], "two");
-        assert_eq!(effects.modifications.len(), 6);
+        assert_eq!(effects.modifications.len(), 8);
         assert!(matches!(
             &effects.modifications[0],
             crate::model::Modification::Snapshot { headers }
                 if headers["x-test"] == vec!["old"]
         ));
+    }
+
+    #[test]
+    fn request_method_and_uri_reject_values_the_http_stack_cannot_represent() {
+        let request = entry().request;
+        assert!(execute_request("req.method = 'BAD METHOD'", &request).is_err());
+        assert!(execute_request("req.uri = 'http://['", &request).is_err());
     }
 
     #[test]

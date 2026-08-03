@@ -225,8 +225,9 @@ plus `created_at`, `updated_at`, request `tags`, and ordered `request_intercepto
 `response_interceptors` execution arrays. Every execution contains a unique `execution_id`,
 `origin` (`saved` or `temporary`), `completed`, the historical script name, phase, zero-based
 position, SHA-256 hash, exact source content, its own modifications, and an optional runtime error.
-Status changes use `status_set` with `status`, and tag changes use `tag_set` with `key` and `value`.
-Scripts that executed without changes are still present.
+Request-line changes use `method_set` with `method` and `uri_set` with `uri`, status changes use
+`status_set` with `status`, and tag changes use `tag_set` with `key` and `value`. Scripts that
+executed without changes are still present.
 Disabled and missing scripts are not recorded.
 
 ## Session table views

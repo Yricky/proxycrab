@@ -268,6 +268,16 @@ impl ProxyCrab {
         capture.summary.request.tags = tags;
         match live.summary.phase {
             InterceptorKind::Request => {
+                capture.summary.request.method = live
+                    .context
+                    .state
+                    .method()
+                    .expect("request breakpoint state always has a method");
+                capture.summary.request.uri = live
+                    .context
+                    .state
+                    .uri()
+                    .expect("request breakpoint state always has a URI");
                 capture.summary.request.headers = headers.clone();
                 if let Some(replacement) = live.context.state.body()
                     && let Ok(bytes) = crate::lua::read_body_replacement(&replacement)

@@ -1176,8 +1176,12 @@ async fn handle_session_http_request(
     let mut request_modifications = Vec::new();
     let mut request_body_modified = false;
     for (position, script) in interceptor_snapshot.request.iter().enumerate() {
-        let state =
-            SharedInterceptorState::new(request_data.headers.clone(), request_data.tags.clone());
+        let state = SharedInterceptorState::new_request(
+            request_data.method.clone(),
+            request_data.uri.clone(),
+            request_data.headers.clone(),
+            request_data.tags.clone(),
+        );
         let journal = ModificationJournal::new(request_data.headers.clone());
         let execution_id = match store.begin_interceptor_run(
             capture_id,
@@ -1245,6 +1249,12 @@ async fn handle_session_http_request(
         .await;
         match execution {
             Ok(Ok((effects, error))) => {
+                request_data.method = effects
+                    .method
+                    .expect("request interceptor effects always include a method");
+                request_data.uri = effects
+                    .uri
+                    .expect("request interceptor effects always include a URI");
                 request_data.headers = effects.headers;
                 request_data.tags = effects.tags;
                 if let Some(replacement) = effects.body {
