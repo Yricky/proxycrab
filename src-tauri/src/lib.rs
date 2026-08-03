@@ -5,9 +5,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use proxy_crab_mgr::{
     MitmManager, ProxyCrabManager,
     dto::{
-        ActiveSession, BypassPage, BypassQuery, CertificateResponse, CreateSessionRequest,
-        DebugFilterScriptRequest, DeleteCount, HttpApiChange, HttpApiResource, HttpServiceStatus,
-        InterceptorCreateRequest, InterceptorDetail, InterceptorLibraryList,
+        ActiveSession, BreakpointDetailPayload, BreakpointQuery, BypassPage, BypassQuery,
+        CertificateResponse, CreateSessionRequest, DebugFilterScriptRequest, DeleteCount,
+        ExecuteTemporaryScriptRequest, ExtendBreakpointRequest, HttpApiChange, HttpApiResource,
+        HttpServiceStatus, InterceptorCreateRequest, InterceptorDetail, InterceptorLibraryList,
         InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest, LogViewsPayload,
         LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
         ReplaceSessionViewRequest, RoutingSelection, ScriptRequest, SessionInterceptorsPayload,
@@ -19,8 +20,8 @@ use proxy_crab_mitm::{
     ProxyCrab,
     log_buffer::{BufferLayer, LogBuffer},
     model::{
-        AppConfig, InterceptorKind, ProxyStatus, Script, SessionMetadata, SystemLogEntry,
-        WorkspacePaths,
+        AppConfig, BreakpointSummary, InterceptorKind, ProxyStatus, Script, SessionMetadata,
+        SystemLogEntry, TemporaryExecutionResult, WorkspacePaths,
     },
 };
 use tauri::{Emitter, Manager, RunEvent, State};
@@ -146,6 +147,45 @@ async fn get_log(
     id: u64,
 ) -> Result<LogDetail, ManagerError> {
     state.manager().log(session_id, id).await
+}
+
+#[tauri::command]
+async fn list_breakpoints(
+    state: State<'_, BackendState>,
+    query: BreakpointQuery,
+) -> Result<Vec<BreakpointSummary>, ManagerError> {
+    state.manager().breakpoints(query).await
+}
+
+#[tauri::command]
+async fn get_breakpoint(
+    state: State<'_, BackendState>,
+    id: u64,
+) -> Result<BreakpointDetailPayload, ManagerError> {
+    state.manager().breakpoint(id).await
+}
+
+#[tauri::command]
+async fn extend_breakpoint(
+    state: State<'_, BackendState>,
+    id: u64,
+    request: ExtendBreakpointRequest,
+) -> Result<BreakpointSummary, ManagerError> {
+    state.manager().extend_breakpoint(id, request).await
+}
+
+#[tauri::command]
+async fn release_breakpoint(state: State<'_, BackendState>, id: u64) -> Result<(), ManagerError> {
+    state.manager().release_breakpoint(id).await
+}
+
+#[tauri::command]
+async fn execute_breakpoint_script(
+    state: State<'_, BackendState>,
+    id: u64,
+    request: ExecuteTemporaryScriptRequest,
+) -> Result<TemporaryExecutionResult, ManagerError> {
+    state.manager().execute_breakpoint_script(id, request).await
 }
 
 #[tauri::command]
@@ -563,6 +603,11 @@ pub fn run() {
             get_log_ids,
             get_log_views,
             get_log,
+            list_breakpoints,
+            get_breakpoint,
+            extend_breakpoint,
+            release_breakpoint,
+            execute_breakpoint_script,
             get_session_view,
             replace_session_view,
             list_column_scripts,

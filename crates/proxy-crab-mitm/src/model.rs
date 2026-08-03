@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub type HeaderValues = BTreeMap<String, Vec<String>>;
+pub type RequestTags = BTreeMap<String, String>;
 pub const MAX_SESSION_INTERCEPTORS_PER_KIND: usize = 12;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -239,6 +240,8 @@ pub struct RequestData {
     pub uri: String,
     pub version: String,
     pub headers: HeaderValues,
+    #[serde(default)]
+    pub tags: RequestTags,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -267,10 +270,21 @@ pub enum Modification {
     HeaderRemove { name: String, values: Vec<String> },
     BodyReplaceString { content: String },
     BodyReplaceFile { path: String },
+    TagSet { key: String, value: String },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InterceptorExecutionOrigin {
+    Saved,
+    Temporary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InterceptorExecution {
+    pub execution_id: u64,
+    pub origin: InterceptorExecutionOrigin,
+    pub completed: bool,
     pub phase: InterceptorKind,
     pub position: usize,
     pub name: String,
@@ -282,6 +296,8 @@ pub struct InterceptorExecution {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterceptorRun {
+    pub origin: InterceptorExecutionOrigin,
+    pub completed: bool,
     pub phase: InterceptorKind,
     pub position: usize,
     pub name: String,
@@ -317,6 +333,40 @@ pub struct CaptureDetail {
     pub response_body: BodyPayload,
     pub request_interceptors: Vec<InterceptorExecution>,
     pub response_interceptors: Vec<InterceptorExecution>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BreakpointSummary {
+    pub id: u64,
+    pub session_id: u64,
+    pub capture_id: u64,
+    pub phase: InterceptorKind,
+    pub position: usize,
+    pub interceptor_name: String,
+    pub method: String,
+    pub uri: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub remaining_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BreakpointListFilter {
+    pub session_id: u64,
+    pub phase: Option<InterceptorKind>,
+    pub interceptor_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BreakpointDetail {
+    pub breakpoint: BreakpointSummary,
+    pub capture: CaptureDetail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TemporaryExecutionResult {
+    pub execution: InterceptorExecution,
+    pub breakpoint: BreakpointSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

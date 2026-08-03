@@ -27,7 +27,13 @@ async function copyHash(): Promise<void> {
     <div class="snapshot-toolbar">
       <span class="snapshot-name mono">{{ execution.name }}</span>
       <span class="badge">
-        {{ execution.phase === "request" ? "历史请求拦截器" : "历史响应拦截器" }}
+        {{ execution.phase === "request" ? "请求拦截器" : "响应拦截器" }}
+      </span>
+      <span class="badge" :class="{ temporary: execution.origin === 'temporary' }">
+        {{ execution.origin === "temporary" ? "临时执行" : "已保存脚本" }}
+      </span>
+      <span v-if="!execution.completed" class="badge waiting">
+        暂停中
       </span>
       <span class="snapshot-spacer" />
       <button class="hash-button mono" title="复制 SHA-256" @click="copyHash">
@@ -64,6 +70,14 @@ async function copyHash(): Promise<void> {
 }
 .snapshot-spacer {
   flex: 1;
+}
+.badge.temporary {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.badge.waiting {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
 }
 .hash-button {
   min-width: 0;

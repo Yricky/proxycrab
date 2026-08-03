@@ -36,6 +36,12 @@
       "prompt": "List the newest transparent-forwarding entries in ProxyCrab and explain why the latest failed item bypassed capture. Do not claim access to headers or bodies.",
       "expected_output": "The agent queries the bypass page, cites the entry ID, source, method, URI, reason, outcome, and error, and explicitly avoids inventing header/body evidence.",
       "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "Find the active ProxyCrab breakpoint for request interceptor hold-checkout, inspect its live request, run a temporary script that sets tag agent-reviewed to yes without releasing it, and report the execution result. Do not alter unrelated breakpoints.",
+      "expected_output": "The agent filters active breakpoints by phase/name, reads the selected live detail, executes phase-valid Lua with req:setTag, keeps the request paused, and cites the temporary execution ID, error state, and tag_set modification.",
+      "files": []
     }
   ]
 }

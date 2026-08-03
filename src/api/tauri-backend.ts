@@ -3,9 +3,12 @@ import type { Backend } from "./backend";
 import type {
   ActiveSession,
   AppConfig,
+  BreakpointQuery,
   BypassQuery,
   CreateSessionRequest,
   DebugFilterScriptRequest,
+  ExecuteTemporaryScriptRequest,
+  ExtendBreakpointRequest,
   InterceptorCreateRequest,
   InterceptorKind,
   InterceptorUpdateRequest,
@@ -84,6 +87,13 @@ export function createTauriBackend(): Backend {
     getLogViews: (request: LogViewsRequest) => call("get_log_views", { request }),
     getLog: (sessionId: number | null, id: number) =>
       call<LogDetail>("get_log", { sessionId, id }),
+    listBreakpoints: (query: BreakpointQuery) => call("list_breakpoints", { query }),
+    getBreakpoint: (id: number) => call("get_breakpoint", { id }),
+    extendBreakpoint: (id: number, request: ExtendBreakpointRequest) =>
+      call("extend_breakpoint", { id, request }),
+    releaseBreakpoint: (id: number) => call("release_breakpoint", { id }),
+    executeBreakpointScript: (id: number, request: ExecuteTemporaryScriptRequest) =>
+      call("execute_breakpoint_script", { id, request }),
     getSessionView: (sessionId: number | null) =>
       call("get_session_view", { sessionId }),
     replaceSessionView: (sessionId: number | null, request: ReplaceSessionViewRequest) =>

@@ -114,7 +114,10 @@ export type Modification =
   | { kind: "header_set"; name: string; value: string }
   | { kind: "header_remove"; name: string; values: string[] }
   | { kind: "body_replace_string"; content: string }
-  | { kind: "body_replace_file"; path: string };
+  | { kind: "body_replace_file"; path: string }
+  | { kind: "tag_set"; key: string; value: string };
+
+export type InterceptorExecutionOrigin = "saved" | "temporary";
 
 export type ProxyStatus =
   | { status: "stopped" }
@@ -255,6 +258,7 @@ export interface RequestDetail {
   uri: string;
   version: string;
   headers: HeaderItem[];
+  tags: Record<string, string>;
   body: BodyPayload;
 }
 
@@ -283,6 +287,9 @@ export interface LogDetail {
 }
 
 export interface InterceptorExecution {
+  execution_id: number;
+  origin: InterceptorExecutionOrigin;
+  completed: boolean;
   phase: InterceptorKind;
   position: number;
   name: string;
@@ -290,6 +297,44 @@ export interface InterceptorExecution {
   content: string;
   modifications: Modification[];
   error: string | null;
+}
+
+export interface BreakpointSummary {
+  id: number;
+  session_id: number;
+  capture_id: number;
+  phase: InterceptorKind;
+  position: number;
+  interceptor_name: string;
+  method: string;
+  uri: string;
+  created_at: number;
+  expires_at: number;
+  remaining_ms: number;
+}
+
+export interface BreakpointQuery {
+  session_id?: number | null;
+  phase?: InterceptorKind | null;
+  interceptor_name?: string | null;
+}
+
+export interface BreakpointDetailPayload {
+  breakpoint: BreakpointSummary;
+  log: LogDetail;
+}
+
+export interface ExtendBreakpointRequest {
+  timeout_ms: number;
+}
+
+export interface ExecuteTemporaryScriptRequest {
+  content: string;
+}
+
+export interface TemporaryExecutionResult {
+  execution: InterceptorExecution;
+  breakpoint: BreakpointSummary;
 }
 
 export interface ScriptRequest {

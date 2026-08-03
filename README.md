@@ -20,6 +20,9 @@ Neither reusable crate depends on Tauri.
 
 The Tauri application data directory contains `config.json`, which points at the workspace. When the pointer is absent or invalid, `app_data_dir/workspace` is used and persisted. A changed pointer takes effect only on the next application launch.
 
+Each workspace root has a `workspace_schema.json` version label. All persisted-data upgrades are
+registered in the centralized migration module and run before workspace stores are opened.
+
 The Tauri command surface also reports the management HTTP service's `running`, `host`, `port`, and startup error state through `get_http_service_status`.
 
 ## Development

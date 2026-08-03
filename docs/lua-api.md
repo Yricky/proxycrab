@@ -127,6 +127,7 @@ Header names are case-insensitive:
 local first = entry.req.headers:get("x-name")       -- string or nil
 local values = entry.req.headers:get_all("x-name") -- string array
 local all = entry.req.headers:all()                 -- name -> string array
+local tag = entry.req:getTag("trace")              -- string or nil
 ```
 
 ## Request interceptors
@@ -135,18 +136,33 @@ local all = entry.req.headers:all()                 -- name -> string array
 req.headers:remove("x-env")
 req.headers:append("x-env", "staging")
 req.headers:set("x-use-staging", "1")
+req:setTag("environment", "staging")
 req.body:replace_with_string("new request body")
+breakpoint(30000)
 ```
 
 `req.method`, `req.version`, and `req.uri` are read-only. `req.headers` and `req.body` are mutable.
+`req:setTag(key, value)` stores a proxy-local string tag and `req:getTag(key)` returns its value or
+`nil`; an empty value still means the tag exists. Tags are persisted with the capture but are never
+sent to the server. After all request interceptors finish, the presence of `_crab_skip` skips the
+upstream request, creates an empty HTTP/1.1 200 response, and continues through response interceptors.
 
 ## Response interceptors
 
 ```lua
 resp.headers:append("x-proxy-crab-debug", "1")
+req:setTag("response-debugged", "")
 resp.body:replace_with_file("/absolute/path/to/body.bin")
 ```
 
-`resp.status` and `resp.version` are read-only. File replacement requires an absolute path and is limited to 64 MiB.
+Response interceptors also receive tag-only global `req`, with `setTag` and `getTag` but no request
+headers/body access. `resp.status` and `resp.version` are read-only. File replacement requires an
+absolute path and is limited to 64 MiB.
+
+`breakpoint(timeoutMs)` is available in saved request and response interceptors. Zero returns
+immediately. A positive value pauses the current request until the timeout or manual release; the
+desktop UI can repeatedly extend the cumulative wait up to 1,800 seconds and execute temporary Lua
+against the same live request/response state. Temporary scripts have the same phase capabilities,
+except they cannot call `breakpoint`. Each temporary run is stored as its own interceptor execution.
 
 Interceptor changes made before a runtime error remain applied. The error is stored on the capture and written to the system log; traffic continues when possible.

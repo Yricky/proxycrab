@@ -14,7 +14,8 @@ import { reportError } from "../stores/app";
 import { openContextMenu } from "../stores/dialog";
 import { interceptorsStore } from "../stores/interceptors";
 import { sessionsStore } from "../stores/sessions";
-import { openScriptEditor } from "../windows/launcher";
+import { breakpointsStore } from "../stores/breakpoints";
+import { openBreakpointList, openScriptEditor } from "../windows/launcher";
 import AppTooltip from "./AppTooltip.vue";
 import InterceptorPicker from "./InterceptorPicker.vue";
 
@@ -44,6 +45,24 @@ function kindLabel(kind: InterceptorKind): string {
 function statusLabel(item: SessionInterceptorItem): string {
   if (!item.valid) return "脚本文件不存在 · 右键可重新创建";
   return item.enabled ? "已开启 · 点击关闭" : "已关闭 · 点击开启";
+}
+
+function breakpointCount(kind: InterceptorKind, name: string): number {
+  return breakpointsStore.count(kind, name);
+}
+
+function breakpointBadge(kind: InterceptorKind, name: string): string {
+  const count = breakpointCount(kind, name);
+  return count > 9 ? "9+" : String(count);
+}
+
+function nodeClick(kind: InterceptorKind, item: SessionInterceptorItem, index: number): void {
+  const sessionId = sessionsStore.viewingSessionId;
+  if (sessionId !== null && breakpointCount(kind, item.name) > 0) {
+    openBreakpointList(sessionId, kind, item.name);
+    return;
+  }
+  void interceptorsStore.toggle(kind, index);
 }
 
 function openPicker(
@@ -204,6 +223,7 @@ onBeforeUnmount(() => {
                   enabled: item.valid && item.enabled,
                   disabled: item.valid && !item.enabled,
                   invalid: !item.valid,
+                  breakpoint: breakpointCount('request', item.name) > 0,
                   dragging: dragging?.kind === 'request' && dragging.index === index,
                   'drop-target':
                     dragTarget?.kind === 'request' &&
@@ -212,14 +232,17 @@ onBeforeUnmount(() => {
                 }"
                 :draggable="true"
                 :aria-label="item.name"
-                @click="interceptorsStore.toggle('request', index)"
+                @click="nodeClick('request', item, index)"
                 @contextmenu="nodeMenu($event, 'request', item, index)"
                 @dragstart="dragStart($event, 'request', index)"
                 @dragover="dragOver($event, 'request', index)"
                 @drop="drop($event, 'request', index)"
                 @dragend="dragEnd"
               >
-                <span v-if="!item.valid">!</span>
+                <span v-if="breakpointCount('request', item.name) > 0" class="breakpoint-count">
+                  {{ breakpointBadge('request', item.name) }}
+                </span>
+                <span v-else-if="!item.valid">!</span>
               </button>
             </AppTooltip>
             <AppTooltip
@@ -273,6 +296,7 @@ onBeforeUnmount(() => {
                   enabled: item.valid && item.enabled,
                   disabled: item.valid && !item.enabled,
                   invalid: !item.valid,
+                  breakpoint: breakpointCount('response', item.name) > 0,
                   dragging: dragging?.kind === 'response' && dragging.index === index,
                   'drop-target':
                     dragTarget?.kind === 'response' &&
@@ -281,14 +305,17 @@ onBeforeUnmount(() => {
                 }"
                 :draggable="true"
                 :aria-label="item.name"
-                @click="interceptorsStore.toggle('response', index)"
+                @click="nodeClick('response', item, index)"
                 @contextmenu="nodeMenu($event, 'response', item, index)"
                 @dragstart="dragStart($event, 'response', index)"
                 @dragover="dragOver($event, 'response', index)"
                 @drop="drop($event, 'response', index)"
                 @dragend="dragEnd"
               >
-                <span v-if="!item.valid">!</span>
+                <span v-if="breakpointCount('response', item.name) > 0" class="breakpoint-count">
+                  {{ breakpointBadge('response', item.name) }}
+                </span>
+                <span v-else-if="!item.valid">!</span>
               </button>
             </AppTooltip>
             <AppTooltip
@@ -441,6 +468,16 @@ onBeforeUnmount(() => {
   color: var(--danger);
   font-size: 12px;
   font-weight: 700;
+}
+.pipeline-node.breakpoint {
+  background: var(--warning);
+  color: #fff;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #000 14%, transparent);
+}
+.breakpoint-count {
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 800;
 }
 .pipeline-node.dragging {
   opacity: 0.38;

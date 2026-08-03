@@ -119,6 +119,7 @@ impl Workspace {
             .open(root.join(".proxycrab.lock"))?;
         lock.try_lock_exclusive()
             .context("workspace is already in use by another ProxyCrab process")?;
+        crate::migration::migrate_workspace(&root)?;
 
         let config_path = root.join(WORKSPACE_CONFIG_FILE);
         let mut config = read_json::<AppConfig>(&config_path).unwrap_or_default();
@@ -463,11 +464,11 @@ fn load_sessions(root: &Path) -> Result<Vec<SessionMetadata>> {
     Ok(sessions)
 }
 
-fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
+pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     Ok(serde_json::from_slice(&fs::read(path)?)?)
 }
 
-fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
+pub(crate) fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
     let content = serde_json::to_vec_pretty(value)?;
     write_bytes_atomic(path, &content)
 }

@@ -13,10 +13,11 @@ This reference documents the complete local HTTP surface used by ProxyCrab agent
 7. [Session views](#session-views)
 8. [Column, filter, and routing scripts](#column-filter-and-routing-scripts)
 9. [Interceptors](#interceptors)
-10. [Bypass traffic](#bypass-traffic)
-11. [Certificate authority](#certificate-authority)
-12. [System logs](#system-logs)
-13. [Errors and lifecycle notes](#errors-and-lifecycle-notes)
+10. [Active breakpoints](#active-breakpoints)
+11. [Bypass traffic](#bypass-traffic)
+12. [Certificate authority](#certificate-authority)
+13. [System logs](#system-logs)
+14. [Errors and lifecycle notes](#errors-and-lifecycle-notes)
 
 ## Connection and envelopes
 
@@ -444,6 +445,7 @@ Returns:
     "uri": "https://example.com/api/orders",
     "version": "HTTP/1.1",
     "headers": [{ "name": "content-type", "value": "application/json" }],
+    "tags": { "environment": "staging" },
     "body": { "type": "json", "content": { "sku": "A-1" } }
   },
   "response": {
@@ -465,6 +467,9 @@ Each interceptor execution is:
 
 ```json
 {
+  "execution_id": 17,
+  "origin": "saved",
+  "completed": true,
   "phase": "request",
   "position": 0,
   "name": "add-debug-header",
@@ -479,7 +484,9 @@ Each interceptor execution is:
 ```
 
 Other modification variants are `header_append`, `header_remove` with `values`,
-`body_replace_string` with `content`, and `body_replace_file` with `path`.
+`body_replace_string` with `content`, `body_replace_file` with `path`, and `tag_set` with `key` and
+`value`. Multiple temporary executions may share the same phase and position; use `execution_id`
+and array order rather than treating position as unique.
 
 ## Session views
 
@@ -665,6 +672,32 @@ remain editable. Returns the resolved payload including `valid`.
 At request start, ProxyCrab pins the Session and snapshots the exact UTF-8 content of all enabled,
 present scripts in both chains. The response phase uses that snapshot even if scripts or chains
 change mid-flight. Missing and disabled nodes are skipped.
+
+## Active breakpoints
+
+### `GET /api/breakpoints`
+
+Lists active breakpoints in the selected/active Session. Optional query parameters are
+`session_id`, `phase=request|response`, and `interceptor_name`. A summary contains `id`, Session and
+capture IDs, phase/position/name, method/URI, timestamps, and `remaining_ms`.
+
+### `GET /api/breakpoints/{id}`
+
+Returns `{ "breakpoint": <summary>, "log": <live LogDetail> }`. The log reflects mutations up to
+the current paused point.
+
+### Breakpoint controls
+
+```text
+POST /api/breakpoints/{id}/extend   body: {"timeout_ms":60000}
+POST /api/breakpoints/{id}/execute  body: {"content":"req:setTag('debug','1')"}
+POST /api/breakpoints/{id}/release  no body
+```
+
+Extension is cumulative and silently clips total requested wait to 1,800,000 ms. Execute keeps the
+request paused and returns the independent temporary execution plus refreshed breakpoint summary;
+Lua errors are returned in `execution.error` after partial mutations/history are persisted.
+Breakpoints auto-release at timeout and are not persisted across process restarts.
 
 ## Bypass traffic
 

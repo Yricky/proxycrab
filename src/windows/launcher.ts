@@ -15,6 +15,7 @@ import ScriptSnapshotWindow from "./ScriptSnapshotWindow.vue";
 import SkillInstallWindow from "./SkillInstallWindow.vue";
 import RoutingManagerWindow from "./RoutingManagerWindow.vue";
 import BypassWindow from "./BypassWindow.vue";
+import BreakpointListWindow from "./BreakpointListWindow.vue";
 
 export type ScriptEditorKind = "column" | InterceptorKind;
 
@@ -25,6 +26,30 @@ export function openLogDetail(sessionId: number, logId: number): void {
     props: { sessionId, logId },
     width: 860,
     height: 560,
+  });
+}
+
+export function openBreakpointList(
+  sessionId: number,
+  phase: InterceptorKind,
+  interceptorName: string,
+): void {
+  windowsStore.open(`breakpoints-${sessionId}-${phase}-${interceptorName}`, {
+    title: `${interceptorName} — 断点列表`,
+    component: BreakpointListWindow,
+    props: { sessionId, phase, interceptorName },
+    width: 680,
+    height: 420,
+  });
+}
+
+export function openBreakpointDetail(breakpointId: number, captureId: number): void {
+  windowsStore.open(`breakpoint-${breakpointId}`, {
+    title: `#${captureId} — 断点详情`,
+    component: LogDetailWindow,
+    props: { breakpointId },
+    width: 900,
+    height: 650,
   });
 }
 
@@ -46,7 +71,7 @@ export function openScriptSnapshot(
   execution: InterceptorExecution,
 ): void {
   windowsStore.open(
-    `script-snapshot-${sessionId}-${logId}-${execution.phase}-${execution.position}`,
+    `script-snapshot-${sessionId}-${logId}-${execution.execution_id}`,
     {
       title: `${execution.name} — 历史脚本`,
       component: ScriptSnapshotWindow,

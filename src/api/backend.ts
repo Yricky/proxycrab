@@ -1,12 +1,17 @@
 import type {
   ActiveSession,
   AppConfig,
+  BreakpointDetailPayload,
+  BreakpointQuery,
+  BreakpointSummary,
   BypassPage,
   BypassQuery,
   CertificateResponse,
   CreateSessionRequest,
   DebugFilterScriptRequest,
   DeleteCount,
+  ExecuteTemporaryScriptRequest,
+  ExtendBreakpointRequest,
   InterceptorCreateRequest,
   InterceptorKind,
   InterceptorLibraryList,
@@ -30,6 +35,7 @@ import type {
   SkillInstallInfo,
   UpdateScriptRequest,
   UpdateSessionRequest,
+  TemporaryExecutionResult,
   WorkspacePaths,
 } from "./types";
 
@@ -63,6 +69,17 @@ export interface Backend {
   getLogIds(request: LogIdsRequest): Promise<LogIdsPayload>;
   getLogViews(request: LogViewsRequest): Promise<LogViewsPayload>;
   getLog(sessionId: number | null, id: number): Promise<LogDetail>;
+  listBreakpoints(query: BreakpointQuery): Promise<BreakpointSummary[]>;
+  getBreakpoint(id: number): Promise<BreakpointDetailPayload>;
+  extendBreakpoint(
+    id: number,
+    request: ExtendBreakpointRequest,
+  ): Promise<BreakpointSummary>;
+  releaseBreakpoint(id: number): Promise<void>;
+  executeBreakpointScript(
+    id: number,
+    request: ExecuteTemporaryScriptRequest,
+  ): Promise<TemporaryExecutionResult>;
   getSessionView(sessionId: number | null): Promise<SessionViewPayload>;
   replaceSessionView(
     sessionId: number | null,

@@ -1,9 +1,11 @@
 //! MITM capture runtime used by ProxyCrab frontends and management transports.
 
+mod breakpoint;
 pub mod bypass;
 pub mod ca;
 pub mod log_buffer;
 pub mod lua;
+mod migration;
 pub mod model;
 pub mod proxy;
 pub mod runtime;

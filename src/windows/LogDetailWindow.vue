@@ -3,11 +3,13 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useBackend } from "../api";
 import type {
   BodyPayload,
+  BreakpointSummary,
   HeaderItem,
   InterceptorExecution,
   LogDetail,
   Modification,
 } from "../api/types";
+import { BackendError } from "../api/tauri-backend";
 import { appStore, reportError } from "../stores/app";
 import { formatBytes } from "../utils/format";
 import { bodyLanguage } from "../utils/body-language";
@@ -15,26 +17,123 @@ import MonacoEditor from "../components/MonacoEditor.vue";
 import { Io5Checkmark, Io5Copy, Io5Warning } from "vue-icons-plus/io5";
 import { openScriptSnapshot } from "./launcher";
 
-const props = defineProps<{ sessionId: number; logId: number }>();
+const props = defineProps<{
+  sessionId?: number;
+  logId?: number;
+  breakpointId?: number;
+}>();
 
 const backend = useBackend();
 
 const detail = ref<LogDetail | null>(null);
 const loading = ref(true);
 const loadError = ref<string | null>(null);
+const breakpoint = ref<BreakpointSummary | null>(null);
+const temporaryScript = ref("");
+const scriptPanelOpen = ref(false);
+const executingScript = ref(false);
+const releasing = ref(false);
+const extending = ref(false);
+const extensionSeconds = ref(60);
 
 let autoRefreshTimer: number | undefined;
+let breakpointRefreshTimer: number | undefined;
+let loadInFlight = false;
 
-async function load(): Promise<void> {
-  loading.value = true;
+async function load(silent = false): Promise<void> {
+  if (loadInFlight) return;
+  loadInFlight = true;
+  if (!silent) loading.value = true;
   loadError.value = null;
   try {
-    detail.value = await backend.getLog(props.sessionId, props.logId);
+    if (props.breakpointId !== undefined && breakpoint.value !== null) {
+      const payload = await backend.getBreakpoint(props.breakpointId);
+      breakpoint.value = payload.breakpoint;
+      detail.value = payload.log;
+    } else if (props.breakpointId !== undefined && detail.value === null) {
+      const payload = await backend.getBreakpoint(props.breakpointId);
+      breakpoint.value = payload.breakpoint;
+      detail.value = payload.log;
+      activeTab.value = payload.breakpoint.phase;
+    } else if (props.sessionId !== undefined && props.logId !== undefined) {
+      detail.value = await backend.getLog(props.sessionId, props.logId);
+    } else if (detail.value) {
+      detail.value = await backend.getLog(detail.value.session_id, detail.value.id);
+    }
   } catch (error) {
-    loadError.value = reportError(error, "加载日志详情失败");
+    if (
+      silent &&
+      error instanceof BackendError &&
+      error.code === "not_found" &&
+      detail.value
+    ) {
+      breakpoint.value = null;
+      try {
+        detail.value = await backend.getLog(detail.value.session_id, detail.value.id);
+      } catch {
+        // Keep the last live snapshot while the resumed request finishes persisting.
+      }
+    } else if (!silent) {
+      loadError.value = reportError(error, "加载日志详情失败");
+    }
   } finally {
     loading.value = false;
+    loadInFlight = false;
   }
+}
+
+async function extendBreakpoint(): Promise<void> {
+  if (!breakpoint.value || !Number.isFinite(extensionSeconds.value)) return;
+  extending.value = true;
+  try {
+    breakpoint.value = await backend.extendBreakpoint(breakpoint.value.id, {
+      timeout_ms: Math.max(0, Math.floor(extensionSeconds.value * 1000)),
+    });
+  } catch (error) {
+    reportError(error, "延长断点失败");
+  } finally {
+    extending.value = false;
+  }
+}
+
+async function releaseBreakpoint(): Promise<void> {
+  if (!breakpoint.value) return;
+  releasing.value = true;
+  try {
+    await backend.releaseBreakpoint(breakpoint.value.id);
+    breakpoint.value = null;
+    appStore.toast("断点已放行", "success");
+    window.setTimeout(() => void load(true), 100);
+  } catch (error) {
+    reportError(error, "放行断点失败");
+  } finally {
+    releasing.value = false;
+  }
+}
+
+async function executeTemporaryScript(): Promise<void> {
+  if (!breakpoint.value || executingScript.value) return;
+  executingScript.value = true;
+  try {
+    const result = await backend.executeBreakpointScript(breakpoint.value.id, {
+      content: temporaryScript.value,
+    });
+    breakpoint.value = result.breakpoint;
+    await load(true);
+    if (result.execution.error) {
+      appStore.toast(`临时脚本报错：${result.execution.error}`, "error", 5000);
+    } else {
+      appStore.toast("临时脚本修改已应用，断点仍保持", "success");
+    }
+  } catch (error) {
+    reportError(error, "执行临时脚本失败");
+  } finally {
+    executingScript.value = false;
+  }
+}
+
+function remainingLabel(): string {
+  return `${Math.max(0, Math.ceil((breakpoint.value?.remaining_ms ?? 0) / 1000))} 秒`;
 }
 
 // 请求仍在进行时自动轮询，完成后停止
@@ -45,16 +144,24 @@ watch(
       window.clearTimeout(autoRefreshTimer);
       autoRefreshTimer = undefined;
     }
-    if (outcome === "in_progress") {
+    if (props.breakpointId === undefined && outcome === "in_progress") {
       autoRefreshTimer = window.setTimeout(() => void load(), 2000);
     }
   },
 );
 
-onMounted(load);
+onMounted(() => {
+  void load();
+  if (props.breakpointId !== undefined) {
+    breakpointRefreshTimer = window.setInterval(() => {
+      if (breakpoint.value || detail.value?.outcome === "in_progress") void load(true);
+    }, 500);
+  }
+});
 onBeforeUnmount(() => {
   if (autoRefreshTimer !== undefined) window.clearTimeout(autoRefreshTimer);
   if (copiedTimer !== undefined) window.clearTimeout(copiedTimer);
+  if (breakpointRefreshTimer !== undefined) window.clearInterval(breakpointRefreshTimer);
 });
 
 // ---------- tabs ----------
@@ -272,6 +379,7 @@ const modificationKindLabels: Record<string, string> = {
   header_remove: "删除头",
   body_replace_string: "替换 Body 为字符串",
   body_replace_file: "替换 Body 为文件",
+  tag_set: "设置 Tag",
 };
 
 function modificationLabel(mod: Modification): string {
@@ -291,6 +399,8 @@ function modificationDetail(mod: Modification): string {
       return mod.content;
     case "body_replace_file":
       return mod.path;
+    case "tag_set":
+      return `${mod.key}: ${mod.value}`;
     case "snapshot":
       return `${Object.keys(mod.headers).length} 个请求头`;
   }
@@ -301,7 +411,8 @@ function visibleModifications(execution: InterceptorExecution): Modification[] {
 }
 
 function openExecution(execution: InterceptorExecution): void {
-  openScriptSnapshot(props.sessionId, props.logId, execution);
+  if (!detail.value) return;
+  openScriptSnapshot(detail.value.session_id, detail.value.id, execution);
 }
 
 function headerCount(headers: HeaderItem[]): string {
@@ -368,6 +479,48 @@ function headerCount(headers: HeaderItem[]): string {
           <div class="error-message mono">{{ detail.error.message }}</div>
         </div>
       </div>
+
+      <section v-if="breakpoint" class="breakpoint-panel">
+        <div class="breakpoint-actions">
+          <span class="breakpoint-state">
+            断点等待中 · {{ breakpoint.interceptor_name }} · 剩余 {{ remainingLabel() }}
+          </span>
+          <span class="summary-spacer" />
+          <input
+            v-model.number="extensionSeconds"
+            class="input extension-input mono"
+            type="number"
+            min="0"
+            step="1"
+            aria-label="延长秒数"
+          />
+          <span class="extension-unit">秒</span>
+          <button class="btn" :disabled="extending" @click="extendBreakpoint">
+            {{ extending ? "延长中…" : "延长" }}
+          </button>
+          <button class="btn" @click="scriptPanelOpen = !scriptPanelOpen">
+            {{ scriptPanelOpen ? "收起临时脚本" : "执行临时脚本" }}
+          </button>
+          <button class="btn primary" :disabled="releasing" @click="releaseBreakpoint">
+            {{ releasing ? "放行中…" : "放行" }}
+          </button>
+        </div>
+        <div v-if="scriptPanelOpen" class="temporary-script">
+          <div class="temporary-editor">
+            <MonacoEditor v-model="temporaryScript" language="lua" />
+          </div>
+          <div class="temporary-footer">
+            <span>能力与当前阶段一致；临时脚本中不可再次调用 breakpoint()</span>
+            <button
+              class="btn primary"
+              :disabled="executingScript"
+              @click="executeTemporaryScript"
+            >
+              {{ executingScript ? "执行中…" : "应用修改（保持断点）" }}
+            </button>
+          </div>
+        </div>
+      </section>
 
       <!-- Tab 栏 -->
       <nav class="tab-bar">
@@ -550,12 +703,14 @@ function headerCount(headers: HeaderItem[]): string {
             <div class="execution-section-title">请求拦截器</div>
             <article
               v-for="execution in detail.request_interceptors"
-              :key="`request-${execution.position}`"
+              :key="execution.execution_id"
               class="card execution-card"
             >
               <button class="execution-head" @click="openExecution(execution)">
                 <span class="execution-order">#{{ execution.position + 1 }}</span>
                 <span class="execution-name mono">{{ execution.name }}</span>
+                <span v-if="execution.origin === 'temporary'" class="execution-origin">临时</span>
+                <span v-else-if="!execution.completed" class="execution-origin waiting">暂停中</span>
                 <span class="execution-hash mono">{{ execution.script_hash.slice(0, 12) }}</span>
                 <span class="execution-open">查看历史脚本</span>
               </button>
@@ -584,12 +739,14 @@ function headerCount(headers: HeaderItem[]): string {
             <div class="execution-section-title">响应拦截器</div>
             <article
               v-for="execution in detail.response_interceptors"
-              :key="`response-${execution.position}`"
+              :key="execution.execution_id"
               class="card execution-card"
             >
               <button class="execution-head" @click="openExecution(execution)">
                 <span class="execution-order">#{{ execution.position + 1 }}</span>
                 <span class="execution-name mono">{{ execution.name }}</span>
+                <span v-if="execution.origin === 'temporary'" class="execution-origin">临时</span>
+                <span v-else-if="!execution.completed" class="execution-origin waiting">暂停中</span>
                 <span class="execution-hash mono">{{ execution.script_hash.slice(0, 12) }}</span>
                 <span class="execution-open">查看历史脚本</span>
               </button>
@@ -779,6 +936,29 @@ function headerCount(headers: HeaderItem[]): string {
 }
 
 /* ---------- Tab 栏 ---------- */
+
+.breakpoint-panel {
+  flex: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--bg-panel));
+}
+.breakpoint-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+}
+.breakpoint-state {
+  color: var(--warning);
+  font-size: 11px;
+  font-weight: 600;
+}
+.extension-input { width: 68px; padding: 4px 7px; }
+.extension-unit, .temporary-footer { color: var(--text-faint); font-size: 10px; }
+.temporary-script { height: 210px; display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--bg-panel); }
+.temporary-editor { flex: 1; min-height: 0; display: flex; }
+.temporary-footer { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-top: 1px solid var(--border); }
+.temporary-footer span { flex: 1; }
 
 .tab-bar {
   flex: none;
@@ -1036,6 +1216,18 @@ function headerCount(headers: HeaderItem[]): string {
   flex: none;
   color: var(--text-faint);
   font-size: 10px;
+}
+.execution-origin {
+  flex: none;
+  border-radius: 7px;
+  padding: 1px 6px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 9px;
+}
+.execution-origin.waiting {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--warning);
 }
 .execution-open {
   margin-left: auto;

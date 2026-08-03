@@ -9,7 +9,8 @@ use proxy_crab_mitm::{
     bypass::BypassOutcome,
     log_buffer::LogBuffer,
     model::{
-        CaptureOutcome, ProxyStatus, Script, ScriptKind, SessionInterceptor, SessionInterceptors,
+        BodyPayload, BreakpointListFilter, CaptureOutcome, InterceptorExecutionOrigin,
+        InterceptorKind, ProxyStatus, Script, ScriptKind, SessionInterceptor, SessionInterceptors,
     },
 };
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
@@ -409,6 +410,236 @@ async fn session_interceptor_chain_executes_and_records_source() {
     assert_eq!(detail.request_interceptors[0].name, "session-header");
     assert_eq!(detail.request_interceptors[0].content, source);
 
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn crab_skip_avoids_upstream_and_runs_response_interceptors() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "skip-upstream".into(),
+                content: "req:setTag('_crab_skip', ''); req:setTag('team', 'checkout')".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .create_script(
+            ScriptKind::ResponseInterceptor,
+            Script {
+                name: "build-response".into(),
+                content: "assert(req:getTag('team') == 'checkout'); \
+                          resp.headers:set('x-skipped', '1'); \
+                          resp.body:replace_with_string('mocked')"
+                    .into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "skip-upstream".into(),
+                    enabled: true,
+                }],
+                response: vec![SessionInterceptor {
+                    name: "build-response".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+
+    let unreachable_port = unused_port();
+    let response = proxy_get(
+        proxy_port,
+        &format!("http://127.0.0.1:{unreachable_port}/skipped"),
+        &format!("127.0.0.1:{unreachable_port}"),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert!(
+        response.to_ascii_lowercase().contains("x-skipped: 1"),
+        "{response}"
+    );
+    assert!(response.ends_with("mocked"), "{response}");
+
+    let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+    assert_eq!(capture.request.tags["_crab_skip"], "");
+    assert_eq!(capture.request.tags["team"], "checkout");
+    let detail = runtime.capture(session.id, capture.id).unwrap().unwrap();
+    assert_eq!(detail.response_interceptors.len(), 1);
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn breakpoint_accepts_temporary_changes_and_resumes_saved_script() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let (upstream_port, upstream) = fixed_http_upstream().await;
+    let session = runtime.create_session(None, None).unwrap();
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "hold-request".into(),
+                content: "breakpoint(5000); req.headers:set('x-after', req:getTag('temp'))".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "hold-request".into(),
+                    enabled: true,
+                }],
+                response: vec![],
+            },
+        )
+        .unwrap();
+
+    let uri = format!("http://127.0.0.1:{upstream_port}/breakpoint");
+    let host = format!("127.0.0.1:{upstream_port}");
+    let request_task = tokio::spawn(async move { proxy_get(proxy_port, &uri, &host).await });
+    let filter = BreakpointListFilter {
+        session_id: session.id,
+        phase: Some(InterceptorKind::Request),
+        interceptor_name: Some("hold-request".into()),
+    };
+    let breakpoint = timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(item) = runtime.breakpoints(&filter).into_iter().next() {
+                break item;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let temporary = runtime
+        .execute_breakpoint_script(
+            breakpoint.id,
+            "req:setTag('temp', 'applied'); \
+             req.headers:set('content-type', 'text/plain'); \
+             req.body:replace_with_string('temporary request body')",
+        )
+        .unwrap();
+    assert_eq!(
+        temporary.execution.origin,
+        InterceptorExecutionOrigin::Temporary
+    );
+    assert_eq!(runtime.breakpoints(&filter).len(), 1);
+    runtime.release_breakpoint(breakpoint.id).unwrap();
+    let response = request_task.await.unwrap();
+    assert!(response.contains("\r\n\r\nok"));
+
+    let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+    assert_eq!(capture.request.headers["x-after"], ["applied"]);
+    assert_eq!(capture.request.tags["temp"], "applied");
+    let detail = runtime.capture(session.id, capture.id).unwrap().unwrap();
+    assert_eq!(
+        detail.request_body,
+        BodyPayload::Text {
+            content: "temporary request body".into()
+        }
+    );
+    assert_eq!(detail.request_interceptors.len(), 2);
+    assert_eq!(
+        detail.request_interceptors[1].origin,
+        InterceptorExecutionOrigin::Temporary
+    );
+
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn response_breakpoint_exposes_live_response_and_applies_temporary_body() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let (upstream_port, upstream) = fixed_http_upstream().await;
+    let session = runtime.create_session(None, None).unwrap();
+    runtime
+        .create_script(
+            ScriptKind::ResponseInterceptor,
+            Script {
+                name: "hold-response".into(),
+                content: "breakpoint(5000); resp.headers:set('x-after', req:getTag('temp'))".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![],
+                response: vec![SessionInterceptor {
+                    name: "hold-response".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+
+    let uri = format!("http://127.0.0.1:{upstream_port}/response-breakpoint");
+    let host = format!("127.0.0.1:{upstream_port}");
+    let request_task = tokio::spawn(async move { proxy_get(proxy_port, &uri, &host).await });
+    let filter = BreakpointListFilter {
+        session_id: session.id,
+        phase: Some(InterceptorKind::Response),
+        interceptor_name: Some("hold-response".into()),
+    };
+    let breakpoint = timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(item) = runtime.breakpoints(&filter).into_iter().next() {
+                break item;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let live = runtime.breakpoint(breakpoint.id).unwrap();
+    assert_eq!(live.capture.summary.response.as_ref().unwrap().status, 200);
+    assert_eq!(
+        live.capture.response_body,
+        BodyPayload::Text {
+            content: "ok".into()
+        }
+    );
+    runtime
+        .execute_breakpoint_script(
+            breakpoint.id,
+            "req:setTag('temp', 'yes'); resp.body:replace_with_string('changed')",
+        )
+        .unwrap();
+    let changed = runtime.breakpoint(breakpoint.id).unwrap();
+    assert_eq!(
+        changed.capture.response_body,
+        BodyPayload::Text {
+            content: "changed".into()
+        }
+    );
+
+    runtime.release_breakpoint(breakpoint.id).unwrap();
+    let response = request_task.await.unwrap();
+    assert!(response.to_ascii_lowercase().contains("x-after: yes"));
+    assert!(response.ends_with("changed"));
+    let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+    let persisted = runtime.capture(session.id, capture.id).unwrap().unwrap();
+    assert_eq!(
+        persisted.response_body,
+        BodyPayload::Text {
+            content: "changed".into()
+        }
+    );
     runtime.stop_proxy().await.unwrap();
     upstream.abort();
 }

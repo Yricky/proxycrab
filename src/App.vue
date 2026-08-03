@@ -14,17 +14,20 @@ import { sessionsStore } from "./stores/sessions";
 import { proxyStore } from "./stores/proxy";
 import { logsStore } from "./stores/logs";
 import { startHttpApiSync, stopHttpApiSync } from "./stores/http-api-sync";
+import { breakpointsStore } from "./stores/breakpoints";
 
 onMounted(async () => {
   await startHttpApiSync();
   proxyStore.startPolling();
   await sessionsStore.init();
   logsStore.startPolling();
+  breakpointsStore.startPolling();
 });
 
 onBeforeUnmount(() => {
   proxyStore.stopPolling();
   logsStore.stopPolling();
+  breakpointsStore.stopPolling();
   stopHttpApiSync();
 });
 </script>

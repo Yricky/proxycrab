@@ -39,6 +39,7 @@ The default management API is `http://127.0.0.1:18089`. Every script also accept
 | Create or update a custom column | `scripts/column-upsert.mjs` |
 | Create or update an interceptor | `scripts/interceptor-upsert.mjs` |
 | Attach interceptor chains to a Session | `scripts/session-interceptors-set.mjs` |
+| Inspect or control active interceptor breakpoints | `scripts/breakpoint-list.mjs`, then `scripts/breakpoint-control.mjs` |
 | Create or update a routing script | `scripts/routing-upsert.mjs` |
 | Select or clear the routing script | `scripts/routing-select.mjs` |
 | Inspect or change the active Session | `GET` or `PUT /api/active-session` |
@@ -151,6 +152,17 @@ node <skill-dir>/scripts/session-interceptors-set.mjs \
 Do not claim that an interceptor worked merely because it saved successfully. Capture a new request
 and verify the historical execution and modifications in `log-get.mjs` output.
 
+When an interceptor is paused, list active breakpoints before acting:
+
+```bash
+node <skill-dir>/scripts/breakpoint-list.mjs --session-id 3 --phase request
+node <skill-dir>/scripts/breakpoint-control.mjs --id 7 --action detail
+```
+
+Extending, releasing, or executing a temporary script changes a live request. Perform those actions
+only when the user asks. Temporary execution keeps the breakpoint paused and can retain mutations
+made before a Lua error; inspect the returned `execution.error` and modifications.
+
 Routing scripts return `true` to capture into the active Session and `false` or `nil` to bypass
 capture and TLS decryption. Returning `true` with no active Session also bypasses. Invalid returns
 and script errors emit a system warning and bypass. Select a routing script only after reviewing
@@ -172,6 +184,8 @@ and script errors emit a system warning and bypass. Select a routing script only
   expose their raw bytes.
 - Interceptor mutations applied before a Lua runtime error remain applied. Inspect both
   `modifications` and `error`.
+- Request tags are capture-local metadata. Presence of `_crab_skip`, including an empty value,
+  intentionally suppresses the upstream request after the complete request chain.
 - Keep user-created debugging state unless the user asks for cleanup. Automatic restoration is not
   required.
 - Expect Session, filter, column, and interceptor changes to appear in the desktop UI. If the UI

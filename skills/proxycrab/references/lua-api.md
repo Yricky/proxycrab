@@ -168,6 +168,7 @@ return entry.req.headers:get("x-request-id")
 | `entry.req.version` | string |
 | `entry.req.uri` | URI object |
 | `entry.req.headers` | read-only headers |
+| `entry.req:getTag(key)` | string or `nil` |
 
 ### Read-only response
 
@@ -232,20 +233,27 @@ A request interceptor receives mutable global `req`:
 | `req.uri` | read-only | URI object |
 | `req.headers` | mutable methods | headers |
 | `req.body` | mutable methods | body |
+| `req:getTag(key)` | read-only method | string or `nil` |
+| `req:setTag(key, value)` | mutable method | tag |
 
 Example:
 
 ```lua
 req.headers:remove("x-old-debug")
 req.headers:set("x-debug-mode", "1")
+req:setTag("debug", "")
 req.body:replace_with_string('{"debug":true}')
+breakpoint(30000)
 ```
 
-Method, version, and URI cannot be changed.
+Method, version, and URI cannot be changed. Tags are string key/value metadata stored with the
+capture and never sent upstream. An empty value still counts as present. After the full request
+chain, presence of `_crab_skip` skips upstream and produces a default empty HTTP/1.1 200 response
+before response interceptors run.
 
 ## Response interceptors
 
-A response interceptor receives mutable global `resp`:
+A response interceptor receives mutable global `resp` plus tag-only global `req`:
 
 | Field | Access | Type |
 | --- | --- | --- |
@@ -253,6 +261,8 @@ A response interceptor receives mutable global `resp`:
 | `resp.version` | read-only | string |
 | `resp.headers` | mutable methods | headers |
 | `resp.body` | mutable methods | body |
+| `req:getTag(key)` | read-only method | string or `nil` |
+| `req:setTag(key, value)` | mutable method | tag |
 
 Example:
 
@@ -262,6 +272,15 @@ resp.body:replace_with_file("/absolute/path/to/response.json")
 ```
 
 Status and version cannot be changed.
+
+## Breakpoints
+
+Saved request and response interceptors provide `breakpoint(timeoutMs)`. Zero returns immediately;
+a positive timeout pauses the current network request and behaves like a long-running function call.
+The desktop/API can extend the total wait (silently clipped to 1,800 seconds), release it, or run
+multiple temporary scripts against the same live phase state. Each temporary execution has the same
+phase capabilities except `breakpoint` itself is unavailable, and is persisted as an independent
+history record. Lua errors use normal interceptor semantics: mutations before the error remain.
 
 ## Mutable body API
 
@@ -295,6 +314,7 @@ Each executed script records:
 - exact source content;
 - the initial header snapshot and ordered mutations;
 - an optional runtime error.
+- execution ID, saved/temporary origin, and completion state.
 
 Disabled and missing scripts do not execute and are not recorded.
 

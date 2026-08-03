@@ -69,6 +69,9 @@ The server listens on loopback by default at `http://127.0.0.1:18089`. It has no
 | `/api/logs/ids` | `POST` bounded/filterable log ID query |
 | `/api/logs/views` | `POST` batch incremental table-view rendering |
 | `/api/logs/{id}` | `GET` complete log detail |
+| `/api/breakpoints` | `GET` active breakpoints for one Session |
+| `/api/breakpoints/{id}` | `GET` live detail at the paused interceptor |
+| `/api/breakpoints/{id}/extend`, `/release`, `/execute` | `POST` breakpoint controls |
 | `/api/session-view` | `GET`, `PUT` whole-session table view |
 | `/api/session-interceptors` | `GET`, `PUT` whole-session interceptor chains |
 | `/api/column-scripts`, `/api/column-scripts/{name}` | script CRUD |
@@ -192,7 +195,13 @@ The response columns and cells do not contain the ID column; `row.id` is a separ
 
 ### Read one complete log
 
-`GET /api/logs/{id}?session_id=1` returns request/response metadata and bodies, error/outcome state, plus `created_at`, `updated_at`, and ordered `request_interceptors` / `response_interceptors` execution arrays. Every execution contains the historical script name, phase, zero-based position, SHA-256 hash, exact source content, its own modifications, and an optional runtime error. Scripts that executed without changes are still present. Disabled and missing scripts are not recorded.
+`GET /api/logs/{id}?session_id=1` returns request/response metadata and bodies, error/outcome state,
+plus `created_at`, `updated_at`, request `tags`, and ordered `request_interceptors` /
+`response_interceptors` execution arrays. Every execution contains a unique `execution_id`,
+`origin` (`saved` or `temporary`), `completed`, the historical script name, phase, zero-based
+position, SHA-256 hash, exact source content, its own modifications, and an optional runtime error.
+Tag changes use the `tag_set` modification. Scripts that executed without changes are still present.
+Disabled and missing scripts are not recorded.
 
 ## Session table views
 
@@ -318,6 +327,24 @@ meantime. Missing and disabled nodes are skipped.
 
 Executed content is stored in the Session capture database by lowercase SHA-256. `interceptor_script_contents` stores one copy of each unique source, while `capture_interceptor_runs` links captures to ordered executions and per-script modifications.
 
+## Active interceptor breakpoints
+
+`GET /api/breakpoints?session_id=1&phase=request&interceptor_name=set-env` lists only active,
+in-memory breakpoints for the selected Session; `phase` and `interceptor_name` are optional.
+`GET /api/breakpoints/{id}` returns `{ "breakpoint": ..., "log": ... }`, where `log` is overlaid
+with the current live headers, body replacement, and tags at the paused point.
+
+Controls are:
+
+- `POST /api/breakpoints/{id}/extend` with `{ "timeout_ms": 60000 }`; cumulative requested wait is
+  silently clipped to 1,800,000 ms.
+- `POST /api/breakpoints/{id}/execute` with `{ "content": "..." }`; applies mutations, stores one
+  independent temporary execution, and keeps the breakpoint paused even when Lua reports an error.
+- `POST /api/breakpoints/{id}/release`; resumes saved-script execution after `breakpoint()`.
+
+Breakpoints automatically release when their deadline expires. They are process-local and are not
+restored after restart.
+
 ## Capture lifecycle
 
 A routed HTTP request is inserted into its selected Session database before it is forwarded. The
@@ -349,6 +376,10 @@ and proxy/API addresses are stored in workspace configuration. Each Session stor
 its table view and filter in `sessions/<id>/view.json`, and interceptor chains in
 `sessions/<id>/interceptors.json`. Session deletion is rejected while the proxy is starting,
 running, or stopping.
+The root `workspace_schema.json` is the version label for the whole workspace. Workspace open runs
+the centralized, ordered migration chain before any stores are used and atomically advances the
+label after each successful version. Every migration function documents that version's storage
+model changes; newer unsupported labels are rejected instead of being opened.
 Deleting the active Session while stopped clears the active ID without selecting a replacement.
 An active ID that references a missing Session is cleared and persisted when the workspace opens.
 

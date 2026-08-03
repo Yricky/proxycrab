@@ -38,14 +38,16 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     ProxyCrab,
+    breakpoint::BreakpointContext,
     lua::{
-        BodyReplacement, evaluate_routing, execute_request_lenient_named,
-        execute_response_lenient_named, read_body_replacement,
+        BodyReplacement, BreakpointHook, ModificationJournal, SharedInterceptorState,
+        evaluate_routing, execute_request_with_state, execute_response_with_state,
+        read_body_replacement,
     },
     model::{
-        CaptureError, ErrorStage, HeaderValues, InterceptorKind, InterceptorRun, ProxyStatus,
-        RequestData, ResponseData, ScriptKind, SessionInterceptor, SessionMetadata,
-        script_content_hash,
+        CaptureError, ErrorStage, HeaderValues, InterceptorExecutionOrigin, InterceptorKind,
+        InterceptorRun, ProxyStatus, RequestData, ResponseData, ScriptKind, SessionInterceptor,
+        SessionMetadata, script_content_hash,
     },
     runtime::SessionPin,
     storage::{BodySide, CaptureStore},
@@ -1107,6 +1109,7 @@ async fn handle_session_http_request(
         uri: parts.uri.to_string(),
         version: version_name(parts.version).to_string(),
         headers: headers_to_values(&parts.headers),
+        tags: Default::default(),
     };
     let capture_id = match store.begin(&source.to_string(), &request_data, "request") {
         Ok(id) => id,
@@ -1171,21 +1174,84 @@ async fn handle_session_http_request(
     }
 
     let mut request_modifications = Vec::new();
+    let mut request_body_modified = false;
     for (position, script) in interceptor_snapshot.request.iter().enumerate() {
-        let mut modifications = Vec::new();
-        let mut run_error = None;
-        match execute_request_lenient_named(
-            &script.content,
-            &request_data,
-            &script.name,
-            Some(capture_id),
+        let state =
+            SharedInterceptorState::new(request_data.headers.clone(), request_data.tags.clone());
+        let journal = ModificationJournal::new(request_data.headers.clone());
+        let execution_id = match store.begin_interceptor_run(
+            capture_id,
+            &InterceptorRun {
+                origin: InterceptorExecutionOrigin::Saved,
+                completed: false,
+                phase: InterceptorKind::Request,
+                position,
+                name: script.name.clone(),
+                script_hash: script.hash.clone(),
+                content: script.content.clone(),
+                modifications: journal.snapshot(),
+                error: None,
+            },
         ) {
-            Ok((effects, error)) => {
+            Ok(id) => id,
+            Err(error) => {
+                fail_capture(
+                    &store,
+                    capture_id,
+                    ErrorStage::Interceptor,
+                    "interceptor_history_store_failed",
+                    &error.to_string(),
+                );
+                return text_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "capture storage unavailable",
+                );
+            }
+        };
+        let breakpoint_context = BreakpointContext {
+            session_id: pin.session_id(),
+            capture_id,
+            phase: InterceptorKind::Request,
+            position,
+            interceptor_name: script.name.clone(),
+            parent_execution_id: execution_id,
+            request: request_data.clone(),
+            response: None,
+            state: state.clone(),
+            parent_journal: journal.clone(),
+            store: store.clone(),
+        };
+        let source = script.content.clone();
+        let script_name = script.name.clone();
+        let request_snapshot = request_data.clone();
+        let execution_state = state.clone();
+        let execution_journal = journal.clone();
+        let hook = BreakpointHook {
+            registry: runtime.breakpoint_registry(),
+            context: breakpoint_context,
+        };
+        let mut run_error = None;
+        let execution = tokio::task::spawn_blocking(move || {
+            execute_request_with_state(
+                &source,
+                &request_snapshot,
+                execution_state,
+                execution_journal,
+                &script_name,
+                Some(capture_id),
+                Some(hook),
+            )
+        })
+        .await;
+        match execution {
+            Ok(Ok((effects, error))) => {
                 request_data.headers = effects.headers;
+                request_data.tags = effects.tags;
                 if let Some(replacement) = effects.body {
                     match apply_body_replacement(&replacement) {
                         Ok(body) => {
                             request_body = body;
+                            request_body_modified = true;
                             remove_header_value(&mut request_data.headers, "content-encoding");
                         }
                         Err(error) => {
@@ -1195,31 +1261,27 @@ async fn handle_session_http_request(
                         }
                     }
                 }
-                modifications = effects.modifications;
-                request_modifications.extend(modifications.clone());
+                request_modifications.extend(effects.modifications);
                 if let Some(error) = error {
                     note_script_error(&store, capture_id, &script.name, &error);
                     append_run_error(&mut run_error, error);
                 }
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 let message = error.to_string();
                 note_script_error(&store, capture_id, &script.name, &message);
                 run_error = Some(message);
             }
+            Err(error) => {
+                let message = format!("interceptor worker failed: {error}");
+                note_script_error(&store, capture_id, &script.name, &message);
+                run_error = Some(message);
+            }
         }
-        if let Err(error) = store.record_interceptor_run(
-            capture_id,
-            &InterceptorRun {
-                phase: InterceptorKind::Request,
-                position,
-                name: script.name.clone(),
-                script_hash: script.hash.clone(),
-                content: script.content.clone(),
-                modifications,
-                error: run_error,
-            },
-        ) {
+        let modifications = journal.snapshot();
+        if let Err(error) =
+            store.update_interceptor_run(execution_id, &modifications, run_error.as_deref(), true)
+        {
             fail_capture(
                 &store,
                 capture_id,
@@ -1232,14 +1294,22 @@ async fn handle_session_http_request(
                 "capture storage unavailable",
             );
         }
+        if let Err(error) = store.update_tags(capture_id, &request_data.tags) {
+            fail_capture(
+                &store,
+                capture_id,
+                ErrorStage::Interceptor,
+                "capture_tags_store_failed",
+                &error.to_string(),
+            );
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "capture storage unavailable",
+            );
+        }
     }
-    if request_modifications.iter().any(|item| {
-        matches!(
-            item,
-            crate::model::Modification::BodyReplaceString { .. }
-                | crate::model::Modification::BodyReplaceFile { .. }
-        )
-    }) && let Err(error) = store.save_body(capture_id, BodySide::Request, true, &request_body)
+    if request_body_modified
+        && let Err(error) = store.save_body(capture_id, BodySide::Request, true, &request_body)
     {
         note_script_error(&store, capture_id, "request-body", &error.to_string());
     }
@@ -1270,6 +1340,26 @@ async fn handle_session_http_request(
         let _ = store.save_body(capture_id, BodySide::Response, false, &bytes);
         let _ = store.complete(capture_id, &response_data, &[]);
         return response_from_data(&response_data, bytes, false);
+    }
+
+    if request_data.tags.contains_key("_crab_skip") {
+        return finish_session_response(
+            SessionResponseContext {
+                runtime,
+                store,
+                session_id: pin.session_id(),
+                capture_id,
+            },
+            request_data,
+            ResponseData {
+                status: 200,
+                version: "HTTP/1.1".into(),
+                headers: HeaderValues::new(),
+            },
+            Vec::new(),
+            &interceptor_snapshot.response,
+        )
+        .await;
     }
 
     let upstream_request = match request_from_data(&request_data, request_body) {
@@ -1314,7 +1404,7 @@ async fn handle_session_http_request(
         }
     };
 
-    let mut response_data = ResponseData {
+    let response_data = ResponseData {
         status: upstream_response.status().as_u16(),
         version: version_name(upstream_response.version()).to_string(),
         headers: headers_to_values(upstream_response.headers()),
@@ -1345,7 +1435,7 @@ async fn handle_session_http_request(
         Limited::new(upstream_response, MAX_CAPTURE_BODY_BYTES).collect(),
     )
     .await;
-    let mut response_body = match collected_response {
+    let response_body = match collected_response {
         Ok(Ok(body)) => body.to_bytes().to_vec(),
         Ok(Err(error)) if error.downcast_ref::<LengthLimitError>().is_some() => {
             fail_capture(
@@ -1381,6 +1471,41 @@ async fn handle_session_http_request(
             );
         }
     };
+    finish_session_response(
+        SessionResponseContext {
+            runtime,
+            store,
+            session_id: pin.session_id(),
+            capture_id,
+        },
+        request_data,
+        response_data,
+        response_body,
+        &interceptor_snapshot.response,
+    )
+    .await
+}
+
+struct SessionResponseContext {
+    runtime: Arc<ProxyCrab>,
+    store: CaptureStore,
+    session_id: u64,
+    capture_id: u64,
+}
+
+async fn finish_session_response(
+    context: SessionResponseContext,
+    mut request_data: RequestData,
+    mut response_data: ResponseData,
+    mut response_body: Vec<u8>,
+    scripts: &[InterceptorSnapshot],
+) -> Response<ProxyBody> {
+    let SessionResponseContext {
+        runtime,
+        store,
+        session_id,
+        capture_id,
+    } = context;
     if let Err(error) = store.save_body(capture_id, BodySide::Response, false, &response_body) {
         fail_capture(
             &store,
@@ -1394,23 +1519,99 @@ async fn handle_session_http_request(
             "failed to persist response body",
         );
     }
+    if let Err(error) = store.update_response(capture_id, &response_data) {
+        fail_capture(
+            &store,
+            capture_id,
+            ErrorStage::ResponseBody,
+            "capture_response_update_failed",
+            &error.to_string(),
+        );
+        return text_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to persist response metadata",
+        );
+    }
 
     let mut response_modifications = Vec::new();
-    for (position, script) in interceptor_snapshot.response.iter().enumerate() {
-        let mut modifications = Vec::new();
-        let mut run_error = None;
-        match execute_response_lenient_named(
-            &script.content,
-            &response_data,
-            &script.name,
-            Some(capture_id),
+    let mut response_body_modified = false;
+    for (position, script) in scripts.iter().enumerate() {
+        let state =
+            SharedInterceptorState::new(response_data.headers.clone(), request_data.tags.clone());
+        let journal = ModificationJournal::new(response_data.headers.clone());
+        let execution_id = match store.begin_interceptor_run(
+            capture_id,
+            &InterceptorRun {
+                origin: InterceptorExecutionOrigin::Saved,
+                completed: false,
+                phase: InterceptorKind::Response,
+                position,
+                name: script.name.clone(),
+                script_hash: script.hash.clone(),
+                content: script.content.clone(),
+                modifications: journal.snapshot(),
+                error: None,
+            },
         ) {
-            Ok((effects, error)) => {
+            Ok(id) => id,
+            Err(error) => {
+                fail_capture(
+                    &store,
+                    capture_id,
+                    ErrorStage::Interceptor,
+                    "interceptor_history_store_failed",
+                    &error.to_string(),
+                );
+                return text_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "capture storage unavailable",
+                );
+            }
+        };
+        let breakpoint_context = BreakpointContext {
+            session_id,
+            capture_id,
+            phase: InterceptorKind::Response,
+            position,
+            interceptor_name: script.name.clone(),
+            parent_execution_id: execution_id,
+            request: request_data.clone(),
+            response: Some(response_data.clone()),
+            state: state.clone(),
+            parent_journal: journal.clone(),
+            store: store.clone(),
+        };
+        let source = script.content.clone();
+        let script_name = script.name.clone();
+        let response_snapshot = response_data.clone();
+        let execution_state = state.clone();
+        let execution_journal = journal.clone();
+        let hook = BreakpointHook {
+            registry: runtime.breakpoint_registry(),
+            context: breakpoint_context,
+        };
+        let mut run_error = None;
+        let execution = tokio::task::spawn_blocking(move || {
+            execute_response_with_state(
+                &source,
+                &response_snapshot,
+                execution_state,
+                execution_journal,
+                &script_name,
+                Some(capture_id),
+                Some(hook),
+            )
+        })
+        .await;
+        match execution {
+            Ok(Ok((effects, error))) => {
                 response_data.headers = effects.headers;
+                request_data.tags = effects.tags;
                 if let Some(replacement) = effects.body {
                     match apply_body_replacement(&replacement) {
                         Ok(body) => {
                             response_body = body;
+                            response_body_modified = true;
                             remove_header_value(&mut response_data.headers, "content-encoding");
                         }
                         Err(error) => {
@@ -1420,30 +1621,28 @@ async fn handle_session_http_request(
                         }
                     }
                 }
-                modifications = effects.modifications;
-                response_modifications.extend(modifications.clone());
+                response_modifications.extend(effects.modifications);
                 if let Some(error) = error {
                     note_script_error(&store, capture_id, &script.name, &error);
                     append_run_error(&mut run_error, error);
                 }
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 let message = error.to_string();
                 note_script_error(&store, capture_id, &script.name, &message);
                 run_error = Some(message);
             }
+            Err(error) => {
+                let message = format!("interceptor worker failed: {error}");
+                note_script_error(&store, capture_id, &script.name, &message);
+                run_error = Some(message);
+            }
         }
-        if let Err(error) = store.record_interceptor_run(
-            capture_id,
-            &InterceptorRun {
-                phase: InterceptorKind::Response,
-                position,
-                name: script.name.clone(),
-                script_hash: script.hash.clone(),
-                content: script.content.clone(),
-                modifications,
-                error: run_error,
-            },
+        if let Err(error) = store.update_interceptor_run(
+            execution_id,
+            &journal.snapshot(),
+            run_error.as_deref(),
+            true,
         ) {
             fail_capture(
                 &store,
@@ -1457,14 +1656,22 @@ async fn handle_session_http_request(
                 "capture storage unavailable",
             );
         }
+        if let Err(error) = store.update_tags(capture_id, &request_data.tags) {
+            fail_capture(
+                &store,
+                capture_id,
+                ErrorStage::Interceptor,
+                "capture_tags_store_failed",
+                &error.to_string(),
+            );
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "capture storage unavailable",
+            );
+        }
     }
-    if response_modifications.iter().any(|item| {
-        matches!(
-            item,
-            crate::model::Modification::BodyReplaceString { .. }
-                | crate::model::Modification::BodyReplaceFile { .. }
-        )
-    }) && let Err(error) = store.save_body(capture_id, BodySide::Response, true, &response_body)
+    if response_body_modified
+        && let Err(error) = store.save_body(capture_id, BodySide::Response, true, &response_body)
     {
         note_script_error(&store, capture_id, "response-body", &error.to_string());
     }
@@ -1879,6 +2086,7 @@ fn request_data<B>(request: &Request<B>) -> RequestData {
         uri: request.uri().to_string(),
         version: version_name(request.version()).to_string(),
         headers: headers_to_values(request.headers()),
+        tags: Default::default(),
     }
 }
 

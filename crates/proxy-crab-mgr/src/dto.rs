@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
+
 use proxy_crab_mitm::{
     bypass::BypassEntry,
     model::{
-        AppConfig, BodyPayload, CaptureError, Column, InterceptorExecution, InterceptorKind,
-        InterceptorLibraryItem, ProxyStatus, Script, SessionFilter, SessionMetadata,
-        SystemLogEntry, WorkspacePaths,
+        AppConfig, BodyPayload, BreakpointSummary, CaptureError, Column, InterceptorExecution,
+        InterceptorKind, InterceptorLibraryItem, ProxyStatus, Script, SessionFilter,
+        SessionMetadata, SystemLogEntry, WorkspacePaths,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -166,6 +168,7 @@ pub struct RequestDetail {
     pub uri: String,
     pub version: String,
     pub headers: Vec<HeaderItem>,
+    pub tags: BTreeMap<String, String>,
     pub body: BodyPayload,
 }
 
@@ -193,6 +196,31 @@ pub struct LogDetail {
     pub response: Option<ResponseDetail>,
     pub request_interceptors: Vec<InterceptorExecution>,
     pub response_interceptors: Vec<InterceptorExecution>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BreakpointQuery {
+    pub session_id: Option<u64>,
+    pub phase: Option<InterceptorKind>,
+    pub interceptor_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BreakpointDetailPayload {
+    pub breakpoint: BreakpointSummary,
+    pub log: LogDetail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtendBreakpointRequest {
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecuteTemporaryScriptRequest {
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

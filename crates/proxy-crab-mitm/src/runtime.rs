@@ -8,17 +8,20 @@ use anyhow::{Result, bail};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{
+    breakpoint::BreakpointRegistry,
     bypass::{BypassEntry, BypassStore},
     ca::CertificateAuthority,
     log_buffer::LogBuffer,
     model::{
-        AppConfig, CaptureDetail, CaptureSummary, Column, FilterColumn, FilterOption,
-        InterceptorKind, InterceptorLibraryItem, MAX_SESSION_INTERCEPTORS_PER_KIND, ProxyStatus,
+        AppConfig, BreakpointDetail, BreakpointListFilter, BreakpointSummary, CaptureDetail,
+        CaptureSummary, Column, FilterColumn, FilterOption, InterceptorKind,
+        InterceptorLibraryItem, MAX_SESSION_INTERCEPTORS_PER_KIND, ProxyStatus,
         ResolvedSessionInterceptor, ResolvedSessionInterceptors, Script, ScriptKind, SessionFilter,
-        SessionInterceptors, SessionMetadata, SessionView, SystemLogEntry, WorkspacePaths,
+        SessionInterceptors, SessionMetadata, SessionView, SystemLogEntry,
+        TemporaryExecutionResult, WorkspacePaths,
     },
     proxy::ProxyController,
-    storage::CaptureStore,
+    storage::{CaptureStore, body_payload},
     workspace::{
         Workspace, configure_workspace_for_next_start, configured_workspace, resolve_workspace,
     },
@@ -34,6 +37,7 @@ pub struct ProxyCrab {
     session_pins: Mutex<HashMap<u64, usize>>,
     capture_slots: Arc<Semaphore>,
     log_buffer: Arc<LogBuffer>,
+    breakpoints: Arc<BreakpointRegistry>,
     proxy: ProxyController,
 }
 
@@ -54,6 +58,7 @@ impl ProxyCrab {
             session_pins: Mutex::new(HashMap::new()),
             capture_slots: Arc::new(Semaphore::new(4)),
             log_buffer,
+            breakpoints: Arc::new(BreakpointRegistry::default()),
             proxy: ProxyController::new(),
         }))
     }
@@ -226,6 +231,64 @@ impl ProxyCrab {
             .lock()
             .expect("session pins lock poisoned");
         self.capture_store_locked(session_id)?.get(id)
+    }
+
+    pub fn breakpoints(&self, filter: &BreakpointListFilter) -> Vec<BreakpointSummary> {
+        self.breakpoints.list(filter)
+    }
+
+    pub fn breakpoint(&self, id: u64) -> Result<BreakpointDetail> {
+        let live = self.breakpoints.detail(id)?;
+        let mut capture = self
+            .capture(live.summary.session_id, live.summary.capture_id)?
+            .ok_or_else(|| anyhow::anyhow!("capture {} not found", live.summary.capture_id))?;
+        let headers = live.context.state.headers();
+        let tags = live.context.state.tags();
+        capture.summary.request.tags = tags;
+        match live.summary.phase {
+            InterceptorKind::Request => {
+                capture.summary.request.headers = headers.clone();
+                if let Some(replacement) = live.context.state.body()
+                    && let Ok(bytes) = crate::lua::read_body_replacement(&replacement)
+                {
+                    capture.request_body = body_payload(&bytes, &headers);
+                }
+            }
+            InterceptorKind::Response => {
+                if let Some(response) = &mut capture.summary.response {
+                    response.headers = headers.clone();
+                }
+                if let Some(replacement) = live.context.state.body()
+                    && let Ok(bytes) = crate::lua::read_body_replacement(&replacement)
+                {
+                    capture.response_body = body_payload(&bytes, &headers);
+                }
+            }
+        }
+        Ok(BreakpointDetail {
+            breakpoint: live.summary,
+            capture,
+        })
+    }
+
+    pub fn extend_breakpoint(&self, id: u64, timeout_ms: u64) -> Result<BreakpointSummary> {
+        self.breakpoints.extend(id, timeout_ms)
+    }
+
+    pub fn release_breakpoint(&self, id: u64) -> Result<()> {
+        self.breakpoints.release(id)
+    }
+
+    pub fn execute_breakpoint_script(
+        &self,
+        id: u64,
+        content: &str,
+    ) -> Result<TemporaryExecutionResult> {
+        self.breakpoints.execute_temporary(id, content)
+    }
+
+    pub(crate) fn breakpoint_registry(&self) -> Arc<BreakpointRegistry> {
+        self.breakpoints.clone()
     }
 
     pub fn list_captures_before(
@@ -634,6 +697,7 @@ impl ProxyCrab {
     }
 
     pub async fn stop_proxy(&self) -> Result<ProxyStatus> {
+        self.breakpoints.release_all();
         self.proxy.stop(self).await
     }
 

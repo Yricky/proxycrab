@@ -5,21 +5,23 @@ use proxy_crab_mitm::{
     ProxyCrab,
     lua::{evaluate_column_named, evaluate_filter_named},
     model::{
-        AppConfig, CaptureOutcome, CaptureSummary, Column, FilterColumn, FilterOption,
-        HeaderValues, InterceptorKind, ProxyStatus, Script, ScriptKind, SessionFilter,
-        SessionInterceptor, SessionInterceptors, SessionMetadata, SessionView, SystemLogEntry,
-        WorkspacePaths,
+        AppConfig, BreakpointListFilter, BreakpointSummary, CaptureDetail, CaptureOutcome,
+        CaptureSummary, Column, FilterColumn, FilterOption, HeaderValues, InterceptorKind,
+        ProxyStatus, Script, ScriptKind, SessionFilter, SessionInterceptor, SessionInterceptors,
+        SessionMetadata, SessionView, SystemLogEntry, TemporaryExecutionResult, WorkspacePaths,
     },
 };
 
 use crate::dto::{
-    ActiveSession, BypassPage, BypassQuery, CertificateResponse, ColumnView, CreateSessionRequest,
-    DebugFilterScriptRequest, DeleteCount, HeaderItem, InterceptorCreateRequest, InterceptorDetail,
-    InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest,
-    LogViewException, LogViewRow, LogViewsPayload, LogViewsRequest, ManagerError, ManagerResult,
-    ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, RequestDetail, ResponseDetail,
-    RoutingSelection, ScriptRequest, SessionInterceptorItem, SessionInterceptorsPayload,
-    SessionViewPayload, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
+    ActiveSession, BreakpointDetailPayload, BreakpointQuery, BypassPage, BypassQuery,
+    CertificateResponse, ColumnView, CreateSessionRequest, DebugFilterScriptRequest, DeleteCount,
+    ExecuteTemporaryScriptRequest, ExtendBreakpointRequest, HeaderItem, InterceptorCreateRequest,
+    InterceptorDetail, InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogIdsPayload,
+    LogIdsRequest, LogViewException, LogViewRow, LogViewsPayload, LogViewsRequest, ManagerError,
+    ManagerResult, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, RequestDetail,
+    ResponseDetail, RoutingSelection, ScriptRequest, SessionInterceptorItem,
+    SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery, UpdateScriptRequest,
+    UpdateSessionRequest,
 };
 
 #[async_trait]
@@ -45,6 +47,19 @@ pub trait ProxyCrabManager: Send + Sync {
     async fn log_ids(&self, request: LogIdsRequest) -> ManagerResult<LogIdsPayload>;
     async fn log_views(&self, request: LogViewsRequest) -> ManagerResult<LogViewsPayload>;
     async fn log(&self, session_id: Option<u64>, id: u64) -> ManagerResult<LogDetail>;
+    async fn breakpoints(&self, query: BreakpointQuery) -> ManagerResult<Vec<BreakpointSummary>>;
+    async fn breakpoint(&self, id: u64) -> ManagerResult<BreakpointDetailPayload>;
+    async fn extend_breakpoint(
+        &self,
+        id: u64,
+        request: ExtendBreakpointRequest,
+    ) -> ManagerResult<BreakpointSummary>;
+    async fn release_breakpoint(&self, id: u64) -> ManagerResult<()>;
+    async fn execute_breakpoint_script(
+        &self,
+        id: u64,
+        request: ExecuteTemporaryScriptRequest,
+    ) -> ManagerResult<TemporaryExecutionResult>;
     async fn session_view(&self, session_id: Option<u64>) -> ManagerResult<SessionViewPayload>;
     async fn replace_session_view(
         &self,
@@ -539,33 +554,48 @@ impl ProxyCrabManager for MitmManager {
             .map_err(|error| ManagerError::internal(format!("log read task failed: {error}")))?
             .map_err(map_error)?
             .ok_or_else(|| ManagerError::not_found(format!("log {id} not found")))?;
-        Ok(LogDetail {
-            id,
+        Ok(log_detail_from_capture(detail))
+    }
+
+    async fn breakpoints(&self, query: BreakpointQuery) -> ManagerResult<Vec<BreakpointSummary>> {
+        let session_id = self.session_id(query.session_id)?;
+        Ok(self.runtime.breakpoints(&BreakpointListFilter {
             session_id,
-            created_at: detail.summary.created_at,
-            updated_at: detail.summary.updated_at,
-            source_type: "ip".into(),
-            source_addr: Some(detail.summary.source),
-            stage: detail.summary.stage,
-            outcome: outcome_name(detail.summary.outcome).into(),
-            error: detail.summary.error,
-            request: RequestDetail {
-                method: detail.summary.request.method,
-                uri: detail.summary.request.uri,
-                version: detail.summary.request.version,
-                headers: flatten_headers(&detail.summary.request.headers),
-                body: detail.request_body,
-            },
-            response: detail.summary.response.map(|response| ResponseDetail {
-                status: response.status,
-                status_text: status_text(response.status),
-                version: response.version,
-                headers: flatten_headers(&response.headers),
-                body: detail.response_body,
-            }),
-            request_interceptors: detail.request_interceptors,
-            response_interceptors: detail.response_interceptors,
+            phase: query.phase,
+            interceptor_name: query.interceptor_name,
+        }))
+    }
+
+    async fn breakpoint(&self, id: u64) -> ManagerResult<BreakpointDetailPayload> {
+        let detail = self.runtime.breakpoint(id).map_err(map_error)?;
+        Ok(BreakpointDetailPayload {
+            breakpoint: detail.breakpoint,
+            log: log_detail_from_capture(detail.capture),
         })
+    }
+
+    async fn extend_breakpoint(
+        &self,
+        id: u64,
+        request: ExtendBreakpointRequest,
+    ) -> ManagerResult<BreakpointSummary> {
+        self.runtime
+            .extend_breakpoint(id, request.timeout_ms)
+            .map_err(map_error)
+    }
+
+    async fn release_breakpoint(&self, id: u64) -> ManagerResult<()> {
+        self.runtime.release_breakpoint(id).map_err(map_error)
+    }
+
+    async fn execute_breakpoint_script(
+        &self,
+        id: u64,
+        request: ExecuteTemporaryScriptRequest,
+    ) -> ManagerResult<TemporaryExecutionResult> {
+        self.runtime
+            .execute_breakpoint_script(id, &request.content)
+            .map_err(map_error)
     }
 
     async fn session_view(&self, session_id: Option<u64>) -> ManagerResult<SessionViewPayload> {
@@ -975,6 +1005,39 @@ fn flatten_headers(headers: &HeaderValues) -> Vec<HeaderItem> {
         .collect()
 }
 
+fn log_detail_from_capture(detail: CaptureDetail) -> LogDetail {
+    let id = detail.summary.id;
+    let session_id = detail.summary.session_id;
+    LogDetail {
+        id,
+        session_id,
+        created_at: detail.summary.created_at,
+        updated_at: detail.summary.updated_at,
+        source_type: "ip".into(),
+        source_addr: Some(detail.summary.source),
+        stage: detail.summary.stage,
+        outcome: outcome_name(detail.summary.outcome).into(),
+        error: detail.summary.error,
+        request: RequestDetail {
+            method: detail.summary.request.method,
+            uri: detail.summary.request.uri,
+            version: detail.summary.request.version,
+            headers: flatten_headers(&detail.summary.request.headers),
+            tags: detail.summary.request.tags,
+            body: detail.request_body,
+        },
+        response: detail.summary.response.map(|response| ResponseDetail {
+            status: response.status,
+            status_text: status_text(response.status),
+            version: response.version,
+            headers: flatten_headers(&response.headers),
+            body: detail.response_body,
+        }),
+        request_interceptors: detail.request_interceptors,
+        response_interceptors: detail.response_interceptors,
+    }
+}
+
 fn status_text(status: u16) -> String {
     axum::http::StatusCode::from_u16(status)
         .ok()
@@ -1057,6 +1120,7 @@ mod tests {
             uri: format!("http://example.com/{path}"),
             version: "HTTP/1.1".into(),
             headers: HeaderValues::new(),
+            tags: Default::default(),
         }
     }
 

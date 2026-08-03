@@ -15,8 +15,12 @@ use mlua::{
     Error as LuaError, HookTriggers, Lua, UserData, UserDataFields, UserDataMethods, Value, VmState,
 };
 
-use crate::model::{
-    CaptureSummary, HeaderValues, Modification, RequestData, ResponseData, ScriptKind,
+use crate::{
+    breakpoint::{BreakpointContext, BreakpointRegistry},
+    model::{
+        CaptureSummary, HeaderValues, Modification, RequestData, RequestTags, ResponseData,
+        ScriptKind,
+    },
 };
 
 mod codec;
@@ -36,7 +40,14 @@ pub enum BodyReplacement {
 pub struct ScriptEffects {
     pub headers: HeaderValues,
     pub body: Option<BodyReplacement>,
+    pub tags: RequestTags,
     pub modifications: Vec<Modification>,
+}
+
+#[derive(Clone)]
+pub(crate) struct BreakpointHook {
+    pub registry: Arc<BreakpointRegistry>,
+    pub context: BreakpointContext,
 }
 
 pub fn validate_script(kind: ScriptKind, source: &str) -> Result<()> {
@@ -146,15 +157,38 @@ pub fn execute_request_lenient_named(
     script_name: &str,
     capture_log_id: Option<u64>,
 ) -> Result<(ScriptEffects, Option<String>)> {
+    let state = SharedInterceptorState::new(request.headers.clone(), request.tags.clone());
+    let journal = ModificationJournal::new(request.headers.clone());
+    execute_request_with_state(
+        source,
+        request,
+        state,
+        journal,
+        script_name,
+        capture_log_id,
+        None,
+    )
+}
+
+pub(crate) fn execute_request_with_state(
+    source: &str,
+    request: &RequestData,
+    state: SharedInterceptorState,
+    journal: ModificationJournal,
+    script_name: &str,
+    capture_log_id: Option<u64>,
+    breakpoint: Option<BreakpointHook>,
+) -> Result<(ScriptEffects, Option<String>)> {
     let (lua, warnings) = safe_lua()?;
-    let state = MutationState::new(request.headers.clone());
     lua.globals().set(
         "req",
         RequestView {
             request: request.clone(),
             state: state.clone(),
+            journal: journal.clone(),
         },
     )?;
+    install_breakpoint(&lua, breakpoint)?;
     let error = lua.load(source).exec().err().map(|error| error.to_string());
     log_json_warnings(
         &warnings,
@@ -162,7 +196,7 @@ pub fn execute_request_lenient_named(
         script_name,
         capture_log_id,
     );
-    Ok((state.into_effects(), error))
+    Ok((state.effects(&journal), error))
 }
 
 pub fn execute_response(source: &str, response: &ResponseData) -> Result<ScriptEffects> {
@@ -186,13 +220,59 @@ pub fn execute_response_lenient_named(
     script_name: &str,
     capture_log_id: Option<u64>,
 ) -> Result<(ScriptEffects, Option<String>)> {
+    execute_response_lenient_named_with_tags(
+        source,
+        response,
+        &RequestTags::new(),
+        script_name,
+        capture_log_id,
+    )
+}
+
+pub fn execute_response_lenient_named_with_tags(
+    source: &str,
+    response: &ResponseData,
+    request_tags: &RequestTags,
+    script_name: &str,
+    capture_log_id: Option<u64>,
+) -> Result<(ScriptEffects, Option<String>)> {
+    let state = SharedInterceptorState::new(response.headers.clone(), request_tags.clone());
+    let journal = ModificationJournal::new(response.headers.clone());
+    execute_response_with_state(
+        source,
+        response,
+        state,
+        journal,
+        script_name,
+        capture_log_id,
+        None,
+    )
+}
+
+pub(crate) fn execute_response_with_state(
+    source: &str,
+    response: &ResponseData,
+    state: SharedInterceptorState,
+    journal: ModificationJournal,
+    script_name: &str,
+    capture_log_id: Option<u64>,
+    breakpoint: Option<BreakpointHook>,
+) -> Result<(ScriptEffects, Option<String>)> {
     let (lua, warnings) = safe_lua()?;
-    let state = MutationState::new(response.headers.clone());
     lua.globals().set(
         "resp",
         ResponseView {
             response: response.clone(),
             state: state.clone(),
+            journal: journal.clone(),
+        },
+    )?;
+    install_breakpoint(&lua, breakpoint)?;
+    lua.globals().set(
+        "req",
+        TagRequestView {
+            state: state.clone(),
+            journal: journal.clone(),
         },
     )?;
     let error = lua.load(source).exec().err().map(|error| error.to_string());
@@ -202,7 +282,20 @@ pub fn execute_response_lenient_named(
         script_name,
         capture_log_id,
     );
-    Ok((state.into_effects(), error))
+    Ok((state.effects(&journal), error))
+}
+
+fn install_breakpoint(lua: &Lua, hook: Option<BreakpointHook>) -> Result<()> {
+    let Some(hook) = hook else {
+        return Ok(());
+    };
+    let breakpoint = lua.create_function(move |_, timeout_ms: u64| {
+        hook.registry
+            .wait(hook.context.clone(), timeout_ms)
+            .map_err(LuaError::external)
+    })?;
+    lua.globals().set("breakpoint", breakpoint)?;
+    Ok(())
 }
 
 fn safe_lua() -> Result<(Lua, codec::JsonWarningState)> {
@@ -278,6 +371,12 @@ impl UserData for ReadRequest {
         fields.add_field_method_get("version", |_, this| Ok(this.0.version.clone()));
         fields.add_field_method_get("uri", |_, this| Ok(UriView::from(&this.0.uri)));
         fields.add_field_method_get("headers", |_, this| Ok(ReadHeaders(this.0.headers.clone())));
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("getTag", |_, this, key: String| {
+            Ok(this.0.tags.get(&key).cloned())
+        });
     }
 }
 
@@ -398,22 +497,22 @@ impl UserData for ReadHeaders {
 }
 
 #[derive(Clone)]
-struct MutationState {
+pub(crate) struct SharedInterceptorState {
     headers: Arc<Mutex<HeaderValues>>,
     body: Arc<Mutex<Option<BodyReplacement>>>,
-    modifications: Arc<Mutex<Vec<Modification>>>,
+    tags: Arc<Mutex<RequestTags>>,
 }
 
-impl MutationState {
-    fn new(headers: HeaderValues) -> Self {
+impl SharedInterceptorState {
+    pub(crate) fn new(headers: HeaderValues, tags: RequestTags) -> Self {
         Self {
-            headers: Arc::new(Mutex::new(headers.clone())),
+            headers: Arc::new(Mutex::new(headers)),
             body: Arc::new(Mutex::new(None)),
-            modifications: Arc::new(Mutex::new(vec![Modification::Snapshot { headers }])),
+            tags: Arc::new(Mutex::new(tags)),
         }
     }
 
-    fn into_effects(self) -> ScriptEffects {
+    pub(crate) fn effects(&self, journal: &ModificationJournal) -> ScriptEffects {
         ScriptEffects {
             headers: self
                 .headers
@@ -425,19 +524,67 @@ impl MutationState {
                 .lock()
                 .expect("Lua body state lock poisoned")
                 .clone(),
-            modifications: self
-                .modifications
+            tags: self
+                .tags
                 .lock()
-                .expect("Lua modification state lock poisoned")
+                .expect("Lua tag state lock poisoned")
                 .clone(),
+            modifications: journal.snapshot(),
         }
+    }
+
+    pub(crate) fn tags(&self) -> RequestTags {
+        self.tags
+            .lock()
+            .expect("Lua tag state lock poisoned")
+            .clone()
+    }
+
+    pub(crate) fn headers(&self) -> HeaderValues {
+        self.headers
+            .lock()
+            .expect("Lua header state lock poisoned")
+            .clone()
+    }
+
+    pub(crate) fn body(&self) -> Option<BodyReplacement> {
+        self.body
+            .lock()
+            .expect("Lua body state lock poisoned")
+            .clone()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ModificationJournal(Arc<Mutex<Vec<Modification>>>);
+
+impl ModificationJournal {
+    pub(crate) fn new(headers: HeaderValues) -> Self {
+        Self(Arc::new(Mutex::new(vec![Modification::Snapshot {
+            headers,
+        }])))
+    }
+
+    fn push(&self, modification: Modification) {
+        self.0
+            .lock()
+            .expect("Lua modification journal lock poisoned")
+            .push(modification);
+    }
+
+    pub(crate) fn snapshot(&self) -> Vec<Modification> {
+        self.0
+            .lock()
+            .expect("Lua modification journal lock poisoned")
+            .clone()
     }
 }
 
 #[derive(Clone)]
 struct RequestView {
     request: RequestData,
-    state: MutationState,
+    state: SharedInterceptorState,
+    journal: ModificationJournal,
 }
 
 impl UserData for RequestView {
@@ -445,34 +592,117 @@ impl UserData for RequestView {
         fields.add_field_method_get("method", |_, this| Ok(this.request.method.clone()));
         fields.add_field_method_get("version", |_, this| Ok(this.request.version.clone()));
         fields.add_field_method_get("uri", |_, this| Ok(UriView::from(&this.request.uri)));
-        fields.add_field_method_get("headers", |_, this| Ok(MutableHeaders(this.state.clone())));
-        fields.add_field_method_get("body", |_, this| Ok(MutableBody(this.state.clone())));
+        fields.add_field_method_get("headers", |_, this| {
+            Ok(MutableHeaders {
+                state: this.state.clone(),
+                journal: this.journal.clone(),
+            })
+        });
+        fields.add_field_method_get("body", |_, this| {
+            Ok(MutableBody {
+                state: this.state.clone(),
+                journal: this.journal.clone(),
+            })
+        });
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        add_mutable_tag_methods(methods);
     }
 }
 
 #[derive(Clone)]
 struct ResponseView {
     response: ResponseData,
-    state: MutationState,
+    state: SharedInterceptorState,
+    journal: ModificationJournal,
 }
 
 impl UserData for ResponseView {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         fields.add_field_method_get("status", |_, this| Ok(this.response.status));
         fields.add_field_method_get("version", |_, this| Ok(this.response.version.clone()));
-        fields.add_field_method_get("headers", |_, this| Ok(MutableHeaders(this.state.clone())));
-        fields.add_field_method_get("body", |_, this| Ok(MutableBody(this.state.clone())));
+        fields.add_field_method_get("headers", |_, this| {
+            Ok(MutableHeaders {
+                state: this.state.clone(),
+                journal: this.journal.clone(),
+            })
+        });
+        fields.add_field_method_get("body", |_, this| {
+            Ok(MutableBody {
+                state: this.state.clone(),
+                journal: this.journal.clone(),
+            })
+        });
     }
 }
 
 #[derive(Clone)]
-struct MutableHeaders(MutationState);
+struct TagRequestView {
+    state: SharedInterceptorState,
+    journal: ModificationJournal,
+}
+
+impl UserData for TagRequestView {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        add_mutable_tag_methods(methods);
+    }
+}
+
+trait MutableTagView {
+    fn tag_state(&self) -> (&SharedInterceptorState, &ModificationJournal);
+}
+
+impl MutableTagView for RequestView {
+    fn tag_state(&self) -> (&SharedInterceptorState, &ModificationJournal) {
+        (&self.state, &self.journal)
+    }
+}
+
+impl MutableTagView for TagRequestView {
+    fn tag_state(&self) -> (&SharedInterceptorState, &ModificationJournal) {
+        (&self.state, &self.journal)
+    }
+}
+
+fn add_mutable_tag_methods<T, M>(methods: &mut M)
+where
+    T: MutableTagView + Clone + Send + 'static,
+    M: UserDataMethods<T>,
+{
+    methods.add_method("getTag", |_, this, key: String| {
+        Ok(this
+            .tag_state()
+            .0
+            .tags
+            .lock()
+            .expect("Lua tag state lock poisoned")
+            .get(&key)
+            .cloned())
+    });
+    methods.add_method("setTag", |_, this, (key, value): (String, String)| {
+        let (state, journal) = this.tag_state();
+        state
+            .tags
+            .lock()
+            .expect("Lua tag state lock poisoned")
+            .insert(key.clone(), value.clone());
+        journal.push(Modification::TagSet { key, value });
+        Ok(())
+    });
+}
+
+#[derive(Clone)]
+struct MutableHeaders {
+    state: SharedInterceptorState,
+    journal: ModificationJournal,
+}
 
 impl UserData for MutableHeaders {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("get", |_, this, name: String| {
             let headers = this
-                .0
+                .state
                 .headers
                 .lock()
                 .expect("Lua header state lock poisoned");
@@ -480,7 +710,7 @@ impl UserData for MutableHeaders {
         });
         methods.add_method("get_all", |_, this, name: String| {
             let headers = this
-                .0
+                .state
                 .headers
                 .lock()
                 .expect("Lua header state lock poisoned");
@@ -489,7 +719,7 @@ impl UserData for MutableHeaders {
         methods.add_method("all", |lua, this, ()| {
             let result = lua.create_table()?;
             let headers = this
-                .0
+                .state
                 .headers
                 .lock()
                 .expect("Lua header state lock poisoned");
@@ -501,46 +731,36 @@ impl UserData for MutableHeaders {
         methods.add_method("append", |_, this, (name, value): (String, String)| {
             validate_header_input(&name, &value)?;
             let mut headers = this
-                .0
+                .state
                 .headers
                 .lock()
                 .expect("Lua header state lock poisoned");
             let key = existing_header_name(&headers, &name).unwrap_or_else(|| name.to_lowercase());
             headers.entry(key).or_default().push(value.clone());
-            this.0
-                .modifications
-                .lock()
-                .expect("Lua modification state lock poisoned")
+            this.journal
                 .push(Modification::HeaderAppend { name, value });
             Ok(())
         });
         methods.add_method("set", |_, this, (name, value): (String, String)| {
             validate_header_input(&name, &value)?;
             let mut headers = this
-                .0
+                .state
                 .headers
                 .lock()
                 .expect("Lua header state lock poisoned");
             remove_header(&mut headers, &name);
             headers.insert(name.to_lowercase(), vec![value.clone()]);
-            this.0
-                .modifications
-                .lock()
-                .expect("Lua modification state lock poisoned")
-                .push(Modification::HeaderSet { name, value });
+            this.journal.push(Modification::HeaderSet { name, value });
             Ok(())
         });
         methods.add_method("remove", |_, this, name: String| {
             let mut headers = this
-                .0
+                .state
                 .headers
                 .lock()
                 .expect("Lua header state lock poisoned");
             let values = remove_header(&mut headers, &name).unwrap_or_default();
-            this.0
-                .modifications
-                .lock()
-                .expect("Lua modification state lock poisoned")
+            this.journal
                 .push(Modification::HeaderRemove { name, values });
             Ok(())
         });
@@ -548,17 +768,21 @@ impl UserData for MutableHeaders {
 }
 
 #[derive(Clone)]
-struct MutableBody(MutationState);
+struct MutableBody {
+    state: SharedInterceptorState,
+    journal: ModificationJournal,
+}
 
 impl UserData for MutableBody {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("replace_with_string", |_, this, content: String| {
-            *this.0.body.lock().expect("Lua body state lock poisoned") =
-                Some(BodyReplacement::String(content.clone()));
-            this.0
-                .modifications
+            *this
+                .state
+                .body
                 .lock()
-                .expect("Lua modification state lock poisoned")
+                .expect("Lua body state lock poisoned") =
+                Some(BodyReplacement::String(content.clone()));
+            this.journal
                 .push(Modification::BodyReplaceString { content });
             Ok(())
         });
@@ -566,13 +790,12 @@ impl UserData for MutableBody {
             if !Path::new(&path).is_absolute() {
                 return Err(LuaError::runtime("body replacement path must be absolute"));
             }
-            *this.0.body.lock().expect("Lua body state lock poisoned") =
-                Some(BodyReplacement::File(path.clone()));
-            this.0
-                .modifications
+            *this
+                .state
+                .body
                 .lock()
-                .expect("Lua modification state lock poisoned")
-                .push(Modification::BodyReplaceFile { path });
+                .expect("Lua body state lock poisoned") = Some(BodyReplacement::File(path.clone()));
+            this.journal.push(Modification::BodyReplaceFile { path });
             Ok(())
         });
     }
@@ -637,14 +860,15 @@ mod tests {
     use crate::{
         log_buffer::{BufferLayer, LogBuffer},
         model::{
-            CaptureOutcome, CaptureSummary, HeaderValues, RequestData, ResponseData, ScriptKind,
+            CaptureOutcome, CaptureSummary, HeaderValues, RequestData, RequestTags, ResponseData,
+            ScriptKind,
         },
     };
 
     use super::{
         BodyReplacement, evaluate_column, evaluate_column_named, evaluate_filter,
         evaluate_filter_named, evaluate_routing, execute_request, execute_response,
-        validate_script,
+        execute_response_lenient_named_with_tags, validate_script,
     };
 
     fn entry() -> CaptureSummary {
@@ -657,6 +881,7 @@ mod tests {
                 uri: "https://example.com/path?q=1".into(),
                 version: "HTTP/1.1".into(),
                 headers: HeaderValues::from([("x-test".into(), vec!["old".into()])]),
+                tags: Default::default(),
             },
             response: None,
             outcome: CaptureOutcome::InProgress,
@@ -669,7 +894,8 @@ mod tests {
 
     #[test]
     fn evaluates_filter_and_column() {
-        let entry = entry();
+        let mut entry = entry();
+        entry.request.tags.insert("team".into(), "checkout".into());
         assert!(
             evaluate_filter(
                 "local input = ...; return entry.req.uri.host == input",
@@ -689,6 +915,9 @@ mod tests {
         assert_eq!(
             evaluate_column("return entry.req.headers:get('x-test')", &entry).unwrap(),
             "old"
+        );
+        assert!(
+            evaluate_filter("return entry.req:getTag('team') == 'checkout'", "", &entry).unwrap()
         );
     }
 
@@ -745,17 +974,49 @@ mod tests {
     #[test]
     fn request_script_mutates_headers_and_body() {
         let effects = execute_request(
-            "req.headers:set('x-test', 'new'); req.body:replace_with_string('body')",
+            "req.headers:set('x-test', 'new'); req.body:replace_with_string('body'); \
+             assert(req:getTag('missing') == nil); req:setTag('empty', ''); \
+             req:setTag('team', 'one'); req:setTag('team', 'two')",
             &entry().request,
         )
         .unwrap();
         assert_eq!(effects.headers["x-test"], vec!["new"]);
         assert_eq!(effects.body, Some(BodyReplacement::String("body".into())));
-        assert_eq!(effects.modifications.len(), 3);
+        assert_eq!(effects.tags["empty"], "");
+        assert_eq!(effects.tags["team"], "two");
+        assert_eq!(effects.modifications.len(), 6);
         assert!(matches!(
             &effects.modifications[0],
             crate::model::Modification::Snapshot { headers }
                 if headers["x-test"] == vec!["old"]
+        ));
+    }
+
+    #[test]
+    fn response_request_view_only_exposes_mutable_tags() {
+        let response = ResponseData {
+            status: 200,
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+        };
+        let tags = RequestTags::from([("team".into(), "checkout".into())]);
+        let (effects, error) = execute_response_lenient_named_with_tags(
+            "assert(req:getTag('team') == 'checkout'); \
+             assert(req.headers == nil and req.body == nil and req.method == nil and req.uri == nil); \
+             req:setTag('empty', ''); error('boom')",
+            &response,
+            &tags,
+            "response-tags",
+            Some(1),
+        )
+        .unwrap();
+
+        assert_eq!(effects.tags["empty"], "");
+        assert!(error.unwrap().contains("boom"));
+        assert!(matches!(
+            effects.modifications.last(),
+            Some(crate::model::Modification::TagSet { key, value })
+                if key == "empty" && value.is_empty()
         ));
     }
 

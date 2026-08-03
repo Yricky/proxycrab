@@ -20,8 +20,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dto::{
-        ActiveSession, BypassQuery, CreateSessionRequest, DebugFilterScriptRequest,
-        DeleteBypassRequest, HttpApiChange, HttpApiResource, InterceptorCreateRequest,
+        ActiveSession, BreakpointQuery, BypassQuery, CreateSessionRequest,
+        DebugFilterScriptRequest, DeleteBypassRequest, ExecuteTemporaryScriptRequest,
+        ExtendBreakpointRequest, HttpApiChange, HttpApiResource, InterceptorCreateRequest,
         InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError,
         ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, RoutingSelection,
         ScriptRequest, SessionQuery, SetWorkspaceRequest, SystemLogsQuery, UpdateScriptRequest,
@@ -166,6 +167,14 @@ fn router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
         .route("/api/logs/ids", post(log_ids))
         .route("/api/logs/views", post(log_views))
         .route("/api/logs/{id}", get(log))
+        .route("/api/breakpoints", get(breakpoints))
+        .route("/api/breakpoints/{id}", get(breakpoint))
+        .route("/api/breakpoints/{id}/extend", post(extend_breakpoint))
+        .route("/api/breakpoints/{id}/release", post(release_breakpoint))
+        .route(
+            "/api/breakpoints/{id}/execute",
+            post(execute_breakpoint_script),
+        )
         .route(
             "/api/session-view",
             get(session_view).put(replace_session_view),
@@ -518,6 +527,41 @@ async fn log(
     ApiQuery(query): ApiQuery<SessionQuery>,
 ) -> ApiResult {
     success(manager.log(query.session_id, id).await?)
+}
+
+async fn breakpoints(
+    State(manager): State<ManagerState>,
+    ApiQuery(query): ApiQuery<BreakpointQuery>,
+) -> ApiResult {
+    success(manager.breakpoints(query).await?)
+}
+
+async fn breakpoint(State(manager): State<ManagerState>, ApiPath(id): ApiPath<u64>) -> ApiResult {
+    success(manager.breakpoint(id).await?)
+}
+
+async fn extend_breakpoint(
+    State(manager): State<ManagerState>,
+    ApiPath(id): ApiPath<u64>,
+    ApiJson(request): ApiJson<ExtendBreakpointRequest>,
+) -> ApiResult {
+    success(manager.extend_breakpoint(id, request).await?)
+}
+
+async fn release_breakpoint(
+    State(manager): State<ManagerState>,
+    ApiPath(id): ApiPath<u64>,
+) -> ApiResult {
+    manager.release_breakpoint(id).await?;
+    success(json!({}))
+}
+
+async fn execute_breakpoint_script(
+    State(manager): State<ManagerState>,
+    ApiPath(id): ApiPath<u64>,
+    ApiJson(request): ApiJson<ExecuteTemporaryScriptRequest>,
+) -> ApiResult {
+    success(manager.execute_breakpoint_script(id, request).await?)
 }
 
 async fn session_view(
@@ -1200,6 +1244,7 @@ mod tests {
             ("POST", "/api/logs/views", r#"{"logs":[]}"#),
             ("GET", "/api/session-view", ""),
             ("GET", "/api/active-session", ""),
+            ("GET", "/api/breakpoints", ""),
             ("PUT", "/api/session-view", r#"{"columns":[]}"#),
             ("GET", "/api/session-interceptors", ""),
             (
