@@ -66,6 +66,14 @@
       "prompt": "Use ProxyCrab to save the complete response body for log 42 in Session 3 to /tmp/proxycrab-response.bin, allowing at most 32 MiB of stored body data, then report the saved path and stored size without printing the body bytes.",
       "expected_output": "The agent uses body-get.mjs with session 3, log 42, response side, max-size 33554432, and the requested output file; it reports the machine-readable path and stored size or accurately surfaces body_too_large with actual_size.",
       "files": []
+    },
+    {
+      "id": 12,
+      "prompt": "Create a ProxyCrab request interceptor named pace-debug-traffic using the supplied Lua fixture, attach it to the active Session without changing the response chain, and verify on a new capture that request speed is 1024 B/s, response speed is 2048 B/s, and upstream timeout is 120000 ms. Do not treat the tags as HTTP headers.",
+      "expected_output": "The agent saves valid Lua with _crab_req_speed=1024, _crab_resp_speed=2048, and _crab_req_timeout=120000, preserves the existing response chain, and cites the new capture tags plus tag_set history without claiming any special tag was sent upstream.",
+      "files": [
+        "evals/fixtures/test-traffic-limits.lua"
+      ]
     }
   ]
 }

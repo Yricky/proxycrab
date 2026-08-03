@@ -31,7 +31,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::Semaphore,
     task::{AbortHandle, JoinHandle},
-    time::timeout,
+    time::{Instant, Sleep, timeout},
 };
 use tokio_rustls::TlsConnector;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -46,8 +46,8 @@ use crate::{
     },
     model::{
         CaptureError, ErrorStage, HeaderValues, InterceptorExecutionOrigin, InterceptorKind,
-        InterceptorRun, ProxyStatus, RequestData, ResponseData, ScriptKind, SessionInterceptor,
-        SessionMetadata, script_content_hash,
+        InterceptorRun, ProxyStatus, RequestData, RequestTags, ResponseData, ScriptKind,
+        SessionInterceptor, SessionMetadata, script_content_hash,
     },
     runtime::SessionPin,
     storage::{BodySide, CaptureStore},
@@ -60,6 +60,10 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CAPTURE_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CLIENT_CONNECTIONS: usize = 256;
 const BINARY_HEADER_PREFIX: &str = "\u{e000}proxy-crab-binary:v1:";
+const PACE_CHUNKS_PER_SECOND: u64 = 50;
+const CRAB_REQ_SPEED_TAG: &str = "_crab_req_speed";
+const CRAB_RESP_SPEED_TAG: &str = "_crab_resp_speed";
+const CRAB_REQ_TIMEOUT_TAG: &str = "_crab_req_timeout";
 
 type BoxError = Box<dyn StdError + Send + Sync>;
 type ProxyBody = UnsyncBoxBody<Bytes, BoxError>;
@@ -1000,6 +1004,86 @@ impl<B> Drop for TrackedBody<B> {
     }
 }
 
+struct PacedBody {
+    bytes: Bytes,
+    offset: usize,
+    bytes_per_second: u64,
+    pending_chunk_len: usize,
+    sleep: Option<Pin<Box<Sleep>>>,
+}
+
+impl PacedBody {
+    fn new(bytes: Bytes, bytes_per_second: u64) -> Self {
+        debug_assert!(bytes_per_second > 0);
+        Self {
+            bytes,
+            offset: 0,
+            bytes_per_second,
+            pending_chunk_len: 0,
+            sleep: None,
+        }
+    }
+
+    fn next_chunk_len(&self) -> usize {
+        let remaining = self.bytes.len() - self.offset;
+        let target = self
+            .bytes_per_second
+            .div_ceil(PACE_CHUNKS_PER_SECOND)
+            .max(1);
+        usize::try_from(target).unwrap_or(usize::MAX).min(remaining)
+    }
+
+    fn chunk_delay(&self, chunk_len: usize) -> Duration {
+        let nanos =
+            (chunk_len as u128 * 1_000_000_000_u128).div_ceil(self.bytes_per_second as u128);
+        Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+    }
+}
+
+impl Body for PacedBody {
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        context: &mut TaskContext<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        let this = self.get_mut();
+        if this.offset == this.bytes.len() {
+            return Poll::Ready(None);
+        }
+        if this.sleep.is_none() {
+            this.pending_chunk_len = this.next_chunk_len();
+            this.sleep = Some(Box::pin(tokio::time::sleep_until(
+                Instant::now() + this.chunk_delay(this.pending_chunk_len),
+            )));
+        }
+        if this
+            .sleep
+            .as_mut()
+            .expect("paced body sleep was initialized")
+            .as_mut()
+            .poll(context)
+            .is_pending()
+        {
+            return Poll::Pending;
+        }
+        this.sleep = None;
+        let end = this.offset + this.pending_chunk_len;
+        let chunk = this.bytes.slice(this.offset..end);
+        this.offset = end;
+        Poll::Ready(Some(Ok(Frame::data(chunk))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        hyper::body::SizeHint::with_exact((self.bytes.len() - self.offset) as u64)
+    }
+}
+
 async fn handle_bypass_http(
     mut request: Request<Incoming>,
     request_data: RequestData,
@@ -1103,6 +1187,7 @@ async fn handle_session_http_request(
         }
     };
     let downstream_upgrade = is_upgrade_request(&request).then(|| hyper::upgrade::on(&mut request));
+    let upgrade_request = downstream_upgrade.is_some();
     let (parts, incoming) = request.into_parts();
     let mut request_data = RequestData {
         method: parts.method.to_string(),
@@ -1375,7 +1460,17 @@ async fn handle_session_http_request(
         .await;
     }
 
-    let upstream_request = match request_from_data(&request_data, request_body) {
+    let (request_speed, upstream_timeout) = if upgrade_request {
+        (None, UPSTREAM_TIMEOUT)
+    } else {
+        (
+            parse_special_tag(&request_data.tags, CRAB_REQ_SPEED_TAG, capture_id),
+            parse_special_tag(&request_data.tags, CRAB_REQ_TIMEOUT_TAG, capture_id)
+                .map(Duration::from_millis)
+                .unwrap_or(UPSTREAM_TIMEOUT),
+        )
+    };
+    let upstream_request = match request_from_data(&request_data, request_body, request_speed) {
         Ok(request) => request,
         Err(error) => {
             fail_capture(
@@ -1389,7 +1484,7 @@ async fn handle_session_http_request(
         }
     };
     let mut upstream_response = match timeout(
-        UPSTREAM_TIMEOUT,
+        upstream_timeout,
         send_upstream(upstream_request, cancellation.clone()),
     )
     .await
@@ -1705,10 +1800,12 @@ async fn finish_session_response(
         }
     }
     let _ = store.complete(capture_id, &response_data, &response_modifications);
-    response_from_data(
+    let response_speed = parse_special_tag(&request_data.tags, CRAB_RESP_SPEED_TAG, capture_id);
+    response_from_data_with_speed(
         &response_data,
         response_body,
         request_data.method.eq_ignore_ascii_case("HEAD"),
+        response_speed,
     )
 }
 
@@ -1900,7 +1997,11 @@ where
     }
 }
 
-fn request_from_data(data: &RequestData, body: Vec<u8>) -> Result<Request<ProxyBody>> {
+fn request_from_data(
+    data: &RequestData,
+    body: Vec<u8>,
+    bytes_per_second: Option<u64>,
+) -> Result<Request<ProxyBody>> {
     let uri = Uri::from_str(&data.uri)?;
     let mut builder = Request::builder()
         .method(Method::from_bytes(data.method.as_bytes())?)
@@ -1920,7 +2021,12 @@ fn request_from_data(data: &RequestData, body: Vec<u8>) -> Result<Request<ProxyB
         CONTENT_LENGTH,
         HeaderValue::from_str(&body.len().to_string())?,
     );
-    Ok(builder.body(boxed_full(Bytes::from(body)))?)
+    let body = Bytes::from(body);
+    let body = match bytes_per_second.filter(|_| !body.is_empty()) {
+        Some(bytes_per_second) => PacedBody::new(body, bytes_per_second).boxed_unsync(),
+        None => boxed_full(body),
+    };
+    Ok(builder.body(body)?)
 }
 
 fn streaming_upstream_request(
@@ -1947,6 +2053,15 @@ fn response_from_data(
     body: Vec<u8>,
     preserve_content_length: bool,
 ) -> Response<ProxyBody> {
+    response_from_data_with_speed(data, body, preserve_content_length, None)
+}
+
+fn response_from_data_with_speed(
+    data: &ResponseData,
+    body: Vec<u8>,
+    preserve_content_length: bool,
+    bytes_per_second: Option<u64>,
+) -> Response<ProxyBody> {
     let mut builder = Response::builder()
         .status(data.status)
         .version(parse_version(&data.version));
@@ -1970,8 +2085,13 @@ fn response_from_data(
             headers.insert(CONTENT_LENGTH, value);
         }
     }
+    let body = Bytes::from(body);
+    let body = match bytes_per_second.filter(|_| !body.is_empty()) {
+        Some(bytes_per_second) => PacedBody::new(body, bytes_per_second).boxed_unsync(),
+        None => boxed_full(body),
+    };
     builder
-        .body(boxed_full(Bytes::from(body)))
+        .body(body)
         .unwrap_or_else(|_| text_response(StatusCode::INTERNAL_SERVER_ERROR, "invalid response"))
 }
 
@@ -1979,6 +2099,31 @@ fn boxed_full(bytes: Bytes) -> ProxyBody {
     Full::new(bytes)
         .map_err(|never| match never {})
         .boxed_unsync()
+}
+
+fn parse_positive_decimal(value: Option<&str>) -> Result<Option<u64>, ()> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(());
+    }
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .map(Some)
+        .ok_or(())
+}
+
+fn parse_special_tag(tags: &RequestTags, key: &'static str, capture_id: u64) -> Option<u64> {
+    match parse_positive_decimal(tags.get(key).map(String::as_str)) {
+        Ok(value) => value,
+        Err(()) => {
+            tracing::warn!(capture_id, tag = key, "ignoring invalid special tag value");
+            None
+        }
+    }
 }
 
 fn response_status_has_body(status: u16) -> bool {
@@ -2260,14 +2405,21 @@ fn text_response(status: StatusCode, message: &str) -> Response<ProxyBody> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use bytes::Bytes;
+    use http_body_util::BodyExt;
     use hyper::{
         HeaderMap,
+        body::Body,
         header::{CONNECTION, HeaderValue, UPGRADE},
     };
+    use tokio::time::{Instant, sleep};
 
     use super::{
-        headers_to_values, normalize_tls_error, remove_header_value, response_from_data,
-        strip_hop_by_hop_headers, values_to_headers, version_name,
+        PacedBody, headers_to_values, normalize_tls_error, parse_positive_decimal,
+        remove_header_value, response_from_data, strip_hop_by_hop_headers, values_to_headers,
+        version_name,
     };
     use crate::model::{HeaderValues, ResponseData};
 
@@ -2315,6 +2467,63 @@ mod tests {
         let mut headers = HeaderValues::from([("Content-Encoding".into(), vec!["gzip".into()])]);
         remove_header_value(&mut headers, "content-encoding");
         assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn parses_strict_positive_ascii_decimal_values() {
+        assert_eq!(parse_positive_decimal(None), Ok(None));
+        assert_eq!(parse_positive_decimal(Some("1")), Ok(Some(1)));
+        assert_eq!(parse_positive_decimal(Some("001")), Ok(Some(1)));
+        assert_eq!(
+            parse_positive_decimal(Some("18446744073709551615")),
+            Ok(Some(u64::MAX))
+        );
+
+        for invalid in [
+            "",
+            "0",
+            "-1",
+            "+1",
+            " 1",
+            "1 ",
+            "1.0",
+            "1e3",
+            "1KB",
+            "１",
+            "18446744073709551616",
+        ] {
+            assert_eq!(parse_positive_decimal(Some(invalid)), Err(()), "{invalid}");
+        }
+    }
+
+    #[tokio::test]
+    async fn paced_body_waits_before_each_chunk_without_catching_up() {
+        let started_at = Instant::now();
+        let mut body = PacedBody::new(Bytes::from_static(b"abcd"), 40);
+
+        let frame = body.frame().await.unwrap().unwrap();
+        let first_at = Instant::now();
+        let first_bytes = frame.into_data().unwrap();
+        assert!(first_at.duration_since(started_at) >= Duration::from_millis(20));
+        assert_eq!(first_bytes, Bytes::from_static(b"a"));
+
+        sleep(Duration::from_millis(75)).await;
+        let late_poll_at = Instant::now();
+        let frame = body.frame().await.unwrap().unwrap();
+        let second_at = Instant::now();
+        let second_bytes = frame.into_data().unwrap();
+        assert!(second_at.duration_since(late_poll_at) >= Duration::from_millis(20));
+        assert_eq!(second_bytes, Bytes::from_static(b"b"));
+        assert_eq!(body.size_hint().exact(), Some(2));
+
+        assert_eq!(
+            body.collect().await.unwrap().to_bytes(),
+            Bytes::from_static(b"cd")
+        );
+
+        let mut empty = PacedBody::new(Bytes::new(), 1);
+        assert!(empty.is_end_stream());
+        assert!(empty.frame().await.is_none());
     }
 
     #[test]

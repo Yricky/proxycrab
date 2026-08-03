@@ -153,6 +153,32 @@ it explicitly.
 sent to the server. After all request interceptors finish, the presence of `_crab_skip` skips the
 upstream request, creates an empty HTTP/1.1 200 response, and continues through response interceptors.
 
+Three additional proxy-local tags control ordinary captured HTTP/HTTPS traffic:
+
+| Tag | Unit | Behavior |
+| --- | --- | --- |
+| `_crab_req_speed` | bytes per second | Maximum speed for the final request body sent from ProxyCrab to the server |
+| `_crab_resp_speed` | bytes per second | Maximum speed for the final response body sent from ProxyCrab to the client |
+| `_crab_req_timeout` | milliseconds | Upstream operation timeout; defaults to `60000` |
+
+Values must match ASCII `[0-9]+`, fit in `u64`, and be greater than zero. Leading zeroes are
+accepted. Invalid final values are ignored with a Rust `warn`; they do not fail the interceptor or
+capture. Request speed and timeout use the values after the complete request interceptor chain.
+Response speed uses the value after the complete response interceptor chain, so either phase may
+set or overwrite it. Breakpoint temporary scripts participate in the same final-value behavior.
+
+Speed limits are independent per capture and direction. They pace the final outbound body bytes
+without an initial or catch-up burst; headers, HTTP framing, and TLS overhead are not counted.
+Network backpressure may make the transfer slower. `_crab_req_timeout` covers upstream connection,
+TLS, paced request-body upload, and waiting for response headers. It does not change the existing
+request-body or response-body read timeouts and there is no downstream response timeout.
+
+The traffic-control tags do not apply to bypass traffic, raw CONNECT tunnels, Upgrade/WebSocket,
+the local `proxy.crab/ca.crt` response, or proxy-generated error responses. With `_crab_skip`,
+request speed and timeout are unused, while `_crab_resp_speed` still applies to the final synthetic
+response after response interceptors. All special tags remain persisted capture metadata and are
+never emitted as HTTP headers.
+
 ## Response interceptors
 
 ```lua

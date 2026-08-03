@@ -1,4 +1,8 @@
-use std::{io::Cursor, sync::Arc, time::Duration};
+use std::{
+    io::Cursor,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -9,7 +13,7 @@ use proxy_crab_mitm::{
     bypass::BypassOutcome,
     log_buffer::LogBuffer,
     model::{
-        BodyPayload, BreakpointListFilter, CaptureOutcome, InterceptorExecutionOrigin,
+        BodyPayload, BreakpointListFilter, CaptureOutcome, ErrorStage, InterceptorExecutionOrigin,
         InterceptorKind, Modification, ProxyStatus, Script, ScriptKind, SessionInterceptor,
         SessionInterceptors,
     },
@@ -120,6 +124,83 @@ async fn staged_http_upstream() -> (
     (port, release, task)
 }
 
+#[derive(Debug)]
+struct UploadObservation {
+    body: Vec<u8>,
+    first_body_after: Option<Duration>,
+    complete_after: Option<Duration>,
+}
+
+async fn body_gated_http_upstream() -> (
+    u16,
+    tokio::sync::oneshot::Receiver<UploadObservation>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (observation_tx, observation_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let started_at = Instant::now();
+        let mut request = Vec::new();
+        let mut header_end = None;
+        let mut content_length = None;
+        let mut first_body_after = None;
+        loop {
+            let mut bytes = [0; 1024];
+            let count = stream.read(&mut bytes).await.unwrap();
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&bytes[..count]);
+            if header_end.is_none()
+                && let Some(position) = request.windows(4).position(|window| window == b"\r\n\r\n")
+            {
+                let end = position + 4;
+                let headers = String::from_utf8_lossy(&request[..end]);
+                content_length = headers.lines().find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                });
+                header_end = Some(end);
+            }
+            if let Some(end) = header_end {
+                let body_len = request.len() - end;
+                if body_len > 0 && first_body_after.is_none() {
+                    first_body_after = Some(started_at.elapsed());
+                }
+                if content_length.is_some_and(|length| body_len >= length) {
+                    break;
+                }
+            }
+        }
+        let end = header_end.unwrap_or(request.len());
+        let expected = content_length.unwrap_or(0);
+        let body = request[end..]
+            .get(..expected.min(request.len() - end))
+            .unwrap_or_default()
+            .to_vec();
+        let complete_after = (body.len() == expected).then(|| started_at.elapsed());
+        let completed = complete_after.is_some();
+        let _ = observation_tx.send(UploadObservation {
+            body,
+            first_body_after,
+            complete_after,
+        });
+        if completed {
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                )
+                .await
+                .unwrap();
+        }
+    });
+    (port, observation_rx, task)
+}
+
 async fn proxy_get(proxy_port: u16, uri: &str, host: &str) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
     stream
@@ -137,6 +218,72 @@ async fn proxy_get(proxy_port: u16, uri: &str, host: &str) -> String {
         .unwrap()
         .unwrap();
     String::from_utf8_lossy(&response).into_owned()
+}
+
+async fn proxy_post(proxy_port: u16, uri: &str, host: &str, body: &[u8]) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    stream
+        .write_all(
+            format!(
+                "POST {uri} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    stream.write_all(body).await.unwrap();
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(3), stream.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+async fn proxy_get_body_timing(
+    proxy_port: u16,
+    uri: &str,
+    host: &str,
+    body_len: usize,
+) -> (String, Vec<u8>, Duration, Duration) {
+    let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    stream
+        .write_all(
+            format!(
+                "GET {uri} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut headers = Vec::new();
+    while !headers.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        timeout(Duration::from_secs(3), stream.read_exact(&mut byte))
+            .await
+            .unwrap()
+            .unwrap();
+        headers.push(byte[0]);
+    }
+    let headers_at = Instant::now();
+    let mut body = vec![0; body_len];
+    timeout(Duration::from_secs(3), stream.read_exact(&mut body[..1]))
+        .await
+        .unwrap()
+        .unwrap();
+    let first_body_after = headers_at.elapsed();
+    timeout(Duration::from_secs(3), stream.read_exact(&mut body[1..]))
+        .await
+        .unwrap()
+        .unwrap();
+    let complete_after = headers_at.elapsed();
+    (
+        String::from_utf8_lossy(&headers).into_owned(),
+        body,
+        first_body_after,
+        complete_after,
+    )
 }
 
 async fn connect_tunnel(proxy_port: u16) -> TcpStream {
@@ -563,6 +710,7 @@ async fn crab_skip_avoids_upstream_and_runs_response_interceptors() {
                           assert(req.uri.path == '/skipped'); \
                           assert(req.headers:get('host') ~= nil); \
                           assert(req:getTag('team') == 'checkout'); \
+                          req:setTag('_crab_resp_speed', '60'); \
                           resp.status = 777; \
                           resp.headers:set('x-skipped', '1'); \
                           resp.body:replace_with_string('mocked')"
@@ -587,12 +735,14 @@ async fn crab_skip_avoids_upstream_and_runs_response_interceptors() {
         .unwrap();
 
     let unreachable_port = unused_port();
+    let started_at = Instant::now();
     let response = proxy_get(
         proxy_port,
         &format!("http://127.0.0.1:{unreachable_port}/skipped"),
         &format!("127.0.0.1:{unreachable_port}"),
     )
     .await;
+    assert!(started_at.elapsed() >= Duration::from_millis(80));
     assert!(response.starts_with("HTTP/1.1 777"), "{response}");
     assert!(
         response.to_ascii_lowercase().contains("x-skipped: 1"),
@@ -613,6 +763,156 @@ async fn crab_skip_avoids_upstream_and_runs_response_interceptors() {
             .any(|modification| matches!(modification, Modification::StatusSet { status: 777 }))
     );
     runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn request_speed_paces_the_final_body_sent_upstream() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, observation, upstream) = body_gated_http_upstream().await;
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "pace-request".into(),
+                content: "req.body:replace_with_string('pong'); req:setTag('_crab_req_speed', '20'); req:setTag('_crab_req_timeout', '1000')".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "pace-request".into(),
+                    enabled: true,
+                }],
+                response: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let response = proxy_post(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/paced-upload"),
+        &format!("127.0.0.1:{upstream_port}"),
+        b"ping",
+    )
+    .await;
+    assert!(response.ends_with("ok"), "{response}");
+    let observation = observation.await.unwrap();
+    assert_eq!(observation.body, b"pong");
+    assert!(observation.first_body_after.unwrap() >= Duration::from_millis(35));
+    assert!(observation.complete_after.unwrap() >= Duration::from_millis(170));
+
+    let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+    assert_eq!(capture.request.tags["_crab_req_speed"], "20");
+    assert_eq!(capture.request.tags["_crab_req_timeout"], "1000");
+
+    runtime.stop_proxy().await.unwrap();
+    upstream.await.unwrap();
+}
+
+#[tokio::test]
+async fn request_timeout_includes_paced_upload_waiting() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, observation, upstream) = body_gated_http_upstream().await;
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "timeout-paced-request".into(),
+                content:
+                    "req:setTag('_crab_req_speed', '20'); req:setTag('_crab_req_timeout', '100')"
+                        .into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "timeout-paced-request".into(),
+                    enabled: true,
+                }],
+                response: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let response = proxy_post(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/timed-out-upload"),
+        &format!("127.0.0.1:{upstream_port}"),
+        b"ping",
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 504"), "{response}");
+    let observation = timeout(Duration::from_secs(2), observation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(observation.complete_after.is_none());
+
+    let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+    assert_eq!(capture.outcome, CaptureOutcome::Failed);
+    let error = capture.error.unwrap();
+    assert_eq!(error.stage, ErrorStage::Upstream);
+    assert_eq!(error.kind, "upstream_timeout");
+
+    runtime.stop_proxy().await.unwrap();
+    upstream.await.unwrap();
+}
+
+#[tokio::test]
+async fn response_speed_paces_the_final_interceptor_body() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, upstream) = fixed_http_upstream().await;
+    runtime
+        .create_script(
+            ScriptKind::ResponseInterceptor,
+            Script {
+                name: "pace-response".into(),
+                content:
+                    "resp.body:replace_with_string('pong'); req:setTag('_crab_resp_speed', '20')"
+                        .into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: Vec::new(),
+                response: vec![SessionInterceptor {
+                    name: "pace-response".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+
+    let (headers, body, first_body_after, complete_after) = proxy_get_body_timing(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/paced-download"),
+        &format!("127.0.0.1:{upstream_port}"),
+        4,
+    )
+    .await;
+    assert!(headers.starts_with("HTTP/1.1 200"), "{headers}");
+    assert!(headers.to_ascii_lowercase().contains("content-length: 4"));
+    assert_eq!(body, b"pong");
+    assert!(first_body_after >= Duration::from_millis(35));
+    assert!(complete_after >= Duration::from_millis(170));
+
+    let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+    assert_eq!(capture.request.tags["_crab_resp_speed"], "20");
+
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
 }
 
 #[tokio::test]
@@ -975,6 +1275,27 @@ async fn forwards_http_upgrade_bidirectionally() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let session = runtime.create_session(None, None).unwrap();
     let (upstream_port, upstream) = upgrade_echo_upstream().await;
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "upgrade-limits-ignored".into(),
+                content: "req:setTag('_crab_req_speed', '1'); req:setTag('_crab_resp_speed', '1'); req:setTag('_crab_req_timeout', '1')".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "upgrade-limits-ignored".into(),
+                    enabled: true,
+                }],
+                response: Vec::new(),
+            },
+        )
+        .unwrap();
     let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
     stream
         .write_all(

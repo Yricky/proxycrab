@@ -232,6 +232,13 @@ Request-line changes use `method_set` with `method` and `uri_set` with `uri`, st
 executed without changes are still present.
 Disabled and missing scripts are not recorded.
 
+The persisted tag map may include `_crab_skip`, `_crab_req_speed`, `_crab_resp_speed`, and
+`_crab_req_timeout`. These are proxy-local controls rather than HTTP headers. For ordinary captured
+HTTP/HTTPS traffic, positive ASCII decimal speed values pace final outbound body bytes per second,
+and `_crab_req_timeout` overrides the 60,000 ms upstream timeout. Invalid final values are ignored
+with a runtime warning. Bypass, raw CONNECT, Upgrade/WebSocket, the local CA endpoint, and
+proxy-generated errors retain their existing unpaced behavior.
+
 Log detail embeds decoded text/JSON only through 64 KiB. Every non-empty body includes the stored
 byte size and selected absolute capture path; compressed bodies therefore report their compressed
 file size. `GET /api/logs/{id}/body?session_id=1&side=request&decompress=false&max_size=16777216`

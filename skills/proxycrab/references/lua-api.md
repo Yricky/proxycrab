@@ -256,6 +256,25 @@ upstream. An empty value still counts as present. After the full request chain, 
 `_crab_skip` skips upstream and produces a default empty HTTP/1.1 200 response before response
 interceptors run.
 
+The final request tags also support these proxy-local traffic controls:
+
+| Tag | Unit | Behavior |
+| --- | --- | --- |
+| `_crab_req_speed` | bytes per second | Pace the final request body sent to the server |
+| `_crab_resp_speed` | bytes per second | Pace the final response body sent to the client |
+| `_crab_req_timeout` | milliseconds | Bound connection, TLS, paced upload, and response-header wait; default `60000` |
+
+Values must contain only ASCII digits, fit in `u64`, and be greater than zero; leading zeroes are
+valid. An invalid final value is ignored and written to the Rust warning log. Request speed and
+timeout are resolved after request interceptors; response speed is resolved after response
+interceptors, including temporary breakpoint scripts. Limits are independent per capture and
+direction, count only final outbound body bytes, send no initial or catch-up burst, and do not alter
+headers or add a downstream timeout. Tags remain persisted metadata and never become HTTP headers.
+
+These controls exclude bypass, raw CONNECT, Upgrade/WebSocket, `proxy.crab/ca.crt`, and
+proxy-generated errors. `_crab_skip` makes request speed/timeout irrelevant, but response speed can
+pace a synthetic body created by response interceptors.
+
 ## Response interceptors
 
 A response interceptor receives mutable global `resp` plus request global `req`. Request metadata

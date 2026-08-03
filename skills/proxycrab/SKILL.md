@@ -208,6 +208,12 @@ and script errors emit a system warning and bypass. Select a routing script only
   `modifications` and `error`.
 - Request tags are capture-local metadata. Presence of `_crab_skip`, including an empty value,
   intentionally suppresses the upstream request after the complete request chain.
+- `_crab_req_speed` and `_crab_resp_speed` pace the final outbound request and response bodies in
+  bytes per second; `_crab_req_timeout` sets the upstream timeout in milliseconds (default 60000).
+  Use only positive ASCII decimal values. Invalid final values are ignored with a runtime warning.
+  These controls are per capture, never become HTTP headers, and do not apply to bypass, raw
+  CONNECT, Upgrade/WebSocket, the local CA endpoint, or proxy-generated errors. `_crab_skip` still
+  allows response pacing after response interceptors create the synthetic response.
 - Keep user-created debugging state unless the user asks for cleanup. Automatic restoration is not
   required.
 - Expect Session, filter, column, and interceptor changes to appear in the desktop UI. If the UI
