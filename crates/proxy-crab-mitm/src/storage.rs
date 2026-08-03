@@ -385,50 +385,52 @@ impl CaptureStore {
     }
 
     pub fn get(&self, id: u64) -> Result<Option<CaptureDetail>> {
-        let connection = self.connection()?;
-        let mut statement = connection.prepare(
-            "SELECT id, source, method, uri, req_version, req_headers,
-                    resp_status, resp_version, resp_headers, outcome, stage,
-                    error_stage, error_kind, error_message, created_at, updated_at, req_tags
-             FROM captures WHERE id=?1",
-        )?;
-        statement
-            .query_row(params![id as i64], |row| {
-                let summary = self.summary_from_row(row)?;
-                let request_body = self
-                    .read_body(
-                        id,
-                        BodySide::Request,
-                        &summary.request.headers,
-                        self.body_path(id, BodySide::Request, true).exists(),
-                    )
-                    .unwrap_or(BodyPayload::Empty);
-                let response_body = self
-                    .read_body(
-                        id,
-                        BodySide::Response,
-                        summary
-                            .response
-                            .as_ref()
-                            .map(|response| &response.headers)
-                            .unwrap_or(&HeaderValues::new()),
-                        self.body_path(id, BodySide::Response, true).exists(),
-                    )
-                    .unwrap_or(BodyPayload::Empty);
-                Ok(CaptureDetail {
-                    summary,
-                    request_body,
-                    response_body,
-                    request_interceptors: self
-                        .interceptor_executions(id, InterceptorKind::Request)
-                        .unwrap_or_default(),
-                    response_interceptors: self
-                        .interceptor_executions(id, InterceptorKind::Response)
-                        .unwrap_or_default(),
-                })
-            })
-            .optional()
-            .map_err(Into::into)
+        let summary = {
+            let connection = self.connection()?;
+            let mut statement = connection.prepare(
+                "SELECT id, source, method, uri, req_version, req_headers,
+                        resp_status, resp_version, resp_headers, outcome, stage,
+                        error_stage, error_kind, error_message, created_at, updated_at, req_tags
+                 FROM captures WHERE id=?1",
+            )?;
+            statement
+                .query_row(params![id as i64], |row| self.summary_from_row(row))
+                .optional()?
+        };
+        let Some(summary) = summary else {
+            return Ok(None);
+        };
+        let request_body = self
+            .read_body(
+                id,
+                BodySide::Request,
+                &summary.request.headers,
+                self.body_path(id, BodySide::Request, true).exists(),
+            )
+            .unwrap_or(BodyPayload::Empty);
+        let response_body = self
+            .read_body(
+                id,
+                BodySide::Response,
+                summary
+                    .response
+                    .as_ref()
+                    .map(|response| &response.headers)
+                    .unwrap_or(&HeaderValues::new()),
+                self.body_path(id, BodySide::Response, true).exists(),
+            )
+            .unwrap_or(BodyPayload::Empty);
+        Ok(Some(CaptureDetail {
+            summary,
+            request_body,
+            response_body,
+            request_interceptors: self
+                .interceptor_executions(id, InterceptorKind::Request)
+                .unwrap_or_default(),
+            response_interceptors: self
+                .interceptor_executions(id, InterceptorKind::Response)
+                .unwrap_or_default(),
+        }))
     }
 
     pub fn mark_in_progress_as_shutdown(&self) -> Result<usize> {
@@ -445,7 +447,8 @@ impl CaptureStore {
     fn initialize(&self) -> Result<()> {
         let connection = self.connection()?;
         connection.execute_batch(
-            "CREATE TABLE IF NOT EXISTS captures (
+            "PRAGMA journal_mode = WAL;
+            CREATE TABLE IF NOT EXISTS captures (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source TEXT NOT NULL,
                 method TEXT NOT NULL,
@@ -498,7 +501,10 @@ impl CaptureStore {
     fn connection(&self) -> Result<Connection> {
         let connection = Connection::open(&self.database_path)?;
         connection.busy_timeout(Duration::from_secs(5))?;
-        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        connection.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             PRAGMA synchronous = NORMAL;",
+        )?;
         Ok(connection)
     }
 

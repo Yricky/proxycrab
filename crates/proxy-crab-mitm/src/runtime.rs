@@ -204,6 +204,33 @@ impl ProxyCrab {
         })
     }
 
+    fn pin_capture_store(&self, session_id: u64) -> Result<CaptureStorePin<'_>> {
+        let mut pins = self
+            .session_pins
+            .lock()
+            .expect("session pins lock poisoned");
+        let store = self.capture_store_locked(session_id)?;
+        *pins.entry(session_id).or_default() += 1;
+        Ok(CaptureStorePin {
+            runtime: self,
+            session_id,
+            store,
+        })
+    }
+
+    fn unpin_session(&self, session_id: u64) {
+        let mut pins = self
+            .session_pins
+            .lock()
+            .expect("session pins lock poisoned");
+        if let Some(count) = pins.get_mut(&session_id) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                pins.remove(&session_id);
+            }
+        }
+    }
+
     pub async fn acquire_capture_slot(&self) -> OwnedSemaphorePermit {
         self.capture_slots
             .clone()
@@ -218,19 +245,13 @@ impl ProxyCrab {
         limit: usize,
         after_id: Option<u64>,
     ) -> Result<Vec<CaptureSummary>> {
-        let _pins = self
-            .session_pins
-            .lock()
-            .expect("session pins lock poisoned");
-        self.capture_store_locked(session_id)?.list(limit, after_id)
+        self.pin_capture_store(session_id)?
+            .store
+            .list(limit, after_id)
     }
 
     pub fn capture(&self, session_id: u64, id: u64) -> Result<Option<CaptureDetail>> {
-        let _pins = self
-            .session_pins
-            .lock()
-            .expect("session pins lock poisoned");
-        self.capture_store_locked(session_id)?.get(id)
+        self.pin_capture_store(session_id)?.store.get(id)
     }
 
     pub fn breakpoints(&self, filter: &BreakpointListFilter) -> Vec<BreakpointSummary> {
@@ -297,11 +318,8 @@ impl ProxyCrab {
         limit: usize,
         before_id: Option<u64>,
     ) -> Result<Vec<CaptureSummary>> {
-        let _pins = self
-            .session_pins
-            .lock()
-            .expect("session pins lock poisoned");
-        self.capture_store_locked(session_id)?
+        self.pin_capture_store(session_id)?
+            .store
             .list_before(limit, before_id)
     }
 
@@ -313,30 +331,19 @@ impl ProxyCrab {
         max_id: Option<u64>,
         ascending: bool,
     ) -> Result<Vec<CaptureSummary>> {
-        let _pins = self
-            .session_pins
-            .lock()
-            .expect("session pins lock poisoned");
-        self.capture_store_locked(session_id)?
+        self.pin_capture_store(session_id)?
+            .store
             .list_range(limit, min_id, max_id, ascending)
     }
 
     pub fn captures(&self, session_id: u64, ids: &[u64]) -> Result<Vec<CaptureSummary>> {
-        let _pins = self
-            .session_pins
-            .lock()
-            .expect("session pins lock poisoned");
-        self.capture_store_locked(session_id)?.get_many(ids)
+        self.pin_capture_store(session_id)?.store.get_many(ids)
     }
 
     pub fn mark_in_progress_as_shutdown(&self) {
-        let _pins = self
-            .session_pins
-            .lock()
-            .expect("session pins lock poisoned");
         for session in self.sessions() {
-            if let Ok(store) = self.capture_store_locked(session.id) {
-                let _ = store.mark_in_progress_as_shutdown();
+            if let Ok(pin) = self.pin_capture_store(session.id) {
+                let _ = pin.store.mark_in_progress_as_shutdown();
             }
         }
     }
@@ -728,17 +735,19 @@ impl SessionPin {
 
 impl Drop for SessionPin {
     fn drop(&mut self) {
-        let mut pins = self
-            .runtime
-            .session_pins
-            .lock()
-            .expect("session pins lock poisoned");
-        if let Some(count) = pins.get_mut(&self.session_id) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                pins.remove(&self.session_id);
-            }
-        }
+        self.runtime.unpin_session(self.session_id);
+    }
+}
+
+struct CaptureStorePin<'a> {
+    runtime: &'a ProxyCrab,
+    session_id: u64,
+    store: CaptureStore,
+}
+
+impl Drop for CaptureStorePin<'_> {
+    fn drop(&mut self) {
+        self.runtime.unpin_session(self.session_id);
     }
 }
 
@@ -816,6 +825,26 @@ mod tests {
         config.active_session_id = None;
         runtime.replace_config(config).unwrap();
         assert_eq!(runtime.active_session_id(), None);
+    }
+
+    #[test]
+    fn capture_store_pin_releases_registry_lock_during_storage_work() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
+
+        let pin = runtime.pin_capture_store(session.id).unwrap();
+
+        assert!(runtime.session_pins.try_lock().is_ok());
+        assert!(
+            runtime
+                .delete_session(session.id)
+                .unwrap_err()
+                .to_string()
+                .contains("requests in progress")
+        );
+        drop(pin);
+        runtime.delete_session(session.id).unwrap();
     }
 
     #[test]

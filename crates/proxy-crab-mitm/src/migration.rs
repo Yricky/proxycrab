@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::workspace::{read_json, write_json_atomic};
 
 const WORKSPACE_SCHEMA_FILE: &str = "workspace_schema.json";
-pub(crate) const CURRENT_WORKSPACE_SCHEMA_VERSION: u32 = 1;
+pub(crate) const CURRENT_WORKSPACE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct WorkspaceSchema {
@@ -31,6 +31,7 @@ pub(crate) fn migrate_workspace(root: &Path) -> Result<()> {
     while version < CURRENT_WORKSPACE_SCHEMA_VERSION {
         match version {
             0 => migrate_v0_to_v1(root)?,
+            1 => migrate_v1_to_v2(root)?,
             _ => bail!("no migration registered for workspace schema version {version}"),
         }
         version += 1;
@@ -87,6 +88,36 @@ fn migrate_capture_database_v1(path: &Path) -> Result<()> {
              ON capture_interceptor_runs(capture_id, phase, id)",
             [],
         )?;
+    }
+    Ok(())
+}
+
+/// Workspace schema v2 changes every Session capture database from SQLite's rollback journal
+/// storage model to WAL. The logical tables and blob layout stay unchanged; the persistent WAL
+/// mode allows management readers to overlap with MITM capture writers.
+fn migrate_v1_to_v2(root: &Path) -> Result<()> {
+    let sessions = root.join("sessions");
+    if !sessions.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(&sessions)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let database = entry.path().join("captures.db");
+        if database.exists() {
+            let connection = Connection::open(&database)?;
+            connection.busy_timeout(Duration::from_secs(5))?;
+            connection
+                .execute_batch("PRAGMA journal_mode = WAL;")
+                .with_context(|| {
+                    format!(
+                        "failed to enable WAL for capture database {}",
+                        database.display()
+                    )
+                })?;
+        }
     }
     Ok(())
 }
@@ -148,6 +179,7 @@ fn table_has_column(connection: &Connection, table: &str, column: &str) -> Resul
 mod tests {
     use std::fs;
 
+    use rusqlite::Connection;
     use tempfile::tempdir;
 
     use super::{CURRENT_WORKSPACE_SCHEMA_VERSION, WorkspaceSchema, migrate_workspace};
@@ -186,5 +218,33 @@ mod tests {
 
         let error = migrate_workspace(root.path()).unwrap_err();
         assert!(error.to_string().contains("newer than supported"));
+    }
+
+    #[test]
+    fn v2_migration_enables_wal_for_existing_capture_databases() {
+        let root = tempdir().unwrap();
+        let session = root.path().join("sessions/1");
+        fs::create_dir_all(&session).unwrap();
+        let database = session.join("captures.db");
+        Connection::open(&database)
+            .unwrap()
+            .execute("CREATE TABLE captures (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+        write_json_atomic(
+            &root.path().join("workspace_schema.json"),
+            &WorkspaceSchema { version: 1 },
+        )
+        .unwrap();
+
+        migrate_workspace(root.path()).unwrap();
+
+        let connection = Connection::open(database).unwrap();
+        let journal_mode: String = connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal_mode, "wal");
+        let schema: WorkspaceSchema =
+            read_json(&root.path().join("workspace_schema.json")).unwrap();
+        assert_eq!(schema.version, 2);
     }
 }

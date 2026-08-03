@@ -23,6 +23,9 @@ use crate::dto::{
     SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery, UpdateScriptRequest,
     UpdateSessionRequest,
 };
+use tokio::sync::Semaphore;
+
+const MAX_BLOCKING_MANAGEMENT_TASKS: usize = 8;
 
 #[async_trait]
 pub trait ProxyCrabManager: Send + Sync {
@@ -138,6 +141,7 @@ pub trait ProxyCrabManager: Send + Sync {
 
 pub struct MitmManager {
     runtime: Arc<ProxyCrab>,
+    blocking_tasks: Arc<Semaphore>,
 }
 
 enum PreparedFilter {
@@ -161,11 +165,33 @@ struct PreparedScript {
 
 impl MitmManager {
     pub fn new(runtime: Arc<ProxyCrab>) -> Arc<Self> {
-        Arc::new(Self { runtime })
+        Arc::new(Self {
+            runtime,
+            blocking_tasks: Arc::new(Semaphore::new(MAX_BLOCKING_MANAGEMENT_TASKS)),
+        })
     }
 
     pub fn runtime(&self) -> &Arc<ProxyCrab> {
         &self.runtime
+    }
+
+    async fn run_blocking<T, F>(&self, name: &'static str, task: F) -> ManagerResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> ManagerResult<T> + Send + 'static,
+    {
+        let permit = self
+            .blocking_tasks
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| ManagerError::internal("management task limiter closed"))?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            task()
+        })
+        .await
+        .map_err(|error| ManagerError::internal(format!("{name} task failed: {error}")))?
     }
 
     fn session_id(&self, requested: Option<u64>) -> ManagerResult<u64> {
@@ -373,71 +399,68 @@ impl ProxyCrabManager for MitmManager {
         let ascending = request.min_id.is_some() && request.max_id.is_none();
         let requested_filter = request.filter;
         let runtime = self.runtime.clone();
-        let filter = match &requested_filter {
-            Some(filter) => filter.clone(),
-            None => runtime.session_view(session_id).map_err(map_error)?.filter,
-        };
-        let prepared = Self::prepare_filter(&runtime, &filter)?;
         let min_id = request.min_id;
         let max_id = request.max_id;
-        let ids = tokio::task::spawn_blocking(move || {
-            if limit == 0 {
-                return Ok(Vec::new());
-            }
-            if matches!(prepared, PreparedFilter::All) {
-                return runtime
+        self.run_blocking("log ID", move || {
+            let filter = match &requested_filter {
+                Some(filter) => filter.clone(),
+                None => runtime.session_view(session_id).map_err(map_error)?.filter,
+            };
+            let prepared = Self::prepare_filter(&runtime, &filter)?;
+            let ids = if limit == 0 {
+                Vec::new()
+            } else if matches!(prepared, PreparedFilter::All) {
+                runtime
                     .list_captures_range(session_id, limit, min_id, max_id, ascending)
                     .map(|items| items.into_iter().map(|item| item.id).collect())
-                    .map_err(map_error);
-            }
-
-            let mut ids = Vec::with_capacity(limit);
-            let mut min_id = min_id;
-            let mut max_id = max_id;
-            loop {
-                let page = runtime
-                    .list_captures_range(session_id, SCAN_PAGE_SIZE, min_id, max_id, ascending)
-                    .map_err(map_error)?;
-                if page.is_empty() {
-                    break;
-                }
-                let page_len = page.len();
-                let cursor = page.last().map(|item| item.id);
-                for item in page {
-                    if Self::matches_filter(&prepared, &item) {
-                        ids.push(item.id);
-                        if ids.len() == limit {
-                            return Ok(ids);
+                    .map_err(map_error)?
+            } else {
+                let mut ids = Vec::with_capacity(limit);
+                let mut min_id = min_id;
+                let mut max_id = max_id;
+                'scan: loop {
+                    let page = runtime
+                        .list_captures_range(session_id, SCAN_PAGE_SIZE, min_id, max_id, ascending)
+                        .map_err(map_error)?;
+                    if page.is_empty() {
+                        break 'scan ids;
+                    }
+                    let page_len = page.len();
+                    let cursor = page.last().map(|item| item.id);
+                    for item in page {
+                        if Self::matches_filter(&prepared, &item) {
+                            ids.push(item.id);
+                            if ids.len() == limit {
+                                break 'scan ids;
+                            }
                         }
                     }
+                    if page_len < SCAN_PAGE_SIZE {
+                        break 'scan ids;
+                    }
+                    if ascending {
+                        min_id = cursor;
+                    } else {
+                        max_id = cursor;
+                    }
                 }
-                if page_len < SCAN_PAGE_SIZE {
-                    break;
-                }
-                if ascending {
-                    min_id = cursor;
-                } else {
-                    max_id = cursor;
-                }
-            }
-            Ok(ids)
+            };
+            let effective_filter = if let Some(filter) = requested_filter {
+                let mut view = runtime.session_view(session_id).map_err(map_error)?;
+                view.filter = filter;
+                runtime
+                    .replace_session_view(session_id, view)
+                    .map_err(map_error)?
+                    .filter
+            } else {
+                filter
+            };
+            Ok(LogIdsPayload {
+                ids,
+                filter: effective_filter,
+            })
         })
         .await
-        .map_err(|error| ManagerError::internal(format!("log ID task failed: {error}")))??;
-        let effective_filter = if let Some(filter) = requested_filter {
-            let mut view = self.runtime.session_view(session_id).map_err(map_error)?;
-            view.filter = filter;
-            self.runtime
-                .replace_session_view(session_id, view)
-                .map_err(map_error)?
-                .filter
-        } else {
-            filter
-        };
-        Ok(LogIdsPayload {
-            ids,
-            filter: effective_filter,
-        })
     }
 
     async fn log_views(&self, request: LogViewsRequest) -> ManagerResult<LogViewsPayload> {
@@ -449,112 +472,113 @@ impl ProxyCrabManager for MitmManager {
             )));
         }
         let session_id = self.session_id(request.session_id)?;
-        let columns = match request.view {
-            Some(view) => view.columns,
-            None => {
-                self.runtime
-                    .session_view(session_id)
-                    .map_err(map_error)?
-                    .columns
-            }
-        };
-        if columns
-            .iter()
-            .any(|column| !column.width().is_finite() || column.width() <= 0.0)
-        {
-            return Err(ManagerError::bad_request("column width must be positive"));
-        }
-        let column_views = columns.iter().map(column_view).collect::<Vec<_>>();
-        let mut requested = HashMap::new();
-        for item in request.logs {
-            requested.insert(item.id, item.updated_at);
-        }
-        let ids = requested.keys().copied().collect::<Vec<_>>();
-        let summaries = self.runtime.captures(session_id, &ids).map_err(map_error)?;
-        let summaries = summaries
-            .into_iter()
-            .map(|item| (item.id, item))
-            .collect::<HashMap<_, _>>();
-        let mut scripts = HashMap::<String, Result<String, String>>::new();
-        for column in &columns {
-            if let Column::Script { script_name, .. } = column {
-                scripts.entry(script_name.clone()).or_insert_with(|| {
-                    self.runtime
-                        .script(ScriptKind::Column, script_name)
-                        .map(|script| script.content)
-                        .map_err(|error| error.to_string())
-                });
-            }
-        }
-
-        let mut rows = Vec::new();
-        let mut exceptions = Vec::new();
-        for (id, client_updated_at) in requested {
-            let Some(item) = summaries.get(&id) else {
-                exceptions.push(LogViewException {
-                    id,
-                    column_index: None,
-                    code: "log_not_found".into(),
-                    message: format!("log {id} not found"),
-                });
-                continue;
+        let runtime = self.runtime.clone();
+        self.run_blocking("log view", move || {
+            let columns = match request.view {
+                Some(view) => view.columns,
+                None => runtime.session_view(session_id).map_err(map_error)?.columns,
             };
-            if client_updated_at.is_some_and(|updated_at| item.updated_at <= updated_at) {
-                continue;
+            if columns
+                .iter()
+                .any(|column| !column.width().is_finite() || column.width() <= 0.0)
+            {
+                return Err(ManagerError::bad_request("column width must be positive"));
+            }
+            let column_views = columns.iter().map(column_view).collect::<Vec<_>>();
+            let mut requested = HashMap::new();
+            for item in request.logs {
+                requested.insert(item.id, item.updated_at);
+            }
+            let ids = requested.keys().copied().collect::<Vec<_>>();
+            let summaries = runtime.captures(session_id, &ids).map_err(map_error)?;
+            let summaries = summaries
+                .into_iter()
+                .map(|item| (item.id, item))
+                .collect::<HashMap<_, _>>();
+            let mut scripts = HashMap::<String, Result<String, String>>::new();
+            for column in &columns {
+                if let Column::Script { script_name, .. } = column {
+                    scripts.entry(script_name.clone()).or_insert_with(|| {
+                        runtime
+                            .script(ScriptKind::Column, script_name)
+                            .map(|script| script.content)
+                            .map_err(|error| error.to_string())
+                    });
+                }
             }
 
-            let mut cells = Vec::with_capacity(columns.len());
-            for (column_index, column) in columns.iter().enumerate() {
-                if let Some(value) = Self::render_builtin_cell(column, item) {
-                    cells.push(value);
+            let mut rows = Vec::new();
+            let mut exceptions = Vec::new();
+            for (id, client_updated_at) in requested {
+                let Some(item) = summaries.get(&id) else {
+                    exceptions.push(LogViewException {
+                        id,
+                        column_index: None,
+                        code: "log_not_found".into(),
+                        message: format!("log {id} not found"),
+                    });
+                    continue;
+                };
+                if client_updated_at.is_some_and(|updated_at| item.updated_at <= updated_at) {
                     continue;
                 }
-                let Column::Script { script_name, .. } = column else {
-                    unreachable!("all built-in columns were rendered above");
-                };
-                let result = match scripts
-                    .get(script_name)
-                    .expect("every script column is preloaded")
-                {
-                    Ok(content) => evaluate_column_named(content, item, script_name)
-                        .map_err(|error| error.to_string()),
-                    Err(message) => Err(message.clone()),
-                };
-                match result {
-                    Ok(value) => cells.push(value),
-                    Err(message) => {
-                        cells.push(String::new());
-                        exceptions.push(LogViewException {
-                            id,
-                            column_index: Some(column_index),
-                            code: "column_script_error".into(),
-                            message,
-                        });
+
+                let mut cells = Vec::with_capacity(columns.len());
+                for (column_index, column) in columns.iter().enumerate() {
+                    if let Some(value) = Self::render_builtin_cell(column, item) {
+                        cells.push(value);
+                        continue;
+                    }
+                    let Column::Script { script_name, .. } = column else {
+                        unreachable!("all built-in columns were rendered above");
+                    };
+                    let result = match scripts
+                        .get(script_name)
+                        .expect("every script column is preloaded")
+                    {
+                        Ok(content) => evaluate_column_named(content, item, script_name)
+                            .map_err(|error| error.to_string()),
+                        Err(message) => Err(message.clone()),
+                    };
+                    match result {
+                        Ok(value) => cells.push(value),
+                        Err(message) => {
+                            cells.push(String::new());
+                            exceptions.push(LogViewException {
+                                id,
+                                column_index: Some(column_index),
+                                code: "column_script_error".into(),
+                                message,
+                            });
+                        }
                     }
                 }
+                rows.push(LogViewRow {
+                    id,
+                    updated_at: item.updated_at,
+                    cells,
+                });
             }
-            rows.push(LogViewRow {
-                id,
-                updated_at: item.updated_at,
-                cells,
-            });
-        }
-        Ok(LogViewsPayload {
-            columns: column_views,
-            rows,
-            exceptions,
+            Ok(LogViewsPayload {
+                columns: column_views,
+                rows,
+                exceptions,
+            })
         })
+        .await
     }
 
     async fn log(&self, session_id: Option<u64>, id: u64) -> ManagerResult<LogDetail> {
         let session_id = self.session_id(session_id)?;
         let runtime = self.runtime.clone();
-        let detail = tokio::task::spawn_blocking(move || runtime.capture(session_id, id))
-            .await
-            .map_err(|error| ManagerError::internal(format!("log read task failed: {error}")))?
-            .map_err(map_error)?
-            .ok_or_else(|| ManagerError::not_found(format!("log {id} not found")))?;
-        Ok(log_detail_from_capture(detail))
+        self.run_blocking("log read", move || {
+            let detail = runtime
+                .capture(session_id, id)
+                .map_err(map_error)?
+                .ok_or_else(|| ManagerError::not_found(format!("log {id} not found")))?;
+            Ok(log_detail_from_capture(detail))
+        })
+        .await
     }
 
     async fn breakpoints(&self, query: BreakpointQuery) -> ManagerResult<Vec<BreakpointSummary>> {
@@ -567,11 +591,15 @@ impl ProxyCrabManager for MitmManager {
     }
 
     async fn breakpoint(&self, id: u64) -> ManagerResult<BreakpointDetailPayload> {
-        let detail = self.runtime.breakpoint(id).map_err(map_error)?;
-        Ok(BreakpointDetailPayload {
-            breakpoint: detail.breakpoint,
-            log: log_detail_from_capture(detail.capture),
+        let runtime = self.runtime.clone();
+        self.run_blocking("breakpoint read", move || {
+            let detail = runtime.breakpoint(id).map_err(map_error)?;
+            Ok(BreakpointDetailPayload {
+                breakpoint: detail.breakpoint,
+                log: log_detail_from_capture(detail.capture),
+            })
         })
+        .await
     }
 
     async fn extend_breakpoint(
@@ -593,9 +621,13 @@ impl ProxyCrabManager for MitmManager {
         id: u64,
         request: ExecuteTemporaryScriptRequest,
     ) -> ManagerResult<TemporaryExecutionResult> {
-        self.runtime
-            .execute_breakpoint_script(id, &request.content)
-            .map_err(map_error)
+        let runtime = self.runtime.clone();
+        self.run_blocking("breakpoint script", move || {
+            runtime
+                .execute_breakpoint_script(id, &request.content)
+                .map_err(map_error)
+        })
+        .await
     }
 
     async fn session_view(&self, session_id: Option<u64>) -> ManagerResult<SessionViewPayload> {
@@ -714,22 +746,26 @@ impl ProxyCrabManager for MitmManager {
         request: DebugFilterScriptRequest,
     ) -> ManagerResult<bool> {
         let session_id = self.session_id(request.session_id)?;
-        let script = self
-            .runtime
-            .script(ScriptKind::Filter, &name)
-            .map_err(map_error)?;
-        let detail = self
-            .runtime
-            .capture(session_id, request.log_id)
-            .map_err(map_error)?
-            .ok_or_else(|| ManagerError::not_found(format!("log {} not found", request.log_id)))?;
-        evaluate_filter_named(
-            &script.content,
-            &request.input,
-            &detail.summary,
-            &script.name,
-        )
-        .map_err(|error| ManagerError::bad_request(error.to_string()))
+        let runtime = self.runtime.clone();
+        self.run_blocking("filter script", move || {
+            let script = runtime
+                .script(ScriptKind::Filter, &name)
+                .map_err(map_error)?;
+            let detail = runtime
+                .capture(session_id, request.log_id)
+                .map_err(map_error)?
+                .ok_or_else(|| {
+                    ManagerError::not_found(format!("log {} not found", request.log_id))
+                })?;
+            evaluate_filter_named(
+                &script.content,
+                &request.input,
+                &detail.summary,
+                &script.name,
+            )
+            .map_err(|error| ManagerError::bad_request(error.to_string()))
+        })
+        .await
     }
 
     async fn routing_scripts(&self) -> ManagerResult<Vec<Script>> {
@@ -940,31 +976,46 @@ impl ProxyCrabManager for MitmManager {
 
     async fn bypass_entries(&self, query: BypassQuery) -> ManagerResult<BypassPage> {
         let limit = query.limit.unwrap_or(200).clamp(1, 1000);
-        let mut rows = self
-            .runtime
-            .bypass_entries(limit + 1, query.before_id)
-            .map_err(map_error)?;
-        let has_more = rows.len() > limit;
-        rows.truncate(limit);
-        Ok(BypassPage { rows, has_more })
+        let runtime = self.runtime.clone();
+        self.run_blocking("bypass read", move || {
+            let mut rows = runtime
+                .bypass_entries(limit + 1, query.before_id)
+                .map_err(map_error)?;
+            let has_more = rows.len() > limit;
+            rows.truncate(limit);
+            Ok(BypassPage { rows, has_more })
+        })
+        .await
     }
 
     async fn delete_bypass_entry(&self, id: u64) -> ManagerResult<()> {
-        self.runtime.delete_bypass_entry(id).map_err(map_error)
+        let runtime = self.runtime.clone();
+        self.run_blocking("bypass delete", move || {
+            runtime.delete_bypass_entry(id).map_err(map_error)
+        })
+        .await
     }
 
     async fn delete_bypass_entries(&self, ids: Vec<u64>) -> ManagerResult<DeleteCount> {
-        self.runtime
-            .delete_bypass_entries(&ids)
-            .map(|deleted| DeleteCount { deleted })
-            .map_err(map_error)
+        let runtime = self.runtime.clone();
+        self.run_blocking("bypass delete", move || {
+            runtime
+                .delete_bypass_entries(&ids)
+                .map(|deleted| DeleteCount { deleted })
+                .map_err(map_error)
+        })
+        .await
     }
 
     async fn clear_bypass_entries(&self) -> ManagerResult<DeleteCount> {
-        self.runtime
-            .clear_bypass_entries()
-            .map(|deleted| DeleteCount { deleted })
-            .map_err(map_error)
+        let runtime = self.runtime.clone();
+        self.run_blocking("bypass clear", move || {
+            runtime
+                .clear_bypass_entries()
+                .map(|deleted| DeleteCount { deleted })
+                .map_err(map_error)
+        })
+        .await
     }
 }
 
@@ -1105,13 +1156,28 @@ mod tests {
         ScriptRequest, SessionInterceptorInput, UpdateScriptRequest,
     };
 
-    use super::{MitmManager, ProxyCrabManager, status_text};
+    use super::{MAX_BLOCKING_MANAGEMENT_TASKS, MitmManager, ProxyCrabManager, status_text};
 
     #[test]
     fn response_status_text_uses_the_canonical_reason() {
         assert_eq!(status_text(200), "OK");
         assert_eq!(status_text(404), "Not Found");
         assert_eq!(status_text(999), "");
+    }
+
+    #[test]
+    fn blocking_management_tasks_are_limited_to_eight() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager = MitmManager::new(runtime);
+
+        assert_eq!(MAX_BLOCKING_MANAGEMENT_TASKS, 8);
+        let permits = (0..8)
+            .map(|_| manager.blocking_tasks.clone().try_acquire_owned().unwrap())
+            .collect::<Vec<_>>();
+        assert!(manager.blocking_tasks.clone().try_acquire_owned().is_err());
+        drop(permits);
+        assert_eq!(manager.blocking_tasks.available_permits(), 8);
     }
 
     fn request(path: &str) -> RequestData {

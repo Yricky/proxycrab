@@ -809,6 +809,8 @@ Routing and capture lifecycle details:
 - A bypassed CONNECT is transparently tunneled without TLS decryption.
 - Request/response bodies are bounded to 64 MiB with a 60-second read timeout.
 - ProxyCrab allows at most four concurrent body-materializing exchanges and 256 client connections.
+- Capture/bypass queries and management Lua evaluations allow at most eight concurrent tasks;
+  additional tasks wait for capacity.
 - CONNECT creates a provisional capture before the tunnel is acknowledged.
 - A TLS failure updates that CONNECT capture.
 - Successful TLS MITM retains the CONNECT row as a successful `tls_mitm` capture and stores decrypted

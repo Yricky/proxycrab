@@ -363,6 +363,10 @@ If the initial database insert fails, traffic is not forwarded. When the proxy s
 
 Request and response bodies are bounded to 64 MiB with a 60-second read timeout. The proxy allows at most four exchanges to materialize bodies concurrently and at most 256 client connections, preventing many clients from multiplying per-request resource bounds without limit. Lua file body replacements use the same size bound.
 
+Capture/bypass storage queries and management-side Lua evaluations run outside Tokio worker
+threads and share an eight-task concurrency limit. Additional heavy management operations wait for
+a permit. Session capture databases use SQLite WAL so these readers can overlap with MITM writers.
+
 Bypassed metadata is persisted in `<workspace>/bypass.db` without headers or bodies. Each row stores
 timestamps, source, method, URI, version, routing reason, outcome, optional HTTP status/error, and
 nullable upload/download byte counts. `GET /api/bypass` pages newest first; single, batch, and
@@ -380,6 +384,8 @@ The root `workspace_schema.json` is the version label for the whole workspace. W
 the centralized, ordered migration chain before any stores are used and atomically advances the
 label after each successful version. Every migration function documents that version's storage
 model changes; newer unsupported labels are rejected instead of being opened.
+Schema v2 changes Session capture databases from rollback journals to WAL without changing their
+logical tables or blob layout.
 Deleting the active Session while stopped clears the active ID without selecting a replacement.
 An active ID that references a missing Session is cleared and persisted when the workspace opens.
 

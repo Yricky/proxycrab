@@ -1,9 +1,9 @@
 use std::{
-    path::Path,
-    sync::{Arc, Mutex},
+    path::{Path, PathBuf},
+    time::Duration,
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
@@ -36,15 +36,17 @@ pub struct BypassEntry {
 
 #[derive(Clone)]
 pub struct BypassStore {
-    connection: Arc<Mutex<Connection>>,
+    database_path: PathBuf,
 }
 
 impl BypassStore {
     pub fn open(workspace: &Path) -> Result<Self> {
-        let connection = Connection::open(workspace.join("bypass.db"))?;
+        let store = Self {
+            database_path: workspace.join("bypass.db"),
+        };
+        let connection = store.connection()?;
         connection.execute_batch(
             "PRAGMA journal_mode=WAL;
-             PRAGMA foreign_keys=ON;
              CREATE TABLE IF NOT EXISTS bypass_entries (
                id INTEGER PRIMARY KEY AUTOINCREMENT,
                created_at INTEGER NOT NULL,
@@ -63,11 +65,19 @@ impl BypassStore {
              CREATE INDEX IF NOT EXISTS bypass_entries_updated
              ON bypass_entries(updated_at DESC, id DESC);",
         )?;
-        let store = Self {
-            connection: Arc::new(Mutex::new(connection)),
-        };
+        drop(connection);
         store.mark_in_progress_as_shutdown()?;
         Ok(store)
+    }
+
+    fn connection(&self) -> Result<Connection> {
+        let connection = Connection::open(&self.database_path)?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        connection.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             PRAGMA synchronous=NORMAL;",
+        )?;
+        Ok(connection)
     }
 
     pub fn begin(
@@ -79,10 +89,7 @@ impl BypassStore {
         reason: &str,
     ) -> Result<u64> {
         let now = now_millis();
-        let connection = self
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("bypass database lock poisoned"))?;
+        let connection = self.connection()?;
         connection.execute(
             "INSERT INTO bypass_entries (
                created_at, updated_at, source, method, uri, version, reason, outcome
@@ -135,10 +142,7 @@ impl BypassStore {
         upload_bytes: Option<u64>,
         download_bytes: Option<u64>,
     ) -> Result<()> {
-        let connection = self
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("bypass database lock poisoned"))?;
+        let connection = self.connection()?;
         let changed = connection.execute(
             "UPDATE bypass_entries
              SET updated_at=?2, outcome=?3, response_status=?4, error=?5,
@@ -161,10 +165,7 @@ impl BypassStore {
     }
 
     pub fn list(&self, limit: usize, before_id: Option<u64>) -> Result<Vec<BypassEntry>> {
-        let connection = self
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("bypass database lock poisoned"))?;
+        let connection = self.connection()?;
         let mut statement = connection.prepare(
             "SELECT id, created_at, updated_at, source, method, uri, version, reason,
                     outcome, response_status, error, upload_bytes, download_bytes
@@ -189,10 +190,7 @@ impl BypassStore {
         if ids.is_empty() {
             return Ok(0);
         }
-        let mut connection = self
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("bypass database lock poisoned"))?;
+        let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let placeholders = (1..=ids.len())
             .map(|index| format!("?{index}"))
@@ -221,10 +219,7 @@ impl BypassStore {
     }
 
     pub fn clear_terminal(&self) -> Result<usize> {
-        let connection = self
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("bypass database lock poisoned"))?;
+        let connection = self.connection()?;
         Ok(connection.execute(
             "DELETE FROM bypass_entries WHERE outcome != 'in_progress'",
             [],
@@ -232,10 +227,7 @@ impl BypassStore {
     }
 
     pub fn mark_in_progress_as_shutdown(&self) -> Result<()> {
-        let connection = self
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("bypass database lock poisoned"))?;
+        let connection = self.connection()?;
         connection.execute(
             "UPDATE bypass_entries
              SET updated_at=?1, outcome='failed', error='proxy_shutdown'

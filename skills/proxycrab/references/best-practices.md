@@ -17,6 +17,9 @@ Start with the narrowest stable discriminator available:
 The API stores one filter per Session. A filtered `POST /api/logs/ids` updates that persisted filter
 after a successful scan. Do not assume filtering is read-only.
 
+Capture/bypass queries and management Lua evaluations share an eight-task concurrency limit.
+Additional calls queue asynchronously, so prefer bounded batches over unbounded parallel fan-out.
+
 ## Separate observation from mutation
 
 Inspect at least one unmodified capture before adding an interceptor. When testing an interceptor:

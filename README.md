@@ -17,11 +17,14 @@ Neither reusable crate depends on Tauri.
 - CA download through the proxy: `http://proxy.crab/ca.crt`.
 - System log buffer: the newest 10,000 entries in memory.
 - Captured request/response bodies: at most 64 MiB each, with a 60-second read timeout, at most four concurrently materialized exchanges, and at most 256 client connections.
+- Blocking capture/bypass queries and management Lua evaluations: at most eight concurrently; excess work waits without occupying Tokio worker threads.
 
 The Tauri application data directory contains `config.json`, which points at the workspace. When the pointer is absent or invalid, `app_data_dir/workspace` is used and persisted. A changed pointer takes effect only on the next application launch.
 
 Each workspace root has a `workspace_schema.json` version label. All persisted-data upgrades are
 registered in the centralized migration module and run before workspace stores are opened.
+Workspace schema v2 enables SQLite WAL for Session capture databases so management readers can
+overlap with MITM capture writers.
 
 The Tauri command surface also reports the management HTTP service's `running`, `host`, `port`, and startup error state through `get_http_service_status`.
 
