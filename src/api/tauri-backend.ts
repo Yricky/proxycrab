@@ -83,6 +83,7 @@ export function createTauriBackend(): Backend {
     getProxyStatus: () => call("get_proxy_status"),
     startProxy: () => call("start_proxy"),
     stopProxy: () => call("stop_proxy"),
+    listLocalIps: () => call("list_local_ips"),
 
     listSessions: () => call("list_sessions"),
     createSession: (request: CreateSessionRequest) => call("create_session", { request }),

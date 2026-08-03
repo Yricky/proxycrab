@@ -121,6 +121,26 @@ async fn get_proxy_status(state: State<'_, BackendState>) -> Result<ProxyStatus,
     state.manager().proxy_status().await
 }
 
+/// Enumerates the machine's IPv4 addresses (including loopback) for the
+/// toolbar's display-only IP picker. The proxy itself always binds to the
+/// configured `proxy_host`; this list is purely informational.
+#[tauri::command]
+fn list_local_ips() -> Vec<String> {
+    let mut ips: Vec<String> = if_addrs::get_if_addrs()
+        .map(|interfaces| {
+            interfaces
+                .into_iter()
+                .map(|interface| interface.addr.ip())
+                .filter(|ip| ip.is_ipv4())
+                .map(|ip| ip.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    ips.sort();
+    ips.dedup();
+    ips
+}
+
 #[tauri::command]
 async fn start_proxy(state: State<'_, BackendState>) -> Result<ProxyStatus, ManagerError> {
     state.manager().start_proxy().await
@@ -647,6 +667,7 @@ pub fn run() {
             delete_agents_preset,
             reimport_default_agents_presets,
             get_proxy_status,
+            list_local_ips,
             start_proxy,
             stop_proxy,
             list_sessions,
@@ -724,4 +745,22 @@ pub fn run() {
             });
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn list_local_ips_returns_sorted_unique_ipv4() {
+        let ips = super::list_local_ips();
+        for ip in &ips {
+            assert!(
+                ip.parse::<std::net::Ipv4Addr>().is_ok(),
+                "entry is not an IPv4 address: {ip}"
+            );
+        }
+        assert!(
+            ips.windows(2).all(|pair| pair[0] < pair[1]),
+            "IPs must be sorted and deduplicated: {ips:?}"
+        );
+    }
 }

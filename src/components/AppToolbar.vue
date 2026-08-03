@@ -38,20 +38,8 @@ type ToolbarMenu = "ai" | "scripts" | "tools" | "system";
 
 const toolbarMenus = ref<HTMLElement | null>(null);
 const activeMenu = ref<ToolbarMenu | null>(null);
-
-function statusClass(status: string): string {
-  switch (status) {
-    case "running":
-      return "ok";
-    case "starting":
-    case "stopping":
-      return "warn";
-    case "failed":
-      return "err";
-    default:
-      return "";
-  }
-}
+const ipSegment = ref<HTMLElement | null>(null);
+const ipMenuOpen = ref(false);
 
 function toggleMenu(menu: ToolbarMenu): void {
   activeMenu.value = activeMenu.value === menu ? null : menu;
@@ -67,14 +55,37 @@ function setTheme(theme: ThemeMode): void {
   appStore.setTheme(theme);
 }
 
+function toggleIpMenu(): void {
+  ipMenuOpen.value = !ipMenuOpen.value;
+  if (ipMenuOpen.value) {
+    void proxyStore.refreshLocalIps();
+  }
+}
+
+function onPortInput(event: Event): void {
+  proxyStore.setPortText((event.target as HTMLInputElement).value);
+}
+
+function onToggle(): void {
+  if (proxyStore.canToggle) {
+    void proxyStore.toggle();
+  }
+}
+
 function onDocumentPointerDown(event: PointerEvent): void {
-  if (!toolbarMenus.value?.contains(event.target as Node)) {
+  const target = event.target as Node;
+  if (!toolbarMenus.value?.contains(target)) {
     activeMenu.value = null;
+  }
+  if (ipMenuOpen.value && !ipSegment.value?.contains(target)) {
+    ipMenuOpen.value = false;
   }
 }
 
 function onDocumentKeydown(event: KeyboardEvent): void {
-  if (event.key === "Escape") activeMenu.value = null;
+  if (event.key !== "Escape") return;
+  activeMenu.value = null;
+  ipMenuOpen.value = false;
 }
 
 onMounted(() => {
@@ -98,20 +109,56 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="tb-group tb-proxy">
-      <button
-        class="btn"
-        :class="proxyStore.running ? 'danger' : 'primary'"
-        :disabled="proxyStore.busy"
-        @click="proxyStore.toggle()"
+      <div
+        class="proxy-control"
+        :class="
+          proxyStore.running ? 'running' : proxyStore.canToggle ? 'ready' : 'off'
+        "
       >
-        <Io5Stop v-if="proxyStore.running" :size="13" />
-        <Io5Play v-else :size="13" />
-        {{ proxyStore.running ? "停止代理" : "启动代理" }}
-      </button>
-      <span class="proxy-status" :class="statusClass(proxyStore.status.status)">
-        <span class="dot" />
-        {{ proxyStore.label }}
-      </span>
+        <div ref="ipSegment" class="proxy-seg proxy-ip">
+          <button
+            class="proxy-ip-trigger"
+            :aria-expanded="ipMenuOpen"
+            :title="'查看本机 IP'"
+            @click="toggleIpMenu"
+          >
+            <span class="mono">{{ proxyStore.displayIp }}</span>
+            <Io5ChevronDown :size="11" />
+          </button>
+          <div v-if="ipMenuOpen" class="proxy-ip-menu">
+            <div v-for="ip in proxyStore.ipOptions" :key="ip" class="proxy-ip-item">
+              <span class="mono">{{ ip }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="proxy-seg">
+          <input
+            class="proxy-port-input"
+            :value="proxyStore.portText"
+            :disabled="proxyStore.running || proxyStore.busy"
+            maxlength="5"
+            spellcheck="false"
+            autocomplete="off"
+            :title="'监听端口（1-65535）'"
+            @input="onPortInput"
+            @keydown.enter="onToggle"
+          />
+        </div>
+        <div class="proxy-seg proxy-btn-seg">
+          <button
+            class="proxy-toggle-btn"
+            :class="
+              proxyStore.running ? 'running' : proxyStore.canToggle ? 'ready' : 'off'
+            "
+            :disabled="!proxyStore.canToggle"
+            :title="proxyStore.running ? '停止代理' : '启动代理'"
+            @click="onToggle"
+          >
+            <Io5Stop v-if="proxyStore.running" :size="14" />
+            <Io5Play v-else :size="14" />
+          </button>
+        </div>
+      </div>
     </div>
 
     <div class="tb-spacer" />
@@ -343,36 +390,136 @@ onBeforeUnmount(() => {
   margin: 5px 4px;
   background: var(--border);
 }
-.proxy-status {
+
+/* ---------- proxy start/stop control ---------- */
+
+.proxy-control {
+  display: flex;
+  align-items: stretch;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  transition: border-color 0.12s;
+}
+/* Border follows the start/stop button state. */
+.proxy-control.ready {
+  border-color: var(--accent);
+}
+.proxy-control.running {
+  border-color: var(--danger);
+}
+.proxy-control.off {
+  border-color: var(--border);
+}
+.proxy-seg {
+  display: flex;
+  align-items: center;
+}
+.proxy-seg + .proxy-seg {
+  border-left: 1px solid var(--border);
+}
+.proxy-ip {
+  position: relative;
+}
+.proxy-ip-trigger {
+  height: 100%;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  padding: 0 7px 0 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  border-radius: calc(var(--radius-md) - 1px) 0 0 calc(var(--radius-md) - 1px);
+  transition: background 0.12s;
+}
+.proxy-ip-trigger:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.proxy-ip-trigger:disabled {
+  cursor: default;
+}
+.proxy-ip-trigger svg {
+  flex: none;
   color: var(--text-secondary);
+}
+.proxy-port-input {
+  width: 58px;
+  height: 100%;
+  padding: 0 8px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
   font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: center;
 }
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-faint);
+.proxy-port-input:focus {
+  background: var(--bg-hover);
 }
-.proxy-status.ok .dot {
-  background: var(--success);
+.proxy-port-input:disabled {
+  cursor: default;
 }
-.proxy-status.ok {
-  color: var(--success);
+.proxy-btn-seg {
+  padding: 0;
 }
-.proxy-status.warn .dot {
-  background: var(--warning);
+.proxy-toggle-btn {
+  width: 30px;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 0 calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px) 0;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.12s;
 }
-.proxy-status.warn {
-  color: var(--warning);
+.proxy-toggle-btn.ready {
+  background: var(--accent);
 }
-.proxy-status.err .dot {
+.proxy-toggle-btn.ready:hover {
+  background: var(--accent-hover);
+}
+.proxy-toggle-btn.running {
   background: var(--danger);
 }
-.proxy-status.err {
-  color: var(--danger);
+.proxy-toggle-btn.running:hover {
+  background: var(--danger-hover);
+}
+.proxy-toggle-btn.off {
+  background: var(--bg-active);
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+.proxy-ip-menu {
+  position: absolute;
+  z-index: 100004;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 150px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popup);
+}
+.proxy-ip-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: default;
 }
 </style>

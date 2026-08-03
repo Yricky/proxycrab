@@ -68,6 +68,7 @@ export interface Backend {
   getProxyStatus(): Promise<ProxyStatus>;
   startProxy(): Promise<ProxyStatus>;
   stopProxy(): Promise<ProxyStatus>;
+  listLocalIps(): Promise<string[]>;
 
   // sessions
   listSessions(): Promise<SessionMetadata[]>;
