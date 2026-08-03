@@ -64,7 +64,11 @@ pub struct CreateSessionRequest {
 pub struct UpdateSessionRequest {
     pub name: Option<String>,
     pub description: Option<Option<String>>,
-    pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActiveSession {
+    pub session_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -317,6 +321,7 @@ pub enum HttpApiResource {
     Config,
     Proxy,
     Sessions,
+    ActiveSession,
     SessionView,
     ColumnScripts,
     FilterScripts,

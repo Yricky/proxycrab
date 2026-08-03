@@ -18,7 +18,7 @@ Usage:
   node routing-select.mjs --name NAME [--base-url URL]
   node routing-select.mjs --clear true [--base-url URL]
 
-Select one routing script, or clear the selection to restore default-tag routing.
+Select one routing script, or clear the selection to capture into the active Session by default.
 `);
     return;
   }

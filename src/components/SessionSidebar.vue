@@ -20,10 +20,6 @@ const creating = ref(false);
 const editingId = ref<number | null>(null);
 const editName = ref("");
 const editDesc = ref("");
-const editTags = ref<string[]>([]);
-const tagDraft = ref("");
-const tagError = ref("");
-const TAG_PATTERN = /^[a-z0-9_]{1,20}$/;
 
 async function createSession(): Promise<void> {
   if (creating.value) return;
@@ -39,26 +35,6 @@ function startEdit(session: SessionMetadata): void {
   editingId.value = session.id;
   editName.value = session.name;
   editDesc.value = session.description ?? "";
-  editTags.value = [...session.tags];
-  tagDraft.value = "";
-  tagError.value = "";
-}
-
-function addTag(): void {
-  const tag = tagDraft.value;
-  if (!TAG_PATTERN.test(tag)) {
-    tagError.value = "仅支持 1–20 位小写字母、数字和下划线";
-    return;
-  }
-  if (!editTags.value.includes(tag)) {
-    editTags.value = [...editTags.value, tag].sort();
-  }
-  tagDraft.value = "";
-  tagError.value = "";
-}
-
-function removeTag(tag: string): void {
-  editTags.value = editTags.value.filter((item) => item !== tag);
 }
 
 async function submitEdit(): Promise<void> {
@@ -69,7 +45,6 @@ async function submitEdit(): Promise<void> {
     editingId.value,
     name,
     editDesc.value.trim() || null,
-    editTags.value,
   );
   if (updated) {
     editingId.value = null;
@@ -87,15 +62,11 @@ async function removeSession(id: number, name: string): Promise<void> {
   if (ok) await sessionsStore.remove(id);
 }
 
-async function setDefault(session: SessionMetadata): Promise<void> {
-  if (session.tags.includes("default")) return;
-  const updated = await sessionsStore.update(
-    session.id,
-    session.name,
-    session.description,
-    [...session.tags, "default"],
-  );
-  if (updated) appStore.toast(`「${session.name}」已设为默认会话`, "success");
+async function toggleActive(session: SessionMetadata): Promise<void> {
+  const active = sessionsStore.activeSessionId === session.id;
+  if (await sessionsStore.replaceActive(active ? null : session.id)) {
+    appStore.toast(active ? "已取消活跃会话" : `「${session.name}」已设为活跃会话`, "success");
+  }
 }
 
 function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
@@ -103,10 +74,9 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
     { label: "查看", icon: Io5Eye, action: () => sessionsStore.view(session.id) },
     { label: "编辑会话", icon: Io5Create, action: () => startEdit(session) },
     {
-      label: "设为默认",
+      label: sessionsStore.activeSessionId === session.id ? "取消活跃" : "设为活跃",
       icon: Io5RadioButtonOn,
-      disabled: session.tags.includes("default"),
-      action: () => void setDefault(session),
+      action: () => void toggleActive(session),
     },
     {
       label: "删除",
@@ -166,6 +136,7 @@ onMounted(() => {
         class="sb-item"
         :class="{
           viewing: sessionsStore.viewingSessionId === session.id,
+          active: sessionsStore.activeSessionId === session.id,
         }"
         @click="sessionsStore.view(session.id)"
         @contextmenu="sessionMenu($event, session)"
@@ -181,29 +152,6 @@ onMounted(() => {
               @keyup.enter="submitEdit"
               @keyup.esc="editingId = null"
             />
-            <div class="sb-tag-editor">
-              <div v-if="editTags.length" class="sb-tags">
-                <button
-                  v-for="tag in editTags"
-                  :key="tag"
-                  type="button"
-                  class="sb-tag removable"
-                  :class="{ default: tag === 'default' }"
-                  :title="`移除 ${tag}`"
-                  @click="removeTag(tag)"
-                >
-                  {{ tag }} ×
-                </button>
-              </div>
-              <input
-                v-model="tagDraft"
-                class="input mono sb-tag-input"
-                placeholder="添加 tag"
-                @keyup.enter="addTag"
-                @keyup.esc="tagDraft = ''"
-              />
-              <span v-if="tagError" class="sb-tag-error">{{ tagError }}</span>
-            </div>
             <input
               v-model="editDesc"
               class="input sb-edit-desc"
@@ -222,23 +170,19 @@ onMounted(() => {
         <template v-else>
           <div class="sb-item-top">
             <span class="sb-name" :title="session.name">{{ session.name }}</span>
+            <span
+              v-if="sessionsStore.activeSessionId === session.id"
+              class="sb-active"
+              title="活跃会话"
+            >
+              <Io5RadioButtonOn :size="11" />活跃
+            </span>
           </div>
           <div class="sb-item-meta">
             <span>{{ formatRelativeTime(session.created_at) }}</span>
             <span v-if="session.description" class="sb-desc" :title="session.description">
               {{ session.description }}
             </span>
-            <div v-if="session.tags.length" class="sb-tags">
-              <span
-                v-for="(tag, index) in session.tags"
-                :key="tag"
-                class="sb-tag"
-                :class="{ default: tag === 'default' }"
-                :title="tag"
-              >
-                {{ index === 0 ? tag : tag.charAt(0) }}
-              </span>
-            </div>
           </div>
         </template>
       </div>
@@ -357,6 +301,9 @@ onMounted(() => {
 .sb-item.viewing {
   background: var(--bg-selected);
 }
+.sb-item.active .sb-name {
+  color: var(--accent);
+}
 .sb-item-top {
   display: flex;
   align-items: center;
@@ -369,66 +316,12 @@ onMounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sb-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 5px;
-}
-.sb-tag {
-  max-width: 100%;
-  padding: 0 5px;
-  border-radius: 4px;
-  background: #6b7280;
-  color: #fff;
-  font: inherit;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 16px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sb-tag.default {
-  background: var(--accent);
-}
-.sb-tag.removable {
-  border: 0;
-  cursor: pointer;
-  text-align: left;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-.sb-tag-editor {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  min-width: 0;
-  padding: 1px 3px;
-}
-.sb-tag-editor .sb-tags {
-  display: contents;
-}
-.sb-tag-editor .sb-tag {
+.sb-active {
   flex: none;
-  max-width: 100%;
-  margin: 0;
-}
-.sb-tag-editor .sb-tag-input {
-  flex: 1 1 64px;
-  width: auto;
-  min-width: 64px;
-  height: 20px;
-  margin: 0;
-  padding: 0 4px;
-  font-size: 10px;
-}
-.sb-tag-error {
-  display: block;
-  flex-basis: 100%;
-  margin-top: 3px;
-  color: var(--danger);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
   font-size: 10px;
 }
 .sb-item-meta {
@@ -446,24 +339,6 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.sb-item-meta .sb-tags {
-  flex: none;
-  min-width: 0;
-  max-width: 60%;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  flex-wrap: nowrap;
-  margin-top: 0;
-  margin-left: auto;
-}
-.sb-item-meta .sb-tag {
-  flex-shrink: 1;
-  min-width: 0;
-}
-.sb-item-meta .sb-tag:not(:first-child) {
-  flex: none;
 }
 .sb-edit .input {
   width: 100%;
@@ -489,8 +364,5 @@ onMounted(() => {
   padding: 1px 3px;
   color: var(--text-faint);
   font-size: 11px;
-}
-.sb-edit .sb-tag-input {
-  width: auto;
 }
 </style>

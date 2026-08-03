@@ -24,10 +24,9 @@ function outcomeLabel(outcome: BypassEntry["outcome"]): string {
 
 function reasonLabel(reason: string): string {
   const labels: Record<string, string> = {
-    no_default_tag: "未绑定 default",
-    script_nil: "规则返回 nil",
+    no_active_session: "没有活跃会话",
+    script_bypass: "分流规则旁路",
     routing_script_error: "规则执行失败",
-    session_create_failed: "创建 Session 失败",
     session_pin_failed: "Session 不可用",
   };
   return labels[reason] ?? reason;

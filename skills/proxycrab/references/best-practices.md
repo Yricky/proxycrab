@@ -2,8 +2,8 @@
 
 ## Scope first
 
-Use a dedicated routing tag and Session when possible. Record the Session ID in notes and commands
-so later tag changes cannot silently redirect reads. Remember that direct HTTP routing runs per
+Use a dedicated active Session when possible. Record the Session ID in notes and commands so later
+active-Session changes cannot silently redirect reads. Remember that direct HTTP routing runs per
 request, while a CONNECT result pins one Session for the whole tunnel.
 
 Start with the narrowest stable discriminator available:

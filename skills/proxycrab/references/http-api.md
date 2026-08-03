@@ -59,7 +59,8 @@ percent-encoded normally.
 Successful HTTP mutations notify the running Tauri frontend through an internal event channel. The
 HTTP envelope does not change and there is no public event endpoint.
 
-- Session changes refresh the sidebar and tags without forcing the user to view another Session.
+- Session and active-Session changes refresh the sidebar without forcing the user to view another
+  Session.
 - Routing-library and selection changes refresh the routing manager.
 - Bypass deletion and clearing refresh the bypass window.
 - A changed log filter or Session view reloads the table only when that Session is currently viewed.
@@ -93,12 +94,14 @@ response. Do not assume the user wants their currently viewed Session changed.
   "proxy_port": 8089,
   "api_host": "127.0.0.1",
   "api_port": 18089,
-  "routing_script_name": "route-by-host"
+  "routing_script_name": "route-by-host",
+  "active_session_id": 3
 }
 ```
 
-`routing_script_name` can be `null`. The management API host must remain `127.0.0.1` or `::1`.
-Changing an API address affects a later service start, not the already-bound listener.
+`routing_script_name` and `active_session_id` can be `null`. A non-null active Session ID must
+exist. The management API host must remain `127.0.0.1` or `::1`. Changing an API address affects a
+later service start, not the already-bound listener.
 
 ### SessionMetadata
 
@@ -107,13 +110,11 @@ Changing an API address affects a later service start, not the already-bound lis
   "id": 3,
   "name": "checkout-debug",
   "created_at": 1785380000000,
-  "description": "Capture checkout failures",
-  "tags": ["checkout", "default"]
+  "description": "Capture checkout failures"
 }
 ```
 
-`description` can be `null`. Tags are globally unique, stored sorted, and must match
-`^[a-z0-9_]{1,20}$`. Timestamps are Unix milliseconds.
+`description` can be `null`. Timestamps are Unix milliseconds.
 
 ### ProxyStatus
 
@@ -243,7 +244,8 @@ Returns `AppConfig`.
 ### `PUT /api/config`
 
 Replaces the complete `AppConfig` and returns the stored value. Read the current config first and
-preserve fields that should not change. A non-existent `routing_script_name` returns `not_found`.
+preserve fields that should not change. A non-existent `routing_script_name` or
+`active_session_id` returns `not_found`.
 
 ## Proxy lifecycle
 
@@ -279,33 +281,41 @@ Returns `SessionMetadata[]`.
 
 Both fields are optional or `null`. ProxyCrab generates a name when omitted. Returns the created
 `SessionMetadata`. New Sessions use the default table columns, empty filter, and empty interceptor
-chains. The first manually created Session in an empty workspace receives the `default` tag.
+chains. The first Session created in an empty workspace becomes active; later Session creation does
+not change the active Session.
 
 ### `PUT /api/sessions/{id}`
 
 ```json
 {
   "name": "new-name",
-  "description": null,
-  "tags": ["checkout", "default"]
+  "description": null
 }
 ```
 
-All fields are optional. Omitting `description` preserves it; explicit `null` clears it. Supplying
-`tags` replaces the complete tag set. A tag already bound elsewhere is atomically moved from the
-old Session. Returns the updated `SessionMetadata`.
+All fields are optional. Omitting `description` preserves it; explicit `null` clears it. Returns the
+updated `SessionMetadata`.
 
 ### `DELETE /api/sessions/{id}`
 
 Returns `{}`. Session deletion is rejected while the proxy is starting, running, or stopping.
 Deletion is allowed while stopped or failed. A Session with pinned in-progress requests cannot be
-deleted.
+deleted. Deleting the active Session clears the active selection without choosing a replacement.
+
+### `GET /api/active-session`
+
+Returns `{ "session_id": 3 }` or `{ "session_id": null }`.
+
+### `PUT /api/active-session`
+
+Accepts and returns the same shape. A non-null Session ID must exist. Changing or clearing the
+active Session is allowed while the proxy runs.
 
 ## Capture logs
 
 All log endpoints accept an optional Session. POST requests use `session_id` in JSON; the detail
-endpoint uses the query string. Omitting it selects the Session tagged `default`. If no Session owns
-that tag, the response is `409 conflict`.
+endpoint uses the query string. Omitting it selects the active Session. If no Session is active, the
+response is `409 conflict`.
 
 ### `POST /api/logs/ids`
 
@@ -675,7 +685,7 @@ Returns newest-first pagination:
       "method": "CONNECT",
       "uri": "example.com:443",
       "version": "HTTP/1.1",
-      "reason": "script_nil",
+      "reason": "script_bypass",
       "outcome": "success",
       "response_status": null,
       "error": null,
@@ -749,19 +759,18 @@ HTTP status mapping:
 | `bad_request` | 400 | Invalid JSON, arguments, script, filter, or operation |
 | `forbidden_origin` | 403 | Non-local browser Origin |
 | `not_found` | 404 | Missing endpoint, Session, log, or script |
-| `conflict` | 409 | State conflict, including no `default` Session or deleting a Session while proxy runs |
+| `conflict` | 409 | State conflict, including no active Session or deleting a Session while proxy runs |
 | `proxy_running` | 409 | Session deletion attempted while proxy is starting/running/stopping |
 | `session_in_use` | 409 | Tried to delete a Session pinned by active requests |
 | `internal_error` | 500 | Storage, runtime, I/O, or other internal failure |
 
 Routing and capture lifecycle details:
 
-- With no selected routing script, a bound `default` tag captures; otherwise traffic bypasses.
+- With no selected routing script, the active Session captures; if none is active, traffic bypasses.
 - Routing runs once per direct HTTP request and once per CONNECT tunnel.
-- A routing script returns a tag string or `nil`. `nil` bypasses. An explicit unbound tag creates
-  exactly one Session named after that tag with a description naming the routing script.
-- Invalid returns and runtime errors emit a system warning, then use a bound `default` Session or
-  bypass when none exists.
+- A routing script returns `true` to capture into the active Session and `false` or `nil` to bypass.
+  Returning `true` while no Session is active also bypasses.
+- Invalid returns and runtime errors emit a system warning and bypass.
 - A routed normal request is inserted before forwarding. If insertion fails, traffic is not
   forwarded.
 - A bypassed CONNECT is transparently tunneled without TLS decryption.

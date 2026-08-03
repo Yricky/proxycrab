@@ -18,7 +18,6 @@ use mlua::{
 use crate::model::{
     CaptureSummary, HeaderValues, Modification, RequestData, ResponseData, ScriptKind,
 };
-use crate::workspace::validate_tag;
 
 mod codec;
 
@@ -62,7 +61,7 @@ pub fn evaluate_routing(
     authority: &str,
     source_address: SocketAddr,
     script_name: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<bool>> {
     let (lua, warnings) = safe_lua()?;
     lua.globals().set("phase", phase)?;
     lua.globals().set(
@@ -78,12 +77,8 @@ pub fn evaluate_routing(
     log_json_warnings(&warnings, ScriptKind::Routing, script_name, None);
     match result? {
         Value::Nil => Ok(None),
-        Value::String(value) => {
-            let tag = value.to_str()?.to_string();
-            validate_tag(&tag)?;
-            Ok(Some(tag))
-        }
-        _ => bail!("routing script must return a tag string or nil"),
+        Value::Boolean(value) => Ok(Some(value)),
+        _ => bail!("routing script must return a boolean or nil"),
     }
 }
 
@@ -724,7 +719,7 @@ mod tests {
               and source.port == 4321
               and source.address == "127.0.0.1:4321"
             then
-              return "mobile_2"
+              return true
             end
             return nil
         "#;
@@ -732,14 +727,19 @@ mod tests {
         assert_eq!(
             evaluate_routing(script, "http", &request, "example.com:443", source, "route",)
                 .unwrap(),
-            Some("mobile_2".into())
+            Some(true)
         );
         assert_eq!(
             evaluate_routing("return nil", "http", &request, "", source, "route").unwrap(),
             None
         );
-        assert!(evaluate_routing("return 'Upper'", "http", &request, "", source, "route").is_err());
-        assert!(evaluate_routing("return true", "http", &request, "", source, "route").is_err());
+        assert_eq!(
+            evaluate_routing("return false", "http", &request, "", source, "route").unwrap(),
+            Some(false)
+        );
+        assert!(
+            evaluate_routing("return 'capture'", "http", &request, "", source, "route").is_err()
+        );
     }
 
     #[test]
@@ -942,7 +942,7 @@ mod tests {
         );
         assert_eq!(
             evaluate_routing(
-                "return base64.decode('bW9iaWxl')",
+                "return base64.decode('dHJ1ZQ==') == 'true'",
                 "http",
                 &entry.request,
                 "example.com",
@@ -950,7 +950,7 @@ mod tests {
                 "codec-route",
             )
             .unwrap(),
-            Some("mobile".into()),
+            Some(true),
         );
 
         let request_effects = execute_request(

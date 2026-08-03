@@ -3,7 +3,7 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Use ProxyCrab to find the most recent 5xx request in the Session tagged default and explain the failure using capture evidence. Do not expose credentials in the final report.",
+      "prompt": "Use ProxyCrab to find the most recent 5xx request in the active Session and explain the failure using capture evidence. Do not expose credentials in the final report.",
       "expected_output": "A concise diagnosis citing the Session and log ID, request URI, response status/body evidence, interceptor history when relevant, uncertainty, and a next check.",
       "files": []
     },
@@ -15,20 +15,20 @@
     },
     {
       "id": 3,
-      "prompt": "Create a ProxyCrab request interceptor named add-agent-debug-header that sets x-agent-debug: 1, attach it to the Session tagged default without removing existing response interceptors, and verify on a newly captured request that it executed.",
+      "prompt": "Create a ProxyCrab request interceptor named add-agent-debug-header that sets x-agent-debug: 1, attach it to the active Session without removing existing response interceptors, and verify on a newly captured request that it executed.",
       "expected_output": "The agent saves valid Lua, preserves the response chain, atomically updates both chains, and cites a new capture's historical source and header_set modification as verification.",
       "files": []
     },
     {
       "id": 4,
-      "prompt": "Create a ProxyCrab request interceptor named add-codec-metadata that JSON-serializes {source = \"agent\", enabled = true}, URL-safe Base64 encodes it without padding, and sets the result as x-agent-metadata. Attach it to the Session tagged default without changing the response chain, then verify it on a newly captured request.",
+      "prompt": "Create a ProxyCrab request interceptor named add-codec-metadata that JSON-serializes {source = \"agent\", enabled = true}, URL-safe Base64 encodes it without padding, and sets the result as x-agent-metadata. Attach it to the active Session without changing the response chain, then verify it on a newly captured request.",
       "expected_output": "The agent uses json.encode and base64.url_encode(value, false) in valid Lua, preserves both existing chains except for the requested request interceptor addition, and cites a new capture's historical source plus the x-agent-metadata header_set modification as verification.",
       "files": []
     },
     {
       "id": 5,
-      "prompt": "Create or update a ProxyCrab routing script named route-agent that returns agent_debug for requests from 127.0.0.1 and nil otherwise, then select it. Do not rename or delete other scripts.",
-      "expected_output": "The agent writes valid routing Lua, upserts it without rename behavior, selects it through the routing selection endpoint, and explains that nil traffic bypasses Session capture and TLS decryption.",
+      "prompt": "Create or update a ProxyCrab routing script named route-agent that returns true for requests from 127.0.0.1 and false otherwise, then select it. Do not rename or delete other scripts.",
+      "expected_output": "The agent writes valid routing Lua, upserts it without rename behavior, selects it through the routing selection endpoint, and explains that true captures into the active Session while false traffic bypasses Session capture and TLS decryption.",
       "files": []
     },
     {

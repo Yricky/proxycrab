@@ -13,7 +13,7 @@ use proxy_crab_mitm::{
 };
 
 use crate::dto::{
-    BypassPage, BypassQuery, CertificateResponse, ColumnView, CreateSessionRequest,
+    ActiveSession, BypassPage, BypassQuery, CertificateResponse, ColumnView, CreateSessionRequest,
     DebugFilterScriptRequest, DeleteCount, HeaderItem, InterceptorCreateRequest, InterceptorDetail,
     InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest,
     LogViewException, LogViewRow, LogViewsPayload, LogViewsRequest, ManagerError, ManagerResult,
@@ -32,6 +32,8 @@ pub trait ProxyCrabManager: Send + Sync {
     async fn start_proxy(&self) -> ManagerResult<ProxyStatus>;
     async fn stop_proxy(&self) -> ManagerResult<ProxyStatus>;
     async fn sessions(&self) -> ManagerResult<Vec<SessionMetadata>>;
+    async fn active_session(&self) -> ManagerResult<ActiveSession>;
+    async fn replace_active_session(&self, active: ActiveSession) -> ManagerResult<ActiveSession>;
     async fn create_session(&self, request: CreateSessionRequest)
     -> ManagerResult<SessionMetadata>;
     async fn update_session(
@@ -153,12 +155,8 @@ impl MitmManager {
 
     fn session_id(&self, requested: Option<u64>) -> ManagerResult<u64> {
         requested
-            .or_else(|| {
-                self.runtime
-                    .session_for_tag("default")
-                    .map(|session| session.id)
-            })
-            .ok_or_else(|| ManagerError::conflict("no default Session"))
+            .or_else(|| self.runtime.active_session_id())
+            .ok_or_else(|| ManagerError::conflict("no active Session"))
     }
 
     fn render_builtin_cell(column: &Column, item: &CaptureSummary) -> Option<String> {
@@ -307,6 +305,19 @@ impl ProxyCrabManager for MitmManager {
         Ok(self.runtime.sessions())
     }
 
+    async fn active_session(&self) -> ManagerResult<ActiveSession> {
+        Ok(ActiveSession {
+            session_id: self.runtime.active_session_id(),
+        })
+    }
+
+    async fn replace_active_session(&self, active: ActiveSession) -> ManagerResult<ActiveSession> {
+        self.runtime
+            .replace_active_session(active.session_id)
+            .map_err(map_error)?;
+        Ok(active)
+    }
+
     async fn create_session(
         &self,
         request: CreateSessionRequest,
@@ -322,7 +333,7 @@ impl ProxyCrabManager for MitmManager {
         request: UpdateSessionRequest,
     ) -> ManagerResult<SessionMetadata> {
         self.runtime
-            .update_session(id, request.name, request.description, request.tags)
+            .update_session(id, request.name, request.description)
             .map_err(map_error)
     }
 

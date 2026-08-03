@@ -105,7 +105,8 @@ async function saveProxyListen(): Promise<void> {
     return;
   }
   try {
-    const next: AppConfig = { ...config.value, proxy_host: host, proxy_port: port };
+    const latest = await backend.getConfig();
+    const next: AppConfig = { ...latest, proxy_host: host, proxy_port: port };
     config.value = await backend.replaceConfig(next);
     proxyHost.value = config.value.proxy_host;
     proxyPort.value = config.value.proxy_port;

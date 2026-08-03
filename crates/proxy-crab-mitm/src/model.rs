@@ -18,6 +18,8 @@ pub struct AppConfig {
     pub api_port: u16,
     #[serde(default)]
     pub routing_script_name: Option<String>,
+    #[serde(default)]
+    pub active_session_id: Option<u64>,
 }
 
 impl Default for AppConfig {
@@ -28,6 +30,7 @@ impl Default for AppConfig {
             api_host: default_api_host(),
             api_port: default_api_port(),
             routing_script_name: None,
+            active_session_id: None,
         }
     }
 }
@@ -158,8 +161,6 @@ pub struct SessionMetadata {
     pub name: String,
     pub created_at: u64,
     pub description: Option<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

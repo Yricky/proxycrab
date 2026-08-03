@@ -166,7 +166,7 @@ async fn upgrade_echo_upstream() -> (u16, tokio::task::JoinHandle<()>) {
 }
 
 #[tokio::test]
-async fn captures_plain_http_and_hot_default_tag_moves() {
+async fn captures_plain_http_and_hot_active_session_switches() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
     let first = runtime.create_session(None, None).unwrap();
@@ -180,9 +180,7 @@ async fn captures_plain_http_and_hot_default_tag_moves() {
     assert!(response.contains("\r\n\r\nok"));
 
     let second = runtime.create_session(Some("second".into()), None).unwrap();
-    runtime
-        .update_session(second.id, None, None, Some(vec!["default".into()]))
-        .unwrap();
+    runtime.replace_active_session(Some(second.id)).unwrap();
     let response = proxy_get(
         proxy_port,
         &format!("http://127.0.0.1:{upstream_port}/second"),
@@ -198,7 +196,7 @@ async fn captures_plain_http_and_hot_default_tag_moves() {
 }
 
 #[tokio::test]
-async fn forwards_plain_http_to_bypass_when_no_default_tag_exists() {
+async fn forwards_plain_http_to_bypass_when_no_active_session_exists() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
 
@@ -213,7 +211,7 @@ async fn forwards_plain_http_to_bypass_when_no_default_tag_exists() {
     assert!(runtime.sessions().is_empty());
     let entries = runtime.bypass_entries(10, None).unwrap();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].reason, "no_default_tag");
+    assert_eq!(entries[0].reason, "no_active_session");
     assert_eq!(entries[0].outcome, BypassOutcome::Success);
     assert_eq!(entries[0].response_status, Some(200));
     runtime.stop_proxy().await.unwrap();
@@ -276,9 +274,12 @@ async fn streams_plain_http_bypass_before_the_upstream_response_finishes() {
 }
 
 #[tokio::test]
-async fn routing_script_receives_http_authority_and_creates_tagged_session() {
+async fn routing_script_receives_http_authority_and_captures_into_active_session() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
+    let session = runtime
+        .create_session(Some("capture".into()), None)
+        .unwrap();
     runtime
         .create_script(
             ScriptKind::Routing,
@@ -286,7 +287,7 @@ async fn routing_script_receives_http_authority_and_creates_tagged_session() {
                 name: "route".into(),
                 content: format!(
                     "if phase == 'http' and req.authority == '127.0.0.1:{upstream_port}' \
-                     and source.ip == '127.0.0.1' then return 'matched' end return nil"
+                     and source.ip == '127.0.0.1' then return true end return false"
                 ),
             },
         )
@@ -303,17 +304,64 @@ async fn routing_script_receives_http_authority_and_creates_tagged_session() {
     .await;
 
     assert!(response.contains("\r\n\r\nok"));
-    let session = runtime.session_for_tag("matched").unwrap();
-    assert_eq!(session.name, "matched");
-    assert_eq!(
-        session.description.as_deref(),
-        Some("由分流脚本「route」自动创建")
-    );
     assert_eq!(
         runtime.list_captures(session.id, 10, None).unwrap().len(),
         1
     );
-    assert!(runtime.session_for_tag("default").is_none());
+    assert_eq!(runtime.sessions().len(), 1);
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn routing_script_false_and_invalid_returns_bypass_even_with_an_active_session() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let (upstream_port, upstream) = fixed_http_upstream().await;
+    let session = runtime
+        .create_session(Some("capture".into()), None)
+        .unwrap();
+    runtime
+        .create_script(
+            ScriptKind::Routing,
+            Script {
+                name: "route".into(),
+                content: "return false".into(),
+            },
+        )
+        .unwrap();
+    let mut config = runtime.config();
+    config.routing_script_name = Some("route".into());
+    runtime.replace_config(config).unwrap();
+
+    let first = proxy_get(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/false"),
+        &format!("127.0.0.1:{upstream_port}"),
+    )
+    .await;
+    assert!(first.contains("\r\n\r\nok"));
+
+    runtime
+        .update_script(ScriptKind::Routing, "route", "return 'legacy-tag'".into())
+        .unwrap();
+    let second = proxy_get(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/invalid"),
+        &format!("127.0.0.1:{upstream_port}"),
+    )
+    .await;
+    assert!(second.contains("\r\n\r\nok"));
+
+    assert!(
+        runtime
+            .list_captures(session.id, 10, None)
+            .unwrap()
+            .is_empty()
+    );
+    let entries = runtime.bypass_entries(10, None).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].reason, "routing_script_error");
+    assert_eq!(entries[1].reason, "script_bypass");
     runtime.stop_proxy().await.unwrap();
     upstream.abort();
 }
@@ -406,9 +454,7 @@ async fn connect_diagnostic_stays_in_session_pinned_at_connect() {
     let first = runtime.create_session(None, None).unwrap();
     let stream = connect_tunnel(proxy_port).await;
     let second = runtime.create_session(Some("second".into()), None).unwrap();
-    runtime
-        .update_session(second.id, None, None, Some(vec!["default".into()]))
-        .unwrap();
+    runtime.replace_active_session(Some(second.id)).unwrap();
 
     let config = ClientConfig::builder()
         .with_root_certificates(RootCertStore::empty())
@@ -497,7 +543,7 @@ async fn bypass_connect_tunnels_bytes_without_creating_a_session() {
     .unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].method, "CONNECT");
-    assert_eq!(entries[0].reason, "no_default_tag");
+    assert_eq!(entries[0].reason, "no_active_session");
     assert_eq!(entries[0].outcome, BypassOutcome::Success);
     runtime.stop_proxy().await.unwrap();
 }

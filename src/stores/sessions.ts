@@ -9,11 +9,17 @@ export const sessionsStore = reactive({
   sessions: [] as SessionMetadata[],
   /** The session whose logs are shown in the main table. */
   viewingSessionId: null as number | null,
+  activeSessionId: null as number | null,
   loading: false,
 
   async refresh(): Promise<void> {
     try {
-      this.sessions = await backend.listSessions();
+      const [sessions, active] = await Promise.all([
+        backend.listSessions(),
+        backend.getActiveSession(),
+      ]);
+      this.sessions = sessions;
+      this.activeSessionId = active.session_id;
       if (
         this.viewingSessionId !== null &&
         !this.sessions.some((s) => s.id === this.viewingSessionId)
@@ -28,8 +34,12 @@ export const sessionsStore = reactive({
   async init(): Promise<void> {
     this.loading = true;
     try {
-      const sessions = await backend.listSessions();
+      const [sessions, active] = await Promise.all([
+        backend.listSessions(),
+        backend.getActiveSession(),
+      ]);
       this.sessions = sessions;
+      this.activeSessionId = active.session_id;
       this.viewingSessionId = sessions[0]?.id ?? null;
     } catch (error) {
       reportError(error, "初始化会话失败");
@@ -40,8 +50,12 @@ export const sessionsStore = reactive({
 
   async syncFromBackend(): Promise<void> {
     try {
-      const sessions = await backend.listSessions();
+      const [sessions, active] = await Promise.all([
+        backend.listSessions(),
+        backend.getActiveSession(),
+      ]);
       this.sessions = sessions;
+      this.activeSessionId = active.session_id;
       if (
         this.viewingSessionId === null ||
         !sessions.some((session) => session.id === this.viewingSessionId)
@@ -71,13 +85,11 @@ export const sessionsStore = reactive({
     id: number,
     name: string,
     description: string | null,
-    tags: string[],
   ): Promise<boolean> {
     try {
       await backend.updateSession(id, {
         name,
         description,
-        tags,
       });
       await this.refresh();
       return true;
@@ -98,6 +110,17 @@ export const sessionsStore = reactive({
       return true;
     } catch (error) {
       reportError(error, "删除会话失败");
+      return false;
+    }
+  },
+
+  async replaceActive(sessionId: number | null): Promise<boolean> {
+    try {
+      const active = await backend.replaceActiveSession({ session_id: sessionId });
+      this.activeSessionId = active.session_id;
+      return true;
+    } catch (error) {
+      reportError(error, "切换活跃会话失败");
       return false;
     }
   },

@@ -20,11 +20,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dto::{
-        BypassQuery, CreateSessionRequest, DebugFilterScriptRequest, DeleteBypassRequest,
-        HttpApiChange, HttpApiResource, InterceptorCreateRequest, InterceptorUpdateRequest,
-        LogIdsRequest, LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
-        ReplaceSessionViewRequest, RoutingSelection, ScriptRequest, SessionQuery,
-        SetWorkspaceRequest, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
+        ActiveSession, BypassQuery, CreateSessionRequest, DebugFilterScriptRequest,
+        DeleteBypassRequest, HttpApiChange, HttpApiResource, InterceptorCreateRequest,
+        InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError,
+        ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, RoutingSelection,
+        ScriptRequest, SessionQuery, SetWorkspaceRequest, SystemLogsQuery, UpdateScriptRequest,
+        UpdateSessionRequest,
     },
     manager::ProxyCrabManager,
 };
@@ -155,6 +156,10 @@ fn router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
         .route("/api/proxy/stop", post(stop_proxy))
         .route("/api/sessions", get(sessions).post(create_session))
         .route(
+            "/api/active-session",
+            get(active_session).put(replace_active_session),
+        )
+        .route(
             "/api/sessions/{id}",
             put(update_session).delete(delete_session),
         )
@@ -273,14 +278,26 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
     let resources = match (method, path) {
         (&Method::PUT, "/api/workspace") => vec![HttpApiResource::Workspace],
         (&Method::PUT, "/api/config") => {
-            vec![HttpApiResource::Config, HttpApiResource::RoutingSelection]
+            vec![
+                HttpApiResource::Config,
+                HttpApiResource::RoutingSelection,
+                HttpApiResource::ActiveSession,
+            ]
         }
         (&Method::POST, "/api/proxy/start" | "/api/proxy/stop") => {
             vec![HttpApiResource::Proxy]
         }
-        (&Method::POST, "/api/sessions") => vec![HttpApiResource::Sessions],
-        (&Method::PUT | &Method::DELETE, value) if value.starts_with("/api/sessions/") => {
+        (&Method::POST, "/api/sessions") => {
+            vec![HttpApiResource::Sessions, HttpApiResource::ActiveSession]
+        }
+        (&Method::PUT, value) if value.starts_with("/api/sessions/") => {
             vec![HttpApiResource::Sessions]
+        }
+        (&Method::DELETE, value) if value.starts_with("/api/sessions/") => {
+            vec![HttpApiResource::Sessions, HttpApiResource::ActiveSession]
+        }
+        (&Method::PUT, "/api/active-session") => {
+            vec![HttpApiResource::ActiveSession, HttpApiResource::Config]
         }
         (&Method::PUT, "/api/session-view") => vec![HttpApiResource::SessionView],
         (&Method::POST, "/api/column-scripts") => {
@@ -425,6 +442,17 @@ async fn sessions(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.sessions().await?)
 }
 
+async fn active_session(State(manager): State<ManagerState>) -> ApiResult {
+    success(manager.active_session().await?)
+}
+
+async fn replace_active_session(
+    State(manager): State<ManagerState>,
+    ApiJson(active): ApiJson<ActiveSession>,
+) -> ApiResult {
+    success(manager.replace_active_session(active).await?)
+}
+
 async fn create_session(
     State(manager): State<ManagerState>,
     ApiJson(request): ApiJson<CreateSessionRequest>,
@@ -456,12 +484,7 @@ async fn log_ids(
     let requested_filter = request.filter.clone();
     let affected_session_id = match request.session_id {
         Some(id) => Some(id),
-        None => manager
-            .sessions()
-            .await?
-            .into_iter()
-            .find(|session| session.tags.iter().any(|tag| tag == "default"))
-            .map(|session| session.id),
+        None => manager.active_session().await?.session_id,
     };
     let previous_filter = if requested_filter.is_some() {
         manager
@@ -836,7 +859,18 @@ mod tests {
                 "PUT",
                 "/api/config",
                 None,
-                vec![HttpApiResource::Config, HttpApiResource::RoutingSelection],
+                vec![
+                    HttpApiResource::Config,
+                    HttpApiResource::RoutingSelection,
+                    HttpApiResource::ActiveSession,
+                ],
+                None,
+            ),
+            (
+                "PUT",
+                "/api/active-session",
+                None,
+                vec![HttpApiResource::ActiveSession, HttpApiResource::Config],
                 None,
             ),
             (
@@ -947,6 +981,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn active_session_http_api_is_nullable_and_validates_session_ids() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime
+            .create_session(Some("capture".into()), None)
+            .unwrap();
+        let app = router(MitmManager::new(runtime));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/active-session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"]["session_id"], session.id);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/active-session")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"session_id":null}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/active-session")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"session_id":18446744073709551615}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn http_and_trait_return_the_same_config_dto() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
@@ -1016,7 +1101,10 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         let change = receiver.try_recv().unwrap();
-        assert_eq!(change.resources, vec![HttpApiResource::Sessions]);
+        assert_eq!(
+            change.resources,
+            vec![HttpApiResource::Sessions, HttpApiResource::ActiveSession]
+        );
 
         let response = app
             .oneshot(
@@ -1111,6 +1199,7 @@ mod tests {
             ),
             ("POST", "/api/logs/views", r#"{"logs":[]}"#),
             ("GET", "/api/session-view", ""),
+            ("GET", "/api/active-session", ""),
             ("PUT", "/api/session-view", r#"{"columns":[]}"#),
             ("GET", "/api/session-interceptors", ""),
             (
@@ -1127,13 +1216,14 @@ mod tests {
             (
                 "POST",
                 "/api/routing-scripts",
-                r#"{"name":"route","content":"return \"default\""}"#,
+                r#"{"name":"route","content":"return true"}"#,
             ),
             (
                 "PUT",
                 "/api/routing-script-selection",
                 r#"{"name":"route"}"#,
             ),
+            ("PUT", "/api/active-session", r#"{"session_id":null}"#),
             ("GET", "/api/bypass", ""),
         ] {
             let response = app

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Backend } from "./backend";
 import type {
+  ActiveSession,
   AppConfig,
   BypassQuery,
   CreateSessionRequest,
@@ -75,6 +76,9 @@ export function createTauriBackend(): Backend {
     updateSession: (id: number, request: UpdateSessionRequest) =>
       call("update_session", { id, request }),
     deleteSession: (id: number) => call("delete_session", { id }),
+    getActiveSession: () => call("get_active_session"),
+    replaceActiveSession: (active: ActiveSession) =>
+      call("replace_active_session", { active }),
 
     getLogIds: (request: LogIdsRequest) => call("get_log_ids", { request }),
     getLogViews: (request: LogViewsRequest) => call("get_log_views", { request }),

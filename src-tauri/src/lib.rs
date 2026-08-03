@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use proxy_crab_mgr::{
     MitmManager, ProxyCrabManager,
     dto::{
-        BypassPage, BypassQuery, CertificateResponse, CreateSessionRequest,
+        ActiveSession, BypassPage, BypassQuery, CertificateResponse, CreateSessionRequest,
         DebugFilterScriptRequest, DeleteCount, HttpApiChange, HttpApiResource, HttpServiceStatus,
         InterceptorCreateRequest, InterceptorDetail, InterceptorLibraryList,
         InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest, LogViewsPayload,
@@ -86,6 +86,19 @@ async fn list_sessions(
     state: State<'_, BackendState>,
 ) -> Result<Vec<SessionMetadata>, ManagerError> {
     state.manager().sessions().await
+}
+
+#[tauri::command]
+async fn get_active_session(state: State<'_, BackendState>) -> Result<ActiveSession, ManagerError> {
+    state.manager().active_session().await
+}
+
+#[tauri::command]
+async fn replace_active_session(
+    state: State<'_, BackendState>,
+    active: ActiveSession,
+) -> Result<ActiveSession, ManagerError> {
+    state.manager().replace_active_session(active).await
 }
 
 #[tauri::command]
@@ -542,6 +555,8 @@ pub fn run() {
             start_proxy,
             stop_proxy,
             list_sessions,
+            get_active_session,
+            replace_active_session,
             create_session,
             update_session,
             delete_session,

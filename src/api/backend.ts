@@ -1,4 +1,5 @@
 import type {
+  ActiveSession,
   AppConfig,
   BypassPage,
   BypassQuery,
@@ -55,6 +56,8 @@ export interface Backend {
   createSession(request: CreateSessionRequest): Promise<SessionMetadata>;
   updateSession(id: number, request: UpdateSessionRequest): Promise<SessionMetadata>;
   deleteSession(id: number): Promise<void>;
+  getActiveSession(): Promise<ActiveSession>;
+  replaceActiveSession(active: ActiveSession): Promise<ActiveSession>;
 
   // capture logs
   getLogIds(request: LogIdsRequest): Promise<LogIdsPayload>;

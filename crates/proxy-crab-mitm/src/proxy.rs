@@ -402,14 +402,11 @@ fn resolve_route(
         Ok(script) => script,
         Err(error) => {
             tracing::warn!("failed to load routing configuration: {error}");
-            None
+            return RouteDecision::Bypass("routing_script_error");
         }
     };
     let Some(script) = script else {
-        return runtime
-            .session_for_tag("default")
-            .map(RouteDecision::Session)
-            .unwrap_or(RouteDecision::Bypass("no_default_tag"));
+        return active_route(runtime);
     };
     match evaluate_routing(
         &script.content,
@@ -419,25 +416,20 @@ fn resolve_route(
         source,
         &script.name,
     ) {
-        Ok(None) => RouteDecision::Bypass("script_nil"),
-        Ok(Some(tag)) => match runtime.resolve_or_create_tag(&tag, &script.name) {
-            Ok(session) => RouteDecision::Session(session),
-            Err(error) => {
-                tracing::warn!(
-                    "routing script {} selected tag {tag}, but Session creation failed: {error}",
-                    script.name
-                );
-                RouteDecision::Bypass("session_create_failed")
-            }
-        },
+        Ok(None | Some(false)) => RouteDecision::Bypass("script_bypass"),
+        Ok(Some(true)) => active_route(runtime),
         Err(error) => {
             tracing::warn!("routing script {} failed: {error}", script.name);
-            runtime
-                .session_for_tag("default")
-                .map(RouteDecision::Session)
-                .unwrap_or(RouteDecision::Bypass("routing_script_error"))
+            RouteDecision::Bypass("routing_script_error")
         }
     }
+}
+
+fn active_route(runtime: &ProxyCrab) -> RouteDecision {
+    runtime
+        .active_session()
+        .map(RouteDecision::Session)
+        .unwrap_or(RouteDecision::Bypass("no_active_session"))
 }
 
 fn handle_connect(

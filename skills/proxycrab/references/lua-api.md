@@ -89,25 +89,23 @@ replacement methods.
 ## Routing scripts
 
 A routing script runs once for every direct HTTP request and once for a CONNECT tunnel. It must
-return a tag string matching `^[a-z0-9_]{1,20}$` or `nil`.
+return a boolean or `nil`.
 
 ```lua
 if phase == "connect" and req.uri.host == "internal.example.com" then
-  return "internal"
+  return false
 end
 if source.ip == "127.0.0.1" then
-  return "local_debug"
+  return true
 end
-return nil
+return false
 ```
 
-- `nil` means transparent bypass. HTTPS bypass does not perform TLS decryption.
-- A returned tag already bound to a Session selects that Session.
-- An explicit unbound tag atomically creates one Session named after the tag and records the
-  routing script name in its description.
-- A runtime error, invalid tag, or other return type writes a system warning and falls back to the
-  Session tagged `default`; if no such Session exists, it bypasses.
-- With no selected routing script, a bound `default` tag is used, otherwise traffic bypasses.
+- `true` captures into the active Session. If no Session is active, traffic bypasses.
+- `false` or `nil` means transparent bypass. HTTPS bypass does not perform TLS decryption.
+- A runtime error or other return type writes a system warning and bypasses.
+- With no selected routing script, the active Session captures all traffic; if no Session is
+  active, traffic bypasses.
 
 Routing globals are read-only:
 

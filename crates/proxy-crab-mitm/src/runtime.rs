@@ -88,7 +88,7 @@ impl ProxyCrab {
         if let Some(name) = &config.routing_script_name {
             self.workspace.get_script(ScriptKind::Routing, name)?;
         }
-        self.workspace.update_config(|current| *current = config)
+        self.workspace.replace_config(config)
     }
 
     pub fn sessions(&self) -> Vec<SessionMetadata> {
@@ -108,9 +108,8 @@ impl ProxyCrab {
         id: u64,
         name: Option<String>,
         description: Option<Option<String>>,
-        tags: Option<Vec<String>>,
     ) -> Result<SessionMetadata> {
-        self.workspace.update_session(id, name, description, tags)
+        self.workspace.update_session(id, name, description)
     }
 
     pub fn delete_session(&self, id: u64) -> Result<()> {
@@ -132,12 +131,17 @@ impl ProxyCrab {
         })
     }
 
-    pub fn session_for_tag(&self, tag: &str) -> Option<SessionMetadata> {
-        self.workspace.session_for_tag(tag)
+    pub fn active_session_id(&self) -> Option<u64> {
+        self.workspace.active_session_id()
     }
 
-    pub fn resolve_or_create_tag(&self, tag: &str, script_name: &str) -> Result<SessionMetadata> {
-        self.workspace.resolve_or_create_tag(tag, script_name)
+    pub fn active_session(&self) -> Option<SessionMetadata> {
+        let id = self.active_session_id()?;
+        self.sessions().into_iter().find(|session| session.id == id)
+    }
+
+    pub fn replace_active_session(&self, session_id: Option<u64>) -> Result<Option<u64>> {
+        self.workspace.replace_active_session(session_id)
     }
 
     pub fn selected_routing_script(&self) -> Result<Option<Script>> {
@@ -733,6 +737,22 @@ mod tests {
     };
 
     use super::ProxyCrab;
+
+    #[test]
+    fn config_replacement_validates_active_session() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
+        let session = runtime.create_session(Some("one".into()), None).unwrap();
+        let mut config = runtime.config();
+
+        config.active_session_id = Some(u64::MAX);
+        assert!(runtime.replace_config(config.clone()).is_err());
+        assert_eq!(runtime.active_session_id(), Some(session.id));
+
+        config.active_session_id = None;
+        runtime.replace_config(config).unwrap();
+        assert_eq!(runtime.active_session_id(), None);
+    }
 
     #[test]
     fn session_interceptor_chains_enforce_limit_and_uniqueness() {

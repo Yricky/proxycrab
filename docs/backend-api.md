@@ -32,9 +32,10 @@ normal Agent/API activity silent.
 | HTTP operation | UI resources affected | Desktop behavior |
 | --- | --- | --- |
 | `PUT /api/workspace` | Workspace settings | Refreshes an open clean settings window |
-| `PUT /api/config` | Settings and routing selection | Refreshes global config state |
+| `PUT /api/config` | Settings, routing selection, and active Session | Refreshes global config state |
 | `POST /api/proxy/start`, `POST /api/proxy/stop` | Proxy status | Refreshes the toolbar state |
-| Session create/update/delete | Session list and tags | Keeps the viewed Session unless it was deleted |
+| Session create/update/delete | Session list and active Session | Keeps the viewed Session unless it was deleted |
+| `PUT /api/active-session` | Active Session and settings | Refreshes the active indicator without changing the viewed Session |
 | Routing-script create/update/delete/selection | Routing library and selection | Refreshes the routing manager |
 | Bypass delete/batch delete/clear | Bypass table | Refreshes the bypass window |
 | `POST /api/logs/ids` with a changed `filter` | Target Session filter and visible log set | Reloads the table only when that Session is being viewed |
@@ -64,6 +65,7 @@ The server listens on loopback by default at `http://127.0.0.1:18089`. It has no
 | `/api/proxy/start`, `/api/proxy/stop` | `POST` |
 | `/api/sessions` | `GET`, `POST` |
 | `/api/sessions/{id}` | `PUT`, `DELETE` |
+| `/api/active-session` | `GET`, `PUT` nullable active Session |
 | `/api/logs/ids` | `POST` bounded/filterable log ID query |
 | `/api/logs/views` | `POST` batch incremental table-view rendering |
 | `/api/logs/{id}` | `GET` complete log detail |
@@ -85,7 +87,7 @@ System logs accept `after_seq` and are capped at 10,000 entries.
 
 All three log operations accept an optional Session. The POST operations accept `session_id` in
 their JSON body; the detail operation accepts `session_id` in its query string. Omitting it selects
-the Session tagged `default`. If that tag is unbound, the operation returns `409 conflict`.
+the active Session. If no Session is active, the operation returns `409 conflict`.
 
 ### Query log IDs
 
@@ -227,8 +229,8 @@ script. Deleting a referenced script removes matching table columns and resets f
 reference it. Script names cannot be changed.
 
 New Sessions always use the fixed built-in method, URI, status-code, and source columns plus an
-empty filter. The first manually created Session in an empty workspace receives the `default` tag.
-Tags match `^[a-z0-9_]{1,20}$`, are globally unique, and move atomically between Sessions.
+empty filter. The first Session created in an empty workspace becomes active. Later creation does
+not replace or restore an active Session.
 
 ## Global filter scripts
 
@@ -245,18 +247,22 @@ DELETE /api/filter-scripts/{name}
 Updates replace only script content. Deleting a referenced filter script, or deleting a
 custom-column script used as a filter target, resets those Session filters to no selection.
 
-## Routing scripts and Session tags
+## Routing scripts and active Session
 
 `AppConfig.routing_script_name` stores an optional selected routing script. CRUD lives under
 `/api/routing-scripts`; `PUT /api/routing-script-selection` accepts `{"name":"route"}` or
 `{"name":null}`. There is no rename or debug endpoint.
 
 For direct HTTP, routing runs per request. For HTTPS, it runs once on CONNECT and pins the selected
-Session for the whole tunnel. Lua returns a tag or `nil`; `nil` bypasses. An explicit unbound tag
-atomically creates one Session named after the tag with description
-`由分流脚本「<script>」自动创建`. Invalid returns or runtime errors emit a system warning and fall
-back to a bound `default` Session, otherwise bypass. With no selected script, `default` is used when
-bound, otherwise bypass.
+Session for the whole tunnel. Lua returns `true` to capture into the current active Session and
+`false` or `nil` to bypass. If `true` is returned while no Session is active, the request bypasses.
+Invalid returns and runtime errors emit a system warning and bypass. With no selected script, the
+active Session captures all traffic; with no active Session, traffic bypasses.
+
+`GET /api/active-session` returns `{"session_id":1}` or `{"session_id":null}`. `PUT` accepts the
+same shape, validates non-null IDs, and is allowed while the proxy runs. `AppConfig.active_session_id`
+uses the same validation through `PUT /api/config`. Switching affects later HTTP requests and new
+CONNECT tunnels; an established CONNECT remains pinned to its original Session.
 
 `POST /api/filter-scripts/{name}/debug` evaluates one script without suppressing errors:
 
@@ -315,7 +321,7 @@ Executed content is stored in the Session capture database by lowercase SHA-256.
 ## Capture lifecycle
 
 A routed HTTP request is inserted into its selected Session database before it is forwarded. The
-Session is pinned for the entire request/response lifecycle even if tags change.
+Session is pinned for the entire request/response lifecycle even if the active Session changes.
 
 Capture outcomes are:
 
@@ -338,11 +344,13 @@ with `proxy_shutdown` when the proxy stops.
 
 ## Workspace and CA
 
-The workspace is locked exclusively for the process lifetime. Routing selection and proxy/API
-addresses are stored in workspace configuration. Each Session stores metadata (including tags),
+The workspace is locked exclusively for the process lifetime. Routing selection, active Session,
+and proxy/API addresses are stored in workspace configuration. Each Session stores metadata,
 its table view and filter in `sessions/<id>/view.json`, and interceptor chains in
 `sessions/<id>/interceptors.json`. Session deletion is rejected while the proxy is starting,
 running, or stopping.
+Deleting the active Session while stopped clears the active ID without selecting a replacement.
+An active ID that references a missing Session is cleared and persisted when the workspace opens.
 
 Each workspace has an independent generated CA. Missing or corrupt CA files are regenerated with a warning, the per-host certificate cache is bounded, and the CA private key is restricted to owner-only permissions on macOS/Unix. Regeneration is serialized with proxy start/stop and rejected while the proxy is running.
 `http://proxy.crab/ca.crt` is always served locally without routing, Session capture, or bypass

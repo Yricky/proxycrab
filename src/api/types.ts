@@ -41,6 +41,7 @@ export interface AppConfig {
   api_host: string;
   api_port: number;
   routing_script_name: string | null;
+  active_session_id: number | null;
 }
 
 export interface SessionMetadata {
@@ -48,7 +49,6 @@ export interface SessionMetadata {
   name: string;
   created_at: number;
   description: string | null;
-  tags: string[];
 }
 
 export interface Script {
@@ -140,6 +140,7 @@ export type HttpApiResource =
   | "config"
   | "proxy"
   | "sessions"
+  | "active_session"
   | "session_view"
   | "column_scripts"
   | "filter_scripts"
@@ -173,7 +174,10 @@ export interface CreateSessionRequest {
 export interface UpdateSessionRequest {
   name?: string | null;
   description?: string | null;
-  tags?: string[] | null;
+}
+
+export interface ActiveSession {
+  session_id: number | null;
 }
 
 export interface LogIdsRequest {

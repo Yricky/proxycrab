@@ -11,7 +11,7 @@ import { routingStore } from "../stores/routing";
 import { windowsStore } from "../stores/windows";
 
 const WINDOW_ID = "routing-manager";
-const DEFAULT_SOURCE = 'return "default"\n';
+const DEFAULT_SOURCE = "return true\n";
 const backend = useBackend();
 
 const scripts = ref<Script[]>([]);

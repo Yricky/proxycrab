@@ -307,7 +307,7 @@ mod tests {
                 "GET",
                 "http://example.com",
                 "HTTP/1.1",
-                "no_default",
+                "no_active_session",
             )
             .unwrap();
         drop(store);
