@@ -3,6 +3,7 @@ import type { Backend } from "./backend";
 import type {
   ActiveSession,
   AppConfig,
+  CreateAgentsPresetRequest,
   BreakpointQuery,
   BypassQuery,
   CreateSessionRequest,
@@ -22,6 +23,7 @@ import type {
   ScriptRequest,
   SystemLogsQuery,
   UpdateScriptRequest,
+  UpdateAgentsPresetRequest,
   UpdateSessionRequest,
 } from "./types";
 
@@ -69,6 +71,14 @@ export function createTauriBackend(): Backend {
     setWorkspaceForNextStart: (path) => call("set_workspace_for_next_start", { path }),
     getConfig: () => call("get_config"),
     replaceConfig: (config: AppConfig) => call("replace_config", { config }),
+    getAgentsPresets: () => call("get_agents_presets"),
+    createAgentsPreset: (request: CreateAgentsPresetRequest) =>
+      call("create_agents_preset", { request }),
+    updateAgentsPreset: (id: string, request: UpdateAgentsPresetRequest) =>
+      call("update_agents_preset", { id, request }),
+    activateAgentsPreset: (id: string) => call("activate_agents_preset", { id }),
+    deleteAgentsPreset: (id: string) => call("delete_agents_preset", { id }),
+    reimportDefaultAgentsPresets: () => call("reimport_default_agents_presets"),
 
     getProxyStatus: () => call("get_proxy_status"),
     startProxy: () => call("start_proxy"),

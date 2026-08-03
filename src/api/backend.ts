@@ -1,5 +1,6 @@
 import type {
   ActiveSession,
+  AgentsPresetState,
   AppConfig,
   BreakpointDetailPayload,
   BreakpointQuery,
@@ -7,6 +8,7 @@ import type {
   BypassPage,
   BypassQuery,
   CertificateResponse,
+  CreateAgentsPresetRequest,
   CreateSessionRequest,
   DebugFilterScriptRequest,
   DeleteCount,
@@ -34,6 +36,7 @@ import type {
   SystemLogsQuery,
   SkillInstallInfo,
   UpdateScriptRequest,
+  UpdateAgentsPresetRequest,
   UpdateSessionRequest,
   TemporaryExecutionResult,
   WorkspacePaths,
@@ -51,6 +54,15 @@ export interface Backend {
   setWorkspaceForNextStart(path: string): Promise<WorkspacePaths>;
   getConfig(): Promise<AppConfig>;
   replaceConfig(config: AppConfig): Promise<AppConfig>;
+  getAgentsPresets(): Promise<AgentsPresetState>;
+  createAgentsPreset(request: CreateAgentsPresetRequest): Promise<AgentsPresetState>;
+  updateAgentsPreset(
+    id: string,
+    request: UpdateAgentsPresetRequest,
+  ): Promise<AgentsPresetState>;
+  activateAgentsPreset(id: string): Promise<AgentsPresetState>;
+  deleteAgentsPreset(id: string): Promise<AgentsPresetState>;
+  reimportDefaultAgentsPresets(): Promise<AgentsPresetState>;
 
   // proxy lifecycle
   getProxyStatus(): Promise<ProxyStatus>;

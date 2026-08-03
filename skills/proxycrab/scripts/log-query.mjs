@@ -49,15 +49,17 @@ Choose at most one filter selector:
   --filter-script NAME [--input TEXT]
   --case-sensitive
 
-With no selector or --input, the Session's persisted filter is reused. Supplying a selector
-persists the selected filter in the Session.
+With no selector or --input, the Session's persisted filter is reused. Supplying a selector applies
+it only to this query and does not change the Session's persisted filter.
 `);
     return;
   }
 
+  const filter = buildRemoteFilter(args);
   const body = {
     session_id: optionalInteger(args, "session-id", { min: 1 }),
-    filter: buildRemoteFilter(args),
+    filter,
+    persist_filter: filter === undefined ? undefined : false,
     min_id: optionalInteger(args, "min-id", { min: 0 }),
     max_id: optionalInteger(args, "max-id", { min: 1 }),
     limit: optionalInteger(args, "limit", { min: 0, max: 10_000 }),

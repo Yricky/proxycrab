@@ -4,6 +4,7 @@ import { proxyStore } from "../stores/proxy";
 import { appStore, type ThemeMode } from "../stores/app";
 import {
   openBase64,
+  openAgentsPresets,
   openCertManager,
   openColumnManager,
   openFilterManager,
@@ -19,6 +20,7 @@ import {
   Io5ChevronDown,
   Io5CodeSlash,
   Io5Desktop,
+  Io5DocumentText,
   Io5Download,
   Io5Key,
   Io5List,
@@ -32,7 +34,7 @@ import {
   Io5Sunny,
 } from "vue-icons-plus/io5";
 
-type ToolbarMenu = "scripts" | "tools" | "system";
+type ToolbarMenu = "ai" | "scripts" | "tools" | "system";
 
 const toolbarMenus = ref<HTMLElement | null>(null);
 const activeMenu = ref<ToolbarMenu | null>(null);
@@ -117,7 +119,29 @@ onBeforeUnmount(() => {
     <div ref="toolbarMenus" class="tb-group tb-menus">
       <div class="tb-menu-wrap">
         <button
-          class="btn tb-menu-trigger"
+          class="tb-menu-trigger"
+          :class="{ active: activeMenu === 'ai' }"
+          :aria-expanded="activeMenu === 'ai'"
+          @click="toggleMenu('ai')"
+        >
+          AI
+          <Io5ChevronDown :size="11" />
+        </button>
+        <div v-if="activeMenu === 'ai'" class="tb-menu">
+          <button class="tb-menu-item" @click="runMenuAction(openAgentsPresets)">
+            <Io5DocumentText :size="14" />
+            <span>AGENTS.md 预设…</span>
+          </button>
+          <button class="tb-menu-item" @click="runMenuAction(openSkillInstall)">
+            <Io5Download :size="14" />
+            <span>安装 ProxyCrab Skill…</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="tb-menu-wrap">
+        <button
+          class="tb-menu-trigger"
           :class="{ active: activeMenu === 'scripts' }"
           :aria-expanded="activeMenu === 'scripts'"
           @click="toggleMenu('scripts')"
@@ -147,7 +171,7 @@ onBeforeUnmount(() => {
 
       <div class="tb-menu-wrap">
         <button
-          class="btn tb-menu-trigger"
+          class="tb-menu-trigger"
           :class="{ active: activeMenu === 'tools' }"
           :aria-expanded="activeMenu === 'tools'"
           @click="toggleMenu('tools')"
@@ -165,7 +189,7 @@ onBeforeUnmount(() => {
 
       <div class="tb-menu-wrap">
         <button
-          class="btn tb-menu-trigger"
+          class="tb-menu-trigger"
           :class="{ active: activeMenu === 'system' }"
           :aria-expanded="activeMenu === 'system'"
           @click="toggleMenu('system')"
@@ -181,10 +205,6 @@ onBeforeUnmount(() => {
           <button class="tb-menu-item" @click="runMenuAction(openSystemLogs)">
             <Io5Newspaper :size="14" />
             <span>系统日志</span>
-          </button>
-          <button class="tb-menu-item" @click="runMenuAction(openSkillInstall)">
-            <Io5Download :size="14" />
-            <span>安装 ProxyCrab Skill…</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openSettings)">
             <Io5Settings :size="14" />
@@ -254,8 +274,21 @@ onBeforeUnmount(() => {
   align-items: center;
 }
 .tb-menu-trigger {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
   gap: 4px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: default;
+  transition:
+    color 0.12s,
+    background 0.12s;
 }
 .tb-menu-trigger:hover,
 .tb-menu-trigger.active {

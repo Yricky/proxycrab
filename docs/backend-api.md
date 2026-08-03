@@ -2,7 +2,7 @@
 
 ## Shared management contract
 
-HTTP handlers and Tauri commands call the same `ProxyCrabManager` trait and use the same request/response DTOs. HTTP successes use:
+HTTP handlers and Tauri commands call the same `ProxyCrabManager` trait and use the same request/response DTOs. Except for `GET /api/agents.md`, HTTP successes use:
 
 ```json
 { "ok": true, "data": {} }
@@ -38,7 +38,7 @@ normal Agent/API activity silent.
 | `PUT /api/active-session` | Active Session and settings | Refreshes the active indicator without changing the viewed Session |
 | Routing-script create/update/delete/selection | Routing library and selection | Refreshes the routing manager |
 | Bypass delete/batch delete/clear | Bypass table | Refreshes the bypass window |
-| `POST /api/logs/ids` with a changed `filter` | Target Session filter and visible log set | Reloads the table only when that Session is being viewed |
+| `POST /api/logs/ids` with a changed persisted `filter` | Target Session filter and visible log set | Reloads the table only when that Session is being viewed; `persist_filter: false` stays silent |
 | `PUT /api/session-view` | Target Session columns | Reloads the table only when that Session is being viewed |
 | Column-script create/update/delete | Column/filter choices and rendered custom columns | Refreshes script lists and the current table view |
 | Filter-script create/update/delete | Filter choices and filtered results | Refreshes script lists and the current table view |
@@ -59,6 +59,7 @@ The server listens on loopback by default at `http://127.0.0.1:18089`. It has no
 
 | Resource | Operations |
 | --- | --- |
+| `/api/agents.md` | `GET` active workspace Agent instructions as raw `text/plain` |
 | `/api/workspace` | `GET` current/configured paths; `PUT` next-start path |
 | `/api/config` | `GET`, `PUT` |
 | `/api/proxy/status` | `GET` |
@@ -86,6 +87,25 @@ The server listens on loopback by default at `http://127.0.0.1:18089`. It has no
 
 System logs accept `after_seq` and are capped at 10,000 entries.
 
+## Workspace Agent instructions
+
+The manager initializes workspace-scoped Agent presets when `agents/config.json` is absent:
+
+```text
+agents/config.json
+agents/presets/full-capability.md
+agents/presets/quiet-investigation.md
+```
+
+`充分使用能力` is active by default. The desktop AI menu manages, edits, deletes, activates, and
+reimports presets through Tauri commands. Reimport overwrites same-name defaults without changing
+the active preset. At least one preset must remain; deleting the active preset selects the next
+available item.
+
+`GET /api/agents.md` reads the active Markdown file from disk for every request and returns its raw
+UTF-8 content with `Content-Type: text/plain; charset=utf-8`. It does not use the JSON success
+envelope and does not trigger desktop UI synchronization.
+
 ## Network log queries
 
 All three log operations accept an optional Session. The POST operations accept `session_id` in
@@ -109,11 +129,16 @@ the active Session. If no Session is active, the operation returns `409 conflict
   },
   "min_id": 100,
   "max_id": 10000,
-  "limit": 10000
+  "limit": 10000,
+  "persist_filter": false
 }
 ```
 
-Every field is optional. Omitting `filter` reuses the Session's persisted filter. Supplying it applies the draft to this query and persists it only after the ID scan succeeds. `option: null` or an empty `input` matches all logs; an empty input still preserves the selected option.
+Every field is optional. Omitting `filter` reuses the Session's persisted filter. Supplying it
+applies the draft to this query and persists it only after the ID scan succeeds. Set
+`persist_filter: false` to filter without changing the Session view or emitting a UI synchronization
+event; omitting the field retains the compatible default of `true`. `option: null` or an empty
+`input` matches all logs; an empty input still preserves the selected option.
 
 A column option supports `method`, `uri`, `code`, `source`, `stage`, or `{ "kind": "script", "script_name": "..." }`. Built-in and custom-column output are matched with contains; `case_sensitive` controls Unicode case folding. A script option has the form `{ "kind": "script", "script_name": "..." }` and passes `input` to that global Lua filter script. Custom-column and filter-script execution errors silently count as non-matches.
 

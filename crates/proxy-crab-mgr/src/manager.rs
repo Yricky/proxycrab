@@ -12,16 +12,20 @@ use proxy_crab_mitm::{
     },
 };
 
-use crate::dto::{
-    ActiveSession, BreakpointDetailPayload, BreakpointQuery, BypassPage, BypassQuery,
-    CertificateResponse, ColumnView, CreateSessionRequest, DebugFilterScriptRequest, DeleteCount,
-    ExecuteTemporaryScriptRequest, ExtendBreakpointRequest, HeaderItem, InterceptorCreateRequest,
-    InterceptorDetail, InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogIdsPayload,
-    LogIdsRequest, LogViewException, LogViewRow, LogViewsPayload, LogViewsRequest, ManagerError,
-    ManagerResult, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, RequestDetail,
-    ResponseDetail, RoutingSelection, ScriptRequest, SessionInterceptorItem,
-    SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery, UpdateScriptRequest,
-    UpdateSessionRequest,
+use crate::{
+    agents::AgentsStore,
+    dto::{
+        ActiveSession, AgentsPresetState, BreakpointDetailPayload, BreakpointQuery, BypassPage,
+        BypassQuery, CertificateResponse, ColumnView, CreateAgentsPresetRequest,
+        CreateSessionRequest, DebugFilterScriptRequest, DeleteCount, ExecuteTemporaryScriptRequest,
+        ExtendBreakpointRequest, HeaderItem, InterceptorCreateRequest, InterceptorDetail,
+        InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest,
+        LogViewException, LogViewRow, LogViewsPayload, LogViewsRequest, ManagerError,
+        ManagerResult, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, RequestDetail,
+        ResponseDetail, RoutingSelection, ScriptRequest, SessionInterceptorItem,
+        SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery, UpdateAgentsPresetRequest,
+        UpdateScriptRequest, UpdateSessionRequest,
+    },
 };
 use tokio::sync::Semaphore;
 
@@ -33,6 +37,20 @@ pub trait ProxyCrabManager: Send + Sync {
     async fn set_workspace_for_next_start(&self, path: String) -> ManagerResult<WorkspacePaths>;
     async fn config(&self) -> ManagerResult<AppConfig>;
     async fn replace_config(&self, config: AppConfig) -> ManagerResult<AppConfig>;
+    async fn agents_presets(&self) -> ManagerResult<AgentsPresetState>;
+    async fn agents_markdown(&self) -> ManagerResult<String>;
+    async fn create_agents_preset(
+        &self,
+        request: CreateAgentsPresetRequest,
+    ) -> ManagerResult<AgentsPresetState>;
+    async fn update_agents_preset(
+        &self,
+        id: String,
+        request: UpdateAgentsPresetRequest,
+    ) -> ManagerResult<AgentsPresetState>;
+    async fn activate_agents_preset(&self, id: String) -> ManagerResult<AgentsPresetState>;
+    async fn delete_agents_preset(&self, id: String) -> ManagerResult<AgentsPresetState>;
+    async fn reimport_default_agents_presets(&self) -> ManagerResult<AgentsPresetState>;
     async fn proxy_status(&self) -> ManagerResult<ProxyStatus>;
     async fn start_proxy(&self) -> ManagerResult<ProxyStatus>;
     async fn stop_proxy(&self) -> ManagerResult<ProxyStatus>;
@@ -141,6 +159,7 @@ pub trait ProxyCrabManager: Send + Sync {
 
 pub struct MitmManager {
     runtime: Arc<ProxyCrab>,
+    agents: Arc<AgentsStore>,
     blocking_tasks: Arc<Semaphore>,
 }
 
@@ -165,8 +184,14 @@ struct PreparedScript {
 
 impl MitmManager {
     pub fn new(runtime: Arc<ProxyCrab>) -> Arc<Self> {
+        let workspace = runtime.workspace_paths();
+        let agents = Arc::new(AgentsStore::new(Path::new(&workspace.current_path)));
+        if let Err(error) = agents.initialize() {
+            tracing::error!("failed to initialize AGENTS.md presets: {error}");
+        }
         Arc::new(Self {
             runtime,
+            agents,
             blocking_tasks: Arc::new(Semaphore::new(MAX_BLOCKING_MANAGEMENT_TASKS)),
         })
     }
@@ -330,6 +355,71 @@ impl ProxyCrabManager for MitmManager {
         self.runtime.replace_config(config).map_err(map_error)
     }
 
+    async fn agents_presets(&self) -> ManagerResult<AgentsPresetState> {
+        let agents = self.agents.clone();
+        self.run_blocking("AGENTS.md preset", move || {
+            agents.state().map_err(map_error)
+        })
+        .await
+    }
+
+    async fn agents_markdown(&self) -> ManagerResult<String> {
+        let agents = self.agents.clone();
+        self.run_blocking("AGENTS.md", move || {
+            agents.active_markdown().map_err(map_error)
+        })
+        .await
+    }
+
+    async fn create_agents_preset(
+        &self,
+        request: CreateAgentsPresetRequest,
+    ) -> ManagerResult<AgentsPresetState> {
+        let agents = self.agents.clone();
+        self.run_blocking("AGENTS.md preset", move || {
+            agents.create(request.name).map_err(map_error)
+        })
+        .await
+    }
+
+    async fn update_agents_preset(
+        &self,
+        id: String,
+        request: UpdateAgentsPresetRequest,
+    ) -> ManagerResult<AgentsPresetState> {
+        let agents = self.agents.clone();
+        self.run_blocking("AGENTS.md preset", move || {
+            agents
+                .update(&id, request.name, request.content)
+                .map_err(map_error)
+        })
+        .await
+    }
+
+    async fn activate_agents_preset(&self, id: String) -> ManagerResult<AgentsPresetState> {
+        let agents = self.agents.clone();
+        self.run_blocking("AGENTS.md preset", move || {
+            agents.activate(&id).map_err(map_error)
+        })
+        .await
+    }
+
+    async fn delete_agents_preset(&self, id: String) -> ManagerResult<AgentsPresetState> {
+        let agents = self.agents.clone();
+        self.run_blocking("AGENTS.md preset", move || {
+            agents.delete(&id).map_err(map_error)
+        })
+        .await
+    }
+
+    async fn reimport_default_agents_presets(&self) -> ManagerResult<AgentsPresetState> {
+        let agents = self.agents.clone();
+        self.run_blocking("AGENTS.md preset", move || {
+            agents.reimport_defaults().map_err(map_error)
+        })
+        .await
+    }
+
     async fn proxy_status(&self) -> ManagerResult<ProxyStatus> {
         Ok(self.runtime.proxy_status())
     }
@@ -398,6 +488,7 @@ impl ProxyCrabManager for MitmManager {
         let limit = request.limit.unwrap_or(DEFAULT_LIMIT).min(DEFAULT_LIMIT);
         let ascending = request.min_id.is_some() && request.max_id.is_none();
         let requested_filter = request.filter;
+        let persist_filter = request.persist_filter;
         let runtime = self.runtime.clone();
         let min_id = request.min_id;
         let max_id = request.max_id;
@@ -445,15 +536,17 @@ impl ProxyCrabManager for MitmManager {
                     }
                 }
             };
-            let effective_filter = if let Some(filter) = requested_filter {
-                let mut view = runtime.session_view(session_id).map_err(map_error)?;
-                view.filter = filter;
-                runtime
-                    .replace_session_view(session_id, view)
-                    .map_err(map_error)?
-                    .filter
-            } else {
-                filter
+            let effective_filter = match requested_filter {
+                Some(requested) if persist_filter => {
+                    let mut view = runtime.session_view(session_id).map_err(map_error)?;
+                    view.filter = requested;
+                    runtime
+                        .replace_session_view(session_id, view)
+                        .map_err(map_error)?
+                        .filter
+                }
+                Some(requested) => requested,
+                None => filter,
             };
             Ok(LogIdsPayload {
                 ids,
@@ -1151,9 +1244,10 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::dto::{
-        DebugFilterScriptRequest, InterceptorCreateRequest, LogIdsRequest, LogViewItem,
-        LogViewsRequest, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest,
-        ScriptRequest, SessionInterceptorInput, UpdateScriptRequest,
+        CreateAgentsPresetRequest, DebugFilterScriptRequest, InterceptorCreateRequest,
+        LogIdsRequest, LogViewItem, LogViewsRequest, ReplaceSessionInterceptorsRequest,
+        ReplaceSessionViewRequest, ScriptRequest, SessionInterceptorInput,
+        UpdateAgentsPresetRequest, UpdateScriptRequest,
     };
 
     use super::{MAX_BLOCKING_MANAGEMENT_TASKS, MitmManager, ProxyCrabManager, status_text};
@@ -1178,6 +1272,81 @@ mod tests {
         assert!(manager.blocking_tasks.clone().try_acquire_owned().is_err());
         drop(permits);
         assert_eq!(manager.blocking_tasks.available_permits(), 8);
+    }
+
+    #[tokio::test]
+    async fn agent_presets_are_managed_through_the_manager() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager = MitmManager::new(runtime);
+
+        let state = manager
+            .create_agents_preset(CreateAgentsPresetRequest {
+                name: "自定义".into(),
+            })
+            .await
+            .unwrap();
+        let id = state
+            .presets
+            .iter()
+            .find(|preset| preset.name == "自定义")
+            .unwrap()
+            .id
+            .clone();
+        manager
+            .update_agents_preset(
+                id.clone(),
+                UpdateAgentsPresetRequest {
+                    name: None,
+                    content: Some("# Custom".into()),
+                },
+            )
+            .await
+            .unwrap();
+        manager.activate_agents_preset(id).await.unwrap();
+
+        assert_eq!(manager.agents_markdown().await.unwrap(), "# Custom");
+    }
+
+    #[tokio::test]
+    async fn log_ids_can_filter_without_persisting_session_state() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
+        let store =
+            CaptureStore::open(session.id, &runtime.workspace().session_dir(session.id)).unwrap();
+        let first = store
+            .begin("127.0.0.1", &request("first"), "request")
+            .unwrap();
+        store
+            .begin("127.0.0.1", &request("second"), "request")
+            .unwrap();
+        let manager = MitmManager::new(runtime);
+        let original = manager.session_view(Some(session.id)).await.unwrap().filter;
+
+        let result = manager
+            .log_ids(LogIdsRequest {
+                session_id: Some(session.id),
+                filter: Some(SessionFilter {
+                    option: Some(FilterOption::Column {
+                        column: FilterColumn::Uri,
+                        case_sensitive: true,
+                    }),
+                    input: "/first".into(),
+                }),
+                min_id: None,
+                max_id: None,
+                limit: None,
+                persist_filter: false,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.ids, vec![first]);
+        assert_eq!(
+            manager.session_view(Some(session.id)).await.unwrap().filter,
+            original
+        );
     }
 
     fn request(path: &str) -> RequestData {
@@ -1215,6 +1384,7 @@ mod tests {
                 min_id: Some(first),
                 max_id: Some(third),
                 limit: None,
+                persist_filter: true,
             })
             .await
             .unwrap();
@@ -1320,6 +1490,7 @@ mod tests {
                 min_id: None,
                 max_id: None,
                 limit: None,
+                persist_filter: true,
             })
             .await
             .unwrap();
@@ -1336,6 +1507,7 @@ mod tests {
                     min_id: None,
                     max_id: None,
                     limit: None,
+                    persist_filter: true,
                 })
                 .await
                 .unwrap()
@@ -1358,6 +1530,7 @@ mod tests {
                     min_id: None,
                     max_id: None,
                     limit: None,
+                    persist_filter: true,
                 })
                 .await
                 .unwrap()
@@ -1389,6 +1562,7 @@ mod tests {
                     min_id: None,
                     max_id: None,
                     limit: None,
+                    persist_filter: true,
                 })
                 .await
                 .unwrap()
@@ -1419,6 +1593,7 @@ mod tests {
                     min_id: None,
                     max_id: None,
                     limit: None,
+                    persist_filter: true,
                 })
                 .await
                 .unwrap()
@@ -1447,6 +1622,7 @@ mod tests {
                     min_id: None,
                     max_id: None,
                     limit: None,
+                    persist_filter: true,
                 })
                 .await
                 .unwrap()
@@ -1487,6 +1663,7 @@ mod tests {
                     min_id: None,
                     max_id: None,
                     limit: None,
+                    persist_filter: true,
                 })
                 .await
                 .unwrap()
@@ -1520,6 +1697,7 @@ mod tests {
                 min_id: None,
                 max_id: None,
                 limit: None,
+                persist_filter: true,
             })
             .await
             .unwrap();
@@ -1544,6 +1722,7 @@ mod tests {
                     min_id: None,
                     max_id: None,
                     limit: None,
+                    persist_filter: true,
                 })
                 .await
                 .unwrap()

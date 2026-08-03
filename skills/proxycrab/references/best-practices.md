@@ -1,5 +1,11 @@
 # ProxyCrab debugging best practices
 
+## Load the workspace policy first
+
+Immediately after reading the Skill, read `GET /api/agents.md`. The user's current explicit request
+takes precedence over that document. If the endpoint is unavailable, use the Skill's conservative
+built-in rules.
+
 ## Scope first
 
 Use a dedicated active Session when possible. Record the Session ID in notes and commands so later
@@ -15,7 +21,8 @@ Start with the narrowest stable discriminator available:
 5. a Lua filter for compound conditions.
 
 The API stores one filter per Session. A filtered `POST /api/logs/ids` updates that persisted filter
-after a successful scan. Do not assume filtering is read-only.
+after a successful scan unless `persist_filter: false` is supplied. Bundled query/wait scripts use
+stateless filtering by default.
 
 Capture/bypass queries and management Lua evaluations share an eight-task concurrency limit.
 Additional calls queue asynchronously, so prefer bounded batches over unbounded parallel fan-out.

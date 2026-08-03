@@ -42,6 +42,12 @@
       "prompt": "Find the active ProxyCrab breakpoint for request interceptor hold-checkout, inspect its live request, run a temporary script that sets tag agent-reviewed to yes without releasing it, and report the execution result. Do not alter unrelated breakpoints.",
       "expected_output": "The agent filters active breakpoints by phase/name, reads the selected live detail, executes phase-valid Lua with req:setTag, keeps the request paused, and cites the temporary execution ID, error state, and tag_set modification.",
       "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "Use ProxyCrab to inspect the most recent failed request while respecting the active workspace Agent instructions and without changing the user's current filter unless those instructions allow it.",
+      "expected_output": "The agent reads /api/agents.md before any other ProxyCrab API, follows the active policy unless the user's request overrides it, and uses persist_filter=false for a stateless filtered ID query.",
+      "files": []
     }
   ]
 }

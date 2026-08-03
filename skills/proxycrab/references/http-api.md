@@ -5,19 +5,20 @@ This reference documents the complete local HTTP surface used by ProxyCrab agent
 ## Contents
 
 1. [Connection and envelopes](#connection-and-envelopes)
-2. [Shared data types](#shared-data-types)
-3. [Workspace and configuration](#workspace-and-configuration)
-4. [Proxy lifecycle](#proxy-lifecycle)
-5. [Sessions](#sessions)
-6. [Capture logs](#capture-logs)
-7. [Session views](#session-views)
-8. [Column, filter, and routing scripts](#column-filter-and-routing-scripts)
-9. [Interceptors](#interceptors)
-10. [Active breakpoints](#active-breakpoints)
-11. [Bypass traffic](#bypass-traffic)
-12. [Certificate authority](#certificate-authority)
-13. [System logs](#system-logs)
-14. [Errors and lifecycle notes](#errors-and-lifecycle-notes)
+2. [Agent instructions](#agent-instructions)
+3. [Shared data types](#shared-data-types)
+4. [Workspace and configuration](#workspace-and-configuration)
+5. [Proxy lifecycle](#proxy-lifecycle)
+6. [Sessions](#sessions)
+7. [Capture logs](#capture-logs)
+8. [Session views](#session-views)
+9. [Column, filter, and routing scripts](#column-filter-and-routing-scripts)
+10. [Interceptors](#interceptors)
+11. [Active breakpoints](#active-breakpoints)
+12. [Bypass traffic](#bypass-traffic)
+13. [Certificate authority](#certificate-authority)
+14. [System logs](#system-logs)
+15. [Errors and lifecycle notes](#errors-and-lifecycle-notes)
 
 ## Connection and envelopes
 
@@ -31,7 +32,7 @@ The desktop app starts the management service. It has no authentication, binds t
 no permissive CORS policy, requires a loopback/`localhost` Host, and accepts browser Origin values
 only from local `http`, `https`, or `tauri` origins.
 
-Every success is:
+Except for the raw AGENTS.md endpoint documented below, every success is:
 
 ```json
 {
@@ -75,6 +76,28 @@ HTTP envelope does not change and there is no public event endpoint.
 
 This means Agent operations become visible in the desktop app shortly after the HTTP success
 response. Do not assume the user wants their currently viewed Session changed.
+
+## Agent instructions
+
+### `GET /api/agents.md`
+
+Read this endpoint immediately after reading the ProxyCrab Skill and before calling any other
+ProxyCrab API. It returns the current workspace's active AGENTS.md preset as an unwrapped UTF-8 body
+with `Content-Type: text/plain; charset=utf-8`.
+
+The user's current explicit request takes precedence over the returned document. If the endpoint is
+unavailable, use the Skill's conservative built-in behavior. This read is stateless and does not
+notify or refresh the desktop UI.
+
+The desktop app manages multiple workspace-scoped presets under:
+
+```text
+agents/config.json
+agents/presets/<preset-id>.md
+```
+
+Newly initialized workspaces contain `充分使用能力` and `静默排查`, with `充分使用能力` active.
+Preset CRUD and selection are desktop management operations, not public HTTP endpoints.
 
 ## Shared data types
 
@@ -335,14 +358,17 @@ Request:
   },
   "min_id": 100,
   "max_id": 10000,
-  "limit": 100
+  "limit": 100,
+  "persist_filter": false
 }
 ```
 
 Every field is optional.
 
 - Omitting `filter` reuses the Session's persisted filter.
-- Supplying `filter` applies it and persists it only after the scan succeeds.
+- Supplying `filter` applies it and persists it only after the scan succeeds. Set
+  `persist_filter: false` to use it for this query without changing the Session view or notifying
+  the desktop UI. Omitting `persist_filter` preserves the compatible default of `true`.
 - `option: null` or an empty `input` matches all captures; an empty input still preserves the
   selected option.
 - Built-in and custom-column filters use contains matching. `case_sensitive: false` performs Unicode

@@ -68,6 +68,30 @@ pub struct UpdateSessionRequest {
     pub description: Option<Option<String>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateAgentsPresetRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateAgentsPresetRequest {
+    pub name: Option<String>,
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentsPreset {
+    pub id: String,
+    pub name: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentsPresetState {
+    pub active_id: String,
+    pub presets: Vec<AgentsPreset>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActiveSession {
     pub session_id: Option<u64>,
@@ -85,6 +109,12 @@ pub struct LogIdsRequest {
     pub min_id: Option<u64>,
     pub max_id: Option<u64>,
     pub limit: Option<usize>,
+    #[serde(default = "default_true")]
+    pub persist_filter: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -376,6 +406,7 @@ pub use proxy_crab_mitm::model::{
 };
 
 pub type WorkspaceResponse = WorkspacePaths;
+pub type AgentsPresetsResponse = AgentsPresetState;
 pub type ConfigResponse = AppConfig;
 pub type ProxyStatusResponse = ProxyStatus;
 pub type SessionsResponse = Vec<SessionMetadata>;

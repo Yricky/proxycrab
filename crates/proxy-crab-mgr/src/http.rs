@@ -5,7 +5,7 @@ use axum::{
     extract::{FromRequest, FromRequestParts, Path, Query, Request, State},
     http::{
         Method, StatusCode,
-        header::{HOST, ORIGIN},
+        header::{CONTENT_TYPE, HOST, ORIGIN},
         request::Parts,
     },
     middleware::{self, Next},
@@ -150,6 +150,7 @@ pub fn router(manager: ManagerState) -> Router {
 
 fn router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
     Router::new()
+        .route("/api/agents.md", get(agents_markdown))
         .route("/api/workspace", get(get_workspace).put(set_workspace))
         .route("/api/config", get(get_config).put(replace_config))
         .route("/api/proxy/status", get(proxy_status))
@@ -435,6 +436,11 @@ async fn replace_config(
     success(manager.replace_config(config).await?)
 }
 
+async fn agents_markdown(State(manager): State<ManagerState>) -> Result<Response, ApiError> {
+    let markdown = manager.agents_markdown().await?;
+    Ok(([(CONTENT_TYPE, "text/plain; charset=utf-8")], markdown).into_response())
+}
+
 async fn proxy_status(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.proxy_status().await?)
 }
@@ -491,11 +497,12 @@ async fn log_ids(
     ApiJson(request): ApiJson<LogIdsRequest>,
 ) -> ApiResult {
     let requested_filter = request.filter.clone();
+    let persist_filter = request.persist_filter;
     let affected_session_id = match request.session_id {
         Some(id) => Some(id),
         None => manager.active_session().await?.session_id,
     };
-    let previous_filter = if requested_filter.is_some() {
+    let previous_filter = if requested_filter.is_some() && persist_filter {
         manager
             .session_view(affected_session_id)
             .await
@@ -505,7 +512,10 @@ async fn log_ids(
         None
     };
     let payload = manager.log_ids(request).await?;
-    if requested_filter.is_some() && previous_filter.as_ref() != Some(&payload.filter) {
+    if requested_filter.is_some()
+        && persist_filter
+        && previous_filter.as_ref() != Some(&payload.filter)
+    {
         let _ = changes.send(HttpApiChange {
             resources: vec![HttpApiResource::SessionView],
             session_id: affected_session_id,
@@ -1025,6 +1035,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agents_markdown_is_returned_as_raw_plain_text() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let app = router(MitmManager::new(runtime));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/agents.md")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/plain; charset=utf-8"
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = std::str::from_utf8(&body).unwrap();
+        assert!(text.starts_with("# ProxyCrab Agent 行为：充分使用能力"));
+        assert!(!text.contains("\"ok\""));
+    }
+
+    #[tokio::test]
     async fn active_session_http_api_is_nullable_and_validates_session_ids() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
@@ -1201,6 +1238,30 @@ mod tests {
             receiver.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/logs/ids")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"filter":{"option":null,"input":""},"persist_filter":false}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let unexpected = receiver.try_recv();
+        assert!(
+            matches!(
+                unexpected,
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty
+                    | tokio::sync::broadcast::error::TryRecvError::Closed)
+            ),
+            "unexpected UI event after stateless filter: {unexpected:?}"
+        );
     }
 
     #[tokio::test]

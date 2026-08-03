@@ -16,6 +16,7 @@ import SkillInstallWindow from "./SkillInstallWindow.vue";
 import RoutingManagerWindow from "./RoutingManagerWindow.vue";
 import BypassWindow from "./BypassWindow.vue";
 import BreakpointListWindow from "./BreakpointListWindow.vue";
+import AgentsPresetsWindow from "./AgentsPresetsWindow.vue";
 
 export type ScriptEditorKind = "column" | InterceptorKind;
 
@@ -169,5 +170,14 @@ export function openSkillInstall(): void {
     component: SkillInstallWindow,
     width: 560,
     height: 360,
+  });
+}
+
+export function openAgentsPresets(): void {
+  windowsStore.open("agents-presets", {
+    title: "AGENTS.md 预设",
+    component: AgentsPresetsWindow,
+    width: 980,
+    height: 620,
   });
 }

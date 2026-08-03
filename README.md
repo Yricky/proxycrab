@@ -26,6 +26,12 @@ registered in the centralized migration module and run before workspace stores a
 Workspace schema v2 enables SQLite WAL for Session capture databases so management readers can
 overlap with MITM capture writers.
 
+Workspace-scoped Agent behavior presets are owned by the management layer and stored under
+`agents/`. The desktop AI menu edits and activates them, while `GET /api/agents.md` returns the
+active Markdown as raw `text/plain`. The bundled ProxyCrab Skill reads this endpoint before making
+other management calls. A supplied log filter can be kept stateless with
+`persist_filter: false`.
+
 The Tauri command surface also reports the management HTTP service's `running`, `host`, `port`, and startup error state through `get_http_service_status`.
 
 ## Development

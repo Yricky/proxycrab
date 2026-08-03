@@ -56,6 +56,17 @@ export interface Script {
   content: string;
 }
 
+export interface AgentsPreset {
+  id: string;
+  name: string;
+  content: string;
+}
+
+export interface AgentsPresetState {
+  active_id: string;
+  presets: AgentsPreset[];
+}
+
 export type InterceptorKind = "request" | "response";
 
 export interface InterceptorLibraryItem {
@@ -189,6 +200,16 @@ export interface LogIdsRequest {
   min_id?: number | null;
   max_id?: number | null;
   limit?: number | null;
+  persist_filter?: boolean;
+}
+
+export interface CreateAgentsPresetRequest {
+  name: string;
+}
+
+export interface UpdateAgentsPresetRequest {
+  name?: string | null;
+  content?: string | null;
 }
 
 export interface LogIdsPayload {

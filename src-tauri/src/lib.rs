@@ -5,14 +5,16 @@ use std::sync::{Arc, Mutex, RwLock};
 use proxy_crab_mgr::{
     MitmManager, ProxyCrabManager,
     dto::{
-        ActiveSession, BreakpointDetailPayload, BreakpointQuery, BypassPage, BypassQuery,
-        CertificateResponse, CreateSessionRequest, DebugFilterScriptRequest, DeleteCount,
-        ExecuteTemporaryScriptRequest, ExtendBreakpointRequest, HttpApiChange, HttpApiResource,
-        HttpServiceStatus, InterceptorCreateRequest, InterceptorDetail, InterceptorLibraryList,
+        ActiveSession, AgentsPresetState, BreakpointDetailPayload, BreakpointQuery, BypassPage,
+        BypassQuery, CertificateResponse, CreateAgentsPresetRequest, CreateSessionRequest,
+        DebugFilterScriptRequest, DeleteCount, ExecuteTemporaryScriptRequest,
+        ExtendBreakpointRequest, HttpApiChange, HttpApiResource, HttpServiceStatus,
+        InterceptorCreateRequest, InterceptorDetail, InterceptorLibraryList,
         InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest, LogViewsPayload,
         LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
         ReplaceSessionViewRequest, RoutingSelection, ScriptRequest, SessionInterceptorsPayload,
-        SessionViewPayload, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
+        SessionViewPayload, SystemLogsQuery, UpdateAgentsPresetRequest, UpdateScriptRequest,
+        UpdateSessionRequest,
     },
     http::{HttpServerHandle, start_http_server},
 };
@@ -65,6 +67,53 @@ async fn replace_config(
     config: AppConfig,
 ) -> Result<AppConfig, ManagerError> {
     state.manager().replace_config(config).await
+}
+
+#[tauri::command]
+async fn get_agents_presets(
+    state: State<'_, BackendState>,
+) -> Result<AgentsPresetState, ManagerError> {
+    state.manager().agents_presets().await
+}
+
+#[tauri::command]
+async fn create_agents_preset(
+    state: State<'_, BackendState>,
+    request: CreateAgentsPresetRequest,
+) -> Result<AgentsPresetState, ManagerError> {
+    state.manager().create_agents_preset(request).await
+}
+
+#[tauri::command]
+async fn update_agents_preset(
+    state: State<'_, BackendState>,
+    id: String,
+    request: UpdateAgentsPresetRequest,
+) -> Result<AgentsPresetState, ManagerError> {
+    state.manager().update_agents_preset(id, request).await
+}
+
+#[tauri::command]
+async fn activate_agents_preset(
+    state: State<'_, BackendState>,
+    id: String,
+) -> Result<AgentsPresetState, ManagerError> {
+    state.manager().activate_agents_preset(id).await
+}
+
+#[tauri::command]
+async fn delete_agents_preset(
+    state: State<'_, BackendState>,
+    id: String,
+) -> Result<AgentsPresetState, ManagerError> {
+    state.manager().delete_agents_preset(id).await
+}
+
+#[tauri::command]
+async fn reimport_default_agents_presets(
+    state: State<'_, BackendState>,
+) -> Result<AgentsPresetState, ManagerError> {
+    state.manager().reimport_default_agents_presets().await
 }
 
 #[tauri::command]
@@ -591,6 +640,12 @@ pub fn run() {
             set_workspace_for_next_start,
             get_config,
             replace_config,
+            get_agents_presets,
+            create_agents_preset,
+            update_agents_preset,
+            activate_agents_preset,
+            delete_agents_preset,
+            reimport_default_agents_presets,
             get_proxy_status,
             start_proxy,
             stop_proxy,

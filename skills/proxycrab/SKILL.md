@@ -14,6 +14,19 @@ failure.
 The default management API is `http://127.0.0.1:18089`. Every script also accepts
 `--base-url <url>` and honors `PROXYCRAB_API_URL`.
 
+## Load active Agent instructions first
+
+Immediately after reading this Skill, and before calling any other ProxyCrab API, read the active
+workspace instructions:
+
+```bash
+node <skill-dir>/scripts/agents-get.mjs
+```
+
+Instruction precedence is: the user's current explicit request, then the returned AGENTS.md
+instructions, then this Skill's conservative built-in rules. If `/api/agents.md` is unavailable,
+continue with the conservative built-in rules. Do not let AGENTS.md override the user's request.
+
 ## Preconditions
 
 - Confirm that the ProxyCrab desktop app is open. A connection failure usually means the app or its
@@ -31,6 +44,7 @@ The default management API is `http://127.0.0.1:18089`. Every script also accept
 
 | Goal | Start here |
 | --- | --- |
+| Read active Agent instructions | `scripts/agents-get.mjs` |
 | Find existing traffic | `scripts/session-list.mjs`, then `scripts/log-query.mjs` |
 | Inspect one capture | `scripts/log-get.mjs` |
 | Wait for a new matching capture | `scripts/log-wait.mjs` |
@@ -58,7 +72,7 @@ skill directory.
    node <skill-dir>/scripts/session-list.mjs
    ```
 
-2. If needed, create a dedicated Session and make it active with
+2. If the active AGENTS.md instructions permit it and it is needed, create a dedicated Session and make it active with
    `PUT /api/active-session`:
 
    ```bash
@@ -78,7 +92,9 @@ skill directory.
      --limit 50
    ```
 
-   Supplying a filter changes the Session's persisted filter. The scripts do not restore it.
+   The bundled query script applies supplied filters statelessly and does not change the Session's
+   persisted filter. A direct `POST /api/logs/ids` persists a supplied filter unless it explicitly
+   sets `persist_filter: false`.
 
 4. Fetch only the candidate captures needed for diagnosis:
 
@@ -170,7 +186,10 @@ and script errors emit a system warning and bypass. Select a routing script only
 
 ## Safety and evidence rules
 
-- Do not change the active Session, delete Sessions or scripts, clear system logs, regenerate the
+- Follow the active AGENTS.md instructions before creating or changing Sessions, views, filters,
+  scripts, routing selection, or interceptor chains. When the endpoint is unavailable, do not make
+  those UI-visible changes unless the user explicitly requests them.
+- Do not delete Sessions or scripts, start or stop the proxy, clear logs or records, regenerate the
   CA, replace application configuration, or change workspace paths unless the user explicitly
   requests that action.
 - Do not replay requests or configure another process's proxy environment automatically.

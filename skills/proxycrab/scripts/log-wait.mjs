@@ -53,8 +53,8 @@ Matching (may be combined):
   --filter-script NAME [--input TEXT]
   --case-sensitive
 
-One condition is evaluated by ProxyCrab's persisted Session filter. Additional built-in
-conditions are checked locally against full capture details.
+One condition is evaluated remotely without changing the Session's persisted filter. Additional
+built-in conditions are checked locally against full capture details.
 `);
     return;
   }
@@ -72,6 +72,7 @@ conditions are checked locally against full capture details.
     body: {
       ...(sessionId === undefined ? {} : { session_id: sessionId }),
       filter: { option: null, input: "" },
+      persist_filter: false,
       limit: 10_000,
     },
   });
@@ -85,6 +86,7 @@ conditions are checked locally against full capture details.
       body: {
         ...(sessionId === undefined ? {} : { session_id: sessionId }),
         filter: remoteFilter,
+        persist_filter: false,
         min_id: baselineMax,
         limit: 10_000,
       },

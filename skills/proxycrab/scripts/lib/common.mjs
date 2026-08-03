@@ -130,6 +130,29 @@ export async function apiRequest(args, pathname, { method = "GET", body } = {}) 
   return payload.data;
 }
 
+export async function apiTextRequest(args, pathname) {
+  const url = new URL(`${normalizeBaseUrl(args)}${pathname}`);
+  let response;
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+  } catch (error) {
+    throw new Error(`cannot reach ProxyCrab at ${url.origin}: ${error.message}`);
+  }
+  const text = await response.text();
+  if (!response.ok) {
+    let payload;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = undefined;
+    }
+    const code = payload?.error?.code ?? `http_${response.status}`;
+    const message = payload?.error?.message ?? `ProxyCrab request failed with HTTP ${response.status}`;
+    throw new ApiError(response.status, code, message);
+  }
+  return text;
+}
+
 export function sessionQuery(sessionId) {
   return sessionId === undefined ? "" : `?session_id=${encodeURIComponent(sessionId)}`;
 }
