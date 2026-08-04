@@ -934,6 +934,10 @@ Routing and capture lifecycle details:
 - A TLS failure updates that CONNECT capture.
 - Successful TLS MITM retains the CONNECT row as a successful `tls_mitm` capture and stores decrypted
   HTTP requests as additional captures.
+- A captured request whose final request-interceptor tag is exactly `_crab_tls_insecure=true` skips
+  upstream HTTPS certificate-chain and hostname verification. The tag is persisted but never sent as
+  a header; verified and insecure requests use isolated connection pools. Restrict it to controlled
+  test hosts.
 - `updated_at` is a monotonic Unix-millisecond version of the complete capture. Metadata and body
   writes advance it even within the same wall-clock millisecond.
 - Interceptor changes made before a runtime error remain applied and are recorded.

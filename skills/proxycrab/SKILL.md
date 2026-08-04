@@ -240,6 +240,11 @@ and script errors emit a system warning and bypass. Select a routing script only
   These controls are per capture, never become HTTP headers, and do not apply to bypass, raw
   CONNECT, Upgrade/WebSocket, the local CA endpoint, or proxy-generated errors. `_crab_skip` still
   allows response pacing after response interceptors create the synthetic response.
+- `_crab_tls_insecure` disables upstream HTTPS certificate-chain and hostname verification only when
+  its final request-interceptor value is exactly `true`. It also applies to HTTPS Upgrade/WebSocket,
+  has no effect on HTTP or transparent bypass, never becomes a header, and uses a pool isolated from
+  verified traffic. Use it only for a narrowly matched controlled test host and explicitly warn the
+  user about the reduced transport authentication.
 - Keep user-created debugging state unless the user asks for cleanup. Automatic restoration is not
   required.
 - Expect Session, filter, column, and interceptor changes to appear in the desktop UI. If the UI

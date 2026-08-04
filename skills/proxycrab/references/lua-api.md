@@ -269,6 +269,7 @@ The final request tags also support these proxy-local traffic controls:
 | `_crab_req_speed` | bytes per second | Pace the final request body sent to the server |
 | `_crab_resp_speed` | bytes per second | Pace the final response body sent to the client |
 | `_crab_req_timeout` | milliseconds | Bound connection, TLS, paced upload, and response-header wait; default `60000` |
+| `_crab_tls_insecure` | exact string `true` | Disable upstream HTTPS certificate-chain and hostname verification |
 
 Values must contain only ASCII digits, fit in `u64`, and be greater than zero; leading zeroes are
 valid. An invalid final value is ignored and written to the Rust warning log. Request speed and
@@ -277,7 +278,13 @@ interceptors, including temporary breakpoint scripts. Limits are independent per
 direction, count only final outbound body bytes, send no initial or catch-up burst, and do not alter
 headers or add a downstream timeout. Tags remain persisted metadata and never become HTTP headers.
 
-These controls exclude bypass, raw CONNECT, Upgrade/WebSocket, `proxy.crab/ca.crt`, and
+`_crab_tls_insecure` is resolved after request interceptors and only the exact final string `true`
+enables it. Any other present value is ignored with a Rust warning. It does nothing for HTTP, but it
+does apply to HTTPS Upgrade/WebSocket. Insecure and verified HTTPS traffic use separate connection
+pools, so later untagged requests cannot reuse an insecure TLS connection. Restrict this tag to a
+controlled test host because it removes upstream server authentication.
+
+The speed/timeout controls exclude bypass, raw CONNECT, Upgrade/WebSocket, `proxy.crab/ca.crt`, and
 proxy-generated errors. `_crab_skip` makes request speed/timeout irrelevant, but response speed can
 pace a synthetic body created by response interceptors.
 

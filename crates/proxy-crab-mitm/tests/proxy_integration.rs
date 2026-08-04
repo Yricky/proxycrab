@@ -1,4 +1,5 @@
 use std::{
+    convert::Infallible,
     io::Cursor,
     sync::Arc,
     time::{Duration, Instant},
@@ -6,7 +7,7 @@ use std::{
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::{Request, Version};
+use hyper::{Request, Response, Version, server::conn::http1, service::service_fn};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use proxy_crab_mitm::{
     ProxyCrab,
@@ -19,14 +20,19 @@ use proxy_crab_mitm::{
     },
     storage::{BodySide, BodySourceData},
 };
-use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
+use rcgen::{CertifiedKey, generate_simple_self_signed};
+use rustls::{
+    ClientConfig, RootCertStore, ServerConfig,
+    pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName},
+};
 use tempfile::tempdir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    sync::mpsc,
     time::{sleep, timeout},
 };
-use tokio_rustls::TlsConnector;
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 fn unused_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -218,6 +224,84 @@ async fn proxy_get(proxy_port: u16, uri: &str, host: &str) -> String {
         .unwrap()
         .unwrap();
     String::from_utf8_lossy(&response).into_owned()
+}
+
+async fn proxy_https_get(
+    runtime: &ProxyCrab,
+    proxy_port: u16,
+    authority: &str,
+    path: &str,
+) -> String {
+    let mut roots = RootCertStore::empty();
+    for certificate in rustls_pemfile::certs(&mut Cursor::new(runtime.certificate_pem())) {
+        roots.add(certificate.unwrap()).unwrap();
+    }
+    let config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(config));
+    let stream = connect_tunnel_to(proxy_port, authority).await;
+    let server_name =
+        ServerName::try_from(authority.split(':').next().unwrap().to_string()).unwrap();
+    let mut tls = connector.connect(server_name, stream).await.unwrap();
+    tls.write_all(
+        format!(
+            "GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+        )
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(3), tls.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+async fn self_signed_https_upstream() -> (
+    u16,
+    mpsc::UnboundedReceiver<hyper::HeaderMap>,
+    tokio::task::JoinHandle<()>,
+) {
+    let CertifiedKey { cert, signing_key } =
+        generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    let config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![cert.der().clone()],
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der())),
+        )
+        .unwrap();
+    let acceptor = TlsAcceptor::from(Arc::new(config));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (request_tx, request_rx) = mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let acceptor = acceptor.clone();
+            let request_tx = request_tx.clone();
+            tokio::spawn(async move {
+                let Ok(tls) = acceptor.accept(stream).await else {
+                    return;
+                };
+                let service = service_fn(move |request: Request<hyper::body::Incoming>| {
+                    let _ = request_tx.send(request.headers().clone());
+                    async {
+                        Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"ok"))))
+                    }
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(tls), service)
+                    .await;
+            });
+        }
+    });
+    (port, request_rx, task)
 }
 
 async fn proxy_post(proxy_port: u16, uri: &str, host: &str, body: &[u8]) -> String {
@@ -1383,6 +1467,68 @@ async fn origin_form_ca_download_is_local_and_not_recorded() {
     assert!(runtime.sessions().is_empty());
     assert!(runtime.bypass_entries(10, None).unwrap().is_empty());
     runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn tls_insecure_tag_allows_self_signed_upstream_without_weakening_default_pool() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, mut upstream_requests, upstream) = self_signed_https_upstream().await;
+    let authority = format!("127.0.0.1:{upstream_port}");
+
+    let rejected = proxy_https_get(&runtime, proxy_port, &authority, "/rejected").await;
+    assert!(rejected.starts_with("HTTP/1.1 502"), "{rejected}");
+
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "allow-self-signed-upstream".into(),
+                content: "req:setTag('_crab_tls_insecure', 'true')".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "allow-self-signed-upstream".into(),
+                    enabled: true,
+                }],
+                response: vec![],
+            },
+        )
+        .unwrap();
+
+    let allowed = proxy_https_get(&runtime, proxy_port, &authority, "/allowed").await;
+    assert!(allowed.starts_with("HTTP/1.1 200"), "{allowed}");
+    assert!(allowed.ends_with("ok"), "{allowed}");
+    let upstream_headers = timeout(Duration::from_secs(2), upstream_requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!upstream_headers.contains_key("_crab_tls_insecure"));
+
+    let allowed_capture = runtime
+        .list_captures(session.id, 20, None)
+        .unwrap()
+        .into_iter()
+        .find(|capture| capture.request.uri.ends_with("/allowed"))
+        .unwrap();
+    assert_eq!(allowed_capture.request.tags["_crab_tls_insecure"], "true");
+
+    runtime
+        .replace_session_interceptors(session.id, SessionInterceptors::default())
+        .unwrap();
+    let rejected_again = proxy_https_get(&runtime, proxy_port, &authority, "/rejected-again").await;
+    assert!(
+        rejected_again.starts_with("HTTP/1.1 502"),
+        "{rejected_again}"
+    );
+
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
 }
 
 #[tokio::test]

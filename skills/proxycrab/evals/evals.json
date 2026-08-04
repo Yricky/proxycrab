@@ -86,6 +86,14 @@
       "prompt": "List the available ProxyCrab Sessions and tell me which custom table columns are configured for each one.",
       "expected_output": "The agent uses session-list.mjs and reports the column names returned with each Session, including custom-column script names, without making separate manual Session-view calls.",
       "files": []
+    },
+    {
+      "id": 15,
+      "prompt": "Create a ProxyCrab request interceptor named allow-self-signed-test using the supplied Lua fixture, attach it to the active Session without changing the response chain, and verify on a new capture for self-signed.test that the insecure TLS policy was selected. Do not send the special tag as an HTTP header.",
+      "expected_output": "The agent saves narrowly matched Lua with _crab_tls_insecure=true, preserves the existing response chain, warns that upstream server authentication is disabled for the matched HTTPS requests, and cites a new capture's tag plus tag_set history without claiming the tag was sent upstream.",
+      "files": [
+        "evals/fixtures/test-tls-insecure.lua"
+      ]
     }
   ]
 }

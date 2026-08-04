@@ -67,6 +67,7 @@ const BINARY_HEADER_PREFIX: &str = "\u{e000}proxy-crab-binary:v1:";
 const CRAB_REQ_SPEED_TAG: &str = "_crab_req_speed";
 const CRAB_RESP_SPEED_TAG: &str = "_crab_resp_speed";
 const CRAB_REQ_TIMEOUT_TAG: &str = "_crab_req_timeout";
+const CRAB_TLS_INSECURE_TAG: &str = "_crab_tls_insecure";
 
 #[derive(Debug, Clone)]
 struct InterceptorSnapshot {
@@ -1035,7 +1036,7 @@ async fn handle_bypass_http(
     };
     let mut upstream_response = match runtime
         .upstream_client()
-        .send(upstream_request, cancellation.clone())
+        .send(upstream_request, false, cancellation.clone())
         .await
     {
         Ok(response) => response,
@@ -1394,6 +1395,7 @@ async fn handle_session_http_request(
                 .unwrap_or(UPSTREAM_TIMEOUT),
         )
     };
+    let tls_insecure = tls_insecure_from_tags(&request_data.tags, capture_id);
     let upstream_request = match request_from_data(&request_data, request_body, request_speed) {
         Ok(request) => request,
         Err(error) => {
@@ -1411,7 +1413,7 @@ async fn handle_session_http_request(
         upstream_timeout,
         runtime
             .upstream_client()
-            .send(upstream_request, cancellation.clone()),
+            .send(upstream_request, tls_insecure, cancellation.clone()),
     )
     .await
     {
@@ -1967,6 +1969,28 @@ fn parse_special_tag(tags: &RequestTags, key: &'static str, capture_id: u64) -> 
     }
 }
 
+fn parse_tls_insecure_tag(value: Option<&str>) -> Result<bool, ()> {
+    match value {
+        None => Ok(false),
+        Some("true") => Ok(true),
+        Some(_) => Err(()),
+    }
+}
+
+fn tls_insecure_from_tags(tags: &RequestTags, capture_id: u64) -> bool {
+    match parse_tls_insecure_tag(tags.get(CRAB_TLS_INSECURE_TAG).map(String::as_str)) {
+        Ok(value) => value,
+        Err(()) => {
+            tracing::warn!(
+                capture_id,
+                tag = CRAB_TLS_INSECURE_TAG,
+                "ignoring invalid special tag value"
+            );
+            false
+        }
+    }
+}
+
 fn response_status_has_body(status: u16) -> bool {
     !(100..200).contains(&status)
         && status != StatusCode::NO_CONTENT.as_u16()
@@ -2259,8 +2283,8 @@ mod tests {
 
     use super::{
         PacedBody, headers_to_values, normalize_tls_error, parse_positive_decimal,
-        remove_header_value, response_from_data, strip_hop_by_hop_headers, values_to_headers,
-        version_name,
+        parse_tls_insecure_tag, remove_header_value, response_from_data, strip_hop_by_hop_headers,
+        values_to_headers, version_name,
     };
     use crate::model::{HeaderValues, ResponseData};
 
@@ -2334,6 +2358,16 @@ mod tests {
             "18446744073709551616",
         ] {
             assert_eq!(parse_positive_decimal(Some(invalid)), Err(()), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn parses_tls_insecure_tag_only_for_explicit_true() {
+        assert_eq!(parse_tls_insecure_tag(None), Ok(false));
+        assert_eq!(parse_tls_insecure_tag(Some("true")), Ok(true));
+
+        for invalid in ["", "false", "TRUE", "True", "1", " true", "true "] {
+            assert_eq!(parse_tls_insecure_tag(Some(invalid)), Err(()), "{invalid}");
         }
     }
 

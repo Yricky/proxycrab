@@ -62,6 +62,12 @@ requests as additional captures. Do not mistake the CONNECT row for the applicat
 Bypassed CONNECT traffic has no decrypted request detail; inspect the bypass table for source,
 authority, reason, outcome, byte counts, and errors.
 
+For a controlled test host with a self-signed certificate, a narrowly matched request interceptor may
+set `_crab_tls_insecure` to the exact value `true`. This disables upstream certificate-chain and
+hostname verification, so record the tag as evidence, warn about the loss of server authentication,
+and never apply it broadly or to production traffic. Untagged requests remain on an isolated verified
+connection pool.
+
 ## Handle bodies accurately
 
 `text` and `json` bodies embed decoded content only through 64 KiB. Every non-empty persisted body

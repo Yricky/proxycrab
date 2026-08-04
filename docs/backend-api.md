@@ -282,11 +282,15 @@ Request-line changes use `method_set` with `method` and `uri_set` with `uri`, st
 executed without changes are still present.
 Disabled and missing scripts are not recorded.
 
-The persisted tag map may include `_crab_skip`, `_crab_req_speed`, `_crab_resp_speed`, and
-`_crab_req_timeout`. These are proxy-local controls rather than HTTP headers. For ordinary captured
+The persisted tag map may include `_crab_skip`, `_crab_req_speed`, `_crab_resp_speed`,
+`_crab_req_timeout`, and `_crab_tls_insecure`. These are proxy-local controls rather than HTTP
+headers. For ordinary captured
 HTTP/HTTPS traffic, positive ASCII decimal speed values pace final outbound body bytes per second,
 and `_crab_req_timeout` overrides the 60,000 ms upstream timeout. Invalid final values are ignored
-with a runtime warning. Bypass, raw CONNECT, Upgrade/WebSocket, the local CA endpoint, and
+with a runtime warning. The exact final value `_crab_tls_insecure=true` disables upstream HTTPS
+certificate-chain and hostname verification for that request, including Upgrade/WebSocket; other
+values and HTTP requests retain normal verification behavior. Verified and insecure HTTPS
+connections use separate pools. Bypass, raw CONNECT, Upgrade/WebSocket, the local CA endpoint, and
 proxy-generated errors retain their existing unpaced behavior.
 
 Log detail embeds decoded text/JSON only through 64 KiB. Every non-empty body includes the stored

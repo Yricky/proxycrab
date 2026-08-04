@@ -7,7 +7,12 @@ use hyper_util::{
     client::legacy::{Client, connect::HttpConnector},
     rt::{TokioExecutor, TokioIo, TokioTimer},
 };
-use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
+use rustls::{
+    ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
+    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+    crypto::{CryptoProvider, WebPkiSupportedAlgorithms},
+    pki_types::{CertificateDer, ServerName, UnixTime},
+};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
@@ -22,43 +27,113 @@ type PooledClient = Client<HttpsConnector<HttpConnector>, ProxyBody>;
 
 #[derive(Clone)]
 pub(crate) struct UpstreamClient {
-    pooled: PooledClient,
+    verified: PooledClient,
+    insecure: PooledClient,
 }
 
 impl UpstreamClient {
     pub(crate) fn new() -> Self {
-        let mut http = HttpConnector::new();
-        http.enforce_http(false);
-        http.set_connect_timeout(Some(CONNECT_TIMEOUT));
-        let https = HttpsConnectorBuilder::new()
-            .with_webpki_roots()
-            .https_or_http()
-            .enable_http1()
-            .enable_http2()
-            .wrap_connector(http);
-        let pooled = Client::builder(TokioExecutor::new())
-            .pool_idle_timeout(std::time::Duration::from_secs(90))
-            .pool_timer(TokioTimer::new())
-            .pool_max_idle_per_host(32)
-            .build(https);
-        Self { pooled }
+        Self {
+            verified: pooled_client(client_config(false)),
+            insecure: pooled_client(client_config(true)),
+        }
     }
 
     pub(crate) async fn send(
         &self,
         mut request: Request<ProxyBody>,
+        tls_insecure: bool,
         cancellation: CancellationToken,
     ) -> Result<Response<Incoming>> {
+        let tls_insecure = tls_insecure && request.uri().scheme_str() == Some("https");
         if request.headers().contains_key(UPGRADE)
             || (request.uri().scheme_str() == Some("http") && request.version() == Version::HTTP_2)
         {
-            return send_dedicated(request, cancellation).await;
+            return send_dedicated(request, tls_insecure, cancellation).await;
         }
         normalize_pooled_request_version(&mut request);
+        let client = if tls_insecure {
+            &self.insecure
+        } else {
+            &self.verified
+        };
         tokio::select! {
-            response = self.pooled.request(request) => Ok(response?),
+            response = client.request(request) => Ok(response?),
             _ = cancellation.cancelled() => bail!("proxy stopped"),
         }
+    }
+}
+
+fn pooled_client(config: ClientConfig) -> PooledClient {
+    let mut http = HttpConnector::new();
+    http.enforce_http(false);
+    http.set_connect_timeout(Some(CONNECT_TIMEOUT));
+    let https = HttpsConnectorBuilder::new()
+        .with_tls_config(config)
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .wrap_connector(http);
+    Client::builder(TokioExecutor::new())
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .pool_timer(TokioTimer::new())
+        .pool_max_idle_per_host(32)
+        .build(https)
+}
+
+fn client_config(tls_insecure: bool) -> ClientConfig {
+    let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let mut config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    if tls_insecure {
+        let algorithms = CryptoProvider::get_default()
+            .expect("rustls crypto provider is installed by ClientConfig::builder")
+            .signature_verification_algorithms;
+        config
+            .dangerous()
+            .set_certificate_verifier(Arc::new(InsecureServerCertVerifier { algorithms }));
+    }
+    config
+}
+
+#[derive(Debug)]
+struct InsecureServerCertVerifier {
+    algorithms: WebPkiSupportedAlgorithms,
+}
+
+impl ServerCertVerifier for InsecureServerCertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.algorithms.supported_schemes()
     }
 }
 
@@ -73,6 +148,7 @@ fn normalize_pooled_request_version(request: &mut Request<ProxyBody>) {
 
 async fn send_dedicated(
     request: Request<ProxyBody>,
+    tls_insecure: bool,
     cancellation: CancellationToken,
 ) -> Result<Response<Incoming>> {
     let uri = request.uri().clone();
@@ -85,10 +161,7 @@ async fn send_dedicated(
         .await
         .context("upstream connect timeout")??;
     if https {
-        let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let mut config = ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+        let mut config = client_config(tls_insecure);
         config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
         let connector = TlsConnector::from(Arc::new(config));
         let server_name = ServerName::try_from(host.to_string())
@@ -162,9 +235,24 @@ mod tests {
 
     use bytes::Bytes;
     use http_body_util::{BodyExt, Full};
-    use hyper::{Request, Response, server::conn::http1, service::service_fn};
+    use hyper::{
+        Request, Response, StatusCode,
+        header::{CONNECTION, UPGRADE},
+        server::conn::http1,
+        service::service_fn,
+    };
     use hyper_util::rt::TokioIo;
-    use tokio::{net::TcpListener, sync::oneshot};
+    use rcgen::{CertifiedKey, generate_simple_self_signed};
+    use rustls::{
+        ServerConfig,
+        pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
+    };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        sync::oneshot,
+    };
+    use tokio_rustls::TlsAcceptor;
     use tokio_util::sync::CancellationToken;
 
     use super::{UpstreamClient, normalize_pooled_request_version};
@@ -204,7 +292,7 @@ mod tests {
                 .body(boxed_full(Bytes::new()))
                 .unwrap();
             let response = client
-                .send(request, CancellationToken::new())
+                .send(request, false, CancellationToken::new())
                 .await
                 .unwrap();
             assert_eq!(
@@ -215,6 +303,51 @@ mod tests {
 
         assert_eq!(accepted.load(Ordering::Relaxed), 1);
         let _ = stop_tx.send(());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dedicated_https_upgrade_honors_insecure_tls_policy() {
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![cert.der().clone()],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der())),
+            )
+            .unwrap();
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut tls = acceptor.accept(stream).await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                tls.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            tls.write_all(
+                b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        });
+
+        let request = Request::builder()
+            .uri(format!("https://{address}/upgrade"))
+            .header(CONNECTION, "upgrade")
+            .header(UPGRADE, "websocket")
+            .body(boxed_full(Bytes::new()))
+            .unwrap();
+        let response = UpstreamClient::new()
+            .send(request, true, CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
         server.await.unwrap();
     }
 
