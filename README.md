@@ -24,7 +24,8 @@ The Tauri application data directory contains `config.json`, which points at the
 Each workspace root has a `workspace_schema.json` version label. All persisted-data upgrades are
 registered in the centralized migration module and run before workspace stores are opened.
 Workspace schema v2 enables SQLite WAL for Session capture databases so management readers can
-overlap with MITM capture writers.
+recover and interoperate with the established workspace format. Each opened capture or bypass
+store reuses one configured SQLite connection across its clones and serializes access to it.
 
 Workspace-scoped Agent behavior presets are owned by the management layer and stored under
 `agents/`. The desktop AI menu edits and activates them, while `GET /api/agents.md` returns the

@@ -2,6 +2,7 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 
@@ -45,7 +46,7 @@ pub struct BodySource {
 #[derive(Clone)]
 pub struct CaptureStore {
     session_id: u64,
-    database_path: PathBuf,
+    connection: Arc<Mutex<Connection>>,
     blob_directory: PathBuf,
 }
 
@@ -53,9 +54,15 @@ impl CaptureStore {
     pub fn open(session_id: u64, session_directory: &Path) -> Result<Self> {
         let blob_directory = session_directory.join("blob");
         fs::create_dir_all(&blob_directory)?;
+        let connection = Connection::open(session_directory.join("captures.db"))?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        connection.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             PRAGMA synchronous = NORMAL;",
+        )?;
         let store = Self {
             session_id,
-            database_path: session_directory.join("captures.db"),
+            connection: Arc::new(Mutex::new(connection)),
             blob_directory,
         };
         store.initialize()?;
@@ -564,14 +571,10 @@ impl CaptureStore {
         Ok(())
     }
 
-    fn connection(&self) -> Result<Connection> {
-        let connection = Connection::open(&self.database_path)?;
-        connection.busy_timeout(Duration::from_secs(5))?;
-        connection.execute_batch(
-            "PRAGMA foreign_keys = ON;
-             PRAGMA synchronous = NORMAL;",
-        )?;
-        Ok(connection)
+    fn connection(&self) -> Result<MutexGuard<'_, Connection>> {
+        self.connection
+            .lock()
+            .map_err(|_| anyhow!("capture database connection lock poisoned"))
     }
 
     fn interceptor_executions(
@@ -915,6 +918,17 @@ mod tests {
             headers: HeaderValues::new(),
             tags: Default::default(),
         }
+    }
+
+    #[test]
+    fn clones_share_one_connection() {
+        let root = tempdir().unwrap();
+        let store = CaptureStore::open(7, root.path()).unwrap();
+
+        assert!(std::sync::Arc::ptr_eq(
+            &store.connection,
+            &store.clone().connection,
+        ));
     }
 
     #[test]

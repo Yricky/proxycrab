@@ -40,7 +40,9 @@ export const sessionsStore = reactive({
       ]);
       this.sessions = sessions;
       this.activeSessionId = active.session_id;
-      this.viewingSessionId = sessions[0]?.id ?? null;
+      // 默认查看活跃会话；活跃会话不存在时回退到第一个会话
+      const activeSession = sessions.find((s) => s.id === active.session_id);
+      this.viewingSessionId = activeSession?.id ?? sessions[0]?.id ?? null;
     } catch (error) {
       reportError(error, "初始化会话失败");
     } finally {

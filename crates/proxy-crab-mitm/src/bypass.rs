@@ -1,9 +1,10 @@
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
+    sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
@@ -36,13 +37,19 @@ pub struct BypassEntry {
 
 #[derive(Clone)]
 pub struct BypassStore {
-    database_path: PathBuf,
+    connection: Arc<Mutex<Connection>>,
 }
 
 impl BypassStore {
     pub fn open(workspace: &Path) -> Result<Self> {
+        let connection = Connection::open(workspace.join("bypass.db"))?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        connection.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             PRAGMA synchronous=NORMAL;",
+        )?;
         let store = Self {
-            database_path: workspace.join("bypass.db"),
+            connection: Arc::new(Mutex::new(connection)),
         };
         let connection = store.connection()?;
         connection.execute_batch(
@@ -70,14 +77,10 @@ impl BypassStore {
         Ok(store)
     }
 
-    fn connection(&self) -> Result<Connection> {
-        let connection = Connection::open(&self.database_path)?;
-        connection.busy_timeout(Duration::from_secs(5))?;
-        connection.execute_batch(
-            "PRAGMA foreign_keys=ON;
-             PRAGMA synchronous=NORMAL;",
-        )?;
-        Ok(connection)
+    fn connection(&self) -> Result<MutexGuard<'_, Connection>> {
+        self.connection
+            .lock()
+            .map_err(|_| anyhow!("bypass database connection lock poisoned"))
     }
 
     pub fn begin(
@@ -266,6 +269,17 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{BypassOutcome, BypassStore};
+
+    #[test]
+    fn clones_share_one_connection() {
+        let root = tempdir().unwrap();
+        let store = BypassStore::open(root.path()).unwrap();
+
+        assert!(std::sync::Arc::ptr_eq(
+            &store.connection,
+            &store.clone().connection,
+        ));
+    }
 
     #[test]
     fn lifecycle_and_deletion_rules() {

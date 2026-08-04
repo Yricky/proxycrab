@@ -7,7 +7,7 @@ use std::{
 use async_trait::async_trait;
 use proxy_crab_mitm::{
     ProxyCrab,
-    lua::{evaluate_column_named, evaluate_filter_named},
+    lua::{ColumnEvaluator, FilterEvaluator, evaluate_filter_named},
     model::{
         AppConfig, BreakpointListFilter, BreakpointSummary, CaptureDetail, CaptureOutcome,
         CaptureSummary, Column, FilterColumn, FilterOption, HeaderValues, InterceptorKind,
@@ -183,17 +183,20 @@ enum PreparedFilter {
         column: FilterColumn,
         input: String,
         case_sensitive: bool,
-        script: Option<PreparedScript>,
+        script: Option<PreparedColumnScript>,
     },
     Script {
-        script: PreparedScript,
+        script: PreparedFilterScript,
         input: String,
     },
 }
 
-struct PreparedScript {
-    name: String,
-    source: String,
+struct PreparedColumnScript {
+    evaluator: Result<ColumnEvaluator, String>,
+}
+
+struct PreparedFilterScript {
+    evaluator: Result<FilterEvaluator, String>,
 }
 
 impl MitmManager {
@@ -272,9 +275,9 @@ impl MitmManager {
                         let script = runtime
                             .script(ScriptKind::Column, script_name)
                             .map_err(map_error)?;
-                        Some(PreparedScript {
-                            name: script.name,
-                            source: script.content,
+                        Some(PreparedColumnScript {
+                            evaluator: ColumnEvaluator::new(&script.content, &script.name)
+                                .map_err(|error| error.to_string()),
                         })
                     }
                     _ => None,
@@ -291,9 +294,9 @@ impl MitmManager {
                     .script(ScriptKind::Filter, script_name)
                     .map_err(map_error)?;
                 Ok(PreparedFilter::Script {
-                    script: PreparedScript {
-                        name: script.name,
-                        source: script.content,
+                    script: PreparedFilterScript {
+                        evaluator: FilterEvaluator::new(&script.content, &script.name)
+                            .map_err(|error| error.to_string()),
                     },
                     input: filter.input.clone(),
                 })
@@ -305,7 +308,10 @@ impl MitmManager {
         match filter {
             PreparedFilter::All => true,
             PreparedFilter::Script { script, input } => {
-                evaluate_filter_named(&script.source, input, item, &script.name).unwrap_or(false)
+                let Ok(evaluator) = &script.evaluator else {
+                    return false;
+                };
+                evaluator.evaluate(input, item).unwrap_or(false)
             }
             PreparedFilter::Column {
                 column,
@@ -327,8 +333,10 @@ impl MitmManager {
                         let Some(script) = script else {
                             return false;
                         };
-                        let Ok(value) = evaluate_column_named(&script.source, item, &script.name)
-                        else {
+                        let Ok(evaluator) = &script.evaluator else {
+                            return false;
+                        };
+                        let Ok(value) = evaluator.evaluate(item) else {
                             return false;
                         };
                         value
@@ -602,13 +610,13 @@ impl ProxyCrabManager for MitmManager {
                 .into_iter()
                 .map(|item| (item.id, item))
                 .collect::<HashMap<_, _>>();
-            let mut scripts = HashMap::<String, Result<String, String>>::new();
+            let mut scripts = HashMap::<String, Result<ColumnEvaluator, String>>::new();
             for column in &columns {
                 if let Column::Script { script_name, .. } = column {
                     scripts.entry(script_name.clone()).or_insert_with(|| {
                         runtime
                             .script(ScriptKind::Column, script_name)
-                            .map(|script| script.content)
+                            .and_then(|script| ColumnEvaluator::new(&script.content, &script.name))
                             .map_err(|error| error.to_string())
                     });
                 }
@@ -643,8 +651,9 @@ impl ProxyCrabManager for MitmManager {
                         .get(script_name)
                         .expect("every script column is preloaded")
                     {
-                        Ok(content) => evaluate_column_named(content, item, script_name)
-                            .map_err(|error| error.to_string()),
+                        Ok(evaluator) => {
+                            evaluator.evaluate(item).map_err(|error| error.to_string())
+                        }
                         Err(message) => Err(message.clone()),
                     };
                     match result {

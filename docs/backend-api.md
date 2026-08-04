@@ -460,7 +460,14 @@ Request and response bodies are bounded to 64 MiB with a 60-second read timeout.
 
 Capture/bypass storage queries and management-side Lua evaluations run outside Tokio worker
 threads and share an eight-task concurrency limit. Additional heavy management operations wait for
-a permit. Session capture databases use SQLite WAL so these readers can overlap with MITM writers.
+a permit. Each opened capture or bypass store reuses one configured SQLite connection across its
+clones and serializes access to it. Session capture databases retain SQLite WAL as their persisted
+journal format.
+
+Within one log-ID or log-view query, each referenced filter or custom-column script is compiled
+once and reuses one Lua VM. Every capture evaluation still receives a fresh sandbox environment,
+instruction budget, and JSON warning count, so globals and standard-library table changes do not
+carry between rows or scripts.
 
 Bypassed metadata is persisted in `<workspace>/bypass.db` without headers or bodies. Each row stores
 timestamps, source, method, URI, version, routing reason, outcome, optional HTTP status/error, and

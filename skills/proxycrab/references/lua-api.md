@@ -138,6 +138,10 @@ The input is exact, including leading and trailing whitespace. During normal log
 runtime errors, instruction exhaustion, or non-boolean results count as non-matches without a system
 log entry. `/api/filter-scripts/{name}/debug` reports those errors directly.
 
+Batch filtering may reuse a script's Lua VM and compiled function, but every capture starts with a
+fresh sandbox environment, instruction budget, and JSON warning count. Global assignments and
+standard-library table changes never carry into the next capture or another script.
+
 Guard `entry.resp` before reading it because in-progress and failed captures might not have one.
 
 ## Custom-column scripts
@@ -149,6 +153,8 @@ return entry.req.headers:get("x-request-id")
 ```
 
 `nil` renders as an empty string. Tables, functions, threads, and userdata are rejected.
+As with filters, rendering multiple captures may reuse the compiled script, while every capture
+receives an isolated sandbox with no global state carried from an earlier row.
 
 ## Read-only capture model
 

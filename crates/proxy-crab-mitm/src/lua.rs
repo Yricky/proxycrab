@@ -12,7 +12,8 @@ use std::{
 
 use anyhow::{Result, anyhow, bail};
 use mlua::{
-    Error as LuaError, HookTriggers, Lua, UserData, UserDataFields, UserDataMethods, Value, VmState,
+    Error as LuaError, Function, HookTriggers, Lua, Table, UserData, UserDataFields,
+    UserDataMethods, Value, VmState,
 };
 
 use crate::{
@@ -112,13 +113,142 @@ pub fn evaluate_filter_named(
     entry: &CaptureSummary,
     script_name: &str,
 ) -> Result<bool> {
-    let (lua, warnings) = safe_lua()?;
-    lua.globals().set("entry", EntryView(entry.clone()))?;
-    let result = lua.load(source).call::<Value>(argument);
-    log_json_warnings(&warnings, ScriptKind::Filter, script_name, Some(entry.id));
-    match result? {
-        Value::Boolean(value) => Ok(value),
-        _ => bail!("filter script must return a boolean"),
+    FilterEvaluator::new(source, script_name)?.evaluate(argument, entry)
+}
+
+pub struct FilterEvaluator {
+    script: ReusableScript,
+}
+
+impl FilterEvaluator {
+    pub fn new(source: &str, script_name: &str) -> Result<Self> {
+        Ok(Self {
+            script: ReusableScript::new(source, ScriptKind::Filter, script_name)?,
+        })
+    }
+
+    pub fn evaluate(&self, argument: &str, entry: &CaptureSummary) -> Result<bool> {
+        self.script.prepare(entry)?;
+        let result = self.script.function.call::<Value>(argument);
+        self.script.finish(entry.id);
+        match result? {
+            Value::Boolean(value) => Ok(value),
+            _ => bail!("filter script must return a boolean"),
+        }
+    }
+}
+
+pub struct ColumnEvaluator {
+    script: ReusableScript,
+}
+
+impl ColumnEvaluator {
+    pub fn new(source: &str, script_name: &str) -> Result<Self> {
+        Ok(Self {
+            script: ReusableScript::new(source, ScriptKind::Column, script_name)?,
+        })
+    }
+
+    pub fn evaluate(&self, entry: &CaptureSummary) -> Result<String> {
+        self.script.prepare(entry)?;
+        let result = self.script.function.call::<Value>(());
+        self.script.finish(entry.id);
+        match result? {
+            Value::Nil => Ok(String::new()),
+            Value::Boolean(value) => Ok(value.to_string()),
+            Value::Integer(value) => Ok(value.to_string()),
+            Value::Number(value) => Ok(value.to_string()),
+            Value::String(value) => Ok(value.to_str()?.to_string()),
+            _ => bail!("column script must return nil or a scalar value"),
+        }
+    }
+}
+
+struct ReusableScript {
+    lua: Lua,
+    function: Function,
+    environment_factory: Function,
+    warnings: codec::JsonWarningState,
+    kind: ScriptKind,
+    name: String,
+}
+
+impl ReusableScript {
+    fn new(source: &str, kind: ScriptKind, name: &str) -> Result<Self> {
+        let (lua, warnings) = safe_lua()?;
+        let function = lua.load(source).into_function()?;
+        let environment_factory = lua
+            .load(
+                r#"return function(base)
+                     local environment = {}
+                     for key, value in next, base do
+                       if key ~= "_G" then
+                         if type(value) == "table" and key ~= "base64" and key ~= "json" then
+                           local copy = {}
+                           for table_key, table_value in next, value do
+                             copy[table_key] = table_value
+                           end
+                           local metatable = getmetatable(value)
+                           if type(metatable) == "table" then
+                             setmetatable(copy, metatable)
+                           end
+                           value = copy
+                         end
+                         environment[key] = value
+                       end
+                     end
+                     environment._G = environment
+                     local base_load = environment.load
+                     environment.load = function(chunk, chunk_name, mode, chunk_environment)
+                       if chunk_environment == nil then
+                         chunk_environment = environment
+                       end
+                       return base_load(chunk, chunk_name, mode, chunk_environment)
+                     end
+                     return environment
+                   end"#,
+            )
+            .eval()?;
+        Ok(Self {
+            lua,
+            function,
+            environment_factory,
+            warnings,
+            kind,
+            name: name.to_string(),
+        })
+    }
+
+    fn prepare(&self, entry: &CaptureSummary) -> Result<()> {
+        self.lua.gc_restart();
+        let _ = self.warnings.take();
+        let environment = self.environment_factory.call::<Table>(self.lua.globals())?;
+        environment.set("entry", EntryView(entry.clone()))?;
+        if !self.function.set_environment(environment)? {
+            bail!("script function has no Lua environment");
+        }
+        self.lua
+            .app_data_ref::<InstructionCounter>()
+            .expect("safe Lua always has an instruction counter")
+            .reset();
+        Ok(())
+    }
+
+    fn finish(&self, capture_id: u64) {
+        log_json_warnings(&self.warnings, self.kind, &self.name, Some(capture_id));
+    }
+}
+
+#[derive(Clone, Default)]
+struct InstructionCounter(Arc<AtomicU32>);
+
+impl InstructionCounter {
+    fn reset(&self) {
+        self.0.store(0, Ordering::Relaxed);
+    }
+
+    fn add(&self, count: u32) -> u32 {
+        self.0.fetch_add(count, Ordering::Relaxed) + count
     }
 }
 
@@ -131,18 +261,7 @@ pub fn evaluate_column_named(
     entry: &CaptureSummary,
     script_name: &str,
 ) -> Result<String> {
-    let (lua, warnings) = safe_lua()?;
-    lua.globals().set("entry", EntryView(entry.clone()))?;
-    let result = lua.load(source).eval::<Value>();
-    log_json_warnings(&warnings, ScriptKind::Column, script_name, Some(entry.id));
-    match result? {
-        Value::Nil => Ok(String::new()),
-        Value::Boolean(value) => Ok(value.to_string()),
-        Value::Integer(value) => Ok(value.to_string()),
-        Value::Number(value) => Ok(value.to_string()),
-        Value::String(value) => Ok(value.to_str()?.to_string()),
-        _ => bail!("column script must return nil or a scalar value"),
-    }
+    ColumnEvaluator::new(source, script_name)?.evaluate(entry)
 }
 
 pub fn execute_request(source: &str, request: &RequestData) -> Result<ScriptEffects> {
@@ -335,11 +454,12 @@ fn safe_lua() -> Result<(Lua, codec::JsonWarningState)> {
     ] {
         lua.globals().set(library, Value::Nil)?;
     }
-    let executed = Arc::new(AtomicU32::new(0));
+    let executed = InstructionCounter::default();
+    lua.set_app_data(executed.clone());
     lua.set_hook(
         HookTriggers::new().every_nth_instruction(1000),
         move |_lua, _debug| {
-            if executed.fetch_add(1000, Ordering::Relaxed) + 1000 > INSTRUCTION_LIMIT {
+            if executed.add(1000) > INSTRUCTION_LIMIT {
                 Err(LuaError::runtime("Lua instruction limit exceeded"))
             } else {
                 Ok(VmState::Continue)
@@ -1007,10 +1127,10 @@ mod tests {
     };
 
     use super::{
-        BodyReplacement, ModificationJournal, ResponseScriptContext, SharedInterceptorState,
-        evaluate_column, evaluate_column_named, evaluate_filter, evaluate_filter_named,
-        evaluate_routing, execute_request, execute_response, execute_response_with_state,
-        validate_script,
+        BodyReplacement, ColumnEvaluator, FilterEvaluator, ModificationJournal,
+        ResponseScriptContext, SharedInterceptorState, evaluate_column, evaluate_column_named,
+        evaluate_filter, evaluate_filter_named, evaluate_routing, execute_request,
+        execute_response, execute_response_with_state, validate_script,
     };
 
     fn entry() -> CaptureSummary {
@@ -1060,6 +1180,72 @@ mod tests {
         );
         assert!(
             evaluate_filter("return entry.req:getTag('team') == 'checkout'", "", &entry).unwrap()
+        );
+    }
+
+    #[test]
+    fn reusable_evaluators_keep_rows_isolated() {
+        let column = ColumnEvaluator::new(
+            "counter = (counter or 0) + 1; \
+             string.proxy_crab_counter = (string.proxy_crab_counter or 0) + 1; \
+             return counter .. ':' .. string.proxy_crab_counter",
+            "isolated-column",
+        )
+        .unwrap();
+        assert_eq!(column.evaluate(&entry()).unwrap(), "1:1");
+        assert_eq!(column.evaluate(&entry()).unwrap(), "1:1");
+
+        let loaded = ColumnEvaluator::new(
+            "load('loaded = (loaded or 0) + 1')(); return loaded",
+            "isolated-load",
+        )
+        .unwrap();
+        assert_eq!(loaded.evaluate(&entry()).unwrap(), "1");
+        assert_eq!(loaded.evaluate(&entry()).unwrap(), "1");
+
+        let filter = FilterEvaluator::new(
+            "seen = (seen or 0) + 1; return seen == 1 and ... == 'match'",
+            "isolated-filter",
+        )
+        .unwrap();
+        assert!(filter.evaluate("match", &entry()).unwrap());
+        assert!(filter.evaluate("match", &entry()).unwrap());
+    }
+
+    #[test]
+    fn reusable_evaluator_resets_instruction_budget_per_row() {
+        let evaluator =
+            ColumnEvaluator::new("for _ = 1, 10000 do end; return 'ok'", "budget-column").unwrap();
+
+        for _ in 0..8 {
+            assert_eq!(evaluator.evaluate(&entry()).unwrap(), "ok");
+        }
+    }
+
+    #[test]
+    fn reusable_evaluator_resets_warning_counts_per_row() {
+        let buffer = Arc::new(LogBuffer::new(8));
+        let subscriber = tracing_subscriber::registry().with(BufferLayer::new(buffer.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            let evaluator = FilterEvaluator::new(
+                r#"local value = json.decode('{"duplicate":1,"duplicate":2}')
+                   return value.duplicate == 2"#,
+                "reused-warning",
+            )
+            .unwrap();
+            assert!(evaluator.evaluate("", &entry()).unwrap());
+            assert!(evaluator.evaluate("", &entry()).unwrap());
+        });
+
+        let logs = buffer.query(None, 8);
+        assert_eq!(logs.len(), 2);
+        assert!(
+            logs.iter()
+                .all(|log| log.message.contains("duplicate_keys=1"))
+        );
+        assert!(
+            logs.iter()
+                .all(|log| !log.message.contains("duplicate_keys=2"))
         );
     }
 
