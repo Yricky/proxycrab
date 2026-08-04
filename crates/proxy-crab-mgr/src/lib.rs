@@ -2,6 +2,7 @@
 
 mod agents;
 pub mod dto;
+mod har;
 pub mod http;
 pub mod manager;
 

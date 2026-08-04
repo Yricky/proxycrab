@@ -110,9 +110,9 @@ envelope and does not trigger desktop UI synchronization.
 
 ## Network log queries
 
-All three log operations accept an optional Session. The POST operations accept `session_id` in
-their JSON body; the detail operation accepts `session_id` in its query string. Omitting it selects
-the active Session. If no Session is active, the operation returns `409 conflict`.
+Log operations accept an optional Session. POST operations accept `session_id` in their JSON body;
+detail/body operations accept `session_id` in their query string. Omitting it selects the active
+Session. If no Session is active, the operation returns `409 conflict`.
 
 ### Query log IDs
 
@@ -219,6 +219,56 @@ The response columns and cells do not contain the ID column; `row.id` is a separ
 `column_index` is zero-based and aligns with `columns` and `cells`. A custom-column error leaves that cell empty while preserving the rest of the row. A missing log has no row and no `column_index`. Unchanged logs appear in neither `rows` nor `exceptions`.
 
 `updated_at` is a monotonic Unix-millisecond version for the complete log. Metadata transitions and request/response body writes advance it, even when multiple updates happen in the same wall-clock millisecond.
+
+### Export logs as HAR
+
+`POST /api/logs/export` accepts a strict JSON body:
+
+```json
+{
+  "format": "har",
+  "session_id": 1,
+  "log_ids": [123, 124]
+}
+```
+
+`format` is required and currently only accepts `har`; unsupported values return
+`400 unsupported_export_format`, and unknown fields return `400 bad_request`. `session_id` is
+optional and defaults to the active Session. Omitting `log_ids` snapshots the Session's current
+maximum log ID and exports all eligible records up to that point. An empty array creates a valid HAR
+with no entries. Explicit IDs are deduplicated and emitted in ascending order; if any explicit ID
+does not exist in that Session, the whole request returns `404 log_not_found`.
+
+Only captures with `outcome: success` and a response are eligible. Synthetic `CONNECT` captures at
+the `tls_mitm` stage are skipped; ordinary HTTP responses and `101` upgrade handshakes remain
+eligible. Ineligible explicit IDs are silently skipped. The endpoint generates the complete file
+before sending HTTP 200, so a storage read failure returns a structured HTTP 500 instead of a
+partial HAR. There is no application-level body or export-size limit.
+
+The response is the raw UTF-8 HAR 1.2 JSON document, without the normal `{ "ok": true, "data": ... }`
+envelope. Headers include:
+
+```text
+Content-Type: application/json; charset=utf-8
+Content-Disposition: attachment; filename="proxycrab-session-1.har"
+```
+
+Request and response bodies are complete. gzip, br, deflate, zstd, and stacked content encodings
+are decoded first. Textual content is written as text; binary response content uses HAR
+`encoding: "base64"`, while binary request `postData` uses `_encoding: "base64"`. Unsupported or
+malformed content encoding falls back to raw Base64 and sets the corresponding
+`_proxyCrab.requestBodyDecoded` or `_proxyCrab.responseBodyDecoded` field to `false`.
+`request.bodySize` and `response.bodySize` are captured stored byte counts; `response.content.size`
+is the exported decoded/fallback byte count. Header sizes and all detailed timings are `-1`, while
+entry `time` is `updated_at - created_at`.
+
+Each entry includes `_proxyCrab` with the log/Session IDs, request tags, stage, client source
+address, and original millisecond timestamps. Interceptor source and execution history are not
+embedded. Query parameters, redirects, and cookies are populated on a best-effort basis while the
+original headers are always retained.
+
+HAR export performs no redaction. Authorization headers, Cookie/Set-Cookie values, and request and
+response bodies can contain credentials or personal data; treat the file as sensitive.
 
 ### Read one complete log
 

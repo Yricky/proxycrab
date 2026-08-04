@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    path::Path,
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use proxy_crab_mitm::{
@@ -19,14 +23,15 @@ use crate::{
         ActiveSession, AgentsPresetState, BreakpointDetailPayload, BreakpointQuery, BypassPage,
         BypassQuery, CertificateResponse, ColumnView, CreateAgentsPresetRequest,
         CreateSessionRequest, DebugFilterScriptRequest, DeleteCount, ExecuteTemporaryScriptRequest,
-        ExtendBreakpointRequest, HeaderItem, InterceptorCreateRequest, InterceptorDetail,
-        InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest,
-        LogViewException, LogViewRow, LogViewsPayload, LogViewsRequest, ManagerError,
-        ManagerResult, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, RequestDetail,
-        ResponseDetail, RoutingSelection, ScriptRequest, SessionInterceptorItem,
-        SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery, UpdateAgentsPresetRequest,
-        UpdateScriptRequest, UpdateSessionRequest,
+        ExportLogsRequest, ExtendBreakpointRequest, HeaderItem, InterceptorCreateRequest,
+        InterceptorDetail, InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogExport,
+        LogIdsPayload, LogIdsRequest, LogViewException, LogViewRow, LogViewsPayload,
+        LogViewsRequest, ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest,
+        ReplaceSessionViewRequest, RequestDetail, ResponseDetail, RoutingSelection, ScriptRequest,
+        SessionInterceptorItem, SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery,
+        UpdateAgentsPresetRequest, UpdateScriptRequest, UpdateSessionRequest,
     },
+    har::{self, HarCapture},
 };
 use tokio::sync::Semaphore;
 
@@ -68,6 +73,7 @@ pub trait ProxyCrabManager: Send + Sync {
     async fn delete_session(&self, id: u64) -> ManagerResult<()>;
     async fn log_ids(&self, request: LogIdsRequest) -> ManagerResult<LogIdsPayload>;
     async fn log_views(&self, request: LogViewsRequest) -> ManagerResult<LogViewsPayload>;
+    async fn export_logs(&self, request: ExportLogsRequest) -> ManagerResult<LogExport>;
     async fn log(&self, session_id: Option<u64>, id: u64) -> ManagerResult<LogDetail>;
     async fn log_body_source(
         &self,
@@ -667,6 +673,132 @@ impl ProxyCrabManager for MitmManager {
             })
         })
         .await
+    }
+
+    async fn export_logs(&self, request: ExportLogsRequest) -> ManagerResult<LogExport> {
+        const PAGE_SIZE: usize = 512;
+
+        if request.format != "har" {
+            return Err(ManagerError::new(
+                "unsupported_export_format",
+                format!("unsupported export format {}", request.format),
+            ));
+        }
+        let session_id = self.session_id(request.session_id)?;
+        let runtime = self.runtime.clone();
+        let captures = self
+            .run_blocking("log export", move || {
+                if !runtime
+                    .sessions()
+                    .iter()
+                    .any(|session| session.id == session_id)
+                {
+                    return Err(ManagerError::not_found(format!(
+                        "Session {session_id} not found"
+                    )));
+                }
+
+                let mut summaries = match request.log_ids {
+                    Some(ids) => {
+                        let requested = ids.into_iter().collect::<BTreeSet<_>>();
+                        let requested_ids = requested.iter().copied().collect::<Vec<_>>();
+                        let mut summaries = Vec::with_capacity(requested_ids.len());
+                        for ids in requested_ids.chunks(PAGE_SIZE) {
+                            summaries.extend(runtime.captures(session_id, ids).map_err(map_error)?);
+                        }
+                        let found = summaries
+                            .iter()
+                            .map(|item| item.id)
+                            .collect::<BTreeSet<_>>();
+                        if let Some(missing) = requested.difference(&found).next() {
+                            return Err(ManagerError::new(
+                                "log_not_found",
+                                format!("log {missing} not found"),
+                            ));
+                        }
+                        summaries.sort_by_key(|item| item.id);
+                        summaries
+                    }
+                    None => {
+                        let latest = runtime
+                            .list_captures_range(session_id, 1, None, None, false)
+                            .map_err(map_error)?
+                            .into_iter()
+                            .next();
+                        let Some(latest) = latest else {
+                            return Ok(Vec::new());
+                        };
+                        let upper_bound = latest.id.saturating_add(1);
+                        let mut cursor = None;
+                        let mut summaries = Vec::new();
+                        loop {
+                            let page = runtime
+                                .list_captures_range(
+                                    session_id,
+                                    PAGE_SIZE,
+                                    cursor,
+                                    Some(upper_bound),
+                                    true,
+                                )
+                                .map_err(map_error)?;
+                            if page.is_empty() {
+                                break;
+                            }
+                            let page_len = page.len();
+                            cursor = page.last().map(|item| item.id);
+                            summaries.extend(page);
+                            if page_len < PAGE_SIZE {
+                                break;
+                            }
+                        }
+                        summaries
+                    }
+                };
+                summaries.retain(|item| {
+                    item.outcome == CaptureOutcome::Success
+                        && item.response.is_some()
+                        && !(item.request.method.eq_ignore_ascii_case("CONNECT")
+                            && item.stage == "tls_mitm")
+                });
+
+                summaries
+                    .into_iter()
+                    .map(|summary| {
+                        let id = summary.id;
+                        let detail = runtime
+                            .capture(session_id, id)
+                            .map_err(map_error)?
+                            .ok_or_else(|| {
+                                ManagerError::new(
+                                    "log_not_found",
+                                    format!("log {id} disappeared during export"),
+                                )
+                            })?;
+                        let request_body = runtime
+                            .capture_body_source(session_id, id, BodySide::Request)
+                            .map_err(|error| {
+                                ManagerError::new("body_read_failed", error.to_string())
+                            })?;
+                        let response_body = runtime
+                            .capture_body_source(session_id, id, BodySide::Response)
+                            .map_err(|error| {
+                                ManagerError::new("body_read_failed", error.to_string())
+                            })?;
+                        Ok(HarCapture {
+                            detail,
+                            request_body,
+                            response_body,
+                        })
+                    })
+                    .collect::<ManagerResult<Vec<_>>>()
+            })
+            .await?;
+        let bytes = har::serialize(captures).await?;
+        Ok(LogExport {
+            session_id,
+            filename: format!("proxycrab-session-{session_id}.har"),
+            bytes,
+        })
     }
 
     async fn log(&self, session_id: Option<u64>, id: u64) -> ManagerResult<LogDetail> {
@@ -1283,17 +1415,17 @@ mod tests {
         log_buffer::LogBuffer,
         model::{
             Column, FilterColumn, FilterOption, HeaderValues, InterceptorKind, RequestData,
-            SessionFilter,
+            ResponseData, SessionFilter,
         },
-        storage::CaptureStore,
+        storage::{BodySide, CaptureStore},
     };
     use tempfile::tempdir;
 
     use crate::dto::{
-        CreateAgentsPresetRequest, DebugFilterScriptRequest, InterceptorCreateRequest,
-        LogIdsRequest, LogViewItem, LogViewsRequest, ReplaceSessionInterceptorsRequest,
-        ReplaceSessionViewRequest, ScriptRequest, SessionInterceptorInput,
-        UpdateAgentsPresetRequest, UpdateScriptRequest,
+        CreateAgentsPresetRequest, DebugFilterScriptRequest, ExportLogsRequest,
+        InterceptorCreateRequest, LogIdsRequest, LogViewItem, LogViewsRequest,
+        ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ScriptRequest,
+        SessionInterceptorInput, UpdateAgentsPresetRequest, UpdateScriptRequest,
     };
 
     use super::{MAX_BLOCKING_MANAGEMENT_TASKS, MitmManager, ProxyCrabManager, status_text};
@@ -1909,5 +2041,123 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, "bad_request");
+    }
+
+    #[tokio::test]
+    async fn export_logs_filters_orders_and_deduplicates_captures() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
+        let session_dir = std::path::Path::new(&runtime.workspace_paths().current_path)
+            .join("sessions")
+            .join(session.id.to_string());
+        let store = CaptureStore::open(session.id, &session_dir).unwrap();
+        let first = store
+            .begin("127.0.0.1", &request("first"), "request")
+            .unwrap();
+        let response = ResponseData {
+            status: 200,
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::from([("content-type".into(), vec!["text/plain".into()])]),
+        };
+        store
+            .save_body(first, BodySide::Response, false, b"first response")
+            .unwrap();
+        store.complete(first, &response, &[]).unwrap();
+        let failed = store
+            .begin("127.0.0.1", &request("failed"), "request")
+            .unwrap();
+        store
+            .fail(
+                failed,
+                &proxy_crab_mitm::model::CaptureError {
+                    stage: proxy_crab_mitm::model::ErrorStage::Upstream,
+                    kind: "test".into(),
+                    message: "failed".into(),
+                },
+            )
+            .unwrap();
+        let second = store
+            .begin("127.0.0.1", &request("second"), "request")
+            .unwrap();
+        store
+            .complete(
+                second,
+                &ResponseData {
+                    status: 101,
+                    version: "HTTP/1.1".into(),
+                    headers: HeaderValues::new(),
+                },
+                &[],
+            )
+            .unwrap();
+        let mut connect = request("connect");
+        connect.method = "CONNECT".into();
+        let connect = store.begin("127.0.0.1", &connect, "connect").unwrap();
+        store.mitm_established(connect).unwrap();
+        let manager = MitmManager::new(runtime);
+
+        let export = manager
+            .export_logs(ExportLogsRequest {
+                format: "har".into(),
+                session_id: Some(session.id),
+                log_ids: Some(vec![second, failed, first, second, connect]),
+            })
+            .await
+            .unwrap();
+        let har: serde_json::Value = serde_json::from_slice(&export.bytes).unwrap();
+        let ids = har["log"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["_proxyCrab"]["logId"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec![first, second]);
+        assert_eq!(har["log"]["entries"][1]["response"]["status"], 101);
+        assert_eq!(export.session_id, session.id);
+        assert_eq!(
+            export.filename,
+            format!("proxycrab-session-{}.har", session.id)
+        );
+    }
+
+    #[tokio::test]
+    async fn export_logs_validates_format_missing_ids_and_empty_selection() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
+        let manager = MitmManager::new(runtime);
+
+        let error = manager
+            .export_logs(ExportLogsRequest {
+                format: "json".into(),
+                session_id: Some(session.id),
+                log_ids: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "unsupported_export_format");
+
+        let error = manager
+            .export_logs(ExportLogsRequest {
+                format: "har".into(),
+                session_id: Some(session.id),
+                log_ids: Some(vec![999]),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "log_not_found");
+
+        let export = manager
+            .export_logs(ExportLogsRequest {
+                format: "har".into(),
+                session_id: Some(session.id),
+                log_ids: Some(Vec::new()),
+            })
+            .await
+            .unwrap();
+        let har: serde_json::Value = serde_json::from_slice(&export.bytes).unwrap();
+        assert_eq!(har["log"]["entries"].as_array().unwrap().len(), 0);
     }
 }

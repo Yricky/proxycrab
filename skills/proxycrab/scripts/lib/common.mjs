@@ -154,6 +154,38 @@ export async function apiTextRequest(args, pathname) {
   return text;
 }
 
+export async function apiDownloadRequest(args, pathname, { method = "GET", body } = {}) {
+  const url = new URL(`${normalizeBaseUrl(args)}${pathname}`);
+  let response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: body === undefined ? undefined : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (error) {
+    throw new Error(`cannot reach ProxyCrab at ${url.origin}: ${error.message}`);
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    let payload;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = undefined;
+    }
+    const code = payload?.error?.code ?? `http_${response.status}`;
+    const message = payload?.error?.message ?? `ProxyCrab request failed with HTTP ${response.status}`;
+    throw new ApiError(response.status, code, message);
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filename = /filename="([^"]+)"/i.exec(disposition)?.[1];
+  return {
+    bytes: new Uint8Array(await response.arrayBuffer()),
+    filename: filename === undefined ? undefined : path.basename(filename),
+  };
+}
+
 export function sessionQuery(sessionId) {
   return sessionId === undefined ? "" : `?session_id=${encodeURIComponent(sessionId)}`;
 }
@@ -174,6 +206,12 @@ export async function readJson(pathname) {
 export async function writeJson(pathname, value) {
   const resolved = path.resolve(pathname);
   await writeFile(resolved, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  return resolved;
+}
+
+export async function writeBytes(pathname, value) {
+  const resolved = path.resolve(pathname);
+  await writeFile(resolved, value);
   return resolved;
 }
 

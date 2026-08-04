@@ -203,6 +203,21 @@ pub struct LogViewsPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExportLogsRequest {
+    pub format: String,
+    pub session_id: Option<u64>,
+    pub log_ids: Option<Vec<u64>>,
+}
+
+#[derive(Debug)]
+pub struct LogExport {
+    pub session_id: u64,
+    pub filename: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionViewPayload {
     pub session_id: u64,
     pub columns: Vec<Column>,

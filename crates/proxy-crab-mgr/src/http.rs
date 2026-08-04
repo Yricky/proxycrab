@@ -8,8 +8,8 @@ use axum::{
     http::{
         HeaderValue, Method, StatusCode,
         header::{
-            ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HOST,
-            ORIGIN, VARY,
+            ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LENGTH,
+            CONTENT_TYPE, HOST, ORIGIN, VARY,
         },
         request::Parts,
     },
@@ -34,11 +34,11 @@ use crate::{
     dto::{
         ActiveSession, BodyQuery, BreakpointQuery, BypassQuery, CreateSessionRequest,
         DebugFilterScriptRequest, DeleteBypassRequest, ExecuteTemporaryScriptRequest,
-        ExtendBreakpointRequest, HttpApiChange, HttpApiResource, InterceptorCreateRequest,
-        InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError, ManagerResult,
-        ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, RoutingSelection,
-        ScriptRequest, SessionQuery, SetWorkspaceRequest, SystemLogsQuery, UpdateScriptRequest,
-        UpdateSessionRequest, default_body_max_size,
+        ExportLogsRequest, ExtendBreakpointRequest, HttpApiChange, HttpApiResource,
+        InterceptorCreateRequest, InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest,
+        ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest,
+        RoutingSelection, ScriptRequest, SessionQuery, SetWorkspaceRequest, SystemLogsQuery,
+        UpdateScriptRequest, UpdateSessionRequest, default_body_max_size,
     },
     manager::ProxyCrabManager,
 };
@@ -177,6 +177,7 @@ fn router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
             "/api/sessions/{id}",
             put(update_session).delete(delete_session),
         )
+        .route("/api/logs/export", post(export_logs))
         .route("/api/logs/ids", post(log_ids))
         .route("/api/logs/views", post(log_views))
         .route("/api/logs/{id}/body", get(log_body))
@@ -555,6 +556,30 @@ async fn log_views(
     success(manager.log_views(request).await?)
 }
 
+async fn export_logs(
+    State(manager): State<ManagerState>,
+    ApiJson(request): ApiJson<ExportLogsRequest>,
+) -> Result<Response, ApiError> {
+    let export = manager.export_logs(request).await?;
+    let content_length = export.bytes.len();
+    let mut response = Response::new(Body::from(export.bytes));
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response.headers_mut().insert(
+        CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", export.filename))
+            .map_err(|error| ApiError(ManagerError::internal(error.to_string())))?,
+    );
+    response.headers_mut().insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&content_length.to_string())
+            .expect("usize is always a valid Content-Length"),
+    );
+    Ok(response)
+}
+
 async fn log(
     State(manager): State<ManagerState>,
     ApiPath(id): ApiPath<u64>,
@@ -921,9 +946,12 @@ fn validate_body_query(query: &BodyQuery) -> Result<(), ApiError> {
     }
 }
 
-type DynBodyReader = Pin<Box<dyn AsyncRead + Send>>;
+pub(crate) type DynBodyReader = Pin<Box<dyn AsyncRead + Send>>;
 
-async fn body_reader(source: &BodySource, decompress: bool) -> Result<DynBodyReader, ManagerError> {
+pub(crate) async fn body_reader(
+    source: &BodySource,
+    decompress: bool,
+) -> Result<DynBodyReader, ManagerError> {
     let mut reader: DynBodyReader = match &source.data {
         BodySourceData::File(path) => Box::pin(
             tokio::fs::File::open(path)
@@ -1018,7 +1046,7 @@ impl From<ManagerError> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match self.0.code.as_str() {
-            "bad_request" => StatusCode::BAD_REQUEST,
+            "bad_request" | "unsupported_export_format" => StatusCode::BAD_REQUEST,
             "not_found" | "log_not_found" | "body_not_found" => StatusCode::NOT_FOUND,
             "forbidden_origin" => StatusCode::FORBIDDEN,
             "conflict" | "proxy_running" | "session_in_use" => StatusCode::CONFLICT,
@@ -1052,7 +1080,7 @@ mod tests {
     };
     use proxy_crab_mitm::{ProxyCrab, log_buffer::LogBuffer};
     use proxy_crab_mitm::{
-        model::{HeaderValues, RequestData},
+        model::{CaptureError, ErrorStage, HeaderValues, RequestData, ResponseData},
         storage::{BodySide, BodySource, BodySourceData, CaptureStore},
     };
     use tempfile::tempdir;
@@ -1709,6 +1737,165 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
         }
+    }
+
+    #[tokio::test]
+    async fn export_route_returns_a_complete_har_download() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
+        let session_dir = std::path::Path::new(&runtime.workspace_paths().current_path)
+            .join("sessions")
+            .join(session.id.to_string());
+        let store = CaptureStore::open(session.id, &session_dir).unwrap();
+        let request = RequestData {
+            method: "GET".into(),
+            uri: "https://example.com/export?q=one&q=two".into(),
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+            tags: [("export".into(), "yes".into())].into(),
+        };
+        let success = store.begin("127.0.0.1:1234", &request, "request").unwrap();
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(b"complete response body").unwrap();
+        let compressed = encoder.finish().unwrap();
+        let response = ResponseData {
+            status: 200,
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::from([
+                ("content-type".into(), vec!["text/plain".into()]),
+                ("content-encoding".into(), vec!["gzip".into()]),
+            ]),
+        };
+        store
+            .save_body(success, BodySide::Response, false, &compressed)
+            .unwrap();
+        store.complete(success, &response, &[]).unwrap();
+        let failed = store.begin("127.0.0.1:1234", &request, "request").unwrap();
+        store
+            .fail(
+                failed,
+                &CaptureError {
+                    stage: ErrorStage::Upstream,
+                    kind: "test".into(),
+                    message: "not exported".into(),
+                },
+            )
+            .unwrap();
+        let app = router(MitmManager::new(runtime));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/logs/export")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"format":"har","session_id":{}}}"#,
+                        session.id
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/json; charset=utf-8"
+        );
+        assert_eq!(
+            response.headers()["content-disposition"],
+            format!(
+                "attachment; filename=\"proxycrab-session-{}.har\"",
+                session.id
+            )
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let har: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let entries = har["log"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["_proxyCrab"]["logId"], success);
+        assert_eq!(
+            entries[0]["response"]["content"]["text"],
+            "complete response body"
+        );
+    }
+
+    #[tokio::test]
+    async fn export_route_validates_request_contract() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
+        let app = router(MitmManager::new(runtime));
+
+        for (body, expected_status, expected_code) in [
+            (r#"{}"#, axum::http::StatusCode::BAD_REQUEST, "bad_request"),
+            (
+                r#"{"format":"json"}"#,
+                axum::http::StatusCode::BAD_REQUEST,
+                "unsupported_export_format",
+            ),
+            (
+                r#"{"format":"har","unknown":true}"#,
+                axum::http::StatusCode::BAD_REQUEST,
+                "bad_request",
+            ),
+            (
+                r#"{"format":"har","log_ids":[999]}"#,
+                axum::http::StatusCode::NOT_FOUND,
+                "log_not_found",
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/logs/export")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected_status);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["error"]["code"], expected_code);
+        }
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/logs/export")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"format":"har","session_id":{},"log_ids":[]}}"#,
+                        session.id
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let no_session_data = tempdir().unwrap();
+        let no_session_runtime =
+            ProxyCrab::open(no_session_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let response = router(MitmManager::new(no_session_runtime))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/logs/export")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"format":"har"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
     }
 
     #[tokio::test]

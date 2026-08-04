@@ -339,8 +339,8 @@ active Session is allowed while the proxy runs.
 
 ## Capture logs
 
-All log endpoints accept an optional Session. POST requests use `session_id` in JSON; the detail
-endpoint uses the query string. Omitting it selects the active Session. If no Session is active, the
+Log endpoints accept an optional Session. POST requests use `session_id` in JSON; detail/body
+requests use the query string. Omitting it selects the active Session. If no Session is active, the
 response is `409 conflict`.
 
 ### `POST /api/logs/ids`
@@ -452,6 +452,55 @@ newer.
 The ID is separate from cells. `column_index` is zero-based. A column error leaves that cell empty;
 a missing log has no row or `column_index`. IDs and rows are unordered. Unchanged logs appear in
 neither `rows` nor `exceptions`.
+
+### `POST /api/logs/export`
+
+Exports HAR 1.2:
+
+```json
+{
+  "format": "har",
+  "session_id": 3,
+  "log_ids": [1041, 1042]
+}
+```
+
+- `format` is required and currently only accepts `har`. Unsupported values return
+  `unsupported_export_format`; unknown fields return `bad_request`.
+- Omit `session_id` to select the active Session.
+- Omit `log_ids` to snapshot and export all eligible captures currently in the Session. Captures
+  added after the snapshot are not included.
+- An empty `log_ids` array returns a valid empty HAR.
+- Explicit IDs are deduplicated and entries are ordered by ascending log ID. Any missing explicit
+  ID fails the complete request with `404 log_not_found`; existing but ineligible IDs are skipped.
+- Eligibility requires `outcome: success` and a response. The synthetic `CONNECT / tls_mitm`
+  record is excluded; ordinary HTTP and `101` upgrade handshakes are included.
+
+The response is raw UTF-8 JSON rather than the standard API envelope:
+
+```text
+Content-Type: application/json; charset=utf-8
+Content-Disposition: attachment; filename="proxycrab-session-3.har"
+```
+
+ProxyCrab reads and validates the complete export before returning HTTP 200. There is no configured
+body/export size limit; a storage error fails the whole request with HTTP 500.
+
+Bodies are complete. gzip, br, deflate, zstd, and stacked encodings are decoded. Text/JSON is
+stored as text, binary response content uses standard `encoding: "base64"`, and binary request
+`postData` uses `_encoding: "base64"`. If decoding is unsupported or malformed, raw bytes are
+Base64-encoded and the entry's `_proxyCrab.requestBodyDecoded` or `responseBodyDecoded` is `false`.
+HAR body sizes retain the stored/compressed byte count while response `content.size` is the
+decoded/fallback byte count.
+
+The exporter parses repeated query parameters, Cookie/Set-Cookie, and redirects on a best-effort
+basis while preserving every stored header. `headersSize` and all detailed timing fields are `-1`;
+entry `time` is `updated_at - created_at`. `_proxyCrab` also includes log and Session IDs, request
+tags, stage, client source address, `createdAt`, and `updatedAt`. Interceptor source/history is not
+included.
+
+**Sensitive data:** nothing is redacted. Authorization, Cookie, Set-Cookie, and full body data may
+contain credentials or personal information.
 
 ### `GET /api/logs/{id}?session_id=3`
 

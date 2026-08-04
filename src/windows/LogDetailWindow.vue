@@ -272,6 +272,25 @@ interface UrlSegment {
   cls: string;
 }
 
+// 按原始文本拆分 query（保留编码，不做重编码），逐对着色
+function querySegments(search: string): UrlSegment[] {
+  const raw = search.startsWith("?") ? search.slice(1) : search;
+  const pairs = raw.split("&");
+  const segments: UrlSegment[] = [];
+  pairs.forEach((pair, i) => {
+    if (i > 0) segments.push({ text: "&", cls: "url-query-sep" });
+    const eq = pair.indexOf("=");
+    if (eq >= 0) {
+      segments.push({ text: pair.slice(0, eq), cls: "url-query-key" });
+      segments.push({ text: "=", cls: "url-query-eq" });
+      segments.push({ text: pair.slice(eq + 1), cls: "url-query-value" });
+    } else {
+      segments.push({ text: pair, cls: "url-query-key" });
+    }
+  });
+  return segments;
+}
+
 const urlSegments = computed<UrlSegment[]>(() => {
   const uri = detail.value?.request.uri;
   if (!uri) return [];
@@ -284,7 +303,7 @@ const urlSegments = computed<UrlSegment[]>(() => {
     const path = url.pathname;
     if (path && path !== "/") segments.push({ text: path, cls: "url-path" });
     else if (path) segments.push({ text: path, cls: "url-scheme" });
-    if (url.search) segments.push({ text: url.search, cls: "url-query" });
+    if (url.search) segments.push(...querySegments(url.search));
     if (url.hash) segments.push({ text: url.hash, cls: "url-query" });
     return segments;
   } catch {
@@ -810,6 +829,10 @@ function headerCount(headers: HeaderItem[]): string {
 .url-host { color: var(--accent); font-weight: 600; }
 .url-path { color: var(--text); }
 .url-query { color: var(--warning); }
+.url-query-key { color: var(--warning); }
+.url-query-eq { color: var(--text-faint); }
+.url-query-value { color: var(--accent); }
+.url-query-sep { color: var(--text-faint); }
 
 .meta-strip {
   display: flex;
