@@ -80,6 +80,12 @@
       "prompt": "Use ProxyCrab to export logs 41, 42, and 43 from Session 3 as a HAR file at /tmp/checkout.har. Do not print captured headers or bodies.",
       "expected_output": "The agent uses har-export.mjs with Session 3, the requested comma-separated log IDs, and /tmp/checkout.har; it reports the saved path and warns that HAR may contain unredacted credentials, cookies, headers, and bodies without printing them.",
       "files": []
+    },
+    {
+      "id": 14,
+      "prompt": "List the available ProxyCrab Sessions and tell me which custom table columns are configured for each one.",
+      "expected_output": "The agent uses session-list.mjs and reports the column names returned with each Session, including custom-column script names, without making separate manual Session-view calls.",
+      "files": []
     }
   ]
 }

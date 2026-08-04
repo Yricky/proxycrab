@@ -98,8 +98,60 @@ function parseMessage(cursor: Cursor, depth = 0, endGroup?: number): ProtoField[
   return fields;
 }
 
+function formatJson(value: unknown, depth = 0): string[] {
+  const indent = "  ".repeat(depth);
+  if (value === null || typeof value !== "object") {
+    return [`${indent}${JSON.stringify(value)}`];
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return [`${indent}[]`];
+    const lines = [`${indent}[`];
+    value.forEach((item, index) => {
+      const itemLines = formatJson(item, depth + 1);
+      if (index < value.length - 1) itemLines[itemLines.length - 1] += ",";
+      lines.push(...itemLines);
+    });
+    lines.push(`${indent}]`);
+    return lines;
+  }
+
+  const record = value as Record<string, unknown>;
+  const entries = Object.entries(record);
+  const isProtoField =
+    typeof record.field === "number" &&
+    typeof record.wire === "number" &&
+    Object.prototype.hasOwnProperty.call(record, "value");
+  if (isProtoField) {
+    const valueLines = formatJson(record.value, depth + 1);
+    const firstValueLine = valueLines.shift()?.trimStart() ?? "null";
+    const lines = [
+      `${indent}{ "field": ${record.field}, "wire": ${record.wire}, "value": ${firstValueLine}`,
+      ...valueLines,
+    ];
+    lines[lines.length - 1] += " }";
+    return lines;
+  }
+
+  if (entries.length === 0) return [`${indent}{}`];
+  const lines = [`${indent}{`];
+  entries.forEach(([key, item], index) => {
+    const itemLines = formatJson(item, depth + 1);
+    const firstItemLine = itemLines.shift()?.trimStart() ?? "null";
+    const entryLines = [
+      `${"  ".repeat(depth + 1)}${JSON.stringify(key)}: ${firstItemLine}`,
+      ...itemLines,
+    ];
+    if (index < entries.length - 1) entryLines[entryLines.length - 1] += ",";
+    lines.push(...entryLines);
+  });
+  lines.push(`${indent}}`);
+  return lines;
+}
+
 function format(value: unknown): string {
-  return JSON.stringify(value, null, 2);
+  const json = JSON.stringify(value);
+  return json === undefined ? "" : formatJson(JSON.parse(json)).join("\n");
 }
 
 export function inspectProtobuf(bytes: Uint8Array): string {

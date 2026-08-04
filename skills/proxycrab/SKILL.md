@@ -68,7 +68,7 @@ skill directory.
 
 ## Standard capture-debugging workflow
 
-1. List Sessions and identify the user's intended Session:
+1. List Sessions with their configured table column names and identify the user's intended Session:
 
    ```bash
    node <skill-dir>/scripts/session-list.mjs
