@@ -13,9 +13,9 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, bail};
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, LengthLimitError, Limited, combinators::UnsyncBoxBody};
+use http_body_util::{BodyExt, LengthLimitError, Limited};
 use hyper::{
     HeaderMap, Method, Request, Response, StatusCode, Uri, Version,
     body::{Body, Frame, Incoming},
@@ -25,15 +25,13 @@ use hyper::{
     service::service_fn,
 };
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufStream},
     net::{TcpListener, TcpStream},
     sync::Semaphore,
     task::{AbortHandle, JoinHandle},
-    time::{Instant, Sleep, timeout},
+    time::timeout,
 };
-use tokio_rustls::TlsConnector;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
@@ -53,6 +51,12 @@ use crate::{
     storage::{BodySide, CaptureStore},
 };
 
+mod body;
+mod upstream;
+
+use body::{BoxError, PacedBody, ProxyBody, boxed_full};
+pub(crate) use upstream::UpstreamClient;
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(60);
 const BODY_READ_TIMEOUT: Duration = Duration::from_secs(60);
@@ -60,13 +64,9 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CAPTURE_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CLIENT_CONNECTIONS: usize = 256;
 const BINARY_HEADER_PREFIX: &str = "\u{e000}proxy-crab-binary:v1:";
-const PACE_CHUNKS_PER_SECOND: u64 = 50;
 const CRAB_REQ_SPEED_TAG: &str = "_crab_req_speed";
 const CRAB_RESP_SPEED_TAG: &str = "_crab_resp_speed";
 const CRAB_REQ_TIMEOUT_TAG: &str = "_crab_req_timeout";
-
-type BoxError = Box<dyn StdError + Send + Sync>;
-type ProxyBody = UnsyncBoxBody<Bytes, BoxError>;
 
 #[derive(Debug, Clone)]
 struct InterceptorSnapshot {
@@ -1004,86 +1004,6 @@ impl<B> Drop for TrackedBody<B> {
     }
 }
 
-struct PacedBody {
-    bytes: Bytes,
-    offset: usize,
-    bytes_per_second: u64,
-    pending_chunk_len: usize,
-    sleep: Option<Pin<Box<Sleep>>>,
-}
-
-impl PacedBody {
-    fn new(bytes: Bytes, bytes_per_second: u64) -> Self {
-        debug_assert!(bytes_per_second > 0);
-        Self {
-            bytes,
-            offset: 0,
-            bytes_per_second,
-            pending_chunk_len: 0,
-            sleep: None,
-        }
-    }
-
-    fn next_chunk_len(&self) -> usize {
-        let remaining = self.bytes.len() - self.offset;
-        let target = self
-            .bytes_per_second
-            .div_ceil(PACE_CHUNKS_PER_SECOND)
-            .max(1);
-        usize::try_from(target).unwrap_or(usize::MAX).min(remaining)
-    }
-
-    fn chunk_delay(&self, chunk_len: usize) -> Duration {
-        let nanos =
-            (chunk_len as u128 * 1_000_000_000_u128).div_ceil(self.bytes_per_second as u128);
-        Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
-    }
-}
-
-impl Body for PacedBody {
-    type Data = Bytes;
-    type Error = BoxError;
-
-    fn poll_frame(
-        self: Pin<&mut Self>,
-        context: &mut TaskContext<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        let this = self.get_mut();
-        if this.offset == this.bytes.len() {
-            return Poll::Ready(None);
-        }
-        if this.sleep.is_none() {
-            this.pending_chunk_len = this.next_chunk_len();
-            this.sleep = Some(Box::pin(tokio::time::sleep_until(
-                Instant::now() + this.chunk_delay(this.pending_chunk_len),
-            )));
-        }
-        if this
-            .sleep
-            .as_mut()
-            .expect("paced body sleep was initialized")
-            .as_mut()
-            .poll(context)
-            .is_pending()
-        {
-            return Poll::Pending;
-        }
-        this.sleep = None;
-        let end = this.offset + this.pending_chunk_len;
-        let chunk = this.bytes.slice(this.offset..end);
-        this.offset = end;
-        Poll::Ready(Some(Ok(Frame::data(chunk))))
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.offset == self.bytes.len()
-    }
-
-    fn size_hint(&self) -> hyper::body::SizeHint {
-        hyper::body::SizeHint::with_exact((self.bytes.len() - self.offset) as u64)
-    }
-}
-
 async fn handle_bypass_http(
     mut request: Request<Incoming>,
     request_data: RequestData,
@@ -1113,7 +1033,11 @@ async fn handle_bypass_http(
             return text_response(StatusCode::BAD_REQUEST, "invalid upstream request");
         }
     };
-    let mut upstream_response = match send_upstream(upstream_request, cancellation.clone()).await {
+    let mut upstream_response = match runtime
+        .upstream_client()
+        .send(upstream_request, cancellation.clone())
+        .await
+    {
         Ok(response) => response,
         Err(error) => {
             transfer.fail(&error.to_string());
@@ -1485,7 +1409,9 @@ async fn handle_session_http_request(
     };
     let mut upstream_response = match timeout(
         upstream_timeout,
-        send_upstream(upstream_request, cancellation.clone()),
+        runtime
+            .upstream_client()
+            .send(upstream_request, cancellation.clone()),
     )
     .await
     {
@@ -1918,85 +1844,6 @@ async fn tunnel_connect<C>(
     }
 }
 
-async fn send_upstream(
-    request: Request<ProxyBody>,
-    cancellation: CancellationToken,
-) -> Result<Response<Incoming>> {
-    let uri = request.uri().clone();
-    let host = uri
-        .host()
-        .ok_or_else(|| anyhow!("upstream URI has no host"))?;
-    let https = uri.scheme_str() == Some("https");
-    let port = uri.port_u16().unwrap_or(if https { 443 } else { 80 });
-    let stream = timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
-        .await
-        .context("upstream connect timeout")??;
-    if https {
-        let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let mut config = ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-        let connector = TlsConnector::from(Arc::new(config));
-        let server_name = ServerName::try_from(host.to_string())
-            .map_err(|error| anyhow!("invalid TLS server name: {error}"))?;
-        let tls = connector.connect(server_name, stream).await?;
-        let use_http2 = tls.get_ref().1.alpn_protocol() == Some(b"h2");
-        send_on_io(tls, request, use_http2, cancellation).await
-    } else {
-        let use_http2 = request.version() == Version::HTTP_2;
-        send_on_io(stream, request, use_http2, cancellation).await
-    }
-}
-
-async fn send_on_io<T>(
-    stream: T,
-    mut request: Request<ProxyBody>,
-    use_http2: bool,
-    cancellation: CancellationToken,
-) -> Result<Response<Incoming>>
-where
-    T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-{
-    if use_http2 {
-        let (mut sender, connection) =
-            hyper::client::conn::http2::Builder::new(TokioExecutor::new())
-                .handshake(TokioIo::new(stream))
-                .await?;
-        tokio::spawn(async move {
-            tokio::select! {
-                result = connection => {
-                    if let Err(error) = result {
-                        tracing::warn!("HTTP/2 upstream connection failed: {error}");
-                    }
-                }
-                _ = cancellation.cancelled() => {}
-            }
-        });
-        Ok(sender.send_request(request).await?)
-    } else {
-        let origin = request
-            .uri()
-            .path_and_query()
-            .map(|value| value.as_str())
-            .unwrap_or("/");
-        *request.uri_mut() = Uri::from_str(origin)?;
-        let (mut sender, connection) =
-            hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
-        tokio::spawn(async move {
-            tokio::select! {
-                result = connection.with_upgrades() => {
-                    if let Err(error) = result {
-                        tracing::warn!("HTTP/1 upstream connection failed: {error}");
-                    }
-                }
-                _ = cancellation.cancelled() => {}
-            }
-        });
-        Ok(sender.send_request(request).await?)
-    }
-}
-
 fn request_from_data(
     data: &RequestData,
     body: Vec<u8>,
@@ -2093,12 +1940,6 @@ fn response_from_data_with_speed(
     builder
         .body(body)
         .unwrap_or_else(|_| text_response(StatusCode::INTERNAL_SERVER_ERROR, "invalid response"))
-}
-
-fn boxed_full(bytes: Bytes) -> ProxyBody {
-    Full::new(bytes)
-        .map_err(|never| match never {})
-        .boxed_unsync()
 }
 
 fn parse_positive_decimal(value: Option<&str>) -> Result<Option<u64>, ()> {

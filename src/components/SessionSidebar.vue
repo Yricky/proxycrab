@@ -21,6 +21,52 @@ const editingId = ref<number | null>(null);
 const editName = ref("");
 const editDesc = ref("");
 
+/* ---- 侧边栏宽度拖拽调整 ---- */
+const SIDEBAR_MIN = 160;
+const SIDEBAR_MAX = 480;
+const SIDEBAR_DEFAULT = 240;
+const SIDEBAR_STORAGE_KEY = "proxycrab.sidebarWidth";
+
+function sidebarMaxWidth(): number {
+  // 不超过窗口的 60%，防止窗口过窄时侧边栏吃掉全部空间
+  return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.floor(window.innerWidth * 0.6)));
+}
+
+function initialSidebarWidth(): number {
+  const saved = Number(localStorage.getItem(SIDEBAR_STORAGE_KEY));
+  if (!Number.isFinite(saved)) return SIDEBAR_DEFAULT;
+  return Math.min(sidebarMaxWidth(), Math.max(SIDEBAR_MIN, saved));
+}
+
+const sidebarWidth = ref(initialSidebarWidth());
+const dragging = ref(false);
+let dragStartX = 0;
+let dragStartWidth = 0;
+
+function onResizePointerDown(e: PointerEvent): void {
+  if (e.button !== 0) return;
+  dragging.value = true;
+  dragStartX = e.clientX;
+  dragStartWidth = sidebarWidth.value;
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  e.preventDefault();
+  document.body.style.userSelect = "none";
+}
+
+function onResizePointerMove(e: PointerEvent): void {
+  if (!dragging.value) return;
+  const width = Math.round(dragStartWidth + (e.clientX - dragStartX));
+  sidebarWidth.value = Math.min(sidebarMaxWidth(), Math.max(SIDEBAR_MIN, width));
+}
+
+function endResize(e: PointerEvent): void {
+  if (!dragging.value) return;
+  dragging.value = false;
+  (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+  document.body.style.userSelect = "";
+  localStorage.setItem(SIDEBAR_STORAGE_KEY, String(sidebarWidth.value));
+}
+
 async function createSession(): Promise<void> {
   if (creating.value) return;
   creating.value = true;
@@ -97,7 +143,16 @@ onMounted(() => {
 </script>
 
 <template>
-  <aside class="sidebar">
+  <aside class="sidebar" :style="{ width: sidebarWidth + 'px' }">
+    <div
+      class="sb-resize"
+      :class="{ dragging }"
+      title="拖动调整侧边栏宽度"
+      @pointerdown="onResizePointerDown"
+      @pointermove="onResizePointerMove"
+      @pointerup="endResize"
+      @pointercancel="endResize"
+    ></div>
     <div class="sb-top">
       <div class="sb-header">
         <span class="sb-title">会话</span>
@@ -197,10 +252,35 @@ onMounted(() => {
 .sidebar {
   width: 240px;
   flex: none;
+  position: relative;
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
+}
+.sb-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 5px;
+  height: 100%;
+  z-index: 10;
+  cursor: col-resize;
+  touch-action: none;
+}
+.sb-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 2px;
+  height: 100%;
+  background: transparent;
+  transition: background 0.12s;
+}
+.sb-resize:hover::after,
+.sb-resize.dragging::after {
+  background: var(--accent);
 }
 .sb-top {
   border-bottom: 1px solid var(--border);

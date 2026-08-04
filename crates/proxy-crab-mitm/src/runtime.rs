@@ -20,7 +20,7 @@ use crate::{
         SessionInterceptors, SessionMetadata, SessionView, SystemLogEntry,
         TemporaryExecutionResult, WorkspacePaths,
     },
-    proxy::ProxyController,
+    proxy::{ProxyController, UpstreamClient},
     storage::{BodySide, BodySource, BodySourceData, CaptureStore, body_payload},
     workspace::{
         Workspace, configure_workspace_for_next_start, configured_workspace, resolve_workspace,
@@ -38,6 +38,7 @@ pub struct ProxyCrab {
     capture_slots: Arc<Semaphore>,
     log_buffer: Arc<LogBuffer>,
     breakpoints: Arc<BreakpointRegistry>,
+    upstream: UpstreamClient,
     proxy: ProxyController,
 }
 
@@ -56,9 +57,10 @@ impl ProxyCrab {
             bypass,
             stores: Mutex::new(HashMap::new()),
             session_pins: Mutex::new(HashMap::new()),
-            capture_slots: Arc::new(Semaphore::new(4)),
+            capture_slots: Arc::new(Semaphore::new(128)),
             log_buffer,
             breakpoints: Arc::new(BreakpointRegistry::default()),
+            upstream: UpstreamClient::new(),
             proxy: ProxyController::new(),
         }))
     }
@@ -767,6 +769,10 @@ impl ProxyCrab {
 
     pub(crate) fn bypass_store(&self) -> &BypassStore {
         &self.bypass
+    }
+
+    pub(crate) fn upstream_client(&self) -> &UpstreamClient {
+        &self.upstream
     }
 
     pub async fn start_proxy(self: &Arc<Self>) -> Result<ProxyStatus> {

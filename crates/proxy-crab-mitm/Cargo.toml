@@ -14,6 +14,7 @@ fs2.workspace = true
 futures.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
+hyper-rustls.workspace = true
 hyper-util.workspace = true
 mlua.workspace = true
 rcgen.workspace = true
