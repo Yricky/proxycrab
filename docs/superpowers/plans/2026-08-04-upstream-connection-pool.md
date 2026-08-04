@@ -41,7 +41,7 @@
 - Modify: `crates/proxy-crab-mitm/src/proxy.rs`
 
 - [x] Move `BoxError`, `ProxyBody`, `PacedBody`, and `boxed_full` into `proxy/body.rs` without changing their behavior.
-- [x] Keep bypass lifecycle tracking in `proxy.rs`, importing the extracted body types through a narrow module interface.
+- [x] Move `BypassTransfer` and `TrackedBody` into `proxy/body.rs` as well (`BypassTransfer::new` now takes a `BypassStore` directly instead of `&ProxyCrab`, keeping `body.rs` free of a runtime dependency). `proxy.rs` imports both through the narrow module interface.
 - [x] Keep the existing paced-body timing test passing after the move.
 
 ### Task 4: Verify Behavior and Documentation Scope

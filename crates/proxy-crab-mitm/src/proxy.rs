@@ -1,15 +1,9 @@
 use std::{
     convert::Infallible,
-    error::Error as StdError,
     future::Future,
     net::SocketAddr,
-    pin::Pin,
     str::FromStr,
-    sync::{
-        Arc, Mutex, RwLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-    task::{Context as TaskContext, Poll},
+    sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
 
@@ -18,7 +12,7 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, LengthLimitError, Limited};
 use hyper::{
     HeaderMap, Method, Request, Response, StatusCode, Uri, Version,
-    body::{Body, Frame, Incoming},
+    body::Incoming,
     header::{
         CONNECTION, CONTENT_LENGTH, HOST, HeaderName, HeaderValue, TRANSFER_ENCODING, UPGRADE,
     },
@@ -54,7 +48,7 @@ use crate::{
 mod body;
 mod upstream;
 
-use body::{BoxError, PacedBody, ProxyBody, boxed_full};
+use body::{BypassTransfer, PacedBody, ProxyBody, TrackedBody, boxed_full};
 pub(crate) use upstream::UpstreamClient;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -846,165 +840,6 @@ async fn handle_http_request(
     }
 }
 
-struct BypassTransfer {
-    store: crate::bypass::BypassStore,
-    entry_id: Option<u64>,
-    upload_bytes: AtomicU64,
-    download_bytes: AtomicU64,
-    finalized: AtomicBool,
-}
-
-impl BypassTransfer {
-    fn new(runtime: &ProxyCrab, entry_id: Option<u64>) -> Arc<Self> {
-        Arc::new(Self {
-            store: runtime.bypass_store().clone(),
-            entry_id,
-            upload_bytes: AtomicU64::new(0),
-            download_bytes: AtomicU64::new(0),
-            finalized: AtomicBool::new(false),
-        })
-    }
-
-    fn add_upload(&self, bytes: u64) {
-        self.upload_bytes.fetch_add(bytes, Ordering::Relaxed);
-    }
-
-    fn add_download(&self, bytes: u64) {
-        self.download_bytes.fetch_add(bytes, Ordering::Relaxed);
-    }
-
-    fn complete(&self, response_status: Option<u16>) {
-        if self.finalized.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        if let Some(id) = self.entry_id {
-            let _ = self.store.complete(
-                id,
-                response_status,
-                Some(self.upload_bytes.load(Ordering::Relaxed)),
-                Some(self.download_bytes.load(Ordering::Relaxed)),
-            );
-        }
-    }
-
-    fn fail(&self, error: &str) {
-        if self.finalized.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        if let Some(id) = self.entry_id {
-            let _ = self.store.fail(
-                id,
-                error,
-                Some(self.upload_bytes.load(Ordering::Relaxed)),
-                Some(self.download_bytes.load(Ordering::Relaxed)),
-            );
-        }
-    }
-}
-
-struct TrackedBody<B> {
-    inner: Pin<Box<B>>,
-    transfer: Arc<BypassTransfer>,
-    response_status: Option<u16>,
-    response_remaining: Option<u64>,
-    reached_eof: bool,
-}
-
-impl<B> TrackedBody<B> {
-    fn request(inner: B, transfer: Arc<BypassTransfer>) -> Self {
-        Self {
-            inner: Box::pin(inner),
-            transfer,
-            response_status: None,
-            response_remaining: None,
-            reached_eof: false,
-        }
-    }
-
-    fn response(inner: B, transfer: Arc<BypassTransfer>, response_status: u16) -> Self
-    where
-        B: Body,
-    {
-        let response_remaining = inner.size_hint().exact();
-        let reached_eof = inner.is_end_stream() || response_remaining == Some(0);
-        if reached_eof {
-            transfer.complete(Some(response_status));
-        }
-        Self {
-            inner: Box::pin(inner),
-            transfer,
-            response_status: Some(response_status),
-            response_remaining,
-            reached_eof,
-        }
-    }
-}
-
-impl<B> Body for TrackedBody<B>
-where
-    B: Body<Data = Bytes>,
-    B::Error: StdError + Send + Sync + 'static,
-{
-    type Data = Bytes;
-    type Error = BoxError;
-
-    fn poll_frame(
-        self: Pin<&mut Self>,
-        context: &mut TaskContext<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        let this = self.get_mut();
-        match this.inner.as_mut().poll_frame(context) {
-            Poll::Ready(Some(Ok(frame))) => {
-                if let Some(data) = frame.data_ref() {
-                    if this.response_status.is_some() {
-                        this.transfer.add_download(data.len() as u64);
-                        if let Some(remaining) = &mut this.response_remaining {
-                            *remaining = remaining.saturating_sub(data.len() as u64);
-                            if *remaining == 0 {
-                                this.reached_eof = true;
-                                this.transfer.complete(this.response_status);
-                            }
-                        }
-                    } else {
-                        this.transfer.add_upload(data.len() as u64);
-                    }
-                }
-                Poll::Ready(Some(Ok(frame)))
-            }
-            Poll::Ready(Some(Err(error))) => {
-                this.reached_eof = true;
-                this.transfer.fail(&error.to_string());
-                Poll::Ready(Some(Err(Box::new(error))))
-            }
-            Poll::Ready(None) => {
-                this.reached_eof = true;
-                if let Some(status) = this.response_status {
-                    this.transfer.complete(Some(status));
-                }
-                Poll::Ready(None)
-            }
-            Poll::Pending => Poll::Pending,
-        }
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.inner.is_end_stream()
-    }
-
-    fn size_hint(&self) -> hyper::body::SizeHint {
-        self.inner.size_hint()
-    }
-}
-
-impl<B> Drop for TrackedBody<B> {
-    fn drop(&mut self) {
-        if self.response_status.is_some() && !self.reached_eof {
-            self.transfer
-                .fail("downstream response body closed before completion");
-        }
-    }
-}
-
 async fn handle_bypass_http(
     mut request: Request<Incoming>,
     request_data: RequestData,
@@ -1025,7 +860,7 @@ async fn handle_bypass_http(
         )
         .map_err(|error| tracing::warn!("failed to persist bypass request: {error}"))
         .ok();
-    let transfer = BypassTransfer::new(&runtime, entry_id);
+    let transfer = BypassTransfer::new(runtime.bypass_store().clone(), entry_id);
     let downstream_upgrade = is_upgrade_request(&request).then(|| hyper::upgrade::on(&mut request));
     let upstream_request = match streaming_upstream_request(request, transfer.clone()) {
         Ok(request) => request,
