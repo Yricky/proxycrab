@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { Io5ArrowDown, Io5ArrowUp, Io5Copy, Io5Trash } from "vue-icons-plus/io5";
-import { appStore, reportError } from "../stores/app";
+import { Io5ArrowDown, Io5ArrowUp, Io5Trash } from "vue-icons-plus/io5";
 
 type Mode = "standard" | "urlsafe";
 
@@ -52,28 +51,10 @@ function clearAll(): void {
   encoded.value = "";
   decodeError.value = "";
 }
-
-async function copyResult(): Promise<void> {
-  if (!encoded.value) return;
-  try {
-    await navigator.clipboard.writeText(encoded.value);
-    appStore.toast("已复制到剪贴板", "success");
-  } catch (error) {
-    reportError(error, "复制失败");
-  }
-}
 </script>
 
 <template>
   <div class="b64-root">
-    <div class="b64-toolbar">
-      <span class="text-secondary">编码模式</span>
-      <select v-model="mode" class="select">
-        <option value="standard">Standard</option>
-        <option value="urlsafe">URL-safe</option>
-      </select>
-    </div>
-
     <div class="b64-field">
       <div class="b64-label text-secondary">原始值</div>
       <textarea
@@ -89,9 +70,11 @@ async function copyResult(): Promise<void> {
       <button class="btn" @click="decode"><Io5ArrowUp :size="14" /> 解码</button>
       <button class="btn" @click="clearAll"><Io5Trash :size="14" /> 清空</button>
       <span class="b64-spacer" />
-      <button class="btn" :disabled="!encoded" @click="copyResult">
-        <Io5Copy :size="14" /> 复制结果
-      </button>
+      <span class="text-secondary">编码模式</span>
+      <select v-model="mode" class="select">
+        <option value="standard">Standard</option>
+        <option value="urlsafe">URL-safe</option>
+      </select>
     </div>
 
     <div class="b64-field">
@@ -115,13 +98,6 @@ async function copyResult(): Promise<void> {
   flex-direction: column;
   padding: var(--space-3);
   gap: var(--space-2);
-}
-
-.b64-toolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: none;
 }
 
 .b64-field {

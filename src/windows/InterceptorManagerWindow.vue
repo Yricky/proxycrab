@@ -1,256 +1,51 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { Io5Add, Io5Create, Io5Trash } from "vue-icons-plus/io5";
+import { computed } from "vue";
 import { useBackend } from "../api";
-import type {
-  InterceptorKind,
-  InterceptorLibraryItem,
-  InterceptorLibraryList,
-  HttpApiChange,
-} from "../api/types";
-import { reportError } from "../stores/app";
-import { confirmDialog } from "../stores/dialog";
-import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
-import { openScriptEditor } from "./launcher";
+import type { InterceptorKind } from "../api/types";
+import ScriptLibraryManager, {
+  type ScriptLibraryConfig,
+} from "../components/ScriptLibraryManager.vue";
+
+const props = defineProps<{ kind: InterceptorKind; initialName?: string }>();
 
 const backend = useBackend();
 
-const kind = ref<InterceptorKind>("request");
-const list = ref<InterceptorLibraryList | null>(null);
-const newName = ref("");
+const kindLabel = computed(() => (props.kind === "request" ? "请求拦截器" : "响应拦截器"));
 
-const sortedItems = computed<InterceptorLibraryItem[]>(() =>
-  [...(list.value?.items ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
-);
-
-function notifyChanged(): void {
-  window.dispatchEvent(new CustomEvent("interceptors-changed"));
-}
-
-async function refresh(): Promise<void> {
-  try {
-    list.value = await backend.listInterceptors(kind.value);
-  } catch (error) {
-    reportError(error, "加载拦截器列表失败");
-  }
-}
-
-function onHttpApiChange(event: Event): void {
-  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
-  if (!resources.includes("all") && !resources.includes("interceptors")) return;
-  void refresh();
-}
-
-function switchKind(next: InterceptorKind): void {
-  if (kind.value === next) return;
-  kind.value = next;
-  void refresh();
-}
-
-function validateName(name: string): string | null {
-  if (!name) return "名称不能为空";
-  if (name.includes("/") || name.includes("\\")) return "名称不能包含路径分隔符（/ 或 \\）";
-  return null;
-}
-
-async function create(): Promise<void> {
-  const name = newName.value.trim();
-  const problem = validateName(name);
-  if (problem) {
-    reportError(problem);
-    return;
-  }
-  try {
-    await backend.createInterceptor({ kind: kind.value, name, content: "" });
-    newName.value = "";
-    await refresh();
-    notifyChanged();
-    openScriptEditor(kind.value, name);
-  } catch (error) {
-    reportError(error, "创建拦截器失败");
-  }
-}
-
-async function remove(item: InterceptorLibraryItem): Promise<void> {
-  const usage =
-    item.usage_count > 0
-      ? `它正在被 ${item.usage_count} 个会话使用，删除后会从这些会话的链路中移除。`
-      : "当前没有会话引用它。";
-  const ok = await confirmDialog({
-    title: "删除拦截器",
-    message: `确定删除拦截器「${item.name}」吗？${usage}该操作不可撤销。`,
-    confirmText: "删除",
-    danger: true,
-  });
-  if (!ok) return;
-  try {
-    await backend.deleteInterceptor(kind.value, item.name);
-    await refresh();
-    notifyChanged();
-  } catch (error) {
-    reportError(error, "删除拦截器失败");
-  }
-}
-
-onMounted(() => {
-  void refresh();
-  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
-});
-
-onBeforeUnmount(() => {
-  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
-});
+const config: ScriptLibraryConfig = {
+  windowId: `interceptor-manager-${props.kind}`,
+  sidebarTitle: kindLabel.value,
+  createPlaceholder: `新${kindLabel.value}名`,
+  emptyListHint: `暂无${kindLabel.value}`,
+  editorEmptyHint: `新建一个${kindLabel.value}后即可开始编辑`,
+  statusbar: "Lua 5.4 沙箱 · 10 万指令上限 · 16 MiB 内存上限",
+  defaultSource: "",
+  resources: ["interceptors"],
+  changeEvent: "interceptors-changed",
+  focusScope: props.kind,
+  validateName: (name) => {
+    if (!name) return "名称不能为空";
+    if (name.includes("/") || name.includes("\\")) return "名称不能包含路径分隔符（/ 或 \\）";
+    return null;
+  },
+  deleteMessage: (entry, dirty) =>
+    `确定删除${kindLabel.value}「${entry.name}」吗？${
+      dirty ? "它包含未保存的更改。" : ""
+    }${
+      entry.usage_count
+        ? `它正在被 ${entry.usage_count} 个会话使用，删除后会从这些会话的链路中移除。`
+        : "当前没有会话引用它。"
+    }该操作不可撤销。`,
+  api: {
+    list: () => backend.listInterceptors(props.kind).then((result) => result.items),
+    get: (name) => backend.getInterceptor(props.kind, name),
+    create: (name, content) => backend.createInterceptor({ kind: props.kind, name, content }),
+    update: (name, content) => backend.updateInterceptor(props.kind, name, { content }),
+    remove: (name) => backend.deleteInterceptor(props.kind, name),
+  },
+};
 </script>
 
 <template>
-  <div class="im-root">
-    <div class="im-tabs">
-      <button
-        class="im-tab"
-        :class="{ active: kind === 'request' }"
-        @click="switchKind('request')"
-      >
-        请求拦截器
-      </button>
-      <button
-        class="im-tab"
-        :class="{ active: kind === 'response' }"
-        @click="switchKind('response')"
-      >
-        响应拦截器
-      </button>
-    </div>
-
-    <div class="im-actions">
-      <input
-        v-model="newName"
-        class="input im-name-input"
-        placeholder="新建全局拦截器脚本"
-        @keyup.enter="create"
-      />
-      <button class="btn primary" @click="create"><Io5Add :size="14" /> 新建</button>
-    </div>
-
-    <div class="im-list">
-      <div v-if="!sortedItems.length" class="empty-hint">暂无全局拦截器脚本</div>
-      <div v-for="item in sortedItems" :key="item.name" class="im-row">
-        <Io5Create :size="14" class="im-script-icon" />
-        <button class="im-name mono" @click="openScriptEditor(kind, item.name)">
-          {{ item.name }}
-        </button>
-        <span class="im-usage">
-          {{ item.usage_count ? `${item.usage_count} 个会话使用` : "未使用" }}
-        </span>
-        <span class="im-spacer" />
-        <button class="btn icon" title="编辑脚本" @click="openScriptEditor(kind, item.name)">
-          <Io5Create :size="14" />
-        </button>
-        <button class="btn icon danger" title="删除" @click="remove(item)">
-          <Io5Trash :size="14" />
-        </button>
-      </div>
-    </div>
-  </div>
+  <ScriptLibraryManager :config="config" :initial-name="initialName" />
 </template>
-
-<style scoped>
-.im-root {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-.im-tabs {
-  display: flex;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border);
-}
-.im-tab {
-  padding: 4px 12px;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  cursor: pointer;
-}
-.im-tab:hover {
-  background: var(--bg-hover);
-}
-.im-tab.active {
-  background: var(--bg-selected);
-  color: var(--accent);
-  font-weight: 600;
-}
-.im-actions {
-  display: flex;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border);
-}
-.im-external {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--warning);
-  color: var(--warning);
-  font-size: 12px;
-}
-.im-external span {
-  flex: 1;
-}
-.im-name-input {
-  flex: 1;
-  min-width: 0;
-}
-.im-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--space-1) 0;
-}
-.im-row {
-  min-height: 36px;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 4px var(--space-3);
-}
-.im-row:hover {
-  background: var(--bg-hover);
-}
-.im-script-icon {
-  flex: none;
-  color: var(--text-faint);
-}
-.im-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-  text-align: left;
-}
-.im-name:hover {
-  color: var(--accent);
-}
-.im-usage {
-  flex: none;
-  color: var(--text-faint);
-  font-size: 11px;
-}
-.im-spacer {
-  flex: 1;
-}
-.btn.compact {
-  padding: 4px 9px;
-}
-.btn.icon.danger:hover:not(:disabled) {
-  color: var(--danger);
-}
-</style>

@@ -8,13 +8,16 @@ import {
   openCertManager,
   openColumnManager,
   openFilterManager,
-  openInterceptorManager,
+  openRequestInterceptorManager,
+  openResponseInterceptorManager,
   openRoutingManager,
   openSettings,
   openSkillInstall,
   openSystemLogs,
 } from "../windows/launcher";
 import {
+  Io5ArrowDown,
+  Io5ArrowUp,
   Io5Build,
   Io5Checkmark,
   Io5ChevronDown,
@@ -197,9 +200,13 @@ onBeforeUnmount(() => {
           <Io5ChevronDown :size="12" />
         </button>
         <div v-if="activeMenu === 'scripts'" class="tb-menu">
-          <button class="tb-menu-item" @click="runMenuAction(openInterceptorManager)">
-            <Io5Flash :size="14" />
-            <span>拦截器</span>
+          <button class="tb-menu-item" @click="runMenuAction(openRequestInterceptorManager)">
+            <Io5ArrowDown :size="14" />
+            <span>请求拦截器</span>
+          </button>
+          <button class="tb-menu-item" @click="runMenuAction(openResponseInterceptorManager)">
+            <Io5ArrowUp :size="14" />
+            <span>响应拦截器</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openColumnManager)">
             <Io5List :size="14" />

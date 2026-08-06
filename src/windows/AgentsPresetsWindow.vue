@@ -231,12 +231,6 @@ onBeforeUnmount(() => {
 <template>
   <div ref="root" class="ap-root">
     <aside class="ap-sidebar">
-      <div class="ap-sidebar-heading">
-        <div>
-          <strong>AGENTS.md</strong>
-          <span>Workspace 预设</span>
-        </div>
-      </div>
       <div class="ap-create">
         <input
           v-model="newPresetName"
@@ -278,11 +272,10 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <div class="ap-sidebar-footer">
-        <button class="btn compact" @click="reimportDefaults">
-          <Io5Refresh :size="13" />
+      <div class="ap-sidebar-footer" @click="reimportDefaults">
+                  <Io5Refresh :size="13" />
           重新导入默认预设
-        </button>
+
       </div>
     </aside>
 
@@ -346,11 +339,9 @@ onBeforeUnmount(() => {
   min-width: 210px;
   display: flex;
   flex-direction: column;
+  padding: 8px 0 0;
   border-right: 1px solid var(--border);
   background: var(--bg-panel);
-}
-.ap-sidebar-heading {
-  padding: 12px 12px 8px;
 }
 .ap-sidebar-heading > div {
   display: flex;
@@ -428,6 +419,9 @@ onBeforeUnmount(() => {
 .ap-sidebar-footer {
   padding: 8px;
   border-top: 1px solid var(--border);
+}
+.ap-sidebar-footer:hover {
+  background: var(--bg-hover);
 }
 .ap-sidebar-footer .btn {
   width: 100%;

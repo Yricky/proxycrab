@@ -86,7 +86,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="bp-root">
     <div class="bp-toolbar">
-      <span class="text-secondary">透明转发</span>
+      <span class="text-secondary">透明转发的网络请求不会被任何session捕获</span>
       <span class="text-faint">{{ bypassStore.rows.length }} 条已加载</span>
       <span class="bp-spacer" />
       <button class="btn icon" title="刷新" @click="bypassStore.refresh">

@@ -14,6 +14,7 @@ import {
   Io5Eye,
   Io5RadioButtonOn,
 } from "vue-icons-plus/io5";
+import { IoArrowForwardCircle } from "vue-icons-plus/io";
 
 const creating = ref(false);
 const editingId = ref<number | null>(null);
@@ -158,7 +159,7 @@ onMounted(() => {
         <span class="sb-title">会话</span>
         <div class="sb-header-actions">
           <button class="btn icon" title="透明转发记录" @click="openBypass">
-            <Io5Eye :size="15" />
+            <IoArrowForwardCircle :size="15" />
           </button>
           <button
             class="btn icon"

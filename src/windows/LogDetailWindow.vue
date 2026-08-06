@@ -956,7 +956,7 @@ function headerCount(headers: HeaderItem[]): string {
   flex: none;
   display: flex;
   gap: 2px;
-  padding: 8px 12px 0;
+  padding: 0 8px 0;
   border-bottom: 1px solid var(--border);
 }
 .tab-btn {

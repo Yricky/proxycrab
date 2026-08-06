@@ -56,6 +56,10 @@ function breakpointBadge(kind: InterceptorKind, name: string): string {
   return count > 9 ? "9+" : String(count);
 }
 
+function nodeInitial(name: string): string {
+  return Array.from(name.trim())[0] ?? "";
+}
+
 function nodeClick(kind: InterceptorKind, item: SessionInterceptorItem, index: number): void {
   const sessionId = sessionsStore.viewingSessionId;
   if (sessionId !== null && breakpointCount(kind, item.name) > 0) {
@@ -243,6 +247,7 @@ onBeforeUnmount(() => {
                   {{ breakpointBadge('request', item.name) }}
                 </span>
                 <span v-else-if="!item.valid">!</span>
+                <span v-else class="node-initial">{{ nodeInitial(item.name) }}</span>
               </button>
             </AppTooltip>
             <AppTooltip
@@ -316,6 +321,7 @@ onBeforeUnmount(() => {
                   {{ breakpointBadge('response', item.name) }}
                 </span>
                 <span v-else-if="!item.valid">!</span>
+                <span v-else class="node-initial">{{ nodeInitial(item.name) }}</span>
               </button>
             </AppTooltip>
             <AppTooltip
@@ -478,6 +484,17 @@ onBeforeUnmount(() => {
   font-size: 9px;
   line-height: 1;
   font-weight: 800;
+}
+.node-initial {
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 700;
+}
+.pipeline-node.enabled .node-initial {
+  color: #fff;
+}
+.pipeline-node.disabled .node-initial {
+  color: var(--text-secondary);
 }
 .pipeline-node.dragging {
   opacity: 0.38;

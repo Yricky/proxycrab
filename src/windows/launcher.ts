@@ -3,7 +3,6 @@
 import { windowsStore } from "../stores/windows";
 import type { InterceptorExecution, InterceptorKind } from "../api/types";
 import LogDetailWindow from "./LogDetailWindow.vue";
-import ScriptEditorWindow from "./ScriptEditorWindow.vue";
 import InterceptorManagerWindow from "./InterceptorManagerWindow.vue";
 import ColumnManagerWindow from "./ColumnManagerWindow.vue";
 import FilterManagerWindow from "./FilterManagerWindow.vue";
@@ -18,8 +17,6 @@ import BypassWindow from "./BypassWindow.vue";
 import BreakpointListWindow from "./BreakpointListWindow.vue";
 import AgentsPresetsWindow from "./AgentsPresetsWindow.vue";
 import ArchivedSessionsWindow from "./ArchivedSessionsWindow.vue";
-
-export type ScriptEditorKind = "column" | InterceptorKind;
 
 export function openLogDetail(sessionId: number, logId: number): void {
   windowsStore.open(`detail-${sessionId}-${logId}`, {
@@ -55,16 +52,19 @@ export function openBreakpointDetail(breakpointId: number, captureId: number): v
   });
 }
 
-export function openScriptEditor(kind: ScriptEditorKind, name: string): void {
-  const kindLabel =
-    kind === "column" ? "列脚本" : kind === "request" ? "请求拦截器" : "响应拦截器";
-  windowsStore.open(`script-${kind}-${name}`, {
-    title: `${name} — ${kindLabel}`,
-    component: ScriptEditorWindow,
-    props: { kind, name },
-    width: 720,
-    height: 520,
+export function openScriptEditor(kind: InterceptorKind, name: string): void {
+  const kindLabel = kind === "request" ? "请求拦截器" : "响应拦截器";
+  windowsStore.open(`interceptor-manager-${kind}`, {
+    title: kindLabel,
+    component: InterceptorManagerWindow,
+    props: { kind, initialName: name },
+    width: 980,
+    height: 600,
   });
+  // Fresh windows pick the script via initialName; already-open ones react to this event.
+  window.dispatchEvent(
+    new CustomEvent("proxycrab-focus-script", { detail: { scope: kind, name } }),
+  );
 }
 
 export function openScriptSnapshot(
@@ -84,12 +84,23 @@ export function openScriptSnapshot(
   );
 }
 
-export function openInterceptorManager(): void {
-  windowsStore.open("interceptor-manager", {
-    title: "拦截器管理器",
+export function openRequestInterceptorManager(): void {
+  windowsStore.open("interceptor-manager-request", {
+    title: "请求拦截器",
     component: InterceptorManagerWindow,
-    width: 640,
-    height: 440,
+    props: { kind: "request" },
+    width: 980,
+    height: 600,
+  });
+}
+
+export function openResponseInterceptorManager(): void {
+  windowsStore.open("interceptor-manager-response", {
+    title: "响应拦截器",
+    component: InterceptorManagerWindow,
+    props: { kind: "response" },
+    width: 980,
+    height: 600,
   });
 }
 
