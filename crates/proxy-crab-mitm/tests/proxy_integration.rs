@@ -130,6 +130,46 @@ async fn staged_http_upstream() -> (
     (port, release, task)
 }
 
+async fn delayed_response_frame_upstream(delay: Duration) -> (u16, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        let _ = stream.read(&mut request).await;
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 10\r\nConnection: close\r\n\r\nhello",
+            )
+            .await
+            .unwrap();
+        sleep(delay).await;
+        let _ = stream.write_all(b"world").await;
+    });
+    (port, task)
+}
+
+async fn delayed_first_response_frame_upstream(
+    delay: Duration,
+) -> (u16, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        let _ = stream.read(&mut request).await;
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        sleep(delay).await;
+        let _ = stream.write_all(b"hello").await;
+    });
+    (port, task)
+}
+
 #[derive(Debug)]
 struct UploadObservation {
     body: Vec<u8>,
@@ -538,6 +578,399 @@ async fn streams_plain_http_bypass_before_the_upstream_response_finishes() {
     .await
     .unwrap();
     runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn streams_session_response_before_the_upstream_response_finishes() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, release, upstream) = staged_http_upstream().await;
+    let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    stream
+        .write_all(
+            format!(
+                "GET http://127.0.0.1:{upstream_port}/session-stream HTTP/1.1\r\n\
+                 Host: 127.0.0.1:{upstream_port}\r\n\
+                 Connection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(1), async {
+        let mut chunk = [0; 1024];
+        while !response.windows(5).any(|window| window == b"hello") {
+            let read = stream.read(&mut chunk).await.unwrap();
+            assert_ne!(read, 0, "response ended before the first body chunk");
+            response.extend_from_slice(&chunk[..read]);
+        }
+    })
+    .await
+    .expect("the Session buffered the response instead of streaming it");
+
+    release.send(()).unwrap();
+    timeout(Duration::from_secs(2), stream.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(response.windows(10).any(|window| window == b"helloworld"));
+    upstream.await.unwrap();
+
+    let capture = timeout(Duration::from_secs(1), async {
+        loop {
+            let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+            if capture.outcome == CaptureOutcome::Success {
+                break capture;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let source = runtime
+        .capture_body_source(session.id, capture.id, BodySide::Response)
+        .unwrap()
+        .unwrap();
+    let BodySourceData::File(path) = source.data else {
+        panic!("captured response body was not stored in a file");
+    };
+    assert_eq!(tokio::fs::read(path).await.unwrap(), b"helloworld");
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn response_replacement_does_not_wait_for_the_raw_upstream_body() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, release, upstream) = staged_http_upstream().await;
+    runtime
+        .create_script(
+            ScriptKind::ResponseInterceptor,
+            Script {
+                name: "replace-stream".into(),
+                content: "resp.body:replace_with_string('replacement')".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: Vec::new(),
+                response: vec![SessionInterceptor {
+                    name: "replace-stream".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+
+    let request = tokio::spawn(async move {
+        proxy_get(
+            proxy_port,
+            &format!("http://127.0.0.1:{upstream_port}/replace-stream"),
+            &format!("127.0.0.1:{upstream_port}"),
+        )
+        .await
+    });
+    let response = timeout(Duration::from_secs(1), request)
+        .await
+        .expect("replacement waited for the raw upstream body")
+        .unwrap();
+    assert!(response.ends_with("replacement"), "{response}");
+
+    release.send(()).unwrap();
+    upstream.await.unwrap();
+    let capture = timeout(Duration::from_secs(1), async {
+        loop {
+            let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+            if capture.outcome == CaptureOutcome::Success {
+                break capture;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let raw_path = runtime
+        .workspace()
+        .session_dir(session.id)
+        .join("blob")
+        .join(format!("{}-response.body", capture.id));
+    let modified_path = runtime
+        .workspace()
+        .session_dir(session.id)
+        .join("blob")
+        .join(format!("{}-response.body.modified", capture.id));
+    assert_eq!(tokio::fs::read(raw_path).await.unwrap(), b"helloworld");
+    assert_eq!(
+        tokio::fs::read(modified_path).await.unwrap(),
+        b"replacement"
+    );
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn request_replacement_is_sent_while_the_raw_client_body_keeps_draining() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, observation, upstream) = body_gated_http_upstream().await;
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "replace-upload".into(),
+                content: "req.body:replace_with_string('pong')".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "replace-upload".into(),
+                    enabled: true,
+                }],
+                response: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    stream
+        .write_all(
+            format!(
+                "POST http://127.0.0.1:{upstream_port}/replace-upload HTTP/1.1\r\n\
+                 Host: 127.0.0.1:{upstream_port}\r\n\
+                 Connection: close\r\n\
+                 Content-Length: 10\r\n\r\nhello"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+
+    let observed = timeout(Duration::from_secs(1), observation)
+        .await
+        .expect("replacement upload waited for the raw client body")
+        .unwrap();
+    assert_eq!(observed.body, b"pong");
+    stream.write_all(b"world").await.unwrap();
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(2), stream.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(response.ends_with(b"ok"), "{:?}", response);
+    upstream.await.unwrap();
+
+    let capture = timeout(Duration::from_secs(1), async {
+        loop {
+            let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+            if capture.outcome == CaptureOutcome::Success {
+                break capture;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let raw_path = runtime
+        .workspace()
+        .session_dir(session.id)
+        .join("blob")
+        .join(format!("{}-request.body", capture.id));
+    let modified_path = runtime
+        .workspace()
+        .session_dir(session.id)
+        .join("blob")
+        .join(format!("{}-request.body.modified", capture.id));
+    assert_eq!(tokio::fs::read(raw_path).await.unwrap(), b"helloworld");
+    assert_eq!(tokio::fs::read(modified_path).await.unwrap(), b"pong");
+
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn response_body_frame_timeout_terminates_the_stream_and_fails_the_capture() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, upstream) = delayed_response_frame_upstream(Duration::from_secs(2)).await;
+    runtime
+        .create_script(
+            ScriptKind::ResponseInterceptor,
+            Script {
+                name: "response-timeout".into(),
+                content: "req:setTag('_crab_resp_bodyframe_timeout', '50')".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: Vec::new(),
+                response: vec![SessionInterceptor {
+                    name: "response-timeout".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+
+    let response = proxy_get(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/response-timeout"),
+        &format!("127.0.0.1:{upstream_port}"),
+    )
+    .await;
+    assert!(response.ends_with("hello"), "{response}");
+
+    let capture = timeout(Duration::from_secs(1), async {
+        loop {
+            let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+            if capture.outcome == CaptureOutcome::Failed {
+                break capture;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(capture.error.unwrap().kind, "response_body_timeout");
+    let source = runtime
+        .capture_body_source(session.id, capture.id, BodySide::Response)
+        .unwrap()
+        .unwrap();
+    let BodySourceData::File(path) = source.data else {
+        panic!("captured response body was not stored in a file");
+    };
+    assert_eq!(tokio::fs::read(path).await.unwrap(), b"hello");
+
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn response_body_frame_timeout_also_bounds_the_first_frame() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, upstream) =
+        delayed_first_response_frame_upstream(Duration::from_secs(2)).await;
+    runtime
+        .create_script(
+            ScriptKind::ResponseInterceptor,
+            Script {
+                name: "first-frame-timeout".into(),
+                content: "req:setTag('_crab_resp_bodyframe_timeout', '50')".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: Vec::new(),
+                response: vec![SessionInterceptor {
+                    name: "first-frame-timeout".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+
+    let response = proxy_get(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/first-frame-timeout"),
+        &format!("127.0.0.1:{upstream_port}"),
+    )
+    .await;
+    assert!(!response.ends_with("hello"), "{response}");
+    let capture = timeout(Duration::from_secs(1), async {
+        loop {
+            let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+            if capture.outcome == CaptureOutcome::Failed {
+                break capture;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(capture.error.unwrap().kind, "response_body_timeout");
+
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn response_replacement_survives_a_raw_body_frame_timeout() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, upstream) = delayed_response_frame_upstream(Duration::from_secs(2)).await;
+    runtime
+        .create_script(
+            ScriptKind::ResponseInterceptor,
+            Script {
+                name: "replace-with-timeout".into(),
+                content: "req:setTag('_crab_resp_bodyframe_timeout', '50'); resp.body:replace_with_string('replacement')".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: Vec::new(),
+                response: vec![SessionInterceptor {
+                    name: "replace-with-timeout".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+
+    let response = proxy_get(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/replace-with-timeout"),
+        &format!("127.0.0.1:{upstream_port}"),
+    )
+    .await;
+    assert!(response.ends_with("replacement"), "{response}");
+
+    let capture = timeout(Duration::from_secs(1), async {
+        loop {
+            let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+            if capture.outcome == CaptureOutcome::Success {
+                break capture;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(capture.error.unwrap().kind, "raw_response_body_timeout");
+    let raw_path = runtime
+        .workspace()
+        .session_dir(session.id)
+        .join("blob")
+        .join(format!("{}-response.body", capture.id));
+    let modified_path = runtime
+        .workspace()
+        .session_dir(session.id)
+        .join("blob")
+        .join(format!("{}-response.body.modified", capture.id));
+    assert_eq!(tokio::fs::read(raw_path).await.unwrap(), b"hello");
+    assert_eq!(
+        tokio::fs::read(modified_path).await.unwrap(),
+        b"replacement"
+    );
+
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
 }
 
 #[tokio::test]
@@ -1064,10 +1497,11 @@ async fn breakpoint_accepts_temporary_changes_and_resumes_saved_script() {
         .breakpoint_body_source(breakpoint.id, BodySide::Request)
         .unwrap()
         .unwrap();
-    let BodySourceData::File(path) = source.data else {
-        panic!("prior interceptor replacement should be persisted for breakpoint preview");
+    let preview = match source.data {
+        BodySourceData::File(path) => std::fs::read(path).unwrap(),
+        BodySourceData::Bytes(bytes) => bytes,
     };
-    assert_eq!(std::fs::read(path).unwrap(), b"before hold");
+    assert_eq!(preview, b"before hold");
 
     let temporary = runtime
         .execute_breakpoint_script(
@@ -1161,10 +1595,7 @@ async fn response_breakpoint_exposes_live_response_and_applies_temporary_body() 
 
     let live = runtime.breakpoint(breakpoint.id).unwrap();
     assert_eq!(live.capture.summary.response.as_ref().unwrap().status, 200);
-    assert!(matches!(
-        live.capture.response_body,
-        BodyPayload::Text { ref content, .. } if content == "ok"
-    ));
+    assert!(matches!(live.capture.response_body, BodyPayload::Empty));
     runtime
         .execute_breakpoint_script(
             breakpoint.id,

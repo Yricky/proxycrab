@@ -9,7 +9,8 @@ ProxyCrab syntax-checks every saved script and runs it in a fresh sandbox.
 - Lua-managed memory limit: 16 MiB
 - Unavailable globals/libraries: `io`, `os`, `package`, `debug`, `dofile`, `loadfile`, `require`
 - Script files use the `.lua` suffix.
-- Request/response body replacement is limited to 64 MiB.
+- Captured bodies and file replacements stream without an application-level size limit; Lua string
+  replacements remain subject to the 16 MiB Lua-managed memory budget.
 
 Do not depend on filesystem or process APIs other than the explicit
 `replace_with_file("/absolute/path")` body method.
@@ -269,14 +270,17 @@ The final request tags also support these proxy-local traffic controls:
 | `_crab_req_speed` | bytes per second | Pace the final request body sent to the server |
 | `_crab_resp_speed` | bytes per second | Pace the final response body sent to the client |
 | `_crab_req_timeout` | milliseconds | Bound connection, TLS, paced upload, and response-header wait; default `60000` |
+| `_crab_resp_bodyframe_timeout` | milliseconds | Idle timeout before each upstream response-body frame; unset by default |
 | `_crab_tls_insecure` | exact string `true` | Disable upstream HTTPS certificate-chain and hostname verification |
 
 Values must contain only ASCII digits, fit in `u64`, and be greater than zero; leading zeroes are
 valid. An invalid final value is ignored and written to the Rust warning log. Request speed and
-timeout are resolved after request interceptors; response speed is resolved after response
-interceptors, including temporary breakpoint scripts. Limits are independent per capture and
+timeout are resolved after request interceptors; response speed and response-frame timeout are
+resolved after response interceptors, including temporary breakpoint scripts. Limits are independent per capture and
 direction, count only final outbound body bytes, send no initial or catch-up burst, and do not alter
-headers or add a downstream timeout. Tags remain persisted metadata and never become HTTP headers.
+headers. The response-frame timeout resets after every upstream body frame. It terminates a normal
+downstream response on expiry, but only stops and annotates the raw background drain when a response
+replacement is already being returned. Tags remain persisted metadata and never become HTTP headers.
 
 `_crab_tls_insecure` is resolved after request interceptors and only the exact final string `true`
 enables it. Any other present value is ignored with a Rust warning. It does nothing for HTTP, but it
@@ -346,9 +350,15 @@ body:replace_with_file("/absolute/path/to/body.bin")
 - File paths must be absolute.
 - The file is opened when ProxyCrab applies the effects; missing/unreadable files fail the
   interceptor stage.
-- String and file bodies over 64 MiB fail.
+- Files are streamed without being loaded into memory and have no application-level size limit.
+- Strings remain in Lua-managed memory and are constrained by the sandbox memory budget.
 
 ProxyCrab does not expose the original body content to Lua.
+
+Request interceptors execute once after request headers arrive and before the original request body
+is consumed. Response interceptors execute once after response headers arrive and before the
+original response body is consumed. Raw bodies stream to capture storage while the normal or
+replacement body is transferred independently.
 
 ## Execution and historical evidence
 

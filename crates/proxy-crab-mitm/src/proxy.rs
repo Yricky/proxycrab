@@ -9,7 +9,8 @@ use std::{
 
 use anyhow::{Result, bail};
 use bytes::Bytes;
-use http_body_util::{BodyExt, LengthLimitError, Limited};
+use futures::TryStreamExt;
+use http_body_util::{BodyExt, StreamBody};
 use hyper::{
     HeaderMap, Method, Request, Response, StatusCode, Uri, Version,
     body::Incoming,
@@ -26,6 +27,7 @@ use tokio::{
     task::{AbortHandle, JoinHandle},
     time::timeout,
 };
+use tokio_util::io::ReaderStream;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
@@ -34,7 +36,7 @@ use crate::{
     lua::{
         BodyReplacement, BreakpointHook, ModificationJournal, ResponseScriptContext,
         SharedInterceptorState, evaluate_routing, execute_request_with_state,
-        execute_response_with_state, read_body_replacement,
+        execute_response_with_state,
     },
     model::{
         CaptureError, ErrorStage, HeaderValues, InterceptorExecutionOrigin, InterceptorKind,
@@ -46,20 +48,24 @@ use crate::{
 };
 
 mod body;
+mod bypass;
+mod mitm;
 mod upstream;
 
-use body::{BypassTransfer, PacedBody, ProxyBody, TrackedBody, boxed_full};
+use body::{
+    BoxError, BypassTransfer, PacedBody, ProxyBody, PumpOutcome, PumpResult, TrackedBody,
+    boxed_full, pump_body,
+};
 pub(crate) use upstream::UpstreamClient;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(60);
-const BODY_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_CAPTURE_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CLIENT_CONNECTIONS: usize = 256;
 const BINARY_HEADER_PREFIX: &str = "\u{e000}proxy-crab-binary:v1:";
 const CRAB_REQ_SPEED_TAG: &str = "_crab_req_speed";
 const CRAB_RESP_SPEED_TAG: &str = "_crab_resp_speed";
+const CRAB_RESP_BODYFRAME_TIMEOUT_TAG: &str = "_crab_resp_bodyframe_timeout";
 const CRAB_REQ_TIMEOUT_TAG: &str = "_crab_req_timeout";
 const CRAB_TLS_INSECURE_TAG: &str = "_crab_tls_insecure";
 
@@ -452,9 +458,9 @@ fn handle_connect(
         source,
     );
     if let RouteDecision::Bypass(reason) = decision {
-        return handle_bypass_connect(
+        return bypass::handle_bypass_connect(
             request,
-            BypassConnectContext {
+            bypass::BypassConnectContext {
                 request_data,
                 source,
                 authority,
@@ -472,9 +478,9 @@ fn handle_connect(
         Ok(pin) => pin,
         Err(error) => {
             tracing::warn!("failed to pin routed CONNECT Session: {error}");
-            return handle_bypass_connect(
+            return bypass::handle_bypass_connect(
                 request,
-                BypassConnectContext {
+                bypass::BypassConnectContext {
                     request_data,
                     source,
                     authority,
@@ -504,7 +510,7 @@ fn handle_connect(
         };
         match upgraded {
             Ok(upgraded) => {
-                process_connect(
+                mitm::process_connect(
                     TokioIo::new(upgraded),
                     authority,
                     source,
@@ -526,291 +532,6 @@ fn handle_connect(
     Response::new(boxed_full(Bytes::new()))
 }
 
-struct BypassConnectContext {
-    request_data: RequestData,
-    source: SocketAddr,
-    authority: hyper::http::uri::Authority,
-    reason: &'static str,
-    runtime: Arc<ProxyCrab>,
-    cancellation: CancellationToken,
-    tracker: TaskGroup,
-}
-
-fn handle_bypass_connect(
-    request: &mut Request<Incoming>,
-    context: BypassConnectContext,
-) -> Response<ProxyBody> {
-    let BypassConnectContext {
-        request_data,
-        source,
-        authority,
-        reason,
-        runtime,
-        cancellation,
-        tracker,
-    } = context;
-    let entry_id = runtime
-        .bypass_store()
-        .begin(
-            &source.to_string(),
-            &request_data.method,
-            &request_data.uri,
-            &request_data.version,
-            reason,
-        )
-        .map_err(|error| tracing::warn!("failed to persist bypass CONNECT: {error}"))
-        .ok();
-    let on_upgrade = hyper::upgrade::on(request);
-    tracker.spawn(async move {
-        let upgraded = tokio::select! {
-            upgraded = on_upgrade => upgraded,
-            _ = cancellation.cancelled() => return,
-        };
-        let mut client = match upgraded {
-            Ok(upgraded) => TokioIo::new(upgraded),
-            Err(error) => {
-                if let Some(id) = entry_id {
-                    let _ = runtime
-                        .bypass_store()
-                        .fail(id, &error.to_string(), None, None);
-                }
-                return;
-            }
-        };
-        let mut upstream =
-            match timeout(CONNECT_TIMEOUT, TcpStream::connect(authority.as_str())).await {
-                Ok(Ok(upstream)) => upstream,
-                Ok(Err(error)) => {
-                    if let Some(id) = entry_id {
-                        let _ = runtime
-                            .bypass_store()
-                            .fail(id, &error.to_string(), None, None);
-                    }
-                    return;
-                }
-                Err(_) => {
-                    if let Some(id) = entry_id {
-                        let _ = runtime.bypass_store().fail(
-                            id,
-                            "upstream connection timed out",
-                            None,
-                            None,
-                        );
-                    }
-                    return;
-                }
-            };
-        tokio::select! {
-            result = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {
-                match result {
-                    Ok((upload, download)) => {
-                        if let Some(id) = entry_id {
-                            let _ = runtime.bypass_store().complete(
-                                id,
-                                None,
-                                Some(upload),
-                                Some(download),
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        if let Some(id) = entry_id {
-                            let _ = runtime.bypass_store().fail(
-                                id,
-                                &error.to_string(),
-                                None,
-                                None,
-                            );
-                        }
-                    }
-                }
-            }
-            _ = cancellation.cancelled() => {}
-        }
-    });
-    Response::new(boxed_full(Bytes::new()))
-}
-
-async fn process_connect<C>(
-    client: C,
-    authority: hyper::http::uri::Authority,
-    source: SocketAddr,
-    pin: SessionPin,
-    capture: ConnectCapture,
-    cancellation: CancellationToken,
-    tracker: TaskGroup,
-) where
-    C: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-{
-    let runtime = pin.runtime();
-    let mut client = BufStream::new(client);
-    let inspected = tokio::select! {
-        result = timeout(CONNECT_TIMEOUT, client.fill_buf()) => result,
-        _ = cancellation.cancelled() => return,
-    };
-    let payload = match inspected {
-        Ok(Ok(payload)) if !payload.is_empty() => payload,
-        Ok(Ok(_)) => {
-            record_connect_error(
-                &capture,
-                ErrorStage::Connect,
-                "client_closed",
-                "CONNECT tunnel closed before a payload was received",
-            );
-            return;
-        }
-        Ok(Err(error)) => {
-            record_connect_error(
-                &capture,
-                ErrorStage::Connect,
-                "connect_inspection_failed",
-                &error.to_string(),
-            );
-            return;
-        }
-        Err(_) => {
-            record_connect_error(
-                &capture,
-                ErrorStage::Connect,
-                "connect_inspection_timeout",
-                "CONNECT payload inspection timed out",
-            );
-            return;
-        }
-    };
-
-    if payload.first().copied() != Some(0x16) {
-        tunnel_connect(client, &authority, &capture, cancellation).await;
-        return;
-    }
-
-    let config = match runtime.authority().server_config(authority.host()) {
-        Ok(config) => config,
-        Err(error) => {
-            record_connect_error(
-                &capture,
-                ErrorStage::TlsHandshake,
-                "certificate_generation_failed",
-                &error.to_string(),
-            );
-            return;
-        }
-    };
-    let acceptor = tokio_rustls::TlsAcceptor::from(config);
-    let accepted = tokio::select! {
-        result = timeout(CONNECT_TIMEOUT, acceptor.accept(client)) => result,
-        _ = cancellation.cancelled() => return,
-    };
-    let tls = match accepted {
-        Ok(Ok(tls)) => tls,
-        Ok(Err(error)) => {
-            let message = error.to_string();
-            record_connect_error(
-                &capture,
-                ErrorStage::TlsHandshake,
-                normalize_tls_error(&message),
-                &message,
-            );
-            return;
-        }
-        Err(_) => {
-            record_connect_error(
-                &capture,
-                ErrorStage::TlsHandshake,
-                "client_tls_handshake_timeout",
-                "client TLS handshake timed out",
-            );
-            return;
-        }
-    };
-    let is_http2 = tls.get_ref().1.alpn_protocol() == Some(b"h2");
-    if let Err(error) = capture.store.mitm_established(capture.id) {
-        fail_capture(
-            &capture.store,
-            capture.id,
-            ErrorStage::TlsHandshake,
-            "connect_capture_finalize_failed",
-            &error.to_string(),
-        );
-        return;
-    }
-    serve_mitm_tls(tls, authority, source, pin, cancellation, tracker, is_http2).await;
-}
-
-async fn serve_mitm_tls<C>(
-    tls: C,
-    authority: hyper::http::uri::Authority,
-    source: SocketAddr,
-    pin: SessionPin,
-    cancellation: CancellationToken,
-    tracker: TaskGroup,
-    is_http2: bool,
-) where
-    C: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-{
-    let runtime = pin.runtime();
-    let session_id = pin.session_id();
-    let _connection_pin = pin;
-    let service_cancellation = cancellation.clone();
-    let service = service_fn(move |mut request| {
-        inject_https_authority(&mut request, &authority);
-        let local_ca = is_ca_download(&request_data(&request));
-        let runtime = runtime.clone();
-        let cancellation = service_cancellation.clone();
-        let tracker = tracker.clone();
-        async move {
-            if local_ca {
-                return Ok::<_, Infallible>(certificate_response(&runtime));
-            }
-            Ok::<_, Infallible>(
-                handle_session_http_request(
-                    request,
-                    source,
-                    runtime,
-                    session_id,
-                    cancellation,
-                    tracker,
-                )
-                .await,
-            )
-        }
-    });
-    if is_http2 {
-        let connection = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
-            .serve_connection(TokioIo::new(tls), service);
-        tokio::pin!(connection);
-        tokio::select! {
-            result = &mut connection => {
-                if let Err(error) = result {
-                    tracing::warn!("HTTP/2 MITM connection failed: {error}");
-                }
-            }
-            _ = cancellation.cancelled() => {
-                connection.as_mut().graceful_shutdown();
-                let _ = timeout(SHUTDOWN_TIMEOUT, &mut connection).await;
-            }
-        }
-    } else {
-        let connection = hyper::server::conn::http1::Builder::new()
-            .preserve_header_case(true)
-            .title_case_headers(true)
-            .serve_connection(TokioIo::new(tls), service)
-            .with_upgrades();
-        tokio::pin!(connection);
-        tokio::select! {
-            result = &mut connection => {
-                if let Err(error) = result {
-                    tracing::warn!("HTTPS MITM connection failed: {error}");
-                }
-            }
-            _ = cancellation.cancelled() => {
-                connection.as_mut().graceful_shutdown();
-                let _ = timeout(SHUTDOWN_TIMEOUT, &mut connection).await;
-            }
-        }
-    }
-}
-
 async fn handle_http_request(
     request: Request<Incoming>,
     request_data: RequestData,
@@ -822,7 +543,7 @@ async fn handle_http_request(
     let authority = routing_authority(&request_data);
     match resolve_route(&runtime, &request_data, &authority, "http", source) {
         RouteDecision::Bypass(reason) => {
-            handle_bypass_http(
+            bypass::handle_bypass_http(
                 request,
                 request_data,
                 source,
@@ -834,994 +555,15 @@ async fn handle_http_request(
             .await
         }
         RouteDecision::Session(session) => {
-            handle_session_http_request(request, source, runtime, session.id, cancellation, tracker)
-                .await
-        }
-    }
-}
-
-async fn handle_bypass_http(
-    mut request: Request<Incoming>,
-    request_data: RequestData,
-    source: SocketAddr,
-    reason: &'static str,
-    runtime: Arc<ProxyCrab>,
-    cancellation: CancellationToken,
-    tracker: TaskGroup,
-) -> Response<ProxyBody> {
-    let entry_id = runtime
-        .bypass_store()
-        .begin(
-            &source.to_string(),
-            &request_data.method,
-            &request_data.uri,
-            &request_data.version,
-            reason,
-        )
-        .map_err(|error| tracing::warn!("failed to persist bypass request: {error}"))
-        .ok();
-    let transfer = BypassTransfer::new(runtime.bypass_store().clone(), entry_id);
-    let downstream_upgrade = is_upgrade_request(&request).then(|| hyper::upgrade::on(&mut request));
-    let upstream_request = match streaming_upstream_request(request, transfer.clone()) {
-        Ok(request) => request,
-        Err(error) => {
-            transfer.fail(&error.to_string());
-            return text_response(StatusCode::BAD_REQUEST, "invalid upstream request");
-        }
-    };
-    let mut upstream_response = match runtime
-        .upstream_client()
-        .send(upstream_request, false, cancellation.clone())
-        .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            transfer.fail(&error.to_string());
-            return text_response(StatusCode::BAD_GATEWAY, "upstream request failed");
-        }
-    };
-    let response_data = ResponseData {
-        status: upstream_response.status().as_u16(),
-        version: version_name(upstream_response.version()).to_string(),
-        headers: headers_to_values(upstream_response.headers()),
-    };
-    if upstream_response.status() == StatusCode::SWITCHING_PROTOCOLS {
-        if let Some(downstream_upgrade) = downstream_upgrade {
-            let upstream_upgrade = hyper::upgrade::on(&mut upstream_response);
-            let transfer = transfer.clone();
-            tracker.spawn(async move {
-                match (downstream_upgrade.await, upstream_upgrade.await) {
-                    (Ok(downstream), Ok(upstream)) => {
-                        let mut downstream = TokioIo::new(downstream);
-                        let mut upstream = TokioIo::new(upstream);
-                        tokio::select! {
-                            result = tokio::io::copy_bidirectional(&mut downstream, &mut upstream) => {
-                                match result {
-                                    Ok((upload, download)) => {
-                                        transfer.add_upload(upload);
-                                        transfer.add_download(download);
-                                        transfer.complete(Some(response_data.status));
-                                    }
-                                    Err(error) => transfer.fail(&error.to_string()),
-                                }
-                            }
-                            _ = cancellation.cancelled() => {}
-                        }
-                    }
-                    (Err(error), _) | (_, Err(error)) => transfer.fail(&error.to_string()),
-                }
-            });
-        } else {
-            transfer.complete(Some(response_data.status));
-        }
-        return response_from_data(&response_data, Vec::new(), false);
-    }
-    let (mut parts, incoming) = upstream_response.into_parts();
-    strip_hop_by_hop_headers(&mut parts.headers, false);
-    parts.headers.remove(TRANSFER_ENCODING);
-    let body = TrackedBody::response(incoming, transfer, response_data.status).boxed_unsync();
-    Response::from_parts(parts, body)
-}
-
-async fn handle_session_http_request(
-    mut request: Request<Incoming>,
-    source: SocketAddr,
-    runtime: Arc<ProxyCrab>,
-    session_id: u64,
-    cancellation: CancellationToken,
-    tracker: TaskGroup,
-) -> Response<ProxyBody> {
-    let pin = match runtime.pin_session(session_id) {
-        Ok(pin) => pin,
-        Err(error) => return text_response(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
-    };
-    let _capture_slot = runtime.acquire_capture_slot().await;
-    let store = pin.store().clone();
-    let interceptor_snapshot = match snapshot_session_interceptors(&runtime, pin.session_id()) {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("failed to load session interceptors: {error}"),
-            );
-        }
-    };
-    let downstream_upgrade = is_upgrade_request(&request).then(|| hyper::upgrade::on(&mut request));
-    let upgrade_request = downstream_upgrade.is_some();
-    let (parts, incoming) = request.into_parts();
-    let mut request_data = RequestData {
-        method: parts.method.to_string(),
-        uri: parts.uri.to_string(),
-        version: version_name(parts.version).to_string(),
-        headers: headers_to_values(&parts.headers),
-        tags: Default::default(),
-    };
-    let capture_id = match store.begin(&source.to_string(), &request_data, "request") {
-        Ok(id) => id,
-        Err(error) => {
-            tracing::error!("capture insert failed; refusing to forward request: {error}");
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "capture storage unavailable",
-            );
-        }
-    };
-    let collected_request = timeout(
-        BODY_READ_TIMEOUT,
-        Limited::new(incoming, MAX_CAPTURE_BODY_BYTES).collect(),
-    )
-    .await;
-    let mut request_body = match collected_request {
-        Ok(Ok(body)) => body.to_bytes().to_vec(),
-        Ok(Err(error)) if error.downcast_ref::<LengthLimitError>().is_some() => {
-            fail_capture(
-                &store,
-                capture_id,
-                ErrorStage::RequestBody,
-                "request_body_too_large",
-                "request body exceeded the 64 MiB capture limit",
-            );
-            return text_response(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
-        }
-        Ok(Err(error)) => {
-            fail_capture(
-                &store,
-                capture_id,
-                ErrorStage::RequestBody,
-                "request_body_read_failed",
-                &error.to_string(),
-            );
-            return text_response(StatusCode::BAD_REQUEST, "failed to read request body");
-        }
-        Err(_) => {
-            fail_capture(
-                &store,
-                capture_id,
-                ErrorStage::RequestBody,
-                "request_body_timeout",
-                "request body read timed out",
-            );
-            return text_response(StatusCode::REQUEST_TIMEOUT, "request body read timed out");
-        }
-    };
-    if let Err(error) = store.save_body(capture_id, BodySide::Request, false, &request_body) {
-        fail_capture(
-            &store,
-            capture_id,
-            ErrorStage::RequestBody,
-            "request_body_store_failed",
-            &error.to_string(),
-        );
-        return text_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to persist request body",
-        );
-    }
-
-    let mut request_modifications = Vec::new();
-    for (position, script) in interceptor_snapshot.request.iter().enumerate() {
-        let state = SharedInterceptorState::new_request(
-            request_data.method.clone(),
-            request_data.uri.clone(),
-            request_data.headers.clone(),
-            request_data.tags.clone(),
-        );
-        let journal = ModificationJournal::new(request_data.headers.clone());
-        let execution_id = match store.begin_interceptor_run(
-            capture_id,
-            &InterceptorRun {
-                origin: InterceptorExecutionOrigin::Saved,
-                completed: false,
-                phase: InterceptorKind::Request,
-                position,
-                name: script.name.clone(),
-                script_hash: script.hash.clone(),
-                content: script.content.clone(),
-                modifications: journal.snapshot(),
-                error: None,
-            },
-        ) {
-            Ok(id) => id,
-            Err(error) => {
-                fail_capture(
-                    &store,
-                    capture_id,
-                    ErrorStage::Interceptor,
-                    "interceptor_history_store_failed",
-                    &error.to_string(),
-                );
-                return text_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "capture storage unavailable",
-                );
-            }
-        };
-        let breakpoint_context = BreakpointContext {
-            session_id: pin.session_id(),
-            capture_id,
-            phase: InterceptorKind::Request,
-            position,
-            interceptor_name: script.name.clone(),
-            parent_execution_id: execution_id,
-            request: request_data.clone(),
-            response: None,
-            state: state.clone(),
-            parent_journal: journal.clone(),
-            store: store.clone(),
-        };
-        let source = script.content.clone();
-        let script_name = script.name.clone();
-        let request_snapshot = request_data.clone();
-        let execution_state = state.clone();
-        let execution_journal = journal.clone();
-        let hook = BreakpointHook {
-            registry: runtime.breakpoint_registry(),
-            context: breakpoint_context,
-        };
-        let mut run_error = None;
-        let execution = tokio::task::spawn_blocking(move || {
-            execute_request_with_state(
-                &source,
-                &request_snapshot,
-                execution_state,
-                execution_journal,
-                &script_name,
-                Some(capture_id),
-                Some(hook),
-            )
-        })
-        .await;
-        match execution {
-            Ok(Ok((effects, error))) => {
-                request_data.method = effects
-                    .method
-                    .expect("request interceptor effects always include a method");
-                request_data.uri = effects
-                    .uri
-                    .expect("request interceptor effects always include a URI");
-                request_data.headers = effects.headers;
-                request_data.tags = effects.tags;
-                if let Some(replacement) = effects.body {
-                    match apply_body_replacement(&replacement) {
-                        Ok(body) => {
-                            request_body = body;
-                            remove_header_value(&mut request_data.headers, "content-encoding");
-                            if let Err(error) =
-                                store.save_body(capture_id, BodySide::Request, true, &request_body)
-                            {
-                                note_script_error(
-                                    &store,
-                                    capture_id,
-                                    "request-body",
-                                    &error.to_string(),
-                                );
-                            }
-                        }
-                        Err(error) => {
-                            let message = error.to_string();
-                            note_script_error(&store, capture_id, &script.name, &message);
-                            append_run_error(&mut run_error, message);
-                        }
-                    }
-                }
-                request_modifications.extend(effects.modifications);
-                if let Some(error) = error {
-                    note_script_error(&store, capture_id, &script.name, &error);
-                    append_run_error(&mut run_error, error);
-                }
-            }
-            Ok(Err(error)) => {
-                let message = error.to_string();
-                note_script_error(&store, capture_id, &script.name, &message);
-                run_error = Some(message);
-            }
-            Err(error) => {
-                let message = format!("interceptor worker failed: {error}");
-                note_script_error(&store, capture_id, &script.name, &message);
-                run_error = Some(message);
-            }
-        }
-        let modifications = journal.snapshot();
-        if let Err(error) =
-            store.update_interceptor_run(execution_id, &modifications, run_error.as_deref(), true)
-        {
-            fail_capture(
-                &store,
-                capture_id,
-                ErrorStage::Interceptor,
-                "interceptor_history_store_failed",
-                &error.to_string(),
-            );
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "capture storage unavailable",
-            );
-        }
-        if let Err(error) = store.update_tags(capture_id, &request_data.tags) {
-            fail_capture(
-                &store,
-                capture_id,
-                ErrorStage::Interceptor,
-                "capture_tags_store_failed",
-                &error.to_string(),
-            );
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "capture storage unavailable",
-            );
-        }
-    }
-    if let Err(error) = store.update_request(capture_id, &request_data, &request_modifications) {
-        fail_capture(
-            &store,
-            capture_id,
-            ErrorStage::RequestBody,
-            "capture_update_failed",
-            &error.to_string(),
-        );
-        return text_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "capture storage unavailable",
-        );
-    }
-
-    if is_ca_download(&request_data) {
-        let bytes = runtime.certificate_pem().into_bytes();
-        let response_data = ResponseData {
-            status: 200,
-            version: "HTTP/1.1".into(),
-            headers: HeaderValues::from([(
-                "content-type".into(),
-                vec!["application/x-x509-ca-cert".into()],
-            )]),
-        };
-        let _ = store.save_body(capture_id, BodySide::Response, false, &bytes);
-        let _ = store.complete(capture_id, &response_data, &[]);
-        return response_from_data(&response_data, bytes, false);
-    }
-
-    if request_data.tags.contains_key("_crab_skip") {
-        return finish_session_response(
-            SessionResponseContext {
+            mitm::handle_session_http_request(
+                request,
+                source,
                 runtime,
-                store,
-                session_id: pin.session_id(),
-                capture_id,
-            },
-            request_data,
-            ResponseData {
-                status: 200,
-                version: "HTTP/1.1".into(),
-                headers: HeaderValues::new(),
-            },
-            Vec::new(),
-            &interceptor_snapshot.response,
-        )
-        .await;
-    }
-
-    let (request_speed, upstream_timeout) = if upgrade_request {
-        (None, UPSTREAM_TIMEOUT)
-    } else {
-        (
-            parse_special_tag(&request_data.tags, CRAB_REQ_SPEED_TAG, capture_id),
-            parse_special_tag(&request_data.tags, CRAB_REQ_TIMEOUT_TAG, capture_id)
-                .map(Duration::from_millis)
-                .unwrap_or(UPSTREAM_TIMEOUT),
-        )
-    };
-    let tls_insecure = tls_insecure_from_tags(&request_data.tags, capture_id);
-    let upstream_request = match request_from_data(&request_data, request_body, request_speed) {
-        Ok(request) => request,
-        Err(error) => {
-            fail_capture(
-                &store,
-                capture_id,
-                ErrorStage::Upstream,
-                "invalid_upstream_request",
-                &error.to_string(),
-            );
-            return text_response(StatusCode::BAD_REQUEST, "invalid upstream request");
-        }
-    };
-    let mut upstream_response = match timeout(
-        upstream_timeout,
-        runtime
-            .upstream_client()
-            .send(upstream_request, tls_insecure, cancellation.clone()),
-    )
-    .await
-    {
-        Ok(Ok(response)) => response,
-        Ok(Err(error)) => {
-            fail_capture(
-                &store,
-                capture_id,
-                ErrorStage::Upstream,
-                "upstream_failed",
-                &error.to_string(),
-            );
-            return text_response(StatusCode::BAD_GATEWAY, "upstream request failed");
-        }
-        Err(_) => {
-            fail_capture(
-                &store,
-                capture_id,
-                ErrorStage::Upstream,
-                "upstream_timeout",
-                "upstream request timed out",
-            );
-            return text_response(StatusCode::GATEWAY_TIMEOUT, "upstream request timed out");
-        }
-    };
-
-    let response_data = ResponseData {
-        status: upstream_response.status().as_u16(),
-        version: version_name(upstream_response.version()).to_string(),
-        headers: headers_to_values(upstream_response.headers()),
-    };
-    if upstream_response.status() == StatusCode::SWITCHING_PROTOCOLS {
-        if let Some(downstream_upgrade) = downstream_upgrade {
-            let upstream_upgrade = hyper::upgrade::on(&mut upstream_response);
-            let upgrade_cancellation = cancellation.clone();
-            tracker.spawn(async move {
-                if let (Ok(downstream), Ok(upstream)) =
-                    (downstream_upgrade.await, upstream_upgrade.await)
-                {
-                    let mut downstream = TokioIo::new(downstream);
-                    let mut upstream = TokioIo::new(upstream);
-                    tokio::select! {
-                        _ = tokio::io::copy_bidirectional(&mut downstream, &mut upstream) => {}
-                        _ = upgrade_cancellation.cancelled() => {}
-                    }
-                }
-            });
-        }
-        let _ = store.complete(capture_id, &response_data, &[]);
-        return response_from_data(&response_data, Vec::new(), false);
-    }
-
-    let collected_response = timeout(
-        BODY_READ_TIMEOUT,
-        Limited::new(upstream_response, MAX_CAPTURE_BODY_BYTES).collect(),
-    )
-    .await;
-    let response_body = match collected_response {
-        Ok(Ok(body)) => body.to_bytes().to_vec(),
-        Ok(Err(error)) if error.downcast_ref::<LengthLimitError>().is_some() => {
-            fail_capture(
-                &store,
-                capture_id,
-                ErrorStage::ResponseBody,
-                "response_body_too_large",
-                "response body exceeded the 64 MiB capture limit",
-            );
-            return text_response(StatusCode::BAD_GATEWAY, "upstream response body too large");
-        }
-        Ok(Err(error)) => {
-            fail_capture(
-                &store,
-                capture_id,
-                ErrorStage::ResponseBody,
-                "response_body_read_failed",
-                &error.to_string(),
-            );
-            return text_response(StatusCode::BAD_GATEWAY, "failed to read upstream response");
-        }
-        Err(_) => {
-            fail_capture(
-                &store,
-                capture_id,
-                ErrorStage::ResponseBody,
-                "response_body_timeout",
-                "response body read timed out",
-            );
-            return text_response(
-                StatusCode::GATEWAY_TIMEOUT,
-                "upstream response body timed out",
-            );
-        }
-    };
-    finish_session_response(
-        SessionResponseContext {
-            runtime,
-            store,
-            session_id: pin.session_id(),
-            capture_id,
-        },
-        request_data,
-        response_data,
-        response_body,
-        &interceptor_snapshot.response,
-    )
-    .await
-}
-
-struct SessionResponseContext {
-    runtime: Arc<ProxyCrab>,
-    store: CaptureStore,
-    session_id: u64,
-    capture_id: u64,
-}
-
-async fn finish_session_response(
-    context: SessionResponseContext,
-    mut request_data: RequestData,
-    mut response_data: ResponseData,
-    mut response_body: Vec<u8>,
-    scripts: &[InterceptorSnapshot],
-) -> Response<ProxyBody> {
-    let SessionResponseContext {
-        runtime,
-        store,
-        session_id,
-        capture_id,
-    } = context;
-    if let Err(error) = store.save_body(capture_id, BodySide::Response, false, &response_body) {
-        fail_capture(
-            &store,
-            capture_id,
-            ErrorStage::ResponseBody,
-            "response_body_store_failed",
-            &error.to_string(),
-        );
-        return text_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to persist response body",
-        );
-    }
-    if let Err(error) = store.update_response(capture_id, &response_data) {
-        fail_capture(
-            &store,
-            capture_id,
-            ErrorStage::ResponseBody,
-            "capture_response_update_failed",
-            &error.to_string(),
-        );
-        return text_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to persist response metadata",
-        );
-    }
-
-    let mut response_modifications = Vec::new();
-    for (position, script) in scripts.iter().enumerate() {
-        let state = SharedInterceptorState::new_response(
-            response_data.status,
-            response_data.headers.clone(),
-            request_data.tags.clone(),
-        );
-        let journal = ModificationJournal::new(response_data.headers.clone());
-        let execution_id = match store.begin_interceptor_run(
-            capture_id,
-            &InterceptorRun {
-                origin: InterceptorExecutionOrigin::Saved,
-                completed: false,
-                phase: InterceptorKind::Response,
-                position,
-                name: script.name.clone(),
-                script_hash: script.hash.clone(),
-                content: script.content.clone(),
-                modifications: journal.snapshot(),
-                error: None,
-            },
-        ) {
-            Ok(id) => id,
-            Err(error) => {
-                fail_capture(
-                    &store,
-                    capture_id,
-                    ErrorStage::Interceptor,
-                    "interceptor_history_store_failed",
-                    &error.to_string(),
-                );
-                return text_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "capture storage unavailable",
-                );
-            }
-        };
-        let breakpoint_context = BreakpointContext {
-            session_id,
-            capture_id,
-            phase: InterceptorKind::Response,
-            position,
-            interceptor_name: script.name.clone(),
-            parent_execution_id: execution_id,
-            request: request_data.clone(),
-            response: Some(response_data.clone()),
-            state: state.clone(),
-            parent_journal: journal.clone(),
-            store: store.clone(),
-        };
-        let source = script.content.clone();
-        let script_name = script.name.clone();
-        let request_snapshot = request_data.clone();
-        let response_snapshot = response_data.clone();
-        let execution_state = state.clone();
-        let execution_journal = journal.clone();
-        let hook = BreakpointHook {
-            registry: runtime.breakpoint_registry(),
-            context: breakpoint_context,
-        };
-        let mut run_error = None;
-        let execution = tokio::task::spawn_blocking(move || {
-            execute_response_with_state(
-                &source,
-                ResponseScriptContext {
-                    request: &request_snapshot,
-                    response: &response_snapshot,
-                },
-                execution_state,
-                execution_journal,
-                &script_name,
-                Some(capture_id),
-                Some(hook),
+                session.id,
+                cancellation,
+                tracker,
             )
-        })
-        .await;
-        match execution {
-            Ok(Ok((effects, error))) => {
-                response_data.status = effects
-                    .status
-                    .expect("response interceptor effects always include a status");
-                response_data.headers = effects.headers;
-                request_data.tags = effects.tags;
-                if let Some(replacement) = effects.body {
-                    match apply_body_replacement(&replacement) {
-                        Ok(body) => {
-                            response_body = body;
-                            remove_header_value(&mut response_data.headers, "content-encoding");
-                            if let Err(error) = store.save_body(
-                                capture_id,
-                                BodySide::Response,
-                                true,
-                                &response_body,
-                            ) {
-                                note_script_error(
-                                    &store,
-                                    capture_id,
-                                    "response-body",
-                                    &error.to_string(),
-                                );
-                            }
-                        }
-                        Err(error) => {
-                            let message = error.to_string();
-                            note_script_error(&store, capture_id, &script.name, &message);
-                            append_run_error(&mut run_error, message);
-                        }
-                    }
-                }
-                response_modifications.extend(effects.modifications);
-                if let Some(error) = error {
-                    note_script_error(&store, capture_id, &script.name, &error);
-                    append_run_error(&mut run_error, error);
-                }
-            }
-            Ok(Err(error)) => {
-                let message = error.to_string();
-                note_script_error(&store, capture_id, &script.name, &message);
-                run_error = Some(message);
-            }
-            Err(error) => {
-                let message = format!("interceptor worker failed: {error}");
-                note_script_error(&store, capture_id, &script.name, &message);
-                run_error = Some(message);
-            }
-        }
-        if let Err(error) = store.update_interceptor_run(
-            execution_id,
-            &journal.snapshot(),
-            run_error.as_deref(),
-            true,
-        ) {
-            fail_capture(
-                &store,
-                capture_id,
-                ErrorStage::Interceptor,
-                "interceptor_history_store_failed",
-                &error.to_string(),
-            );
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "capture storage unavailable",
-            );
-        }
-        if let Err(error) = store.update_tags(capture_id, &request_data.tags) {
-            fail_capture(
-                &store,
-                capture_id,
-                ErrorStage::Interceptor,
-                "capture_tags_store_failed",
-                &error.to_string(),
-            );
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "capture storage unavailable",
-            );
-        }
-    }
-    let _ = store.complete(capture_id, &response_data, &response_modifications);
-    let response_speed = parse_special_tag(&request_data.tags, CRAB_RESP_SPEED_TAG, capture_id);
-    response_from_data_with_speed(
-        &response_data,
-        response_body,
-        request_data.method.eq_ignore_ascii_case("HEAD"),
-        response_speed,
-    )
-}
-
-fn snapshot_session_interceptors(
-    runtime: &ProxyCrab,
-    session_id: u64,
-) -> Result<SessionInterceptorSnapshot> {
-    let chains = runtime.session_interceptors(session_id)?;
-    Ok(SessionInterceptorSnapshot {
-        request: resolve_interceptor_snapshots(
-            runtime,
-            session_id,
-            InterceptorKind::Request,
-            ScriptKind::RequestInterceptor,
-            chains.request,
-        ),
-        response: resolve_interceptor_snapshots(
-            runtime,
-            session_id,
-            InterceptorKind::Response,
-            ScriptKind::ResponseInterceptor,
-            chains.response,
-        ),
-    })
-}
-
-fn resolve_interceptor_snapshots(
-    runtime: &ProxyCrab,
-    session_id: u64,
-    phase: InterceptorKind,
-    kind: ScriptKind,
-    entries: Vec<SessionInterceptor>,
-) -> Vec<InterceptorSnapshot> {
-    entries
-        .into_iter()
-        .filter(|entry| entry.enabled)
-        .filter_map(|entry| match runtime.script(kind, &entry.name) {
-            Ok(script) => Some(InterceptorSnapshot {
-                name: script.name,
-                hash: script_content_hash(&script.content),
-                content: script.content,
-            }),
-            Err(error) => {
-                let message = format!(
-                    "session {session_id} {} interceptor {} is unavailable and was skipped: {error}",
-                    match phase {
-                        InterceptorKind::Request => "request",
-                        InterceptorKind::Response => "response",
-                    },
-                    entry.name
-                );
-                tracing::warn!("{message}");
-                runtime.log_buffer().push("WARN", message);
-                None
-            }
-        })
-        .collect()
-}
-
-fn append_run_error(current: &mut Option<String>, next: String) {
-    match current {
-        Some(current) => {
-            current.push_str("; ");
-            current.push_str(&next);
-        }
-        None => *current = Some(next),
-    }
-}
-
-async fn tunnel_connect<C>(
-    mut client: C,
-    authority: &hyper::http::uri::Authority,
-    capture: &ConnectCapture,
-    cancellation: CancellationToken,
-) where
-    C: AsyncRead + AsyncWrite + Unpin,
-{
-    let mut upstream = match timeout(CONNECT_TIMEOUT, TcpStream::connect(authority.as_str())).await
-    {
-        Ok(Ok(upstream)) => upstream,
-        Ok(Err(error)) => {
-            fail_capture(
-                &capture.store,
-                capture.id,
-                ErrorStage::Connect,
-                "upstream_connect_failed",
-                &error.to_string(),
-            );
-            return;
-        }
-        Err(_) => {
-            fail_capture(
-                &capture.store,
-                capture.id,
-                ErrorStage::Connect,
-                "upstream_connect_timeout",
-                "upstream connection timed out",
-            );
-            return;
-        }
-    };
-    let _ = capture.store.tunneled(capture.id);
-    tokio::select! {
-        result = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {
-            if let Err(error) = result {
-                tracing::warn!("CONNECT tunnel for {authority} failed: {error}");
-            }
-        }
-        _ = cancellation.cancelled() => {}
-    }
-}
-
-fn request_from_data(
-    data: &RequestData,
-    body: Vec<u8>,
-    bytes_per_second: Option<u64>,
-) -> Result<Request<ProxyBody>> {
-    let uri = Uri::from_str(&data.uri)?;
-    let mut builder = Request::builder()
-        .method(Method::from_bytes(data.method.as_bytes())?)
-        .uri(uri.clone())
-        .version(parse_version(&data.version));
-    let headers = builder.headers_mut().expect("request builder is valid");
-    values_to_headers(&data.headers, headers)?;
-    let preserve_upgrade = headers.contains_key(UPGRADE);
-    strip_hop_by_hop_headers(headers, preserve_upgrade);
-    if !headers.contains_key(HOST)
-        && let Some(authority) = uri.authority()
-    {
-        headers.insert(HOST, HeaderValue::from_str(authority.as_str())?);
-    }
-    headers.remove(TRANSFER_ENCODING);
-    headers.insert(
-        CONTENT_LENGTH,
-        HeaderValue::from_str(&body.len().to_string())?,
-    );
-    let body = Bytes::from(body);
-    let body = match bytes_per_second.filter(|_| !body.is_empty()) {
-        Some(bytes_per_second) => PacedBody::new(body, bytes_per_second).boxed_unsync(),
-        None => boxed_full(body),
-    };
-    Ok(builder.body(body)?)
-}
-
-fn streaming_upstream_request(
-    request: Request<Incoming>,
-    transfer: Arc<BypassTransfer>,
-) -> Result<Request<ProxyBody>> {
-    let (mut parts, incoming) = request.into_parts();
-    let uri = parts.uri.clone();
-    let preserve_upgrade = parts.headers.contains_key(UPGRADE);
-    strip_hop_by_hop_headers(&mut parts.headers, preserve_upgrade);
-    if !parts.headers.contains_key(HOST)
-        && let Some(authority) = uri.authority()
-    {
-        parts
-            .headers
-            .insert(HOST, HeaderValue::from_str(authority.as_str())?);
-    }
-    let body = TrackedBody::request(incoming, transfer).boxed_unsync();
-    Ok(Request::from_parts(parts, body))
-}
-
-fn response_from_data(
-    data: &ResponseData,
-    body: Vec<u8>,
-    preserve_content_length: bool,
-) -> Response<ProxyBody> {
-    response_from_data_with_speed(data, body, preserve_content_length, None)
-}
-
-fn response_from_data_with_speed(
-    data: &ResponseData,
-    body: Vec<u8>,
-    preserve_content_length: bool,
-    bytes_per_second: Option<u64>,
-) -> Response<ProxyBody> {
-    let mut builder = Response::builder()
-        .status(data.status)
-        .version(parse_version(&data.version));
-    if let Some(headers) = builder.headers_mut() {
-        if let Err(error) = values_to_headers(&data.headers, headers) {
-            tracing::error!("failed to build downstream response headers: {error}");
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "invalid downstream response headers",
-            );
-        }
-        strip_hop_by_hop_headers(
-            headers,
-            data.status == StatusCode::SWITCHING_PROTOCOLS.as_u16(),
-        );
-        headers.remove(TRANSFER_ENCODING);
-        if !preserve_content_length
-            && response_status_has_body(data.status)
-            && let Ok(value) = HeaderValue::from_str(&body.len().to_string())
-        {
-            headers.insert(CONTENT_LENGTH, value);
-        }
-    }
-    let body = Bytes::from(body);
-    let body = match bytes_per_second.filter(|_| !body.is_empty()) {
-        Some(bytes_per_second) => PacedBody::new(body, bytes_per_second).boxed_unsync(),
-        None => boxed_full(body),
-    };
-    builder
-        .body(body)
-        .unwrap_or_else(|_| text_response(StatusCode::INTERNAL_SERVER_ERROR, "invalid response"))
-}
-
-fn parse_positive_decimal(value: Option<&str>) -> Result<Option<u64>, ()> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(());
-    }
-    value
-        .parse::<u64>()
-        .ok()
-        .filter(|value| *value > 0)
-        .map(Some)
-        .ok_or(())
-}
-
-fn parse_special_tag(tags: &RequestTags, key: &'static str, capture_id: u64) -> Option<u64> {
-    match parse_positive_decimal(tags.get(key).map(String::as_str)) {
-        Ok(value) => value,
-        Err(()) => {
-            tracing::warn!(capture_id, tag = key, "ignoring invalid special tag value");
-            None
-        }
-    }
-}
-
-fn parse_tls_insecure_tag(value: Option<&str>) -> Result<bool, ()> {
-    match value {
-        None => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err(()),
-    }
-}
-
-fn tls_insecure_from_tags(tags: &RequestTags, capture_id: u64) -> bool {
-    match parse_tls_insecure_tag(tags.get(CRAB_TLS_INSECURE_TAG).map(String::as_str)) {
-        Ok(value) => value,
-        Err(()) => {
-            tracing::warn!(
-                capture_id,
-                tag = CRAB_TLS_INSECURE_TAG,
-                "ignoring invalid special tag value"
-            );
-            false
+            .await
         }
     }
 }
@@ -2020,8 +762,18 @@ fn note_script_error(store: &CaptureStore, id: u64, name: &str, message: &str) {
     tracing::warn!("interceptor {name} failed: {message}");
 }
 
-fn apply_body_replacement(replacement: &BodyReplacement) -> Result<Vec<u8>> {
-    read_body_replacement(replacement)
+fn note_capture_error(store: &CaptureStore, id: u64, stage: ErrorStage, kind: &str, message: &str) {
+    if let Err(error) = store.note_error(
+        id,
+        &CaptureError {
+            stage,
+            kind: kind.into(),
+            message: message.into(),
+        },
+    ) {
+        tracing::error!("failed to record capture error: {error}");
+    }
+    tracing::warn!("{kind}: {message}");
 }
 
 fn is_upgrade_request(request: &Request<Incoming>) -> bool {
@@ -2059,7 +811,7 @@ fn certificate_response(runtime: &ProxyCrab) -> Response<ProxyBody> {
             vec!["application/x-x509-ca-cert".into()],
         )]),
     };
-    response_from_data(&response, runtime.certificate_pem().into_bytes(), false)
+    mitm::response_from_data(&response, runtime.certificate_pem().into_bytes(), false)
 }
 
 fn normalize_tls_error(message: &str) -> &'static str {
@@ -2116,10 +868,10 @@ mod tests {
     };
     use tokio::time::{Instant, sleep};
 
+    use super::mitm::{parse_positive_decimal, parse_tls_insecure_tag, response_from_data};
     use super::{
-        PacedBody, headers_to_values, normalize_tls_error, parse_positive_decimal,
-        parse_tls_insecure_tag, remove_header_value, response_from_data, strip_hop_by_hop_headers,
-        values_to_headers, version_name,
+        PacedBody, headers_to_values, normalize_tls_error, remove_header_value,
+        strip_hop_by_hop_headers, values_to_headers, version_name,
     };
     use crate::model::{HeaderValues, ResponseData};
 

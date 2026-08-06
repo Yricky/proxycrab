@@ -2,8 +2,12 @@ use std::{
     convert::Infallible,
     error::Error as StdError,
     future::Future,
+    io,
     pin::Pin,
-    sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     task::{Context, Poll},
     time::Duration,
 };
@@ -11,14 +15,174 @@ use std::{
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::UnsyncBoxBody};
 use hyper::body::{Body, Frame};
-use tokio::time::{Instant, Sleep};
+use tokio::{
+    sync::{mpsc, oneshot},
+    time::{Instant, Sleep, timeout},
+};
 
-use crate::bypass::BypassStore;
+use crate::{bypass::BypassStore, storage::CaptureBodyWriter};
+
+use super::TaskGroup;
 
 const PACE_CHUNKS_PER_SECOND: u64 = 50;
 
 pub(super) type BoxError = Box<dyn StdError + Send + Sync>;
 pub(super) type ProxyBody = UnsyncBoxBody<Bytes, BoxError>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum PumpOutcome {
+    Complete,
+    InputError(String),
+    FrameTimeout,
+    OutputClosed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PumpResult {
+    pub(super) outcome: PumpOutcome,
+    pub(super) storage_error: Option<String>,
+}
+
+struct ChannelBody {
+    receiver: mpsc::Receiver<Result<Frame<Bytes>, BoxError>>,
+    size_hint: hyper::body::SizeHint,
+}
+
+impl Body for ChannelBody {
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        self.get_mut().receiver.poll_recv(context)
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        self.size_hint
+    }
+}
+
+pub(super) fn pump_body<B>(
+    mut body: B,
+    mut writer: Option<CaptureBodyWriter>,
+    frame_timeout: Option<Duration>,
+    bytes_per_second: Option<u64>,
+    forward: bool,
+    tracker: &TaskGroup,
+) -> (Option<ProxyBody>, oneshot::Receiver<PumpResult>)
+where
+    B: Body<Data = Bytes> + Unpin + Send + 'static,
+    B::Error: Into<BoxError> + Send + Sync + 'static,
+{
+    let size_hint = body.size_hint();
+    let (frame_sender, frame_receiver) = mpsc::channel::<Result<Frame<Bytes>, BoxError>>(4);
+    let (done_sender, done_receiver) = oneshot::channel();
+    tracker.spawn(async move {
+        let mut storage_error = None;
+        let mut forwarding = forward;
+        let mut output_closed = false;
+        let outcome = loop {
+            let next = match frame_timeout {
+                Some(duration) => match timeout(duration, body.frame()).await {
+                    Ok(frame) => frame,
+                    Err(_) => {
+                        if forwarding {
+                            let _ = frame_sender
+                                .send(Err(Box::new(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "response body frame timed out",
+                                ))))
+                                .await;
+                        }
+                        break PumpOutcome::FrameTimeout;
+                    }
+                },
+                None => body.frame().await,
+            };
+            let Some(frame) = next else {
+                break PumpOutcome::Complete;
+            };
+            let frame = match frame {
+                Ok(frame) => frame,
+                Err(error) => {
+                    let error = error.into();
+                    let message = error.to_string();
+                    if forwarding {
+                        let _ = frame_sender.send(Err(error)).await;
+                    }
+                    break PumpOutcome::InputError(message);
+                }
+            };
+            if let Some(data) = frame.data_ref()
+                && let Some(active_writer) = &mut writer
+                && let Err(error) = active_writer.write_all(data).await
+            {
+                storage_error = Some(error.to_string());
+                writer = None;
+            }
+            if forwarding
+                && send_frame(&frame_sender, frame, bytes_per_second)
+                    .await
+                    .is_err()
+            {
+                forwarding = false;
+                output_closed = true;
+            }
+        };
+        let outcome = if outcome == PumpOutcome::Complete && output_closed {
+            PumpOutcome::OutputClosed
+        } else {
+            outcome
+        };
+        if let Some(active_writer) = writer
+            && let Err(error) = active_writer.finish().await
+        {
+            storage_error = Some(error.to_string());
+        }
+        let _ = done_sender.send(PumpResult {
+            outcome,
+            storage_error,
+        });
+    });
+    let output = forward.then(|| {
+        ChannelBody {
+            receiver: frame_receiver,
+            size_hint,
+        }
+        .boxed_unsync()
+    });
+    (output, done_receiver)
+}
+
+async fn send_frame(
+    sender: &mpsc::Sender<Result<Frame<Bytes>, BoxError>>,
+    frame: Frame<Bytes>,
+    bytes_per_second: Option<u64>,
+) -> Result<(), ()> {
+    let Some(bytes_per_second) = bytes_per_second else {
+        return sender.send(Ok(frame)).await.map_err(|_| ());
+    };
+    let data = match frame.into_data() {
+        Ok(data) => data,
+        Err(frame) => return sender.send(Ok(frame)).await.map_err(|_| ()),
+    };
+    let chunk_len = usize::try_from(bytes_per_second.div_ceil(PACE_CHUNKS_PER_SECOND).max(1))
+        .unwrap_or(usize::MAX);
+    for chunk in data.chunks(chunk_len) {
+        let nanos = (chunk.len() as u128 * 1_000_000_000_u128).div_ceil(bytes_per_second as u128);
+        tokio::time::sleep(Duration::from_nanos(
+            u64::try_from(nanos).unwrap_or(u64::MAX),
+        ))
+        .await;
+        sender
+            .send(Ok(Frame::data(Bytes::copy_from_slice(chunk))))
+            .await
+            .map_err(|_| ())?;
+    }
+    Ok(())
+}
 
 pub(super) struct PacedBody {
     bytes: Bytes,

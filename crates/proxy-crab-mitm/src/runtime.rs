@@ -1,31 +1,65 @@
 use std::{
     collections::{HashMap, HashSet},
+    fs::File,
+    io::Read,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
 };
-
-use anyhow::{Result, bail};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{
     breakpoint::BreakpointRegistry,
     bypass::{BypassEntry, BypassStore},
     ca::CertificateAuthority,
     log_buffer::LogBuffer,
+    lua::BodyReplacement,
     model::{
-        AppConfig, BreakpointDetail, BreakpointListFilter, BreakpointSummary, CaptureDetail,
-        CaptureSummary, Column, FilterColumn, FilterOption, InterceptorKind,
+        AppConfig, BodyPayload, BreakpointDetail, BreakpointListFilter, BreakpointSummary,
+        CaptureDetail, CaptureSummary, Column, FilterColumn, FilterOption, InterceptorKind,
         InterceptorLibraryItem, MAX_SESSION_INTERCEPTORS_PER_KIND, ProxyStatus,
         ResolvedSessionInterceptor, ResolvedSessionInterceptors, Script, ScriptKind, SessionFilter,
         SessionInterceptors, SessionMetadata, SessionView, SystemLogEntry,
         TemporaryExecutionResult, WorkspacePaths,
     },
     proxy::{ProxyController, UpstreamClient},
-    storage::{BodySide, BodySource, BodySourceData, CaptureStore, body_payload},
+    storage::{
+        BODY_DETAIL_LIMIT, BodySide, BodySource, BodySourceData, CaptureStore, body_payload,
+    },
     workspace::{
         Workspace, configure_workspace_for_next_start, configured_workspace, resolve_workspace,
     },
 };
+use anyhow::{Result, bail};
+
+fn body_replacement_payload(
+    replacement: &BodyReplacement,
+    headers: &crate::model::HeaderValues,
+) -> Result<BodyPayload> {
+    match replacement {
+        BodyReplacement::String(content) => {
+            let size = content.len() as u64;
+            if size > BODY_DETAIL_LIMIT {
+                return Ok(BodyPayload::Large { size, path: None });
+            }
+            Ok(body_payload(content.as_bytes(), headers, size, None))
+        }
+        BodyReplacement::File(path) => {
+            let file = File::open(path)?;
+            let size = file.metadata()?.len();
+            if size > BODY_DETAIL_LIMIT {
+                return Ok(BodyPayload::Large { size, path: None });
+            }
+            let mut bytes = Vec::new();
+            file.take(BODY_DETAIL_LIMIT + 1).read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > BODY_DETAIL_LIMIT {
+                return Ok(BodyPayload::Large {
+                    size: bytes.len() as u64,
+                    path: None,
+                });
+            }
+            Ok(body_payload(&bytes, headers, bytes.len() as u64, None))
+        }
+    }
+}
 
 pub struct ProxyCrab {
     app_data_dir: PathBuf,
@@ -35,7 +69,6 @@ pub struct ProxyCrab {
     bypass: BypassStore,
     stores: Mutex<HashMap<u64, CaptureStore>>,
     session_pins: Mutex<HashMap<u64, usize>>,
-    capture_slots: Arc<Semaphore>,
     log_buffer: Arc<LogBuffer>,
     breakpoints: Arc<BreakpointRegistry>,
     upstream: UpstreamClient,
@@ -57,7 +90,6 @@ impl ProxyCrab {
             bypass,
             stores: Mutex::new(HashMap::new()),
             session_pins: Mutex::new(HashMap::new()),
-            capture_slots: Arc::new(Semaphore::new(128)),
             log_buffer,
             breakpoints: Arc::new(BreakpointRegistry::default()),
             upstream: UpstreamClient::new(),
@@ -233,14 +265,6 @@ impl ProxyCrab {
         }
     }
 
-    pub async fn acquire_capture_slot(&self) -> OwnedSemaphorePermit {
-        self.capture_slots
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("capture semaphore is never closed")
-    }
-
     pub fn list_captures(
         &self,
         session_id: u64,
@@ -336,9 +360,9 @@ impl ProxyCrab {
                     .expect("request breakpoint state always has a URI");
                 capture.summary.request.headers = headers.clone();
                 if let Some(replacement) = live.context.state.body()
-                    && let Ok(bytes) = crate::lua::read_body_replacement(&replacement)
+                    && let Ok(payload) = body_replacement_payload(&replacement, &headers)
                 {
-                    capture.request_body = body_payload(&bytes, &headers, bytes.len() as u64, None);
+                    capture.request_body = payload;
                 }
             }
             InterceptorKind::Response => {
@@ -351,10 +375,9 @@ impl ProxyCrab {
                     response.headers = headers.clone();
                 }
                 if let Some(replacement) = live.context.state.body()
-                    && let Ok(bytes) = crate::lua::read_body_replacement(&replacement)
+                    && let Ok(payload) = body_replacement_payload(&replacement, &headers)
                 {
-                    capture.response_body =
-                        body_payload(&bytes, &headers, bytes.len() as u64, None);
+                    capture.response_body = payload;
                 }
             }
         }

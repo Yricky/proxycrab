@@ -10,6 +10,7 @@ use anyhow::{Result, anyhow};
 use brotli::Decompressor;
 use flate2::read::{GzDecoder, ZlibDecoder};
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use tokio::io::AsyncWriteExt;
 
 use crate::{
     model::{
@@ -20,7 +21,7 @@ use crate::{
     workspace::now_millis,
 };
 
-const BODY_DETAIL_LIMIT: u64 = 64 * 1024;
+pub(crate) const BODY_DETAIL_LIMIT: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodySide {
@@ -41,6 +42,24 @@ pub struct BodySource {
     pub stored_size: u64,
     pub content_type: Option<String>,
     pub content_encodings: Vec<String>,
+}
+
+pub(crate) struct CaptureBodyWriter {
+    store: CaptureStore,
+    id: u64,
+    writer: tokio::fs::File,
+}
+
+impl CaptureBodyWriter {
+    pub(crate) async fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
+        self.writer.write_all(bytes).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn finish(mut self) -> Result<()> {
+        self.writer.flush().await?;
+        self.store.touch(self.id)
+    }
 }
 
 #[derive(Clone)]
@@ -242,6 +261,24 @@ impl CaptureStore {
 
     pub fn save_body(&self, id: u64, side: BodySide, modified: bool, bytes: &[u8]) -> Result<()> {
         fs::write(self.body_path(id, side, modified), bytes)?;
+        self.touch(id)
+    }
+
+    pub(crate) async fn create_body_writer(
+        &self,
+        id: u64,
+        side: BodySide,
+        modified: bool,
+    ) -> Result<CaptureBodyWriter> {
+        let file = tokio::fs::File::create(self.body_path(id, side, modified)).await?;
+        Ok(CaptureBodyWriter {
+            store: self.clone(),
+            id,
+            writer: file,
+        })
+    }
+
+    fn touch(&self, id: u64) -> Result<()> {
         self.connection()?.execute(
             "UPDATE captures SET updated_at=MAX(updated_at + 1, ?2) WHERE id=?1",
             params![id as i64, now_millis() as i64],
@@ -908,7 +945,7 @@ mod tests {
         script_content_hash,
     };
 
-    use super::{BodySide, CaptureStore, decode_body};
+    use super::{BodySide, BodySourceData, CaptureStore, decode_body};
 
     fn request(uri: &str) -> RequestData {
         RequestData {
@@ -1053,6 +1090,66 @@ mod tests {
         let after = store.get(id).unwrap().unwrap().summary.updated_at;
 
         assert!(after > before);
+    }
+
+    #[tokio::test]
+    async fn body_writer_appends_without_a_size_limit() {
+        let root = tempdir().unwrap();
+        let store = CaptureStore::open(7, root.path()).unwrap();
+        let id = store
+            .begin("127.0.0.1", &request("http://example.com"), "request")
+            .unwrap();
+        store
+            .update_response(
+                id,
+                &crate::model::ResponseData {
+                    status: 200,
+                    version: "HTTP/1.1".into(),
+                    headers: HeaderValues::new(),
+                },
+            )
+            .unwrap();
+        let mut writer = store
+            .create_body_writer(id, BodySide::Response, false)
+            .await
+            .unwrap();
+        let chunk = vec![b'x'; 1024 * 1024];
+        for _ in 0..65 {
+            writer.write_all(&chunk).await.unwrap();
+        }
+        writer.finish().await.unwrap();
+
+        let source = store.body_source(id, BodySide::Response).unwrap().unwrap();
+        assert_eq!(source.stored_size, 65 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn body_writer_exposes_small_appends_before_finish() {
+        let root = tempdir().unwrap();
+        let store = CaptureStore::open(7, root.path()).unwrap();
+        let mut request = request("http://example.com");
+        request
+            .headers
+            .insert("content-type".into(), vec!["text/plain".into()]);
+        let id = store.begin("127.0.0.1", &request, "request").unwrap();
+        let mut writer = store
+            .create_body_writer(id, BodySide::Request, false)
+            .await
+            .unwrap();
+
+        writer.write_all(b"partial frame").await.unwrap();
+
+        let source = store.body_source(id, BodySide::Request).unwrap().unwrap();
+        assert_eq!(source.stored_size, 13);
+        let BodySourceData::File(path) = source.data else {
+            panic!("streaming capture body should be backed by a file");
+        };
+        assert_eq!(tokio::fs::read(path).await.unwrap(), b"partial frame");
+        let detail = store.get(id).unwrap().unwrap();
+        assert!(matches!(
+            detail.request_body,
+            BodyPayload::Text { ref content, size: 13, .. } if content == "partial frame"
+        ));
     }
 
     #[test]

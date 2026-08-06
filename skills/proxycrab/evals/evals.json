@@ -69,8 +69,8 @@
     },
     {
       "id": 12,
-      "prompt": "Create a ProxyCrab request interceptor named pace-debug-traffic using the supplied Lua fixture, attach it to the active Session without changing the response chain, and verify on a new capture that request speed is 1024 B/s, response speed is 2048 B/s, and upstream timeout is 120000 ms. Do not treat the tags as HTTP headers.",
-      "expected_output": "The agent saves valid Lua with _crab_req_speed=1024, _crab_resp_speed=2048, and _crab_req_timeout=120000, preserves the existing response chain, and cites the new capture tags plus tag_set history without claiming any special tag was sent upstream.",
+      "prompt": "Create a ProxyCrab request interceptor named pace-debug-traffic using the supplied Lua fixture, attach it to the active Session without changing the response chain, and verify on a new capture that request speed is 1024 B/s, response speed is 2048 B/s, upstream timeout is 120000 ms, and response body-frame timeout is 30000 ms. Do not treat the tags as HTTP headers.",
+      "expected_output": "The agent saves valid Lua with _crab_req_speed=1024, _crab_resp_speed=2048, _crab_req_timeout=120000, and _crab_resp_bodyframe_timeout=30000, preserves the existing response chain, and cites the new capture tags plus tag_set history without claiming any special tag was sent upstream.",
       "files": [
         "evals/fixtures/test-traffic-limits.lua"
       ]

@@ -153,20 +153,22 @@ it explicitly.
 sent to the server. After all request interceptors finish, the presence of `_crab_skip` skips the
 upstream request, creates an empty HTTP/1.1 200 response, and continues through response interceptors.
 
-Four additional proxy-local tags control ordinary captured HTTP/HTTPS traffic:
+Five additional proxy-local tags control ordinary captured HTTP/HTTPS traffic:
 
 | Tag | Unit | Behavior |
 | --- | --- | --- |
 | `_crab_req_speed` | bytes per second | Maximum speed for the final request body sent from ProxyCrab to the server |
 | `_crab_resp_speed` | bytes per second | Maximum speed for the final response body sent from ProxyCrab to the client |
 | `_crab_req_timeout` | milliseconds | Upstream operation timeout; defaults to `60000` |
+| `_crab_resp_bodyframe_timeout` | milliseconds | Idle timeout from response headers to the first upstream body frame and between later frames; unset by default |
 | `_crab_tls_insecure` | exact string `true` | Disable upstream HTTPS certificate-chain and hostname verification |
 
 Values must match ASCII `[0-9]+`, fit in `u64`, and be greater than zero. Leading zeroes are
 accepted. Invalid final values are ignored with a Rust `warn`; they do not fail the interceptor or
 capture. Request speed and timeout use the values after the complete request interceptor chain.
-Response speed uses the value after the complete response interceptor chain, so either phase may
-set or overwrite it. Breakpoint temporary scripts participate in the same final-value behavior.
+Response speed and response-frame timeout use the values after the complete response interceptor
+chain, so either phase may set or overwrite them. Breakpoint temporary scripts participate in the
+same final-value behavior.
 `_crab_tls_insecure` is resolved after the complete request interceptor chain and enables the
 insecure TLS policy only when its final value is exactly `true`; any other present value is ignored
 with a warning. It has no effect on HTTP. Verified and insecure HTTPS requests use separate
@@ -176,8 +178,11 @@ connection established under the insecure policy. Use it only for controlled tes
 Speed limits are independent per capture and direction. They pace the final outbound body bytes
 without an initial or catch-up burst; headers, HTTP framing, and TLS overhead are not counted.
 Network backpressure may make the transfer slower. `_crab_req_timeout` covers upstream connection,
-TLS, paced request-body upload, and waiting for response headers. It does not change the existing
-request-body or response-body read timeouts and there is no downstream response timeout.
+TLS, paced request-body upload, and waiting for response headers. `_crab_resp_bodyframe_timeout`
+starts after response interceptors and resets after every upstream response-body frame. On a normal
+response, expiry terminates the downstream body stream and fails the capture. When a response body
+replacement is already being returned, expiry only stops the background raw-body drain and records
+a capture warning; the replacement and successful outcome are retained.
 
 The speed and timeout tags do not apply to bypass traffic, raw CONNECT tunnels, Upgrade/WebSocket,
 the local `proxy.crab/ca.crt` response, or proxy-generated error responses. With `_crab_skip`,
@@ -200,7 +205,13 @@ Response interceptors receive read-only `req.method`, `req.version`, `req.uri`, 
 plus mutable request tags through `setTag` and `getTag`; request bodies remain unavailable.
 `resp.status` is mutable and accepts any integer from 100 through 999, including non-standard
 status codes and status/body combinations. `resp.version` remains read-only. File replacement
-requires an absolute path and is limited to 64 MiB.
+requires an absolute path and is streamed from the file without an application-level size limit.
+
+Request interceptors run once after downstream request headers arrive, before the original request
+body is consumed. Response interceptors run once after upstream response headers arrive, before the
+original response body is consumed. Lua cannot read either original body. Original bodies stream to
+their raw capture files while normal traffic or a replacement body proceeds independently;
+`replace_with_file` is streamed and `replace_with_string` remains Lua-managed memory.
 
 `breakpoint(timeoutMs)` is available in saved request and response interceptors. Zero returns
 immediately. A positive value pauses the current request until the timeout or manual release; the

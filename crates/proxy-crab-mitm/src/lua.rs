@@ -1,7 +1,5 @@
 use std::{
     collections::BTreeMap,
-    fs::File,
-    io::Read,
     net::SocketAddr,
     path::Path,
     sync::{
@@ -10,7 +8,7 @@ use std::{
     },
 };
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use mlua::{
     Error as LuaError, Function, HookTriggers, Lua, Table, UserData, UserDataFields,
     UserDataMethods, Value, VmState,
@@ -28,7 +26,6 @@ mod codec;
 
 pub const INSTRUCTION_LIMIT: u32 = 100_000;
 pub const MEMORY_LIMIT: usize = 16 * 1024 * 1024;
-const MAX_BODY_REPLACEMENT_BYTES: u64 = 64 * 1024 * 1024;
 const ANONYMOUS_SCRIPT_NAME: &str = "<anonymous>";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -755,6 +752,10 @@ impl SharedInterceptorState {
             .expect("Lua body state lock poisoned")
             .clone()
     }
+
+    pub(crate) fn set_body(&self, body: Option<BodyReplacement>) {
+        *self.body.lock().expect("Lua body state lock poisoned") = body;
+    }
 }
 
 #[derive(Clone)]
@@ -1088,29 +1089,6 @@ fn existing_header_name(headers: &HeaderValues, name: &str) -> Option<String> {
 fn remove_header(headers: &mut BTreeMap<String, Vec<String>>, name: &str) -> Option<Vec<String>> {
     let key = existing_header_name(headers, name)?;
     headers.remove(&key)
-}
-
-pub fn read_body_replacement(replacement: &BodyReplacement) -> Result<Vec<u8>> {
-    match replacement {
-        BodyReplacement::String(content) => {
-            if content.len() as u64 > MAX_BODY_REPLACEMENT_BYTES {
-                bail!("body replacement string exceeds the 64 MiB limit");
-            }
-            Ok(content.as_bytes().to_vec())
-        }
-        BodyReplacement::File(path) => {
-            let file = File::open(path)
-                .map_err(|error| anyhow!("failed to open body file {path}: {error}"))?;
-            let mut body = Vec::new();
-            file.take(MAX_BODY_REPLACEMENT_BYTES + 1)
-                .read_to_end(&mut body)
-                .map_err(|error| anyhow!("failed to read body file {path}: {error}"))?;
-            if body.len() as u64 > MAX_BODY_REPLACEMENT_BYTES {
-                bail!("body replacement file exceeds the 64 MiB limit");
-            }
-            Ok(body)
-        }
-    }
 }
 
 #[cfg(test)]

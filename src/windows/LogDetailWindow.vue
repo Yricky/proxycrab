@@ -43,6 +43,7 @@ const extensionSeconds = ref(60);
 let autoRefreshTimer: number | undefined;
 let breakpointRefreshTimer: number | undefined;
 let loadInFlight = false;
+const AUTO_REFRESH_INTERVAL = 2000;
 
 async function load(silent = false): Promise<void> {
   if (loadInFlight) return;
@@ -141,30 +142,71 @@ function remainingLabel(): string {
   return `${Math.max(0, Math.ceil((breakpoint.value?.remaining_ms ?? 0) / 1000))} 秒`;
 }
 
-// 请求仍在进行时自动轮询，完成后停止
+function stopAutoRefresh(): void {
+  if (autoRefreshTimer !== undefined) {
+    window.clearTimeout(autoRefreshTimer);
+    autoRefreshTimer = undefined;
+  }
+}
+
+function shouldAutoRefresh(): boolean {
+  return (
+    props.breakpointId === undefined &&
+    detail.value?.outcome === "in_progress" &&
+    document.hasFocus()
+  );
+}
+
+function scheduleAutoRefresh(): void {
+  stopAutoRefresh();
+  if (!shouldAutoRefresh()) return;
+  autoRefreshTimer = window.setTimeout(async () => {
+    autoRefreshTimer = undefined;
+    if (!shouldAutoRefresh()) return;
+    await load(true);
+    scheduleAutoRefresh();
+  }, AUTO_REFRESH_INTERVAL);
+}
+
+function handleWindowFocus(): void {
+  if (props.breakpointId !== undefined) {
+    if (breakpoint.value || detail.value?.outcome === "in_progress") void load(true);
+    return;
+  }
+  if (detail.value?.outcome === "in_progress") {
+    void load(true).finally(scheduleAutoRefresh);
+  }
+}
+
+function handleWindowBlur(): void {
+  stopAutoRefresh();
+}
+
+// 请求仍在进行且窗口聚焦时持续轮询，完成或失焦后停止
 watch(
   () => detail.value?.outcome,
-  (outcome) => {
-    if (autoRefreshTimer !== undefined) {
-      window.clearTimeout(autoRefreshTimer);
-      autoRefreshTimer = undefined;
-    }
-    if (props.breakpointId === undefined && outcome === "in_progress") {
-      autoRefreshTimer = window.setTimeout(() => void load(), 2000);
-    }
-  },
+  () => scheduleAutoRefresh(),
 );
 
 onMounted(() => {
-  void load();
+  window.addEventListener("focus", handleWindowFocus);
+  window.addEventListener("blur", handleWindowBlur);
+  void load().finally(scheduleAutoRefresh);
   if (props.breakpointId !== undefined) {
     breakpointRefreshTimer = window.setInterval(() => {
-      if (breakpoint.value || detail.value?.outcome === "in_progress") void load(true);
+      if (
+        document.hasFocus() &&
+        (breakpoint.value || detail.value?.outcome === "in_progress")
+      ) {
+        void load(true);
+      }
     }, 500);
   }
 });
 onBeforeUnmount(() => {
-  if (autoRefreshTimer !== undefined) window.clearTimeout(autoRefreshTimer);
+  stopAutoRefresh();
+  window.removeEventListener("focus", handleWindowFocus);
+  window.removeEventListener("blur", handleWindowBlur);
   if (copiedTimer !== undefined) window.clearTimeout(copiedTimer);
   if (breakpointRefreshTimer !== undefined) window.clearInterval(breakpointRefreshTimer);
 });
@@ -274,9 +316,11 @@ interface UrlSegment {
 
 // 按原始文本拆分 query（保留编码，不做重编码），逐对着色
 function querySegments(search: string): UrlSegment[] {
-  const raw = search.startsWith("?") ? search.slice(1) : search;
+  const hasQuestion = search.startsWith("?");
+  const raw = hasQuestion ? search.slice(1) : search;
   const pairs = raw.split("&");
   const segments: UrlSegment[] = [];
+  if (hasQuestion) segments.push({ text: "?", cls: "url-query-sep" });
   pairs.forEach((pair, i) => {
     if (i > 0) segments.push({ text: "&", cls: "url-query-sep" });
     const eq = pair.indexOf("=");

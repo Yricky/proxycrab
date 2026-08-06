@@ -235,11 +235,15 @@ and script errors emit a system warning and bypass. Select a routing script only
 - Request tags are capture-local metadata. Presence of `_crab_skip`, including an empty value,
   intentionally suppresses the upstream request after the complete request chain.
 - `_crab_req_speed` and `_crab_resp_speed` pace the final outbound request and response bodies in
-  bytes per second; `_crab_req_timeout` sets the upstream timeout in milliseconds (default 60000).
-  Use only positive ASCII decimal values. Invalid final values are ignored with a runtime warning.
+  bytes per second; `_crab_req_timeout` sets the upstream timeout in milliseconds (default 60000),
+  and `_crab_resp_bodyframe_timeout` sets the idle milliseconds before each upstream response-body
+  frame. Use only positive ASCII decimal values. Invalid final values are ignored with a runtime warning.
   These controls are per capture, never become HTTP headers, and do not apply to bypass, raw
   CONNECT, Upgrade/WebSocket, the local CA endpoint, or proxy-generated errors. `_crab_skip` still
   allows response pacing after response interceptors create the synthetic response.
+- Request and response interceptors run at the header boundary and cannot read original bodies.
+  Captured bodies and `replace_with_file` stream without an application-level size limit; use raw
+  body endpoints with an explicit `max_size` when reading them back.
 - `_crab_tls_insecure` disables upstream HTTPS certificate-chain and hostname verification only when
   its final request-interceptor value is exactly `true`. It also applies to HTTPS Upgrade/WebSocket,
   has no effect on HTTP or transparent bypass, never becomes a header, and uses a pool isolated from

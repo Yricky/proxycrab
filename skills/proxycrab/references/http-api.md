@@ -926,8 +926,12 @@ Routing and capture lifecycle details:
 - A routed normal request is inserted before forwarding. If insertion fails, traffic is not
   forwarded.
 - A bypassed CONNECT is transparently tunneled without TLS decryption.
-- Request/response bodies are bounded to 64 MiB with a 60-second read timeout.
-- ProxyCrab allows at most four concurrent body-materializing exchanges and 256 client connections.
+- Request/response bodies stream to capture files without an application-level size limit.
+- Interceptors execute once at the request/response header boundary and cannot read original bodies.
+- `_crab_resp_bodyframe_timeout` optionally bounds idle milliseconds before each upstream response
+  body frame; normal responses fail on expiry, while replacement responses retain success and record
+  the raw-drain timeout as diagnostic metadata.
+- ProxyCrab allows at most 256 client connections.
 - Capture/bypass queries and management Lua evaluations allow at most eight concurrent tasks;
   additional tasks wait for capacity.
 - CONNECT creates a provisional capture before the tunnel is acknowledged.

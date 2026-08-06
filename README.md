@@ -16,7 +16,7 @@ Neither reusable crate depends on Tauri.
 - Management API: `127.0.0.1:18089`, started with the app.
 - CA download through the proxy: `http://proxy.crab/ca.crt`.
 - System log buffer: the newest 10,000 entries in memory.
-- Captured request/response bodies: at most 64 MiB each, with a 60-second read timeout, at most four concurrently materialized exchanges, and at most 256 client connections.
+- Captured request/response bodies stream directly to disk without an application-level size limit; at most 256 client connections are accepted.
 - Blocking capture/bypass queries and management Lua evaluations: at most eight concurrently; excess work waits without occupying Tokio worker threads.
 
 The Tauri application data directory contains `config.json`, which points at the workspace. When the pointer is absent or invalid, `app_data_dir/workspace` is used and persisted. A changed pointer takes effect only on the next application launch.

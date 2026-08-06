@@ -283,11 +283,13 @@ executed without changes are still present.
 Disabled and missing scripts are not recorded.
 
 The persisted tag map may include `_crab_skip`, `_crab_req_speed`, `_crab_resp_speed`,
-`_crab_req_timeout`, and `_crab_tls_insecure`. These are proxy-local controls rather than HTTP
+`_crab_req_timeout`, `_crab_resp_bodyframe_timeout`, and `_crab_tls_insecure`. These are proxy-local controls rather than HTTP
 headers. For ordinary captured
 HTTP/HTTPS traffic, positive ASCII decimal speed values pace final outbound body bytes per second,
 and `_crab_req_timeout` overrides the 60,000 ms upstream timeout. Invalid final values are ignored
-with a runtime warning. The exact final value `_crab_tls_insecure=true` disables upstream HTTPS
+with a runtime warning. `_crab_resp_bodyframe_timeout` is a positive millisecond idle timeout from
+response headers to the first upstream body frame and between later frames. The exact final value
+`_crab_tls_insecure=true` disables upstream HTTPS
 certificate-chain and hostname verification for that request, including Upgrade/WebSocket; other
 values and HTTP requests retain normal verification behavior. Verified and insecure HTTPS
 connections use separate pools. Bypass, raw CONNECT, Upgrade/WebSocket, the local CA endpoint, and
@@ -460,7 +462,17 @@ Errors contain a stable `kind`, an execution `stage`, and the underlying message
 
 If the initial database insert fails, traffic is not forwarded. When the proxy stops it stops accepting immediately, waits up to five seconds, and marks unfinished rows with `proxy_shutdown`.
 
-Request and response bodies are bounded to 64 MiB with a 60-second read timeout. The proxy allows at most four exchanges to materialize bodies concurrently and at most 256 client connections, preventing many clients from multiplying per-request resource bounds without limit. Lua file body replacements use the same size bound.
+Request and response interceptors run once at their respective header boundary and cannot read the
+original body. Original request and response bodies stream directly to append-only capture files
+without an application-level size limit. Normal bodies continue streaming through the proxy;
+replacement strings are sent from memory and replacement files are streamed from disk while the
+raw body is drained independently. Capture-storage failures are recorded without interrupting the
+business transfer. The proxy accepts at most 256 client connections.
+
+`_crab_resp_bodyframe_timeout` optionally bounds idle time before each upstream response-body frame.
+For an unmodified response, expiry terminates the downstream stream and fails the capture. If a
+replacement response is already being returned, raw-body timeout/read/storage failures only leave
+diagnostic error metadata; the replacement response and successful capture outcome are retained.
 
 Capture/bypass storage queries and management-side Lua evaluations run outside Tokio worker
 threads and share an eight-task concurrency limit. Additional heavy management operations wait for
