@@ -94,6 +94,12 @@
       "files": [
         "evals/fixtures/test-tls-insecure.lua"
       ]
+    },
+    {
+      "id": 16,
+      "prompt": "Archive an inactive ProxyCrab Session named old-debug, verify it no longer appears in the normal Session list, then restore it. Do not permanently delete any Session or change the active Session.",
+      "expected_output": "The agent reads active workspace instructions, resolves an inactive Session, uses POST /api/sessions/{id}/archive, verifies it through GET /api/archived-sessions and absence from GET /api/sessions, restores it through POST /api/archived-sessions/{id}/restore, and does not call either Session deletion endpoint or alter the active Session.",
+      "files": []
     }
   ]
 }

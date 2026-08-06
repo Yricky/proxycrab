@@ -159,6 +159,13 @@ async fn list_sessions(
 }
 
 #[tauri::command]
+async fn list_archived_sessions(
+    state: State<'_, BackendState>,
+) -> Result<Vec<SessionMetadata>, ManagerError> {
+    state.manager().archived_sessions().await
+}
+
+#[tauri::command]
 async fn get_active_session(state: State<'_, BackendState>) -> Result<ActiveSession, ManagerError> {
     state.manager().active_session().await
 }
@@ -189,8 +196,27 @@ async fn update_session(
 }
 
 #[tauri::command]
-async fn delete_session(state: State<'_, BackendState>, id: u64) -> Result<(), ManagerError> {
-    state.manager().delete_session(id).await
+async fn archive_session(
+    state: State<'_, BackendState>,
+    id: u64,
+) -> Result<SessionMetadata, ManagerError> {
+    state.manager().archive_session(id).await
+}
+
+#[tauri::command]
+async fn restore_session(
+    state: State<'_, BackendState>,
+    id: u64,
+) -> Result<SessionMetadata, ManagerError> {
+    state.manager().restore_session(id).await
+}
+
+#[tauri::command]
+async fn delete_archived_session(
+    state: State<'_, BackendState>,
+    id: u64,
+) -> Result<(), ManagerError> {
+    state.manager().delete_archived_session(id).await
 }
 
 #[tauri::command]
@@ -671,11 +697,14 @@ pub fn run() {
             start_proxy,
             stop_proxy,
             list_sessions,
+            list_archived_sessions,
             get_active_session,
             replace_active_session,
             create_session,
             update_session,
-            delete_session,
+            archive_session,
+            restore_session,
+            delete_archived_session,
             get_log_ids,
             get_log_views,
             get_log,

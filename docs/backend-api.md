@@ -34,7 +34,8 @@ normal Agent/API activity silent.
 | `PUT /api/workspace` | Workspace settings | Refreshes an open clean settings window |
 | `PUT /api/config` | Settings, routing selection, and active Session | Refreshes global config state |
 | `POST /api/proxy/start`, `POST /api/proxy/stop` | Proxy status | Refreshes the toolbar state |
-| Session create/update/delete | Session list and active Session | Keeps the viewed Session unless it was deleted |
+| Session create/update/archive/restore | Active and archived Session lists | Archiving the viewed Session selects the first remaining Session |
+| Archived Session delete | Archived Session list | Refreshes the archived Session window |
 | `PUT /api/active-session` | Active Session and settings | Refreshes the active indicator without changing the viewed Session |
 | Routing-script create/update/delete/selection | Routing library and selection | Refreshes the routing manager |
 | Bypass delete/batch delete/clear | Bypass table | Refreshes the bypass window |
@@ -47,7 +48,7 @@ normal Agent/API activity silent.
 | `POST /api/ca` | CA manager | Reloads an open CA window |
 | `DELETE /api/system-logs` | System-log viewer | Clears and reloads an open log window |
 
-If HTTP deletes the viewed Session, the frontend selects the first remaining Session.
+If HTTP archives the viewed Session, the frontend selects the first remaining Session.
 
 Open script and settings windows automatically reload when clean. If they contain unsaved input,
 the frontend preserves it, displays an external-change warning, and lets the user explicitly reload
@@ -65,7 +66,11 @@ The server listens on loopback by default at `http://127.0.0.1:18089`. It has no
 | `/api/proxy/status` | `GET` |
 | `/api/proxy/start`, `/api/proxy/stop` | `POST` |
 | `/api/sessions` | `GET`, `POST` |
-| `/api/sessions/{id}` | `PUT`, `DELETE` |
+| `/api/sessions/{id}` | `PUT` |
+| `/api/sessions/{id}/archive` | `POST` inactive Session archive |
+| `/api/archived-sessions` | `GET` archived metadata |
+| `/api/archived-sessions/{id}/restore` | `POST` restore |
+| `/api/archived-sessions/{id}` | `DELETE` permanent archived-only deletion |
 | `/api/active-session` | `GET`, `PUT` nullable active Session |
 | `/api/logs/ids` | `POST` bounded/filterable log ID query |
 | `/api/logs/views` | `POST` batch incremental table-view rendering |
@@ -342,6 +347,14 @@ New Sessions always use the fixed built-in method, URI, status-code, and source 
 empty filter. The first Session created in an empty workspace becomes active. Later creation does
 not replace or restore an active Session.
 
+Inactive Sessions can be archived while the proxy runs with
+`POST /api/sessions/{id}/archive`. The whole directory moves to `sessions_archived/<id>`; archived
+Sessions disappear from all existing Session, log, view, interceptor, and export APIs. The active
+Session and Sessions with pinned requests return `409 conflict`. `GET /api/archived-sessions`
+lists metadata only, `POST /api/archived-sessions/{id}/restore` moves it back without activating
+it, and `DELETE /api/archived-sessions/{id}` permanently removes it. There is no direct deletion
+operation for an unarchived Session.
+
 ## Global filter scripts
 
 Filter scripts are stored globally under `scripts/filter`. CRUD follows the same `ScriptRequest` and `UpdateScriptRequest` shapes as custom-column scripts:
@@ -371,8 +384,11 @@ active Session captures all traffic; with no active Session, traffic bypasses.
 
 `GET /api/active-session` returns `{"session_id":1}` or `{"session_id":null}`. `PUT` accepts the
 same shape, validates non-null IDs, and is allowed while the proxy runs. `AppConfig.active_session_id`
-uses the same validation through `PUT /api/config`. Switching affects later HTTP requests and new
-CONNECT tunnels; an established CONNECT remains pinned to its original Session.
+uses the same validation through `PUT /api/config`. An actual active-Session change closes every
+established HTTP connection, CONNECT/MITM tunnel, Upgrade/WebSocket, transparent tunnel, and
+upstream pool before the call returns while leaving the listener running. Changing routing
+selection, changing selected routing content, or deleting the selected rule uses the same reset;
+identical values and unselected routing-script edits do not.
 
 `POST /api/filter-scripts/{name}/debug` evaluates one script without suppressing errors:
 
@@ -496,15 +512,14 @@ with `proxy_shutdown` when the proxy stops.
 The workspace is locked exclusively for the process lifetime. Routing selection, active Session,
 and proxy/API addresses are stored in workspace configuration. Each Session stores metadata,
 its table view and filter in `sessions/<id>/view.json`, and interceptor chains in
-`sessions/<id>/interceptors.json`. Session deletion is rejected while the proxy is starting,
-running, or stopping.
+`sessions/<id>/interceptors.json`. Archived Session directories live under
+`sessions_archived/<id>` and are not opened by normal Session APIs.
 The root `workspace_schema.json` is the version label for the whole workspace. Workspace open runs
 the centralized, ordered migration chain before any stores are used and atomically advances the
 label after each successful version. Every migration function documents that version's storage
 model changes; newer unsupported labels are rejected instead of being opened.
 Schema v2 changes Session capture databases from rollback journals to WAL without changing their
 logical tables or blob layout.
-Deleting the active Session while stopped clears the active ID without selecting a replacement.
 An active ID that references a missing Session is cleared and persisted when the workspace opens.
 
 Each workspace has an independent generated CA. Missing or corrupt CA files are regenerated with a warning, the per-host certificate cache is bounded, and the CA private key is restricted to owner-only permissions on macOS/Unix. Regeneration is serialized with proxy start/stop and rejected while the proxy is running.

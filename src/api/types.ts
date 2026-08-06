@@ -159,6 +159,7 @@ export type HttpApiResource =
   | "config"
   | "proxy"
   | "sessions"
+  | "archived_sessions"
   | "active_session"
   | "session_view"
   | "column_scripts"

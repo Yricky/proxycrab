@@ -239,6 +239,17 @@ impl BypassStore {
         )?;
         Ok(())
     }
+
+    pub fn mark_in_progress_through_as_shutdown(&self, max_id: u64) -> Result<()> {
+        let connection = self.connection()?;
+        connection.execute(
+            "UPDATE bypass_entries
+             SET updated_at=?1, outcome='failed', error='proxy_shutdown'
+             WHERE id<=?2 AND outcome='in_progress'",
+            params![now_millis() as i64, max_id as i64],
+        )?;
+        Ok(())
+    }
 }
 
 fn map_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<BypassEntry> {

@@ -169,13 +169,20 @@ fn router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
         .route("/api/proxy/start", post(start_proxy))
         .route("/api/proxy/stop", post(stop_proxy))
         .route("/api/sessions", get(sessions).post(create_session))
+        .route("/api/archived-sessions", get(archived_sessions))
+        .route("/api/sessions/{id}/archive", post(archive_session))
+        .route("/api/archived-sessions/{id}/restore", post(restore_session))
+        .route(
+            "/api/archived-sessions/{id}",
+            axum::routing::delete(delete_archived_session),
+        )
         .route(
             "/api/active-session",
             get(active_session).put(replace_active_session),
         )
         .route(
             "/api/sessions/{id}",
-            put(update_session).delete(delete_session),
+            put(update_session).fallback(|| async { StatusCode::NOT_FOUND }),
         )
         .route("/api/logs/export", post(export_logs))
         .route("/api/logs/ids", post(log_ids))
@@ -315,11 +322,17 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
         (&Method::POST, "/api/sessions") => {
             vec![HttpApiResource::Sessions, HttpApiResource::ActiveSession]
         }
+        (&Method::POST, value) if value.ends_with("/archive") => {
+            vec![HttpApiResource::Sessions, HttpApiResource::ArchivedSessions]
+        }
+        (&Method::POST, value) if value.ends_with("/restore") => {
+            vec![HttpApiResource::Sessions, HttpApiResource::ArchivedSessions]
+        }
+        (&Method::DELETE, value) if value.starts_with("/api/archived-sessions/") => {
+            vec![HttpApiResource::ArchivedSessions]
+        }
         (&Method::PUT, value) if value.starts_with("/api/sessions/") => {
             vec![HttpApiResource::Sessions]
-        }
-        (&Method::DELETE, value) if value.starts_with("/api/sessions/") => {
-            vec![HttpApiResource::Sessions, HttpApiResource::ActiveSession]
         }
         (&Method::PUT, "/api/active-session") => {
             vec![HttpApiResource::ActiveSession, HttpApiResource::Config]
@@ -482,6 +495,10 @@ async fn sessions(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.sessions().await?)
 }
 
+async fn archived_sessions(State(manager): State<ManagerState>) -> ApiResult {
+    success(manager.archived_sessions().await?)
+}
+
 async fn active_session(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.active_session().await?)
 }
@@ -508,11 +525,25 @@ async fn update_session(
     success(manager.update_session(id, request).await?)
 }
 
-async fn delete_session(
+async fn archive_session(
     State(manager): State<ManagerState>,
     ApiPath(id): ApiPath<u64>,
 ) -> ApiResult {
-    manager.delete_session(id).await?;
+    success(manager.archive_session(id).await?)
+}
+
+async fn restore_session(
+    State(manager): State<ManagerState>,
+    ApiPath(id): ApiPath<u64>,
+) -> ApiResult {
+    success(manager.restore_session(id).await?)
+}
+
+async fn delete_archived_session(
+    State(manager): State<ManagerState>,
+    ApiPath(id): ApiPath<u64>,
+) -> ApiResult {
+    manager.delete_archived_session(id).await?;
     success(json!({}))
 }
 
@@ -1266,6 +1297,27 @@ mod tests {
                 None,
             ),
             (
+                "POST",
+                "/api/sessions/42/archive",
+                None,
+                vec![HttpApiResource::Sessions, HttpApiResource::ArchivedSessions],
+                None,
+            ),
+            (
+                "POST",
+                "/api/archived-sessions/42/restore",
+                None,
+                vec![HttpApiResource::Sessions, HttpApiResource::ArchivedSessions],
+                None,
+            ),
+            (
+                "DELETE",
+                "/api/archived-sessions/42",
+                None,
+                vec![HttpApiResource::ArchivedSessions],
+                None,
+            ),
+            (
                 "PUT",
                 "/api/session-view",
                 Some("session_id=42"),
@@ -1441,6 +1493,118 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn session_archive_routes_replace_direct_session_deletion() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let active = runtime.create_session(Some("active".into()), None).unwrap();
+        let archived = runtime
+            .create_session(Some("archive-me".into()), Some("kept".into()))
+            .unwrap();
+        let app = router(MitmManager::new(runtime));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/api/sessions/{}", archived.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/sessions/{}/archive", active.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/sessions/{}/archive", archived.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/session-view?session_id={}", archived.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/archived-sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"][0]["id"], archived.id);
+        assert_eq!(body["data"][0]["description"], "kept");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/archived-sessions/{}/restore", archived.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/sessions/{}/archive", archived.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/api/archived-sessions/{}", archived.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
     }
 
     #[tokio::test]

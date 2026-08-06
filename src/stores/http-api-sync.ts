@@ -15,6 +15,7 @@ const ALL_RESOURCES: HttpApiResource[] = [
   "config",
   "proxy",
   "sessions",
+  "archived_sessions",
   "active_session",
   "session_view",
   "column_scripts",
@@ -63,7 +64,12 @@ async function flush(): Promise<void> {
   const resources = [...batch.keys()];
   const viewingBefore = sessionsStore.viewingSessionId;
 
-  if (batch.has("sessions") || batch.has("active_session") || batch.has("config")) {
+  if (
+    batch.has("sessions") ||
+    batch.has("archived_sessions") ||
+    batch.has("active_session") ||
+    batch.has("config")
+  ) {
     await sessionsStore.syncFromBackend();
   }
   if (batch.has("proxy") || batch.has("config")) {

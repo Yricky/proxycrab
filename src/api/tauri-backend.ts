@@ -86,10 +86,13 @@ export function createTauriBackend(): Backend {
     listLocalIps: () => call("list_local_ips"),
 
     listSessions: () => call("list_sessions"),
+    listArchivedSessions: () => call("list_archived_sessions"),
     createSession: (request: CreateSessionRequest) => call("create_session", { request }),
     updateSession: (id: number, request: UpdateSessionRequest) =>
       call("update_session", { id, request }),
-    deleteSession: (id: number) => call("delete_session", { id }),
+    archiveSession: (id: number) => call("archive_session", { id }),
+    restoreSession: (id: number) => call("restore_session", { id }),
+    deleteArchivedSession: (id: number) => call("delete_archived_session", { id }),
     getActiveSession: () => call("get_active_session"),
     replaceActiveSession: (active: ActiveSession) =>
       call("replace_active_session", { active }),

@@ -88,6 +88,10 @@ impl CaptureStore {
         Ok(store)
     }
 
+    pub(crate) fn session_id(&self) -> u64 {
+        self.session_id
+    }
+
     pub fn begin(&self, source: &str, request: &RequestData, stage: &str) -> Result<u64> {
         let now = now_millis();
         let connection = self.connection()?;
@@ -551,6 +555,17 @@ impl CaptureStore {
                 updated_at=MAX(updated_at + 1, ?1)
              WHERE outcome='in_progress'",
             params![now_millis() as i64],
+        )?)
+    }
+
+    pub fn mark_in_progress_through_as_shutdown(&self, max_id: u64) -> Result<usize> {
+        Ok(self.connection()?.execute(
+            "UPDATE captures SET outcome='failed', stage='connect',
+                error_stage='connect', error_kind='proxy_shutdown',
+                error_message='proxy stopped before the request completed',
+                updated_at=MAX(updated_at + 1, ?1)
+             WHERE id<=?2 AND outcome='in_progress'",
+            params![now_millis() as i64, max_id as i64],
         )?)
     }
 

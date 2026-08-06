@@ -264,7 +264,9 @@ pub(super) async fn handle_session_http_request(
         headers: headers_to_values(&parts.headers),
         tags: Default::default(),
     };
-    let capture_id = match store.begin(&source.to_string(), &request_data, "request") {
+    let capture_id = match tracker.begin_capture(&store, || {
+        store.begin(&source.to_string(), &request_data, "request")
+    }) {
         Ok(id) => id,
         Err(error) => {
             tracing::error!("capture insert failed; refusing to forward request: {error}");

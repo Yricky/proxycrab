@@ -71,7 +71,7 @@ pub struct ProxyCrab {
     session_pins: Mutex<HashMap<u64, usize>>,
     log_buffer: Arc<LogBuffer>,
     breakpoints: Arc<BreakpointRegistry>,
-    upstream: UpstreamClient,
+    upstream: RwLock<UpstreamClient>,
     proxy: ProxyController,
 }
 
@@ -92,7 +92,7 @@ impl ProxyCrab {
             session_pins: Mutex::new(HashMap::new()),
             log_buffer,
             breakpoints: Arc::new(BreakpointRegistry::default()),
-            upstream: UpstreamClient::new(),
+            upstream: RwLock::new(UpstreamClient::new()),
             proxy: ProxyController::new(),
         }))
     }
@@ -123,15 +123,26 @@ impl ProxyCrab {
         self.workspace.config()
     }
 
-    pub fn replace_config(&self, config: AppConfig) -> Result<AppConfig> {
+    pub async fn replace_config(&self, config: AppConfig) -> Result<AppConfig> {
         if let Some(name) = &config.routing_script_name {
             self.workspace.get_script(ScriptKind::Routing, name)?;
         }
-        self.workspace.replace_config(config)
+        self.proxy
+            .mutate_configuration(self, || {
+                let current = self.config();
+                let changed = current.active_session_id != config.active_session_id
+                    || current.routing_script_name != config.routing_script_name;
+                Ok((self.workspace.replace_config(config)?, changed))
+            })
+            .await
     }
 
     pub fn sessions(&self) -> Vec<SessionMetadata> {
         self.workspace.sessions()
+    }
+
+    pub fn archived_sessions(&self) -> Vec<SessionMetadata> {
+        self.workspace.archived_sessions()
     }
 
     pub fn create_session(
@@ -151,23 +162,40 @@ impl ProxyCrab {
         self.workspace.update_session(id, name, description)
     }
 
-    pub fn delete_session(&self, id: u64) -> Result<()> {
-        self.proxy.with_stopped_session_mutation(|| {
-            let pins = self
-                .session_pins
-                .lock()
-                .expect("session pins lock poisoned");
-            if pins.get(&id).copied().unwrap_or_default() != 0 {
-                bail!("session {id} has requests in progress");
-            }
-            self.stores
-                .lock()
-                .expect("capture stores lock poisoned")
-                .remove(&id);
-            let result = self.workspace.delete_session(id);
-            drop(pins);
-            result
-        })
+    pub async fn archive_session(&self, id: u64) -> Result<SessionMetadata> {
+        self.proxy
+            .mutate_sessions(|| {
+                if self.active_session_id() == Some(id) {
+                    bail!("active session {id} cannot be archived");
+                }
+                let pins = self
+                    .session_pins
+                    .lock()
+                    .expect("session pins lock poisoned");
+                if pins.get(&id).copied().unwrap_or_default() != 0 {
+                    bail!("session {id} has requests in progress");
+                }
+                self.stores
+                    .lock()
+                    .expect("capture stores lock poisoned")
+                    .remove(&id);
+                let result = self.workspace.archive_session(id);
+                drop(pins);
+                result
+            })
+            .await
+    }
+
+    pub async fn restore_session(&self, id: u64) -> Result<SessionMetadata> {
+        self.proxy
+            .mutate_sessions(|| self.workspace.restore_session(id))
+            .await
+    }
+
+    pub async fn delete_archived_session(&self, id: u64) -> Result<()> {
+        self.proxy
+            .mutate_sessions(|| self.workspace.delete_archived_session(id))
+            .await
     }
 
     pub fn active_session_id(&self) -> Option<u64> {
@@ -179,8 +207,58 @@ impl ProxyCrab {
         self.sessions().into_iter().find(|session| session.id == id)
     }
 
-    pub fn replace_active_session(&self, session_id: Option<u64>) -> Result<Option<u64>> {
-        self.workspace.replace_active_session(session_id)
+    pub async fn replace_active_session(&self, session_id: Option<u64>) -> Result<Option<u64>> {
+        self.proxy
+            .mutate_configuration(self, || {
+                let changed = self.active_session_id() != session_id;
+                Ok((self.workspace.replace_active_session(session_id)?, changed))
+            })
+            .await
+    }
+
+    pub async fn replace_routing_selection(&self, name: Option<String>) -> Result<Option<String>> {
+        if let Some(name) = &name {
+            self.script(ScriptKind::Routing, name)?;
+        }
+        self.proxy
+            .mutate_configuration(self, || {
+                let changed = self.config().routing_script_name != name;
+                self.workspace
+                    .update_config(|config| config.routing_script_name = name.clone())?;
+                Ok((name, changed))
+            })
+            .await
+    }
+
+    pub async fn update_routing_script(&self, name: &str, content: String) -> Result<()> {
+        crate::lua::validate_script(ScriptKind::Routing, &content)?;
+        let current = self.script(ScriptKind::Routing, name)?;
+        let selected = self.config().routing_script_name.as_deref() == Some(name);
+        let changed = selected && current.content != content;
+        self.proxy
+            .mutate_configuration(self, || {
+                self.workspace.save_script(
+                    ScriptKind::Routing,
+                    Script {
+                        name: name.to_string(),
+                        content,
+                    },
+                    true,
+                )?;
+                Ok(((), changed))
+            })
+            .await
+    }
+
+    pub async fn delete_routing_script(&self, name: &str) -> Result<()> {
+        self.script(ScriptKind::Routing, name)?;
+        let selected = self.config().routing_script_name.as_deref() == Some(name);
+        self.proxy
+            .mutate_configuration(self, || {
+                self.delete_script(ScriptKind::Routing, name)?;
+                Ok(((), selected))
+            })
+            .await
     }
 
     pub fn selected_routing_script(&self) -> Result<Option<Script>> {
@@ -405,6 +483,10 @@ impl ProxyCrab {
 
     pub(crate) fn breakpoint_registry(&self) -> Arc<BreakpointRegistry> {
         self.breakpoints.clone()
+    }
+
+    pub(crate) fn release_all_breakpoints(&self) {
+        self.breakpoints.release_all();
     }
 
     pub fn list_captures_before(
@@ -794,8 +876,18 @@ impl ProxyCrab {
         &self.bypass
     }
 
-    pub(crate) fn upstream_client(&self) -> &UpstreamClient {
-        &self.upstream
+    pub(crate) fn upstream_client(&self) -> UpstreamClient {
+        self.upstream
+            .read()
+            .expect("upstream client lock poisoned")
+            .clone()
+    }
+
+    pub(crate) fn reset_upstream_client(&self) {
+        *self
+            .upstream
+            .write()
+            .expect("upstream client lock poisoned") = UpstreamClient::new();
     }
 
     pub async fn start_proxy(self: &Arc<Self>) -> Result<ProxyStatus> {
@@ -929,40 +1021,42 @@ mod tests {
 
     use super::ProxyCrab;
 
-    #[test]
-    fn config_replacement_validates_active_session() {
+    #[tokio::test]
+    async fn config_replacement_validates_active_session() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
         let session = runtime.create_session(Some("one".into()), None).unwrap();
         let mut config = runtime.config();
 
         config.active_session_id = Some(u64::MAX);
-        assert!(runtime.replace_config(config.clone()).is_err());
+        assert!(runtime.replace_config(config.clone()).await.is_err());
         assert_eq!(runtime.active_session_id(), Some(session.id));
 
         config.active_session_id = None;
-        runtime.replace_config(config).unwrap();
+        runtime.replace_config(config).await.unwrap();
         assert_eq!(runtime.active_session_id(), None);
     }
 
-    #[test]
-    fn capture_store_pin_releases_registry_lock_during_storage_work() {
+    #[tokio::test]
+    async fn capture_store_pin_releases_registry_lock_during_storage_work() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
         let session = runtime.create_session(None, None).unwrap();
+        runtime.replace_active_session(None).await.unwrap();
 
         let pin = runtime.pin_capture_store(session.id).unwrap();
 
         assert!(runtime.session_pins.try_lock().is_ok());
         assert!(
             runtime
-                .delete_session(session.id)
+                .archive_session(session.id)
+                .await
                 .unwrap_err()
                 .to_string()
                 .contains("requests in progress")
         );
         drop(pin);
-        runtime.delete_session(session.id).unwrap();
+        runtime.archive_session(session.id).await.unwrap();
     }
 
     #[test]

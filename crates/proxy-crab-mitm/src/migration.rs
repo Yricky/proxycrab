@@ -45,20 +45,21 @@ pub(crate) fn migrate_workspace(root: &Path) -> Result<()> {
 /// The new execution model stores saved and temporary runs at the same chain position, records
 /// completion state, and preserves their creation order without changing capture/blob layout.
 fn migrate_v0_to_v1(root: &Path) -> Result<()> {
-    let sessions = root.join("sessions");
-    if !sessions.exists() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(&sessions)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
+    for directory in session_directories(root) {
+        if !directory.exists() {
             continue;
         }
-        let database = entry.path().join("captures.db");
-        if database.exists() {
-            migrate_capture_database_v1(&database).with_context(|| {
-                format!("failed to migrate capture database {}", database.display())
-            })?;
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let database = entry.path().join("captures.db");
+            if database.exists() {
+                migrate_capture_database_v1(&database).with_context(|| {
+                    format!("failed to migrate capture database {}", database.display())
+                })?;
+            }
         }
     }
     Ok(())
@@ -96,30 +97,35 @@ fn migrate_capture_database_v1(path: &Path) -> Result<()> {
 /// storage model to WAL. The logical tables and blob layout stay unchanged; the persistent WAL
 /// mode allows management readers to overlap with MITM capture writers.
 fn migrate_v1_to_v2(root: &Path) -> Result<()> {
-    let sessions = root.join("sessions");
-    if !sessions.exists() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(&sessions)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
+    for directory in session_directories(root) {
+        if !directory.exists() {
             continue;
         }
-        let database = entry.path().join("captures.db");
-        if database.exists() {
-            let connection = Connection::open(&database)?;
-            connection.busy_timeout(Duration::from_secs(5))?;
-            connection
-                .execute_batch("PRAGMA journal_mode = WAL;")
-                .with_context(|| {
-                    format!(
-                        "failed to enable WAL for capture database {}",
-                        database.display()
-                    )
-                })?;
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let database = entry.path().join("captures.db");
+            if database.exists() {
+                let connection = Connection::open(&database)?;
+                connection.busy_timeout(Duration::from_secs(5))?;
+                connection
+                    .execute_batch("PRAGMA journal_mode = WAL;")
+                    .with_context(|| {
+                        format!(
+                            "failed to enable WAL for capture database {}",
+                            database.display()
+                        )
+                    })?;
+            }
         }
     }
     Ok(())
+}
+
+fn session_directories(root: &Path) -> [std::path::PathBuf; 2] {
+    [root.join("sessions"), root.join("sessions_archived")]
 }
 
 fn migrate_interceptor_runs_v1(connection: &mut Connection) -> Result<()> {

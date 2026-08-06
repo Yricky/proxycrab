@@ -322,11 +322,26 @@ not change the active Session.
 All fields are optional. Omitting `description` preserves it; explicit `null` clears it. Returns the
 updated `SessionMetadata`.
 
-### `DELETE /api/sessions/{id}`
+### `POST /api/sessions/{id}/archive`
 
-Returns `{}`. Session deletion is rejected while the proxy is starting, running, or stopping.
-Deletion is allowed while stopped or failed. A Session with pinned in-progress requests cannot be
-deleted. Deleting the active Session clears the active selection without choosing a replacement.
+Moves an inactive Session and all of its data to `sessions_archived/<id>` and returns its
+`SessionMetadata`. The active Session cannot be archived. A Session with pinned in-progress
+requests returns `409 conflict`; archive is otherwise allowed while the proxy runs. Archived
+Sessions are excluded from every existing Session, log, view, interceptor, and export endpoint.
+
+### `GET /api/archived-sessions`
+
+Returns archived `SessionMetadata[]`, ordered by creation time.
+
+### `POST /api/archived-sessions/{id}/restore`
+
+Moves the archived directory back to `sessions/<id>` and returns its unchanged `SessionMetadata`.
+Restore does not make the Session active.
+
+### `DELETE /api/archived-sessions/{id}`
+
+Permanently deletes an archived Session and returns `{}`. This is the only Session deletion API;
+`DELETE /api/sessions/{id}` does not exist.
 
 ### `GET /api/active-session`
 
@@ -335,7 +350,9 @@ Returns `{ "session_id": 3 }` or `{ "session_id": null }`.
 ### `PUT /api/active-session`
 
 Accepts and returns the same shape. A non-null Session ID must exist. Changing or clearing the
-active Session is allowed while the proxy runs.
+active Session is allowed while the proxy runs. An actual change closes every established proxy
+connection, CONNECT tunnel, Upgrade/WebSocket, and upstream pooled connection before returning;
+the listener remains running. Setting the current value again is a no-op for connections.
 
 ## Capture logs
 
@@ -695,7 +712,10 @@ Routing script CRUD uses the same create and content-only update shapes. Selecti
 ```
 
 Use `{ "name": null }` to clear it. Deleting the selected routing script also clears the
-selection. There is no rename or routing-debug endpoint.
+selection. Changing the selection, editing the selected script to different content, or deleting
+the selected script resets all established downstream and upstream connections before returning.
+Updating an unselected script or saving identical selected content does not. There is no rename or
+routing-debug endpoint.
 
 ## Interceptors
 
@@ -908,11 +928,9 @@ HTTP status mapping:
 | `not_found` | 404 | Missing endpoint, Session, log, or script |
 | `log_not_found` | 404 | Missing capture for a body request |
 | `body_not_found` | 404 | Requested side has not produced a body file |
-| `conflict` | 409 | State conflict, including no active Session or deleting a Session while proxy runs |
+| `conflict` | 409 | State conflict, including no active Session or archiving an active/in-use Session |
 | `body_too_large` | 413 | Stored body exceeds `max_size`; includes both sizes |
 | `body_decode_failed` | 422 | Unsupported encoding when server decompression is requested |
-| `proxy_running` | 409 | Session deletion attempted while proxy is starting/running/stopping |
-| `session_in_use` | 409 | Tried to delete a Session pinned by active requests |
 | `internal_error` | 500 | Storage, runtime, I/O, or other internal failure |
 | `body_read_failed` | 500 | Body file cannot be opened or read |
 

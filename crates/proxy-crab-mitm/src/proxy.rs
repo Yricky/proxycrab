@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     convert::Infallible,
     future::Future,
     net::SocketAddr,
@@ -33,6 +34,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use crate::{
     ProxyCrab,
     breakpoint::BreakpointContext,
+    bypass::BypassStore,
     lua::{
         BodyReplacement, BreakpointHook, ModificationJournal, ResponseScriptContext,
         SharedInterceptorState, evaluate_routing, execute_request_with_state,
@@ -85,9 +87,9 @@ struct SessionInterceptorSnapshot {
 pub struct ProxyController {
     status: Arc<RwLock<ProxyStatus>>,
     cancellation: Mutex<Option<CancellationToken>>,
+    connections: Mutex<Option<Arc<ConnectionRegistry>>>,
     task: Mutex<Option<JoinHandle<()>>>,
     operation: tokio::sync::Mutex<()>,
-    lifecycle_transition: Mutex<()>,
 }
 
 impl ProxyController {
@@ -95,9 +97,9 @@ impl ProxyController {
         Self {
             status: Arc::new(RwLock::new(ProxyStatus::Stopped)),
             cancellation: Mutex::new(None),
+            connections: Mutex::new(None),
             task: Mutex::new(None),
             operation: tokio::sync::Mutex::new(()),
-            lifecycle_transition: Mutex::new(()),
         }
     }
 
@@ -108,38 +110,44 @@ impl ProxyController {
             .clone()
     }
 
-    pub(crate) fn with_stopped_session_mutation<T>(
-        &self,
-        action: impl FnOnce() -> Result<T>,
-    ) -> Result<T> {
-        let _transition = self
-            .lifecycle_transition
-            .lock()
-            .expect("proxy lifecycle transition lock poisoned");
-        if !matches!(
-            self.status(),
-            ProxyStatus::Stopped | ProxyStatus::Failed { .. }
-        ) {
-            bail!("sessions cannot be deleted while the proxy is running");
-        }
+    pub(crate) async fn mutate_sessions<T>(&self, action: impl FnOnce() -> Result<T>) -> Result<T> {
+        let _operation = self.operation.lock().await;
         action()
+    }
+
+    pub(crate) async fn mutate_configuration<T>(
+        &self,
+        runtime: &ProxyCrab,
+        action: impl FnOnce() -> Result<(T, bool)>,
+    ) -> Result<T> {
+        let _operation = self.operation.lock().await;
+        let (value, changed) = action()?;
+        if changed && matches!(self.status(), ProxyStatus::Running { .. }) {
+            runtime.release_all_breakpoints();
+            runtime.reset_upstream_client();
+            let registry = self
+                .connections
+                .lock()
+                .expect("proxy connections lock poisoned")
+                .clone();
+            if let Some(registry) = registry {
+                let previous = registry.rotate();
+                previous.cancellation.cancel();
+                previous.tasks.shutdown(SHUTDOWN_TIMEOUT).await;
+            }
+        }
+        Ok(value)
     }
 
     pub async fn start(&self, runtime: Arc<ProxyCrab>) -> Result<ProxyStatus> {
         let _operation = self.operation.lock().await;
-        {
-            let _transition = self
-                .lifecycle_transition
-                .lock()
-                .expect("proxy lifecycle transition lock poisoned");
-            if !matches!(
-                self.status(),
-                ProxyStatus::Stopped | ProxyStatus::Failed { .. }
-            ) {
-                bail!("proxy is already running or changing state");
-            }
-            *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Starting;
+        if !matches!(
+            self.status(),
+            ProxyStatus::Stopped | ProxyStatus::Failed { .. }
+        ) {
+            bail!("proxy is already running or changing state");
         }
+        *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Starting;
         let config = runtime.config();
         let listener = match TcpListener::bind((config.proxy_host.as_str(), config.proxy_port))
             .await
@@ -154,11 +162,15 @@ impl ProxyController {
             }
         };
         let cancellation = CancellationToken::new();
-        let tracker = TaskGroup::new();
+        let connections = Arc::new(ConnectionRegistry::new());
         *self
             .cancellation
             .lock()
             .expect("proxy cancellation lock poisoned") = Some(cancellation.clone());
+        *self
+            .connections
+            .lock()
+            .expect("proxy connections lock poisoned") = Some(connections.clone());
         let status = self.status.clone();
         let host = config.proxy_host.clone();
         let port = config.proxy_port;
@@ -169,7 +181,7 @@ impl ProxyController {
         tracing::info!("MITM proxy listening on {host}:{port}");
 
         let task = tokio::spawn(async move {
-            accept_loop(listener, runtime, cancellation, tracker).await;
+            accept_loop(listener, runtime, cancellation, connections).await;
             *status.write().expect("proxy status lock poisoned") = ProxyStatus::Stopped;
             tracing::info!("MITM proxy stopped");
         });
@@ -199,6 +211,10 @@ impl ProxyController {
         {
             task.abort();
         }
+        self.connections
+            .lock()
+            .expect("proxy connections lock poisoned")
+            .take();
         runtime.mark_in_progress_as_shutdown();
         let _ = runtime.bypass_store().mark_in_progress_as_shutdown();
         *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Stopped;
@@ -221,6 +237,57 @@ struct TaskGroup {
 struct TaskGroupState {
     closing: bool,
     abort_handles: Vec<AbortHandle>,
+    capture_high_watermarks: HashMap<u64, (CaptureStore, u64)>,
+    bypass_high_watermark: Option<(BypassStore, u64)>,
+}
+
+#[derive(Clone)]
+struct ConnectionGeneration {
+    cancellation: CancellationToken,
+    tasks: TaskGroup,
+}
+
+struct ConnectionRegistry {
+    generation: Mutex<ConnectionGeneration>,
+}
+
+impl ConnectionRegistry {
+    fn new() -> Self {
+        Self {
+            generation: Mutex::new(ConnectionGeneration {
+                cancellation: CancellationToken::new(),
+                tasks: TaskGroup::new(),
+            }),
+        }
+    }
+
+    fn current(&self) -> ConnectionGeneration {
+        self.generation
+            .lock()
+            .expect("proxy connection generation lock poisoned")
+            .clone()
+    }
+
+    fn rotate(&self) -> ConnectionGeneration {
+        let mut generation = self
+            .generation
+            .lock()
+            .expect("proxy connection generation lock poisoned");
+        generation.tasks.close();
+        std::mem::replace(
+            &mut *generation,
+            ConnectionGeneration {
+                cancellation: CancellationToken::new(),
+                tasks: TaskGroup::new(),
+            },
+        )
+    }
+
+    async fn shutdown(&self, timeout_duration: Duration) {
+        let generation = self.current();
+        generation.cancellation.cancel();
+        generation.tasks.shutdown(timeout_duration).await;
+    }
 }
 
 struct ConnectCapture {
@@ -235,8 +302,52 @@ impl TaskGroup {
             state: Arc::new(Mutex::new(TaskGroupState {
                 closing: false,
                 abort_handles: Vec::new(),
+                capture_high_watermarks: HashMap::new(),
+                bypass_high_watermark: None,
             })),
         }
+    }
+
+    fn close(&self) {
+        self.state
+            .lock()
+            .expect("proxy task state lock poisoned")
+            .closing = true;
+    }
+
+    fn begin_capture(
+        &self,
+        store: &CaptureStore,
+        begin: impl FnOnce() -> Result<u64>,
+    ) -> Result<u64> {
+        let mut state = self.state.lock().expect("proxy task state lock poisoned");
+        if state.closing {
+            bail!("proxy connection is closing");
+        }
+        let id = begin()?;
+        state
+            .capture_high_watermarks
+            .entry(store.session_id())
+            .and_modify(|(_, max_id)| *max_id = (*max_id).max(id))
+            .or_insert((store.clone(), id));
+        Ok(id)
+    }
+
+    fn begin_bypass(
+        &self,
+        store: &BypassStore,
+        begin: impl FnOnce() -> Result<u64>,
+    ) -> Result<u64> {
+        let mut state = self.state.lock().expect("proxy task state lock poisoned");
+        if state.closing {
+            bail!("proxy connection is closing");
+        }
+        let id = begin()?;
+        match &mut state.bypass_high_watermark {
+            Some((_, max_id)) => *max_id = (*max_id).max(id),
+            watermark @ None => *watermark = Some((store.clone(), id)),
+        }
+        Ok(id)
     }
 
     fn spawn<F>(&self, future: F)
@@ -253,11 +364,8 @@ impl TaskGroup {
     }
 
     async fn shutdown(self, timeout_duration: Duration) {
-        {
-            let mut state = self.state.lock().expect("proxy task state lock poisoned");
-            state.closing = true;
-            self.tracker.close();
-        }
+        self.close();
+        self.tracker.close();
         if timeout(timeout_duration, self.tracker.wait())
             .await
             .is_err()
@@ -277,6 +385,19 @@ impl TaskGroup {
                 tracing::error!("aborted proxy tasks did not finish promptly");
             }
         }
+        let (capture_high_watermarks, bypass_high_watermark) = {
+            let mut state = self.state.lock().expect("proxy task state lock poisoned");
+            (
+                std::mem::take(&mut state.capture_high_watermarks),
+                state.bypass_high_watermark.take(),
+            )
+        };
+        for (_, (store, max_id)) in capture_high_watermarks {
+            let _ = store.mark_in_progress_through_as_shutdown(max_id);
+        }
+        if let Some((store, max_id)) = bypass_high_watermark {
+            let _ = store.mark_in_progress_through_as_shutdown(max_id);
+        }
     }
 }
 
@@ -290,7 +411,7 @@ async fn accept_loop(
     listener: TcpListener,
     runtime: Arc<ProxyCrab>,
     cancellation: CancellationToken,
-    tracker: TaskGroup,
+    connections: Arc<ConnectionRegistry>,
 ) {
     let connection_slots = Arc::new(Semaphore::new(MAX_CLIENT_CONNECTIONS));
     loop {
@@ -298,12 +419,13 @@ async fn accept_loop(
             _ = cancellation.cancelled() => break,
             accepted = listener.accept() => match accepted {
                 Ok((stream, address)) => {
+                    let generation = connections.current();
                     match connection_slots.clone().try_acquire_owned() {
                         Ok(permit) => {
                             let client_runtime = runtime.clone();
-                            let client_cancellation = cancellation.clone();
-                            let client_tracker = tracker.clone();
-                            tracker.spawn(async move {
+                            let client_cancellation = generation.cancellation.clone();
+                            let client_tracker = generation.tasks.clone();
+                            generation.tasks.spawn(async move {
                                 let _permit = permit;
                                 serve_client(
                                     stream,
@@ -323,7 +445,7 @@ async fn accept_loop(
             }
         }
     }
-    tracker.shutdown(SHUTDOWN_TIMEOUT).await;
+    connections.shutdown(SHUTDOWN_TIMEOUT).await;
 }
 
 async fn serve_client(
@@ -492,7 +614,7 @@ fn handle_connect(
             );
         }
     };
-    let capture = match begin_connect_capture(&pin, source, &request_data) {
+    let capture = match begin_connect_capture(&tracker, &pin, source, &request_data) {
         Ok(capture) => capture,
         Err(error) => {
             tracing::error!("failed to persist CONNECT request: {error}");
@@ -723,12 +845,15 @@ fn routing_authority(request: &RequestData) -> String {
 }
 
 fn begin_connect_capture(
+    tracker: &TaskGroup,
     pin: &SessionPin,
     source: SocketAddr,
     request: &RequestData,
 ) -> Result<ConnectCapture> {
     let store = pin.store().clone();
-    let id = store.begin(&source.to_string(), request, "connect")?;
+    let id = tracker.begin_capture(&store, || {
+        store.begin(&source.to_string(), request, "connect")
+    })?;
     Ok(ConnectCapture { store, id })
 }
 

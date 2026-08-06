@@ -5,15 +5,14 @@ import { routingStore } from "../stores/routing";
 import { confirmDialog, openContextMenu } from "../stores/dialog";
 import { formatRelativeTime } from "../utils/format";
 import { appStore } from "../stores/app";
-import { proxyStore } from "../stores/proxy";
-import { openBypass, openRoutingManager } from "../windows/launcher";
+import { openArchivedSessions, openBypass, openRoutingManager } from "../windows/launcher";
 import type { SessionMetadata } from "../api/types";
 import {
   Io5Add,
+  Io5Archive,
   Io5Create,
   Io5Eye,
   Io5RadioButtonOn,
-  Io5Trash,
 } from "vue-icons-plus/io5";
 
 const creating = ref(false);
@@ -98,14 +97,15 @@ async function submitEdit(): Promise<void> {
   }
 }
 
-async function removeSession(id: number, name: string): Promise<void> {
+async function archiveSession(id: number, name: string): Promise<void> {
   const ok = await confirmDialog({
-    title: "删除会话",
-    message: `确定删除会话「${name}」及其全部抓包记录吗？此操作不可恢复。`,
-    confirmText: "删除",
-    danger: true,
+    title: "归档会话",
+    message: `确定归档会话「${name}」吗？抓包记录会完整保留，可在已归档 Session 中恢复。`,
+    confirmText: "归档",
   });
-  if (ok) await sessionsStore.remove(id);
+  if (ok && (await sessionsStore.archive(id))) {
+    appStore.toast(`「${name}」已归档`, "success");
+  }
 }
 
 async function toggleActive(session: SessionMetadata): Promise<void> {
@@ -125,14 +125,14 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
       action: () => void toggleActive(session),
     },
     {
-      label: "删除",
-      icon: Io5Trash,
-      danger: true,
+      label:
+        sessionsStore.activeSessionId === session.id
+          ? "归档（请先取消活跃）"
+          : "归档",
+      icon: Io5Archive,
       dividerBefore: true,
-      disabled: proxyStore.status.status === "starting" ||
-        proxyStore.status.status === "running" ||
-        proxyStore.status.status === "stopping",
-      action: () => void removeSession(session.id, session.name),
+      disabled: sessionsStore.activeSessionId === session.id,
+      action: () => void archiveSession(session.id, session.name),
     },
   ]);
 }
@@ -245,6 +245,10 @@ onMounted(() => {
         暂无会话，点击右上角 + 新建
       </div>
     </div>
+    <button class="sb-archived" @click="openArchivedSessions">
+      <Io5Archive :size="14" />
+      <span>已归档 Session</span>
+    </button>
   </aside>
 </template>
 
@@ -368,6 +372,27 @@ onMounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 4px;
+}
+.sb-archived {
+  flex: none;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.sb-archived:hover {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 .sb-item {
   padding: 7px 10px;

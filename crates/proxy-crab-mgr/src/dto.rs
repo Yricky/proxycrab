@@ -422,6 +422,7 @@ pub enum HttpApiResource {
     Config,
     Proxy,
     Sessions,
+    ArchivedSessions,
     ActiveSession,
     SessionView,
     ColumnScripts,

@@ -1,7 +1,10 @@
 use std::{
     convert::Infallible,
     io::Cursor,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -46,7 +49,7 @@ async fn runtime() -> (tempfile::TempDir, Arc<ProxyCrab>, u16) {
     let mut config = runtime.config();
     config.proxy_host = "127.0.0.1".into();
     config.proxy_port = port;
-    runtime.replace_config(config).unwrap();
+    runtime.replace_config(config).await.unwrap();
     runtime.start_proxy().await.unwrap();
     (app_data, runtime, port)
 }
@@ -71,6 +74,30 @@ async fn fixed_http_upstream() -> (u16, tokio::task::JoinHandle<()>) {
         }
     });
     (port, task)
+}
+
+async fn keepalive_counting_upstream() -> (u16, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let task_accepted = accepted.clone();
+    let task = tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            task_accepted.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                let service = service_fn(|_| async {
+                    Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"ok"))))
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+    (port, accepted, task)
 }
 
 async fn recording_http_upstream() -> (
@@ -487,7 +514,10 @@ async fn captures_plain_http_and_hot_active_session_switches() {
     assert!(response.contains("\r\n\r\nok"));
 
     let second = runtime.create_session(Some("second".into()), None).unwrap();
-    runtime.replace_active_session(Some(second.id)).unwrap();
+    runtime
+        .replace_active_session(Some(second.id))
+        .await
+        .unwrap();
     let response = proxy_get(
         proxy_port,
         &format!("http://127.0.0.1:{upstream_port}/second"),
@@ -994,7 +1024,7 @@ async fn routing_script_receives_http_authority_and_captures_into_active_session
         .unwrap();
     let mut config = runtime.config();
     config.routing_script_name = Some("route".into());
-    runtime.replace_config(config).unwrap();
+    runtime.replace_config(config).await.unwrap();
 
     let response = proxy_get(
         proxy_port,
@@ -1031,7 +1061,7 @@ async fn routing_script_false_and_invalid_returns_bypass_even_with_an_active_ses
         .unwrap();
     let mut config = runtime.config();
     config.routing_script_name = Some("route".into());
-    runtime.replace_config(config).unwrap();
+    runtime.replace_config(config).await.unwrap();
 
     let first = proxy_get(
         proxy_port,
@@ -1042,7 +1072,8 @@ async fn routing_script_false_and_invalid_returns_bypass_even_with_an_active_ses
     assert!(first.contains("\r\n\r\nok"));
 
     runtime
-        .update_script(ScriptKind::Routing, "route", "return 'legacy-tag'".into())
+        .update_routing_script("route", "return 'legacy-tag'".into())
+        .await
         .unwrap();
     let second = proxy_get(
         proxy_port,
@@ -1631,38 +1662,44 @@ async fn response_breakpoint_exposes_live_response_and_applies_temporary_body() 
 }
 
 #[tokio::test]
-async fn pinned_session_cannot_be_deleted_until_request_finishes() {
+async fn pinned_session_cannot_be_archived_until_request_finishes() {
     let app_data = tempdir().unwrap();
     let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-    let first = runtime.create_session(None, None).unwrap();
-    let pin = runtime.pin_session(first.id).unwrap();
+    runtime.create_session(None, None).unwrap();
+    let second = runtime.create_session(Some("second".into()), None).unwrap();
+    let pin = runtime.pin_session(second.id).unwrap();
 
     assert!(
         runtime
-            .delete_session(first.id)
+            .archive_session(second.id)
+            .await
             .unwrap_err()
             .to_string()
             .contains("requests in progress")
     );
     drop(pin);
-    runtime.delete_session(first.id).unwrap();
+    runtime.archive_session(second.id).await.unwrap();
 }
 
 #[tokio::test]
-async fn session_deletion_is_blocked_while_proxy_runs_and_allowed_after_stop() {
+async fn inactive_session_can_be_archived_while_proxy_runs_but_active_session_cannot() {
     let (_app_data, runtime, _proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let active = runtime.create_session(None, None).unwrap();
+    let inactive = runtime
+        .create_session(Some("inactive".into()), None)
+        .unwrap();
 
     assert!(
         runtime
-            .delete_session(session.id)
+            .archive_session(active.id)
+            .await
             .unwrap_err()
             .to_string()
-            .contains("proxy is running")
+            .contains("active session")
     );
+    runtime.archive_session(inactive.id).await.unwrap();
+    assert_eq!(runtime.archived_sessions(), vec![inactive]);
     runtime.stop_proxy().await.unwrap();
-    runtime.delete_session(session.id).unwrap();
-    assert!(runtime.sessions().is_empty());
 }
 
 #[tokio::test]
@@ -1671,7 +1708,10 @@ async fn connect_diagnostic_stays_in_session_pinned_at_connect() {
     let first = runtime.create_session(None, None).unwrap();
     let stream = connect_tunnel(proxy_port).await;
     let second = runtime.create_session(Some("second".into()), None).unwrap();
-    runtime.replace_active_session(Some(second.id)).unwrap();
+    runtime
+        .replace_active_session(Some(second.id))
+        .await
+        .unwrap();
 
     let config = ClientConfig::builder()
         .with_root_certificates(RootCertStore::empty())
@@ -1699,6 +1739,133 @@ async fn connect_diagnostic_stays_in_session_pinned_at_connect() {
             .unwrap()
             .is_empty()
     );
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn active_session_change_disconnects_existing_connect_but_noop_does_not() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let first = runtime.create_session(Some("first".into()), None).unwrap();
+    let mut stream = connect_tunnel(proxy_port).await;
+
+    runtime
+        .replace_active_session(Some(first.id))
+        .await
+        .unwrap();
+    let mut byte = [0_u8; 1];
+    assert!(
+        timeout(Duration::from_millis(100), stream.read(&mut byte))
+            .await
+            .is_err()
+    );
+
+    let second = runtime.create_session(Some("second".into()), None).unwrap();
+    runtime
+        .replace_active_session(Some(second.id))
+        .await
+        .unwrap();
+    assert_eq!(
+        timeout(Duration::from_secs(1), stream.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
+
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn active_session_change_replaces_upstream_connection_pool_but_noop_does_not() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let first = runtime.create_session(Some("first".into()), None).unwrap();
+    let (upstream_port, accepted, upstream) = keepalive_counting_upstream().await;
+    let uri = format!("http://127.0.0.1:{upstream_port}/pooled");
+    let host = format!("127.0.0.1:{upstream_port}");
+
+    assert!(proxy_get(proxy_port, &uri, &host).await.contains("ok"));
+    runtime
+        .replace_active_session(Some(first.id))
+        .await
+        .unwrap();
+    assert!(proxy_get(proxy_port, &uri, &host).await.contains("ok"));
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
+
+    let second = runtime.create_session(Some("second".into()), None).unwrap();
+    runtime
+        .replace_active_session(Some(second.id))
+        .await
+        .unwrap();
+    assert!(proxy_get(proxy_port, &uri, &host).await.contains("ok"));
+    assert_eq!(accepted.load(Ordering::SeqCst), 2);
+
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn only_effective_routing_script_changes_disconnect_existing_connections() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    runtime
+        .create_session(Some("capture".into()), None)
+        .unwrap();
+    runtime
+        .create_script(
+            ScriptKind::Routing,
+            Script {
+                name: "selected".into(),
+                content: "return true".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .create_script(
+            ScriptKind::Routing,
+            Script {
+                name: "unused".into(),
+                content: "return true".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_routing_selection(Some("selected".into()))
+        .await
+        .unwrap();
+    let mut stream = connect_tunnel(proxy_port).await;
+    let mut byte = [0_u8; 1];
+
+    runtime
+        .update_routing_script("unused", "return false".into())
+        .await
+        .unwrap();
+    assert!(
+        timeout(Duration::from_millis(100), stream.read(&mut byte))
+            .await
+            .is_err()
+    );
+
+    runtime
+        .update_routing_script("selected", "return true".into())
+        .await
+        .unwrap();
+    assert!(
+        timeout(Duration::from_millis(100), stream.read(&mut byte))
+            .await
+            .is_err()
+    );
+
+    runtime
+        .update_routing_script("selected", "return false".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        timeout(Duration::from_secs(1), stream.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
+
     runtime.stop_proxy().await.unwrap();
 }
 
@@ -1863,7 +2030,7 @@ async fn concurrent_lifecycle_calls_are_serialized() {
     let mut config = runtime.config();
     config.proxy_host = "127.0.0.1".into();
     config.proxy_port = unused_port();
-    runtime.replace_config(config).unwrap();
+    runtime.replace_config(config).await.unwrap();
 
     let (first, second) = tokio::join!(runtime.start_proxy(), runtime.start_proxy());
     assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);

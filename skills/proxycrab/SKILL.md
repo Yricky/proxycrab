@@ -37,8 +37,9 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
   no selected routing script, traffic enters the active Session; if none is active, traffic is
   transparently forwarded and recorded in `bypass.db`.
 - Use Node.js 18 or newer. The scripts have no npm dependencies.
-- Successful management mutations synchronize into the open desktop UI without changing the
-  Session the user is viewing. Open editors preserve unsaved local changes.
+- Successful management mutations synchronize into the open desktop UI. Archiving the viewed
+  Session selects the first remaining Session; other mutations keep the viewed Session. Open
+  editors preserve unsaved local changes.
 
 ## Choose the smallest workflow
 
@@ -59,6 +60,7 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
 | Create or update a routing script | `scripts/routing-upsert.mjs` |
 | Select or clear the routing script | `scripts/routing-select.mjs` |
 | Inspect or change the active Session | `GET` or `PUT /api/active-session` |
+| Archive, restore, or permanently delete a Session | Read `references/http-api.md` and use the archived-Session endpoints |
 | Inspect transparent forwarding | `scripts/bypass-list.mjs` |
 | Use a low-frequency endpoint | Read `references/http-api.md` and call it directly |
 | Write or review Lua | Read `references/lua-api.md` |
@@ -209,16 +211,18 @@ made before a Lua error; inspect the returned `execution.error` and modification
 Routing scripts return `true` to capture into the active Session and `false` or `nil` to bypass
 capture and TLS decryption. Returning `true` with no active Session also bypasses. Invalid returns
 and script errors emit a system warning and bypass. Select a routing script only after reviewing
-`references/lua-api.md`.
+`references/lua-api.md`. Effective active-Session and selected-routing changes disconnect existing
+proxy connections, tunnels, upgrades, and upstream pools; identical updates do not.
 
 ## Safety and evidence rules
 
 - Follow the active AGENTS.md instructions before creating or changing Sessions, views, filters,
   scripts, routing selection, or interceptor chains. When the endpoint is unavailable, do not make
   those UI-visible changes unless the user explicitly requests them.
-- Do not delete Sessions or scripts, start or stop the proxy, clear logs or records, regenerate the
-  CA, replace application configuration, or change workspace paths unless the user explicitly
-  requests that action.
+- Do not archive or restore Sessions, permanently delete archived Sessions, delete scripts, start
+  or stop the proxy, clear logs or records, regenerate the CA, replace application configuration,
+  or change workspace paths unless the user explicitly requests that action. An active Session
+  cannot be archived; make it inactive only when the user authorizes that separate mutation.
 - Do not replay requests or configure another process's proxy environment automatically.
 - Keep local raw capture output intact for debugging. It can include authorization headers, cookies,
   tokens, and personal data. Redact those values from summaries, chat responses, tickets, and other

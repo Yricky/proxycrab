@@ -26,6 +26,10 @@ registered in the centralized migration module and run before workspace stores a
 Workspace schema v2 enables SQLite WAL for Session capture databases so management readers can
 recover and interoperate with the established workspace format. Each opened capture or bypass
 store reuses one configured SQLite connection across its clones and serializes access to it.
+Active Sessions live under `sessions/`; archived Sessions move intact to `sessions_archived/` and
+can only be permanently deleted from there. Effective active-Session or selected-routing changes
+rotate all downstream connections, tunnels/upgrades, and upstream pools while keeping the proxy
+listener running; identical updates do not rotate connections.
 
 Workspace-scoped Agent behavior presets are owned by the management layer and stored under
 `agents/`. The desktop AI menu edits and activates them, while `GET /api/agents.md` returns the

@@ -61,6 +61,7 @@ pub trait ProxyCrabManager: Send + Sync {
     async fn start_proxy(&self) -> ManagerResult<ProxyStatus>;
     async fn stop_proxy(&self) -> ManagerResult<ProxyStatus>;
     async fn sessions(&self) -> ManagerResult<Vec<SessionMetadata>>;
+    async fn archived_sessions(&self) -> ManagerResult<Vec<SessionMetadata>>;
     async fn active_session(&self) -> ManagerResult<ActiveSession>;
     async fn replace_active_session(&self, active: ActiveSession) -> ManagerResult<ActiveSession>;
     async fn create_session(&self, request: CreateSessionRequest)
@@ -70,7 +71,9 @@ pub trait ProxyCrabManager: Send + Sync {
         id: u64,
         request: UpdateSessionRequest,
     ) -> ManagerResult<SessionMetadata>;
-    async fn delete_session(&self, id: u64) -> ManagerResult<()>;
+    async fn archive_session(&self, id: u64) -> ManagerResult<SessionMetadata>;
+    async fn restore_session(&self, id: u64) -> ManagerResult<SessionMetadata>;
+    async fn delete_archived_session(&self, id: u64) -> ManagerResult<()>;
     async fn log_ids(&self, request: LogIdsRequest) -> ManagerResult<LogIdsPayload>;
     async fn log_views(&self, request: LogViewsRequest) -> ManagerResult<LogViewsPayload>;
     async fn export_logs(&self, request: ExportLogsRequest) -> ManagerResult<LogExport>;
@@ -374,7 +377,7 @@ impl ProxyCrabManager for MitmManager {
                 "management API host must be a loopback address",
             ));
         }
-        self.runtime.replace_config(config).map_err(map_error)
+        self.runtime.replace_config(config).await.map_err(map_error)
     }
 
     async fn agents_presets(&self) -> ManagerResult<AgentsPresetState> {
@@ -458,6 +461,10 @@ impl ProxyCrabManager for MitmManager {
         Ok(self.runtime.sessions())
     }
 
+    async fn archived_sessions(&self) -> ManagerResult<Vec<SessionMetadata>> {
+        Ok(self.runtime.archived_sessions())
+    }
+
     async fn active_session(&self) -> ManagerResult<ActiveSession> {
         Ok(ActiveSession {
             session_id: self.runtime.active_session_id(),
@@ -467,6 +474,7 @@ impl ProxyCrabManager for MitmManager {
     async fn replace_active_session(&self, active: ActiveSession) -> ManagerResult<ActiveSession> {
         self.runtime
             .replace_active_session(active.session_id)
+            .await
             .map_err(map_error)?;
         Ok(active)
     }
@@ -490,16 +498,22 @@ impl ProxyCrabManager for MitmManager {
             .map_err(map_error)
     }
 
-    async fn delete_session(&self, id: u64) -> ManagerResult<()> {
-        self.runtime.delete_session(id).map_err(|error| {
-            if error.to_string().contains("proxy is running") {
-                ManagerError::new("proxy_running", error.to_string())
-            } else if error.to_string().contains("requests in progress") {
-                ManagerError::new("session_in_use", error.to_string())
-            } else {
-                map_error(error)
-            }
-        })
+    async fn archive_session(&self, id: u64) -> ManagerResult<SessionMetadata> {
+        self.runtime
+            .archive_session(id)
+            .await
+            .map_err(map_session_archive_error)
+    }
+
+    async fn restore_session(&self, id: u64) -> ManagerResult<SessionMetadata> {
+        self.runtime.restore_session(id).await.map_err(map_error)
+    }
+
+    async fn delete_archived_session(&self, id: u64) -> ManagerResult<()> {
+        self.runtime
+            .delete_archived_session(id)
+            .await
+            .map_err(map_error)
     }
 
     async fn log_ids(&self, request: LogIdsRequest) -> ManagerResult<LogIdsPayload> {
@@ -1076,13 +1090,15 @@ impl ProxyCrabManager for MitmManager {
         request: UpdateScriptRequest,
     ) -> ManagerResult<()> {
         self.runtime
-            .update_script(ScriptKind::Routing, &name, request.content)
+            .update_routing_script(&name, request.content)
+            .await
             .map_err(map_error)
     }
 
     async fn delete_routing_script(&self, name: String) -> ManagerResult<()> {
         self.runtime
-            .delete_script(ScriptKind::Routing, &name)
+            .delete_routing_script(&name)
+            .await
             .map_err(map_error)
     }
 
@@ -1096,15 +1112,10 @@ impl ProxyCrabManager for MitmManager {
         &self,
         selection: RoutingSelection,
     ) -> ManagerResult<RoutingSelection> {
-        if let Some(name) = &selection.name {
-            self.runtime
-                .script(ScriptKind::Routing, name)
-                .map_err(map_error)?;
-        }
-        let name = selection.name;
-        self.runtime
-            .workspace()
-            .update_config(|config| config.routing_script_name = name.clone())
+        let name = self
+            .runtime
+            .replace_routing_selection(selection.name)
+            .await
             .map_err(map_error)?;
         Ok(RoutingSelection { name })
     }
@@ -1412,6 +1423,15 @@ fn map_error(error: anyhow::Error) -> ManagerError {
         ManagerError::bad_request(message)
     } else {
         ManagerError::internal(message)
+    }
+}
+
+fn map_session_archive_error(error: anyhow::Error) -> ManagerError {
+    let message = error.to_string();
+    if message.contains("active session") || message.contains("requests in progress") {
+        ManagerError::conflict(message)
+    } else {
+        map_error(error)
     }
 }
 

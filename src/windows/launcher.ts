@@ -17,6 +17,7 @@ import RoutingManagerWindow from "./RoutingManagerWindow.vue";
 import BypassWindow from "./BypassWindow.vue";
 import BreakpointListWindow from "./BreakpointListWindow.vue";
 import AgentsPresetsWindow from "./AgentsPresetsWindow.vue";
+import ArchivedSessionsWindow from "./ArchivedSessionsWindow.vue";
 
 export type ScriptEditorKind = "column" | InterceptorKind;
 
@@ -125,6 +126,15 @@ export function openBypass(): void {
     component: BypassWindow,
     width: 1100,
     height: 560,
+  });
+}
+
+export function openArchivedSessions(): void {
+  windowsStore.open("archived-sessions", {
+    title: "已归档 Session",
+    component: ArchivedSessionsWindow,
+    width: 720,
+    height: 480,
   });
 }
 

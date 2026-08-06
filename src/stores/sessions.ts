@@ -7,6 +7,7 @@ const backend = createTauriBackend();
 
 export const sessionsStore = reactive({
   sessions: [] as SessionMetadata[],
+  archivedSessions: [] as SessionMetadata[],
   /** The session whose logs are shown in the main table. */
   viewingSessionId: null as number | null,
   activeSessionId: null as number | null,
@@ -14,11 +15,13 @@ export const sessionsStore = reactive({
 
   async refresh(): Promise<void> {
     try {
-      const [sessions, active] = await Promise.all([
+      const [sessions, archivedSessions, active] = await Promise.all([
         backend.listSessions(),
+        backend.listArchivedSessions(),
         backend.getActiveSession(),
       ]);
       this.sessions = sessions;
+      this.archivedSessions = archivedSessions;
       this.activeSessionId = active.session_id;
       if (
         this.viewingSessionId !== null &&
@@ -34,11 +37,13 @@ export const sessionsStore = reactive({
   async init(): Promise<void> {
     this.loading = true;
     try {
-      const [sessions, active] = await Promise.all([
+      const [sessions, archivedSessions, active] = await Promise.all([
         backend.listSessions(),
+        backend.listArchivedSessions(),
         backend.getActiveSession(),
       ]);
       this.sessions = sessions;
+      this.archivedSessions = archivedSessions;
       this.activeSessionId = active.session_id;
       // 默认查看活跃会话；活跃会话不存在时回退到第一个会话
       const activeSession = sessions.find((s) => s.id === active.session_id);
@@ -52,11 +57,13 @@ export const sessionsStore = reactive({
 
   async syncFromBackend(): Promise<void> {
     try {
-      const [sessions, active] = await Promise.all([
+      const [sessions, archivedSessions, active] = await Promise.all([
         backend.listSessions(),
+        backend.listArchivedSessions(),
         backend.getActiveSession(),
       ]);
       this.sessions = sessions;
+      this.archivedSessions = archivedSessions;
       this.activeSessionId = active.session_id;
       if (
         this.viewingSessionId === null ||
@@ -101,9 +108,9 @@ export const sessionsStore = reactive({
     }
   },
 
-  async remove(id: number): Promise<boolean> {
+  async archive(id: number): Promise<boolean> {
     try {
-      await backend.deleteSession(id);
+      await backend.archiveSession(id);
       if (this.viewingSessionId === id) this.viewingSessionId = null;
       await this.refresh();
       if (this.viewingSessionId === null) {
@@ -111,7 +118,29 @@ export const sessionsStore = reactive({
       }
       return true;
     } catch (error) {
-      reportError(error, "删除会话失败");
+      reportError(error, "归档会话失败");
+      return false;
+    }
+  },
+
+  async restore(id: number): Promise<boolean> {
+    try {
+      await backend.restoreSession(id);
+      await this.refresh();
+      return true;
+    } catch (error) {
+      reportError(error, "取消归档失败");
+      return false;
+    }
+  },
+
+  async deleteArchived(id: number): Promise<boolean> {
+    try {
+      await backend.deleteArchivedSession(id);
+      await this.refresh();
+      return true;
+    } catch (error) {
+      reportError(error, "删除已归档会话失败");
       return false;
     }
   },

@@ -23,15 +23,16 @@ pub(super) fn handle_bypass_connect(
         cancellation,
         tracker,
     } = context;
-    let entry_id = runtime
-        .bypass_store()
-        .begin(
-            &source.to_string(),
-            &request_data.method,
-            &request_data.uri,
-            &request_data.version,
-            reason,
-        )
+    let entry_id = tracker
+        .begin_bypass(runtime.bypass_store(), || {
+            runtime.bypass_store().begin(
+                &source.to_string(),
+                &request_data.method,
+                &request_data.uri,
+                &request_data.version,
+                reason,
+            )
+        })
         .map_err(|error| tracing::warn!("failed to persist bypass CONNECT: {error}"))
         .ok();
     let on_upgrade = hyper::upgrade::on(request);
@@ -114,15 +115,16 @@ pub(super) async fn handle_bypass_http(
     cancellation: CancellationToken,
     tracker: TaskGroup,
 ) -> Response<ProxyBody> {
-    let entry_id = runtime
-        .bypass_store()
-        .begin(
-            &source.to_string(),
-            &request_data.method,
-            &request_data.uri,
-            &request_data.version,
-            reason,
-        )
+    let entry_id = tracker
+        .begin_bypass(runtime.bypass_store(), || {
+            runtime.bypass_store().begin(
+                &source.to_string(),
+                &request_data.method,
+                &request_data.uri,
+                &request_data.version,
+                reason,
+            )
+        })
         .map_err(|error| tracing::warn!("failed to persist bypass request: {error}"))
         .ok();
     let transfer = BypassTransfer::new(runtime.bypass_store().clone(), entry_id);

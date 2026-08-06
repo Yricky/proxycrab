@@ -17,6 +17,8 @@ use crate::model::{
 
 const POINTER_FILE: &str = "config.json";
 const WORKSPACE_CONFIG_FILE: &str = "app_config.json";
+const SESSIONS_DIRECTORY: &str = "sessions";
+const ARCHIVED_SESSIONS_DIRECTORY: &str = "sessions_archived";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorkspacePointer {
@@ -102,12 +104,14 @@ pub struct Workspace {
     _lock: File,
     config: RwLock<AppConfig>,
     sessions: RwLock<Vec<SessionMetadata>>,
+    archived_sessions: RwLock<Vec<SessionMetadata>>,
 }
 
 impl Workspace {
     pub fn open(root: impl Into<PathBuf>) -> Result<Arc<Self>> {
         let root = root.into();
-        fs::create_dir_all(root.join("sessions"))?;
+        fs::create_dir_all(root.join(SESSIONS_DIRECTORY))?;
+        fs::create_dir_all(root.join(ARCHIVED_SESSIONS_DIRECTORY))?;
         for directory in ["column", "filter", "routing", "request", "response"] {
             fs::create_dir_all(root.join("scripts").join(directory))?;
         }
@@ -123,8 +127,10 @@ impl Workspace {
 
         let config_path = root.join(WORKSPACE_CONFIG_FILE);
         let mut config = read_json::<AppConfig>(&config_path).unwrap_or_default();
-        let mut sessions = load_sessions(&root)?;
+        let mut sessions = load_sessions(&root.join(SESSIONS_DIRECTORY))?;
         sessions.sort_by_key(|session| session.created_at);
+        let mut archived_sessions = load_sessions(&root.join(ARCHIVED_SESSIONS_DIRECTORY))?;
+        archived_sessions.sort_by_key(|session| session.created_at);
         if config.routing_script_name.as_ref().is_some_and(|name| {
             !root
                 .join("scripts")
@@ -147,6 +153,7 @@ impl Workspace {
             _lock: lock,
             config: RwLock::new(config),
             sessions: RwLock::new(sessions),
+            archived_sessions: RwLock::new(archived_sessions),
         }))
     }
 
@@ -177,6 +184,13 @@ impl Workspace {
         self.sessions
             .read()
             .expect("workspace sessions lock poisoned")
+            .clone()
+    }
+
+    pub fn archived_sessions(&self) -> Vec<SessionMetadata> {
+        self.archived_sessions
+            .read()
+            .expect("workspace archived sessions lock poisoned")
             .clone()
     }
 
@@ -220,8 +234,13 @@ impl Workspace {
             .sessions
             .write()
             .map_err(|_| anyhow!("workspace sessions lock poisoned"))?;
+        let archived_sessions = self
+            .archived_sessions
+            .read()
+            .map_err(|_| anyhow!("workspace archived sessions lock poisoned"))?;
         let first = sessions.is_empty();
-        let session = self.create_session_locked(&sessions, name, description)?;
+        let session =
+            self.create_session_locked(&sessions, &archived_sessions, name, description)?;
         if first
             && let Err(error) =
                 self.update_config(|config| config.active_session_id = Some(session.id))
@@ -236,12 +255,15 @@ impl Workspace {
     fn create_session_locked(
         &self,
         sessions: &[SessionMetadata],
+        archived_sessions: &[SessionMetadata],
         name: Option<String>,
         description: Option<String>,
     ) -> Result<SessionMetadata> {
         let initial_view = SessionView::default();
         let mut id = now_millis();
-        while sessions.iter().any(|session| session.id == id) {
+        while sessions.iter().any(|session| session.id == id)
+            || archived_sessions.iter().any(|session| session.id == id)
+        {
             id += 1;
         }
         let session = SessionMetadata {
@@ -293,7 +315,7 @@ impl Workspace {
         Ok(next)
     }
 
-    pub fn delete_session(&self, id: u64) -> Result<()> {
+    pub fn archive_session(&self, id: u64) -> Result<SessionMetadata> {
         let mut sessions = self
             .sessions
             .write()
@@ -302,24 +324,79 @@ impl Workspace {
             .iter()
             .position(|session| session.id == id)
             .ok_or_else(|| anyhow!("session {id} not found"))?;
-        let directory = self.session_dir(id);
-        let deleted = self.root.join("sessions").join(format!(".deleted-{id}"));
-        fs::rename(&directory, &deleted)?;
-        if self.active_session_id() == Some(id)
-            && let Err(error) = self.update_config(|config| config.active_session_id = None)
-        {
-            let _ = fs::rename(&deleted, &directory);
-            return Err(error);
+        if self.active_session_id() == Some(id) {
+            bail!("active session {id} cannot be archived");
         }
-        sessions.remove(index);
+        let mut archived_sessions = self
+            .archived_sessions
+            .write()
+            .map_err(|_| anyhow!("workspace archived sessions lock poisoned"))?;
+        let directory = self.session_dir(id);
+        let archived = self.archived_session_dir(id);
+        if archived.exists() {
+            bail!("archived session {id} already exists");
+        }
+        fs::rename(&directory, &archived)?;
+        let session = sessions.remove(index);
+        archived_sessions.push(session.clone());
+        archived_sessions.sort_by_key(|session| session.created_at);
+        Ok(session)
+    }
+
+    pub fn restore_session(&self, id: u64) -> Result<SessionMetadata> {
+        let mut sessions = self
+            .sessions
+            .write()
+            .map_err(|_| anyhow!("workspace sessions lock poisoned"))?;
+        let mut archived_sessions = self
+            .archived_sessions
+            .write()
+            .map_err(|_| anyhow!("workspace archived sessions lock poisoned"))?;
+        let index = archived_sessions
+            .iter()
+            .position(|session| session.id == id)
+            .ok_or_else(|| anyhow!("archived session {id} not found"))?;
+        let directory = self.session_dir(id);
+        if directory.exists() {
+            bail!("session {id} already exists");
+        }
+        fs::rename(self.archived_session_dir(id), &directory)?;
+        let session = archived_sessions.remove(index);
+        sessions.push(session.clone());
+        sessions.sort_by_key(|session| session.created_at);
+        Ok(session)
+    }
+
+    pub fn delete_archived_session(&self, id: u64) -> Result<()> {
+        let mut archived_sessions = self
+            .archived_sessions
+            .write()
+            .map_err(|_| anyhow!("workspace archived sessions lock poisoned"))?;
+        let index = archived_sessions
+            .iter()
+            .position(|session| session.id == id)
+            .ok_or_else(|| anyhow!("archived session {id} not found"))?;
+        let directory = self.archived_session_dir(id);
+        let deleted = self
+            .root
+            .join(ARCHIVED_SESSIONS_DIRECTORY)
+            .join(format!(".deleted-{id}"));
+        fs::rename(&directory, &deleted)?;
+        archived_sessions.remove(index);
         if let Err(error) = fs::remove_dir_all(&deleted) {
-            tracing::warn!("failed to remove deleted session directory {id}: {error}");
+            tracing::warn!("failed to remove archived session directory {id}: {error}");
         }
         Ok(())
     }
 
     pub fn session_dir(&self, id: u64) -> PathBuf {
-        self.root.join("sessions").join(id.to_string())
+        self.root.join(SESSIONS_DIRECTORY).join(id.to_string())
+    }
+
+    pub fn archived_session_dir(&self, id: u64) -> PathBuf {
+        self.root
+            .join(ARCHIVED_SESSIONS_DIRECTORY)
+            .join(id.to_string())
     }
 
     pub fn session_view(&self, id: u64) -> Result<SessionView> {
@@ -451,12 +528,14 @@ fn validate_script_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn load_sessions(root: &Path) -> Result<Vec<SessionMetadata>> {
+fn load_sessions(directory: &Path) -> Result<Vec<SessionMetadata>> {
     let mut sessions = Vec::new();
-    for entry in fs::read_dir(root.join("sessions"))? {
+    for entry in fs::read_dir(directory)? {
         let entry = entry?;
         if entry.file_type()?.is_dir()
-            && let Ok(session) = read_json(entry.path().join("metadata.json").as_path())
+            && let Ok(session) =
+                read_json::<SessionMetadata>(entry.path().join("metadata.json").as_path())
+            && entry.file_name().to_string_lossy() == session.id.to_string()
         {
             sessions.push(session);
         }
@@ -513,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn first_session_becomes_active_and_deletion_clears_active() {
+    fn active_session_cannot_be_archived_and_archive_can_be_restored_or_deleted() {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
         let session = workspace
@@ -521,9 +600,40 @@ mod tests {
             .unwrap();
 
         assert_eq!(workspace.active_session_id(), Some(session.id));
-        workspace.delete_session(session.id).unwrap();
+        assert!(
+            workspace
+                .archive_session(session.id)
+                .unwrap_err()
+                .to_string()
+                .contains("active session")
+        );
+        workspace.replace_active_session(None).unwrap();
+        workspace.archive_session(session.id).unwrap();
         assert!(workspace.sessions().is_empty());
+        assert_eq!(workspace.archived_sessions(), vec![session.clone()]);
+        assert!(workspace.session_view(session.id).is_err());
+        workspace.restore_session(session.id).unwrap();
+        assert_eq!(workspace.sessions(), vec![session.clone()]);
+        workspace.archive_session(session.id).unwrap();
+        workspace.delete_archived_session(session.id).unwrap();
+        assert!(workspace.archived_sessions().is_empty());
         assert_eq!(workspace.active_session_id(), None);
+    }
+
+    #[test]
+    fn archived_sessions_survive_workspace_reopen() {
+        let root = tempdir().unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+        let session = workspace
+            .create_session(Some("archive".into()), None)
+            .unwrap();
+        workspace.replace_active_session(None).unwrap();
+        workspace.archive_session(session.id).unwrap();
+        drop(workspace);
+
+        let reopened = Workspace::open(root.path()).unwrap();
+        assert!(reopened.sessions().is_empty());
+        assert_eq!(reopened.archived_sessions(), vec![session]);
     }
 
     #[test]

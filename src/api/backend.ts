@@ -72,9 +72,12 @@ export interface Backend {
 
   // sessions
   listSessions(): Promise<SessionMetadata[]>;
+  listArchivedSessions(): Promise<SessionMetadata[]>;
   createSession(request: CreateSessionRequest): Promise<SessionMetadata>;
   updateSession(id: number, request: UpdateSessionRequest): Promise<SessionMetadata>;
-  deleteSession(id: number): Promise<void>;
+  archiveSession(id: number): Promise<SessionMetadata>;
+  restoreSession(id: number): Promise<SessionMetadata>;
+  deleteArchivedSession(id: number): Promise<void>;
   getActiveSession(): Promise<ActiveSession>;
   replaceActiveSession(active: ActiveSession): Promise<ActiveSession>;
 
