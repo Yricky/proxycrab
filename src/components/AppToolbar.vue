@@ -8,6 +8,7 @@ import {
   openCertManager,
   openColumnManager,
   openFilterManager,
+  openJwt,
   openRequestInterceptorManager,
   openResponseInterceptorManager,
   openRoutingManager,
@@ -32,6 +33,7 @@ import {
   Io5Play,
   Io5RadioButtonOn,
   Io5Settings,
+  Io5ShieldCheckmark,
   Io5Stop,
   Io5Flash,
   Io5Sunny,
@@ -237,6 +239,10 @@ onBeforeUnmount(() => {
           <button class="tb-menu-item" @click="runMenuAction(openBase64)">
             <Io5Build :size="14" />
             <span>Base64 编解码</span>
+          </button>
+          <button class="tb-menu-item" @click="runMenuAction(openJwt)">
+            <Io5ShieldCheckmark :size="14" />
+            <span>JWT 解码 / 验签</span>
           </button>
         </div>
       </div>

@@ -7,6 +7,7 @@ import InterceptorManagerWindow from "./InterceptorManagerWindow.vue";
 import ColumnManagerWindow from "./ColumnManagerWindow.vue";
 import FilterManagerWindow from "./FilterManagerWindow.vue";
 import Base64Window from "./Base64Window.vue";
+import JwtWindow from "./JwtWindow.vue";
 import CertManagerWindow from "./CertManagerWindow.vue";
 import SystemLogsWindow from "./SystemLogsWindow.vue";
 import SettingsWindow from "./SettingsWindow.vue";
@@ -155,6 +156,15 @@ export function openBase64(): void {
     component: Base64Window,
     width: 520,
     height: 460,
+  });
+}
+
+export function openJwt(): void {
+  windowsStore.open("tool-jwt", {
+    title: "JWT 解码 / 验签",
+    component: JwtWindow,
+    width: 940,
+    height: 640,
   });
 }
 
