@@ -49,14 +49,14 @@ use crate::{
     storage::{BodySide, CaptureStore},
 };
 
-mod body;
+pub(crate) mod body;
 mod bypass;
 mod mitm;
 mod upstream;
 
 use body::{
-    BoxError, BypassTransfer, PacedBody, ProxyBody, PumpOutcome, PumpResult, TrackedBody,
-    boxed_full, pump_body,
+    BoxError, BypassTransfer, DeferredBody, PacedBody, ProxyBody, PumpOutcome, PumpResult,
+    TrackedBody, boxed_full, pump_body,
 };
 pub(crate) use upstream::UpstreamClient;
 
@@ -229,7 +229,7 @@ impl ProxyController {
 }
 
 #[derive(Clone)]
-struct TaskGroup {
+pub(crate) struct TaskGroup {
     tracker: TaskTracker,
     state: Arc<Mutex<TaskGroupState>>,
 }

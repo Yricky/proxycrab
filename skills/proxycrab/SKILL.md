@@ -55,6 +55,7 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
 | Find existing traffic | `scripts/session-list.mjs`, then `scripts/log-query.mjs` |
 | Inspect one capture | `scripts/log-get.mjs` |
 | Save a complete request/response body | `scripts/body-get.mjs` |
+| Upload an immutable workspace Asset | `scripts/asset-upload.mjs` |
 | Wait for a new matching capture | `scripts/log-wait.mjs` |
 | Save a diagnostic artifact | `scripts/log-export.mjs` |
 | Export selected logs or a Session as HAR | `scripts/har-export.mjs` |
@@ -191,6 +192,20 @@ node <skill-dir>/scripts/interceptor-upsert.mjs \
   --file /tmp/add-debug-header.lua
 ```
 
+For a reusable body, upload an immutable workspace Asset before writing the interceptor:
+
+```bash
+node <skill-dir>/scripts/asset-upload.mjs \
+  --id fixtures/mobile-error.json \
+  --file /tmp/mobile-error.json \
+  --content-type application/json
+```
+
+Then resolve it with `get_asset("fixtures/mobile-error.json")` and pass the returned object to
+`replace_with_asset`. Asset IDs are permanent for the workspace because the API does not overwrite
+or delete them; choose the ID deliberately and never retry a conflict under a different ID unless
+the user approves the new name.
+
 Before replacing a Session's interceptor chains, read `GET /api/session-interceptors` and keep the
 previous JSON if restoration may matter. Apply both chains atomically:
 
@@ -254,9 +269,15 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
   These controls are per capture, never become HTTP headers, and do not apply to bypass, raw
   CONNECT, Upgrade/WebSocket, the local CA endpoint, or proxy-generated errors. `_crab_skip` still
   allows response pacing after response interceptors create the synthetic response.
-- Request and response interceptors run at the header boundary and cannot read original bodies.
-  Captured bodies and `replace_with_file` stream without an application-level size limit; use raw
-  body endpoints with an explicit `max_size` when reading them back.
+- Request and response interceptors run at the header boundary. `body:as_string()` and
+  `body:as_json()` wait for the effective original body to finish downloading when no replacement
+  is active; this can block forever for SSE/infinite streams. Decoded getter output is limited to
+  16 MiB. Captured bodies and `replace_with_asset` stream without an application-level size limit;
+  use raw body endpoints with an explicit `max_size` when reading captures back.
+- Workspace Assets are immutable through the API and can contain sensitive bytes. Upload only when
+  the user asks for an Asset or body replacement, do not print their contents, and do not invent a
+  replacement ID after `asset_already_exists` or `asset_path_conflict`. `replace_with_asset` removes
+  stale Content-Encoding but does not set Content-Type.
 - `_crab_tls_insecure` disables upstream HTTPS certificate-chain and hostname verification only when
   its final request-interceptor value is exactly `true`. It also applies to HTTPS Upgrade/WebSocket,
   has no effect on HTTP or transparent bypass, never becomes a header, and uses a pool isolated from

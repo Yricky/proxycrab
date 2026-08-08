@@ -287,6 +287,7 @@ pub enum Modification {
     HeaderRemove { name: String, values: Vec<String> },
     BodyReplaceString { content: String },
     BodyReplaceFile { path: String },
+    BodyReplaceAsset { asset_id: String },
     TagSet { key: String, value: String },
 }
 

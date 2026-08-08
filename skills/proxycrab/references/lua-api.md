@@ -9,11 +9,11 @@ ProxyCrab syntax-checks every saved script and runs it in a fresh sandbox.
 - Lua-managed memory limit: 16 MiB
 - Unavailable globals/libraries: `io`, `os`, `package`, `debug`, `dofile`, `loadfile`, `require`
 - Script files use the `.lua` suffix.
-- Captured bodies and file replacements stream without an application-level size limit; Lua string
-  replacements remain subject to the 16 MiB Lua-managed memory budget.
+- Captured bodies and Asset replacements stream without an application-level size limit; Lua string
+  replacements and decoded body getters remain subject to the 16 MiB limit.
 
-Do not depend on filesystem or process APIs other than the explicit
-`replace_with_file("/absolute/path")` body method.
+Do not depend on filesystem or process APIs. Upload immutable workspace Assets through the
+management HTTP API and resolve them in interceptors with `get_asset(id)`.
 
 ## Base64 and JSON globals
 
@@ -84,8 +84,7 @@ emit conversion warnings.
 JSON nesting is limited to 128 containers. Encoding rejects `NaN` and infinities; decoding rejects
 numbers outside the finite `f64` range. Output is compact JSON, not pretty-printed.
 
-These codecs do not add request or response body read access. Interceptors still only expose body
-replacement methods.
+Interceptor body objects expose the same decoded JSON representation through `body:as_json()`.
 
 ## Routing scripts
 
@@ -175,7 +174,7 @@ receives an isolated sandbox with no global state carried from an earlier row.
 | `entry.req.version` | string |
 | `entry.req.uri` | URI object |
 | `entry.req.headers` | read-only headers |
-| `entry.req:getTag(key)` | string or `nil` |
+| `entry.req:get_tag(key)` | string or `nil` |
 
 ### Read-only response
 
@@ -240,8 +239,8 @@ A request interceptor receives mutable global `req`:
 | `req.uri` | mutable | URI object when read; string when assigned |
 | `req.headers` | mutable methods | headers |
 | `req.body` | mutable methods | body |
-| `req:getTag(key)` | read-only method | string or `nil` |
-| `req:setTag(key, value)` | mutable method | tag |
+| `req:get_tag(key)` | read-only method | string or `nil` |
+| `req:set_tag(key, value)` | mutable method | tag |
 
 Example:
 
@@ -250,7 +249,7 @@ req.method = "BREW"
 req.uri = "https://alternate.example.com/new-path?q=1"
 req.headers:remove("x-old-debug")
 req.headers:set("x-debug-mode", "1")
-req:setTag("debug", "")
+req:set_tag("debug", "")
 req.body:replace_with_string('{"debug":true}')
 breakpoint(30000)
 ```
@@ -307,8 +306,8 @@ and headers are read-only; tags remain mutable proxy-local metadata:
 | `req.version` | read-only | string |
 | `req.uri` | read-only | URI object |
 | `req.headers` | read-only methods | headers |
-| `req:getTag(key)` | read-only method | string or `nil` |
-| `req:setTag(key, value)` | mutable method | tag |
+| `req:get_tag(key)` | read-only method | string or `nil` |
+| `req:set_tag(key, value)` | mutable method | tag |
 
 Example:
 
@@ -320,12 +319,16 @@ then
   resp.status = 777
 end
 resp.headers:append("x-proxycrab-debug", "1")
-resp.body:replace_with_file("/absolute/path/to/response.json")
+local asset = get_asset("fixtures/response.json")
+if asset ~= nil then
+  resp.headers:set("content-type", asset.content_type)
+  resp.body:replace_with_asset(asset)
+end
 ```
 
 Status accepts the full range representable by the HTTP stack, including non-standard codes and
 status/body combinations. Values outside 100 through 999 raise a Lua runtime error. Version and
-request metadata cannot be changed. Request bodies are not exposed to response interceptors.
+request metadata cannot be changed. `req.body` is not exposed to response interceptors.
 
 ## Breakpoints
 
@@ -336,29 +339,45 @@ multiple temporary scripts against the same live phase state. Each temporary exe
 phase capabilities except `breakpoint` itself is unavailable, and is persisted as an independent
 history record. Lua errors use normal interceptor semantics: mutations before the error remain.
 
-## Mutable body API
+## Interceptor body and Asset API
 
 Request and response bodies expose:
 
 ```lua
+local text = body:as_string()
+local value = body:as_json()
 body:replace_with_string("new bytes encoded as UTF-8")
-body:replace_with_file("/absolute/path/to/body.bin")
+local asset = get_asset("fixtures/body.bin")
+if asset ~= nil then body:replace_with_asset(asset) end
 ```
 
+- `as_string()` and `as_json()` read the current effective body: the current script's latest
+  replacement, then an earlier interceptor's replacement, otherwise the original inbound body.
+- The first original-body read waits until the complete body is downloaded and captured, then the
+  outgoing body is replayed from disk. Without a getter call, normal streaming is preserved. An SSE
+  or infinite body can block indefinitely unless a response-frame timeout terminates the read.
+- Both getters require the current effective `Content-Type` to be textual under ProxyCrab's preview
+  rules. `as_string()` returns `nil` for invalid UTF-8. `as_json()` attempts every textual type and
+  returns `nil` for malformed JSON. Empty text returns `""` / `nil`, respectively.
+- gzip, br, deflate, and zstd are decoded first. Unknown or malformed encodings return `nil`; decoded
+  content over 16 MiB raises a Lua runtime error.
 - Only the last body replacement in one script determines the outgoing body.
 - Every replacement call is still recorded in the modification history.
-- File paths must be absolute.
-- The file is opened when ProxyCrab applies the effects; missing/unreadable files fail the
-  interceptor stage.
-- Files are streamed without being loaded into memory and have no application-level size limit.
+- `replace_with_asset` accepts only an Asset returned by `get_asset`; strings and tables are rejected.
+- Asset files are streamed without being loaded into memory and have no application-level size limit.
 - Strings remain in Lua-managed memory and are constrained by the sandbox memory budget.
+- Replacements remove the current `Content-Encoding` header but do not set `Content-Type`.
 
-ProxyCrab does not expose the original body content to Lua.
+`get_asset(id)` is available only in request and response interceptors. Invalid or missing IDs return
+`nil`; storage errors raise a runtime error. A returned Asset is read-only and exposes `id`, `size`,
+`content_type`, `sha256`, and `created_at`. Assets are immutable and shared by the whole workspace.
+IDs allow `[a-z0-9_./]`, up to 255 bytes total and 100 bytes per segment. They cannot begin/end with
+`/`, contain `//`, or use `.`, `..`, or `.metadata` as a segment.
 
-Request interceptors execute once after request headers arrive and before the original request body
-is consumed. Response interceptors execute once after response headers arrive and before the
-original response body is consumed. Raw bodies stream to capture storage while the normal or
-replacement body is transferred independently.
+Request interceptors execute after request headers arrive; response interceptors execute after
+response headers arrive. Raw bodies stream to capture storage while the normal or replacement body
+is transferred. A getter that consumes the raw body switches the normal path to disk replay after
+interceptor execution.
 
 ## Execution and historical evidence
 

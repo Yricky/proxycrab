@@ -834,7 +834,7 @@ async fn response_body_frame_timeout_terminates_the_stream_and_fails_the_capture
             ScriptKind::ResponseInterceptor,
             Script {
                 name: "response-timeout".into(),
-                content: "req:setTag('_crab_resp_bodyframe_timeout', '50')".into(),
+                content: "req:set_tag('_crab_resp_bodyframe_timeout', '50')".into(),
             },
         )
         .unwrap();
@@ -895,7 +895,7 @@ async fn response_body_frame_timeout_also_bounds_the_first_frame() {
             ScriptKind::ResponseInterceptor,
             Script {
                 name: "first-frame-timeout".into(),
-                content: "req:setTag('_crab_resp_bodyframe_timeout', '50')".into(),
+                content: "req:set_tag('_crab_resp_bodyframe_timeout', '50')".into(),
             },
         )
         .unwrap();
@@ -946,7 +946,7 @@ async fn response_replacement_survives_a_raw_body_frame_timeout() {
             ScriptKind::ResponseInterceptor,
             Script {
                 name: "replace-with-timeout".into(),
-                content: "req:setTag('_crab_resp_bodyframe_timeout', '50'); resp.body:replace_with_string('replacement')".into(),
+                content: "req:set_tag('_crab_resp_bodyframe_timeout', '50'); resp.body:replace_with_string('replacement')".into(),
             },
         )
         .unwrap();
@@ -1236,6 +1236,266 @@ async fn request_interceptor_rewrites_method_and_upstream_uri() {
 }
 
 #[tokio::test]
+async fn request_interceptors_read_raw_json_and_observe_prior_replacement() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let (upstream_port, upstream) = fixed_http_upstream().await;
+    let session = runtime.create_session(None, None).unwrap();
+    for (name, content) in [
+        (
+            "read-original-json",
+            "local body = req.body:as_json(); assert(body.original == true); \
+             req.headers:set('x-original-json', '1'); \
+             req.body:replace_with_string('{\"replacement\":true}')",
+        ),
+        (
+            "read-replacement-json",
+            "local body = req.body:as_json(); assert(body.replacement == true); \
+             req.headers:set('x-replacement-json', '1')",
+        ),
+    ] {
+        runtime
+            .create_script(
+                ScriptKind::RequestInterceptor,
+                Script {
+                    name: name.into(),
+                    content: content.into(),
+                },
+            )
+            .unwrap();
+    }
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: ["read-original-json", "read-replacement-json"]
+                    .into_iter()
+                    .map(|name| SessionInterceptor {
+                        name: name.into(),
+                        enabled: true,
+                    })
+                    .collect(),
+                response: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    let body = br#"{"original":true}"#;
+    stream
+        .write_all(
+            format!(
+                "POST http://127.0.0.1:{upstream_port}/body-json HTTP/1.1\r\n\
+                 Host: 127.0.0.1:{upstream_port}\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    stream.write_all(body).await.unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.unwrap();
+    assert!(response.ends_with(b"ok"));
+
+    let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+    assert_eq!(capture.request.headers["x-original-json"], vec!["1"]);
+    assert_eq!(capture.request.headers["x-replacement-json"], vec!["1"]);
+    let raw_path = runtime
+        .workspace()
+        .session_dir(session.id)
+        .join("blob")
+        .join(format!("{}-request.body", capture.id));
+    let modified_path = runtime
+        .workspace()
+        .session_dir(session.id)
+        .join("blob")
+        .join(format!("{}-request.body.modified", capture.id));
+    assert_eq!(tokio::fs::read(raw_path).await.unwrap(), body);
+    assert_eq!(
+        tokio::fs::read(modified_path).await.unwrap(),
+        br#"{"replacement":true}"#
+    );
+
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn response_body_getter_waits_for_complete_raw_body_then_replays_it() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, release, upstream) = staged_http_upstream().await;
+    runtime
+        .create_script(
+            ScriptKind::ResponseInterceptor,
+            Script {
+                name: "read-response-body".into(),
+                content: "local body = resp.body:as_string(); \
+                          assert(body == 'helloworld'); \
+                          resp.headers:set('x-body-read', '1')"
+                    .into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: Vec::new(),
+                response: vec![SessionInterceptor {
+                    name: "read-response-body".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+
+    let request = tokio::spawn(async move {
+        proxy_get(
+            proxy_port,
+            &format!("http://127.0.0.1:{upstream_port}/body-read"),
+            &format!("127.0.0.1:{upstream_port}"),
+        )
+        .await
+    });
+    sleep(Duration::from_millis(100)).await;
+    assert!(
+        !request.is_finished(),
+        "body getter did not wait for completion"
+    );
+    release.send(()).unwrap();
+    let response = request.await.unwrap();
+    assert!(response.to_ascii_lowercase().contains("x-body-read: 1"));
+    assert!(response.ends_with("helloworld"));
+    upstream.await.unwrap();
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn response_body_getter_timeout_terminates_the_downstream_body() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, upstream) = delayed_response_frame_upstream(Duration::from_secs(2)).await;
+    runtime
+        .create_script(
+            ScriptKind::ResponseInterceptor,
+            Script {
+                name: "read-response-timeout".into(),
+                content: "req:set_tag('_crab_resp_bodyframe_timeout', '50'); resp.body:as_string()"
+                    .into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: Vec::new(),
+                response: vec![SessionInterceptor {
+                    name: "read-response-timeout".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+
+    let response = proxy_get(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/body-read-timeout"),
+        &format!("127.0.0.1:{upstream_port}"),
+    )
+    .await;
+    assert!(!response.ends_with("helloworld"), "{response}");
+    let capture = timeout(Duration::from_secs(1), async {
+        loop {
+            let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+            if capture.outcome == CaptureOutcome::Failed {
+                break capture;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(capture.error.unwrap().kind, "response_body_timeout");
+
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn asset_replacement_exposes_metadata_and_current_body() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let (upstream_port, upstream) = fixed_http_upstream().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let mut upload = runtime
+        .begin_asset_upload("fixtures/replacement.json", "application/json".into())
+        .await
+        .unwrap();
+    upload.write(br#"{"asset":true}"#).await.unwrap();
+    upload.finish().await.unwrap();
+    runtime
+        .create_script(
+            ScriptKind::ResponseInterceptor,
+            Script {
+                name: "asset-response".into(),
+                content: "local asset = get_asset('fixtures/replacement.json'); \
+                          assert(asset ~= nil and asset.size == 14); \
+                          resp.body:replace_with_asset(asset); \
+                          resp.headers:set('content-type', asset.content_type); \
+                          local body = resp.body:as_json(); assert(body.asset == true)"
+                    .into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: Vec::new(),
+                response: vec![SessionInterceptor {
+                    name: "asset-response".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+
+    let response = proxy_get(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/asset-response"),
+        &format!("127.0.0.1:{upstream_port}"),
+    )
+    .await;
+    assert!(response.ends_with(r#"{"asset":true}"#), "{response}");
+    let detail = runtime
+        .capture(
+            session.id,
+            runtime.list_captures(session.id, 1, None).unwrap()[0].id,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(
+        detail.response_interceptors[0]
+            .modifications
+            .iter()
+            .any(|item| {
+                matches!(
+                    item,
+                    Modification::BodyReplaceAsset { asset_id }
+                        if asset_id == "fixtures/replacement.json"
+                )
+            })
+    );
+
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
 async fn crab_skip_avoids_upstream_and_runs_response_interceptors() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let session = runtime.create_session(None, None).unwrap();
@@ -1244,7 +1504,7 @@ async fn crab_skip_avoids_upstream_and_runs_response_interceptors() {
             ScriptKind::RequestInterceptor,
             Script {
                 name: "skip-upstream".into(),
-                content: "req:setTag('_crab_skip', ''); req:setTag('team', 'checkout')".into(),
+                content: "req:set_tag('_crab_skip', ''); req:set_tag('team', 'checkout')".into(),
             },
         )
         .unwrap();
@@ -1257,8 +1517,8 @@ async fn crab_skip_avoids_upstream_and_runs_response_interceptors() {
                           assert(req.version == 'HTTP/1.1'); \
                           assert(req.uri.path == '/skipped'); \
                           assert(req.headers:get('host') ~= nil); \
-                          assert(req:getTag('team') == 'checkout'); \
-                          req:setTag('_crab_resp_speed', '60'); \
+                          assert(req:get_tag('team') == 'checkout'); \
+                          req:set_tag('_crab_resp_speed', '60'); \
                           resp.status = 777; \
                           resp.headers:set('x-skipped', '1'); \
                           resp.body:replace_with_string('mocked')"
@@ -1323,7 +1583,7 @@ async fn request_speed_paces_the_final_body_sent_upstream() {
             ScriptKind::RequestInterceptor,
             Script {
                 name: "pace-request".into(),
-                content: "req.body:replace_with_string('pong'); req:setTag('_crab_req_speed', '20'); req:setTag('_crab_req_timeout', '1000')".into(),
+                content: "req.body:replace_with_string('pong'); req:set_tag('_crab_req_speed', '20'); req:set_tag('_crab_req_timeout', '1000')".into(),
             },
         )
         .unwrap();
@@ -1372,7 +1632,7 @@ async fn request_timeout_includes_paced_upload_waiting() {
             Script {
                 name: "timeout-paced-request".into(),
                 content:
-                    "req:setTag('_crab_req_speed', '20'); req:setTag('_crab_req_timeout', '100')"
+                    "req:set_tag('_crab_req_speed', '20'); req:set_tag('_crab_req_timeout', '100')"
                         .into(),
             },
         )
@@ -1425,7 +1685,7 @@ async fn response_speed_paces_the_final_interceptor_body() {
             Script {
                 name: "pace-response".into(),
                 content:
-                    "resp.body:replace_with_string('pong'); req:setTag('_crab_resp_speed', '20')"
+                    "resp.body:replace_with_string('pong'); req:set_tag('_crab_resp_speed', '20')"
                         .into(),
             },
         )
@@ -1482,7 +1742,7 @@ async fn breakpoint_accepts_temporary_changes_and_resumes_saved_script() {
             ScriptKind::RequestInterceptor,
             Script {
                 name: "hold-request".into(),
-                content: "breakpoint(5000); req.headers:set('x-after', req:getTag('temp'))".into(),
+                content: "breakpoint(5000); req.headers:set('x-after', req:get_tag('temp'))".into(),
             },
         )
         .unwrap();
@@ -1540,7 +1800,7 @@ async fn breakpoint_accepts_temporary_changes_and_resumes_saved_script() {
             &format!(
                 "req.method = 'PATCH'; \
                  req.uri = 'http://127.0.0.1:{upstream_port}/temporary'; \
-                 req:setTag('temp', 'applied'); \
+                 req:set_tag('temp', 'applied'); \
                  req.headers:set('content-type', 'text/plain'); \
                  req.body:replace_with_string('temporary request body')"
             ),
@@ -1588,7 +1848,8 @@ async fn response_breakpoint_exposes_live_response_and_applies_temporary_body() 
             ScriptKind::ResponseInterceptor,
             Script {
                 name: "hold-response".into(),
-                content: "breakpoint(5000); resp.headers:set('x-after', req:getTag('temp'))".into(),
+                content: "breakpoint(5000); resp.headers:set('x-after', req:get_tag('temp'))"
+                    .into(),
             },
         )
         .unwrap();
@@ -1632,7 +1893,7 @@ async fn response_breakpoint_exposes_live_response_and_applies_temporary_body() 
             breakpoint.id,
             "assert(req.method == 'GET'); \
              assert(req.uri.path == '/response-breakpoint'); \
-             req:setTag('temp', 'yes'); resp.status = 599; \
+             req:set_tag('temp', 'yes'); resp.status = 599; \
              resp.body:replace_with_string('changed')",
         )
         .unwrap();
@@ -1962,7 +2223,7 @@ async fn forwards_http_upgrade_bidirectionally() {
             ScriptKind::RequestInterceptor,
             Script {
                 name: "upgrade-limits-ignored".into(),
-                content: "req:setTag('_crab_req_speed', '1'); req:setTag('_crab_resp_speed', '1'); req:setTag('_crab_req_timeout', '1')".into(),
+                content: "req:set_tag('_crab_req_speed', '1'); req:set_tag('_crab_resp_speed', '1'); req:set_tag('_crab_req_timeout', '1')".into(),
             },
         )
         .unwrap();
@@ -2082,7 +2343,7 @@ async fn tls_insecure_tag_allows_self_signed_upstream_without_weakening_default_
             ScriptKind::RequestInterceptor,
             Script {
                 name: "allow-self-signed-upstream".into(),
-                content: "req:setTag('_crab_tls_insecure', 'true')".into(),
+                content: "req:set_tag('_crab_tls_insecure', 'true')".into(),
             },
         )
         .unwrap();

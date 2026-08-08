@@ -523,6 +523,42 @@ mod tests {
     }
 
     #[test]
+    fn existing_permission_file_adds_asset_actions_for_every_identity() {
+        let directory = tempdir().unwrap();
+        let store = PermissionStore::open(directory.path()).unwrap();
+        let created = store.create_api_key("agent".into()).unwrap();
+        drop(store);
+
+        let path = directory.path().join(PERMISSION_FILE_NAME);
+        let mut state: PermissionFile = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for permissions in std::iter::once(&mut state.local.permissions).chain(
+            state
+                .api_keys
+                .iter_mut()
+                .map(|record| &mut record.permissions),
+        ) {
+            permissions.remove("GET /api/assets/{*asset_id}");
+            permissions.remove("POST /api/assets/{*asset_id}");
+        }
+        fs::write(&path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
+
+        let store = PermissionStore::open(directory.path()).unwrap();
+        for identity_id in [LOCAL_IDENTITY_ID, created.identity.id.as_str()] {
+            let permissions = store.identity_permissions(identity_id).unwrap();
+            let modes = permissions
+                .permissions
+                .into_iter()
+                .map(|entry| (entry.action_id, entry.mode))
+                .collect::<BTreeMap<_, _>>();
+            assert_eq!(modes["GET /api/assets/{*asset_id}"], PermissionMode::Allow);
+            assert_eq!(
+                modes["POST /api/assets/{*asset_id}"],
+                PermissionMode::Approval
+            );
+        }
+    }
+
+    #[test]
     fn valid_api_key_authenticates_and_deleted_key_does_not() {
         let directory = tempdir().unwrap();
         let store = PermissionStore::open(directory.path()).unwrap();

@@ -7,6 +7,7 @@ use std::{
 use async_trait::async_trait;
 use proxy_crab_mitm::{
     ProxyCrab,
+    asset::{Asset, AssetError, AssetUpload},
     lua::{ColumnEvaluator, FilterEvaluator, evaluate_filter_named},
     model::{
         AppConfig, BreakpointListFilter, BreakpointSummary, CaptureDetail, CaptureOutcome,
@@ -41,6 +42,12 @@ const MAX_BLOCKING_MANAGEMENT_TASKS: usize = 8;
 pub trait ProxyCrabManager: Send + Sync {
     async fn workspace(&self) -> ManagerResult<WorkspacePaths>;
     async fn set_workspace_for_next_start(&self, path: String) -> ManagerResult<WorkspacePaths>;
+    async fn asset(&self, id: String) -> ManagerResult<Asset>;
+    async fn begin_asset_upload(
+        &self,
+        id: String,
+        content_type: String,
+    ) -> ManagerResult<AssetUpload>;
     async fn config(&self) -> ManagerResult<AppConfig>;
     async fn replace_config(&self, config: AppConfig) -> ManagerResult<AppConfig>;
     async fn agents_presets(&self) -> ManagerResult<AgentsPresetState>;
@@ -365,6 +372,24 @@ impl ProxyCrabManager for MitmManager {
         self.runtime
             .set_workspace_for_next_start(Path::new(&path))
             .map_err(map_error)
+    }
+
+    async fn asset(&self, id: String) -> ManagerResult<Asset> {
+        self.runtime
+            .asset(&id)
+            .map_err(map_asset_error)?
+            .ok_or_else(|| ManagerError::new("asset_not_found", format!("asset {id} not found")))
+    }
+
+    async fn begin_asset_upload(
+        &self,
+        id: String,
+        content_type: String,
+    ) -> ManagerResult<AssetUpload> {
+        self.runtime
+            .begin_asset_upload(&id, content_type)
+            .await
+            .map_err(map_asset_error)
     }
 
     async fn config(&self) -> ManagerResult<AppConfig> {
@@ -1423,6 +1448,28 @@ fn map_error(error: anyhow::Error) -> ManagerError {
         ManagerError::bad_request(message)
     } else {
         ManagerError::internal(message)
+    }
+}
+
+fn map_asset_error(error: AssetError) -> ManagerError {
+    match error {
+        AssetError::InvalidId(message) => {
+            ManagerError::new("invalid_asset_id", format!("invalid asset id: {message}"))
+        }
+        AssetError::NotFound(id) => {
+            ManagerError::new("asset_not_found", format!("asset {id} not found"))
+        }
+        AssetError::AlreadyExists(id) => {
+            ManagerError::new("asset_already_exists", format!("asset {id} already exists"))
+        }
+        AssetError::PathConflict(id) => ManagerError::new(
+            "asset_path_conflict",
+            format!("asset path conflicts with an existing file or directory: {id}"),
+        ),
+        AssetError::Storage(error) => ManagerError::new("asset_store_failed", error.to_string()),
+        AssetError::InvalidMetadata(error) => {
+            ManagerError::new("asset_store_failed", error.to_string())
+        }
     }
 }
 

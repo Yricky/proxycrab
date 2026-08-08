@@ -92,6 +92,8 @@ pub static API_ACTIONS: &[ApiAction] = &[
     action!("GET", "/api/agents.md", Allow),
     action!("GET", "/api/workspace", Allow),
     action!("PUT", "/api/workspace", Approval),
+    action!("GET", "/api/assets/{*asset_id}", Allow),
+    action!("POST", "/api/assets/{*asset_id}", Approval),
     action!("GET", "/api/config", Allow),
     action!("PUT", "/api/config", Approval),
     action!("GET", "/api/proxy/status", Allow),
@@ -176,6 +178,9 @@ fn route_template_matches(template: &str, path: &str) -> bool {
     loop {
         match (template.next(), path.next()) {
             (None, None) => return true,
+            (Some(expected), Some(_)) if expected.starts_with("{*") && expected.ends_with('}') => {
+                return true;
+            }
             (Some(expected), Some(actual))
                 if !actual.is_empty()
                     && (expected == actual

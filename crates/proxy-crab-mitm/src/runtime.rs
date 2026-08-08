@@ -7,6 +7,7 @@ use std::{
 };
 
 use crate::{
+    asset::{Asset, AssetError, AssetStore, AssetUpload},
     breakpoint::BreakpointRegistry,
     bypass::{BypassEntry, BypassStore},
     ca::CertificateAuthority,
@@ -42,8 +43,8 @@ fn body_replacement_payload(
             }
             Ok(body_payload(content.as_bytes(), headers, size, None))
         }
-        BodyReplacement::File(path) => {
-            let file = File::open(path)?;
+        BodyReplacement::Asset(asset) => {
+            let file = File::open(asset.path())?;
             let size = file.metadata()?.len();
             if size > BODY_DETAIL_LIMIT {
                 return Ok(BodyPayload::Large { size, path: None });
@@ -65,6 +66,7 @@ pub struct ProxyCrab {
     app_data_dir: PathBuf,
     workspace_paths: RwLock<WorkspacePaths>,
     workspace: Arc<Workspace>,
+    assets: AssetStore,
     authority: RwLock<Arc<CertificateAuthority>>,
     bypass: BypassStore,
     stores: Mutex<HashMap<u64, CaptureStore>>,
@@ -80,12 +82,14 @@ impl ProxyCrab {
         let app_data_dir = app_data_dir.into();
         let workspace_paths = resolve_workspace(&app_data_dir)?;
         let workspace = Workspace::open(PathBuf::from(&workspace_paths.current_path))?;
+        let assets = AssetStore::open(workspace.root())?;
         let authority = Arc::new(CertificateAuthority::load_or_generate(workspace.root())?);
         let bypass = BypassStore::open(workspace.root())?;
         Ok(Arc::new(Self {
             app_data_dir,
             workspace_paths: RwLock::new(workspace_paths),
             workspace,
+            assets,
             authority: RwLock::new(authority),
             bypass,
             stores: Mutex::new(HashMap::new()),
@@ -99,6 +103,22 @@ impl ProxyCrab {
 
     pub fn workspace(&self) -> &Arc<Workspace> {
         &self.workspace
+    }
+
+    pub fn asset(&self, id: &str) -> Result<Option<Asset>, AssetError> {
+        self.assets.get(id)
+    }
+
+    pub(crate) fn asset_store(&self) -> AssetStore {
+        self.assets.clone()
+    }
+
+    pub async fn begin_asset_upload(
+        &self,
+        id: &str,
+        content_type: String,
+    ) -> Result<AssetUpload, AssetError> {
+        self.assets.begin_upload(id, content_type).await
     }
 
     pub fn workspace_paths(&self) -> WorkspacePaths {
@@ -394,12 +414,12 @@ impl ProxyCrab {
                     content_type: first_header(&headers, "content-type").map(str::to_owned),
                     content_encodings: Vec::new(),
                 },
-                crate::lua::BodyReplacement::File(path) => {
-                    let metadata = std::fs::metadata(&path)?;
+                crate::lua::BodyReplacement::Asset(asset) => {
+                    let metadata = std::fs::metadata(asset.path())?;
                     BodySource {
                         stored_size: metadata.len(),
-                        data: BodySourceData::File(path.clone().into()),
-                        path: Some(path),
+                        data: BodySourceData::File(asset.path().to_path_buf()),
+                        path: Some(asset.path().to_string_lossy().into_owned()),
                         content_type: first_header(&headers, "content-type").map(str::to_owned),
                         content_encodings: Vec::new(),
                     }

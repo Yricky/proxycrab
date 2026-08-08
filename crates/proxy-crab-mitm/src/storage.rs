@@ -48,9 +48,13 @@ pub(crate) struct CaptureBodyWriter {
     store: CaptureStore,
     id: u64,
     writer: tokio::fs::File,
+    path: PathBuf,
 }
 
 impl CaptureBodyWriter {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
     pub(crate) async fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
         self.writer.write_all(bytes).await?;
         Ok(())
@@ -274,11 +278,13 @@ impl CaptureStore {
         side: BodySide,
         modified: bool,
     ) -> Result<CaptureBodyWriter> {
-        let file = tokio::fs::File::create(self.body_path(id, side, modified)).await?;
+        let path = self.body_path(id, side, modified);
+        let file = tokio::fs::File::create(&path).await?;
         Ok(CaptureBodyWriter {
             store: self.clone(),
             id,
             writer: file,
+            path,
         })
     }
 

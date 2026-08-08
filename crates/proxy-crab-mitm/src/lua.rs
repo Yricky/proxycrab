@@ -1,7 +1,8 @@
 use std::{
     collections::BTreeMap,
+    fs::File,
+    io::Read,
     net::SocketAddr,
-    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
@@ -15,11 +16,13 @@ use mlua::{
 };
 
 use crate::{
+    asset::{Asset, AssetStore},
     breakpoint::{BreakpointContext, BreakpointRegistry},
     model::{
         CaptureSummary, HeaderValues, Modification, RequestData, RequestTags, ResponseData,
         ScriptKind,
     },
+    proxy::body::DeferredBodyReader,
 };
 
 mod codec;
@@ -31,7 +34,7 @@ const ANONYMOUS_SCRIPT_NAME: &str = "<anonymous>";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BodyReplacement {
     String(String),
-    File(String),
+    Asset(Asset),
 }
 
 #[derive(Debug, Clone)]
@@ -319,6 +322,7 @@ pub(crate) fn execute_request_with_state(
         },
     )?;
     install_breakpoint(&lua, breakpoint)?;
+    install_get_asset(&lua, state.clone())?;
     let error = lua.load(source).exec().err().map(|error| error.to_string());
     log_json_warnings(
         &warnings,
@@ -412,6 +416,7 @@ pub(crate) fn execute_response_with_state(
         },
     )?;
     install_breakpoint(&lua, breakpoint)?;
+    install_get_asset(&lua, state.clone())?;
     lua.globals().set(
         "req",
         ResponseRequestView {
@@ -440,6 +445,24 @@ fn install_breakpoint(lua: &Lua, hook: Option<BreakpointHook>) -> Result<()> {
             .map_err(LuaError::external)
     })?;
     lua.globals().set("breakpoint", breakpoint)?;
+    Ok(())
+}
+
+fn install_get_asset(lua: &Lua, state: SharedInterceptorState) -> Result<()> {
+    let get_asset = lua.create_function(move |_, id: String| {
+        let assets = state
+            .assets
+            .lock()
+            .expect("Lua asset store state lock poisoned")
+            .clone()
+            .ok_or_else(|| LuaError::runtime("asset store is unavailable"))?;
+        match assets.get(&id) {
+            Ok(Some(asset)) => Ok(Some(LuaAsset(asset))),
+            Ok(None) | Err(crate::asset::AssetError::InvalidId(_)) => Ok(None),
+            Err(error) => Err(LuaError::external(error)),
+        }
+    })?;
+    lua.globals().set("get_asset", get_asset)?;
     Ok(())
 }
 
@@ -520,7 +543,7 @@ impl UserData for ReadRequest {
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method("getTag", |_, this, key: String| {
+        methods.add_method("get_tag", |_, this, key: String| {
             Ok(this.0.tags.get(&key).cloned())
         });
     }
@@ -650,6 +673,9 @@ pub(crate) struct SharedInterceptorState {
     headers: Arc<Mutex<HeaderValues>>,
     body: Arc<Mutex<Option<BodyReplacement>>>,
     tags: Arc<Mutex<RequestTags>>,
+    raw_body: Arc<Mutex<Option<DeferredBodyReader>>>,
+    assets: Arc<Mutex<Option<AssetStore>>>,
+    response_phase: bool,
 }
 
 impl SharedInterceptorState {
@@ -661,6 +687,9 @@ impl SharedInterceptorState {
             headers: Arc::new(Mutex::new(headers)),
             body: Arc::new(Mutex::new(None)),
             tags: Arc::new(Mutex::new(tags)),
+            raw_body: Arc::new(Mutex::new(None)),
+            assets: Arc::new(Mutex::new(None)),
+            response_phase: false,
         }
     }
 
@@ -677,7 +706,8 @@ impl SharedInterceptorState {
     }
 
     pub(crate) fn new_response(status: u16, headers: HeaderValues, tags: RequestTags) -> Self {
-        let state = Self::new(headers, tags);
+        let mut state = Self::new(headers, tags);
+        state.response_phase = true;
         *state.status.lock().expect("Lua status state lock poisoned") = Some(status);
         state
     }
@@ -755,6 +785,20 @@ impl SharedInterceptorState {
 
     pub(crate) fn set_body(&self, body: Option<BodyReplacement>) {
         *self.body.lock().expect("Lua body state lock poisoned") = body;
+    }
+
+    pub(crate) fn set_raw_body(&self, reader: DeferredBodyReader) {
+        *self
+            .raw_body
+            .lock()
+            .expect("Lua raw body state lock poisoned") = Some(reader);
+    }
+
+    pub(crate) fn set_asset_store(&self, assets: AssetStore) {
+        *self
+            .assets
+            .lock()
+            .expect("Lua asset store state lock poisoned") = Some(assets);
     }
 }
 
@@ -933,7 +977,7 @@ where
     T: MutableTagView + Clone + Send + 'static,
     M: UserDataMethods<T>,
 {
-    methods.add_method("getTag", |_, this, key: String| {
+    methods.add_method("get_tag", |_, this, key: String| {
         Ok(this
             .tag_state()
             .0
@@ -943,7 +987,7 @@ where
             .get(&key)
             .cloned())
     });
-    methods.add_method("setTag", |_, this, (key, value): (String, String)| {
+    methods.add_method("set_tag", |_, this, (key, value): (String, String)| {
         let (state, journal) = this.tag_state();
         state
             .tags
@@ -1047,19 +1091,162 @@ impl UserData for MutableBody {
                 Some(BodyReplacement::String(content.clone()));
             this.journal
                 .push(Modification::BodyReplaceString { content });
+            remove_content_encoding(&this.state, &this.journal);
             Ok(())
         });
-        methods.add_method("replace_with_file", |_, this, path: String| {
-            if !Path::new(&path).is_absolute() {
-                return Err(LuaError::runtime("body replacement path must be absolute"));
-            }
+        methods.add_method("replace_with_asset", |_, this, asset: mlua::AnyUserData| {
+            let asset = asset
+                .borrow::<LuaAsset>()
+                .map_err(|_| LuaError::runtime("replace_with_asset requires an asset object"))?
+                .0
+                .clone();
             *this
                 .state
                 .body
                 .lock()
-                .expect("Lua body state lock poisoned") = Some(BodyReplacement::File(path.clone()));
-            this.journal.push(Modification::BodyReplaceFile { path });
+                .expect("Lua body state lock poisoned") =
+                Some(BodyReplacement::Asset(asset.clone()));
+            this.journal.push(Modification::BodyReplaceAsset {
+                asset_id: asset.metadata.id,
+            });
+            remove_content_encoding(&this.state, &this.journal);
             Ok(())
+        });
+        methods.add_method("as_string", |lua, this, ()| {
+            let Some(bytes) = effective_text_bytes(this)? else {
+                return Ok(Value::Nil);
+            };
+            match std::str::from_utf8(&bytes) {
+                Ok(_) => Ok(Value::String(lua.create_string(bytes)?)),
+                Err(_) => Ok(Value::Nil),
+            }
+        });
+        methods.add_method("as_json", |lua, this, ()| {
+            let Some(bytes) = effective_text_bytes(this)? else {
+                return Ok(Value::Nil);
+            };
+            let Ok(text) = lua.create_string(bytes) else {
+                return Ok(Value::Nil);
+            };
+            let json: Table = lua.globals().get("json")?;
+            let decode: Function = json.get("decode")?;
+            Ok(decode.call::<Value>(text).unwrap_or(Value::Nil))
+        });
+    }
+}
+
+#[derive(Clone)]
+struct LuaAsset(Asset);
+
+impl UserData for LuaAsset {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get("id", |_, this| Ok(this.0.metadata.id.clone()));
+        fields.add_field_method_get("size", |_, this| Ok(this.0.metadata.size));
+        fields.add_field_method_get("content_type", |_, this| {
+            Ok(this.0.metadata.content_type.clone())
+        });
+        fields.add_field_method_get("sha256", |_, this| Ok(this.0.metadata.sha256.clone()));
+        fields.add_field_method_get("created_at", |_, this| Ok(this.0.metadata.created_at));
+    }
+}
+
+const LUA_BODY_LIMIT: u64 = 16 * 1024 * 1024;
+
+fn effective_text_bytes(body: &MutableBody) -> mlua::Result<Option<Vec<u8>>> {
+    let headers = body.state.headers();
+    let content_type = header_values(&headers, "content-type")
+        .and_then(|values| values.first())
+        .map(String::as_str)
+        .unwrap_or_default();
+    if !is_textual(content_type) {
+        return Ok(None);
+    }
+    let replacement = body.state.body();
+    let path = match replacement {
+        Some(BodyReplacement::String(content)) => {
+            if content.len() as u64 > LUA_BODY_LIMIT {
+                return Err(LuaError::runtime("body exceeds the 16 MiB Lua limit"));
+            }
+            return Ok(Some(content.into_bytes()));
+        }
+        Some(BodyReplacement::Asset(asset)) => asset.path().to_path_buf(),
+        None => {
+            let reader = body
+                .state
+                .raw_body
+                .lock()
+                .expect("Lua raw body state lock poisoned")
+                .clone()
+                .ok_or_else(|| LuaError::runtime("raw body is unavailable"))?;
+            let timeout = body
+                .state
+                .response_phase
+                .then(|| {
+                    body.state
+                        .tags()
+                        .get("_crab_resp_bodyframe_timeout")
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .filter(|value| *value > 0)
+                        .map(std::time::Duration::from_millis)
+                })
+                .flatten();
+            reader.read(timeout).map_err(LuaError::runtime)?
+        }
+    };
+    let encodings = header_values(&headers, "content-encoding")
+        .into_iter()
+        .flatten()
+        .flat_map(|value| value.split(','))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty() && value != "identity")
+        .collect::<Vec<_>>();
+    read_body_file(&path, &encodings)
+}
+
+fn read_body_file(path: &std::path::Path, encodings: &[String]) -> mlua::Result<Option<Vec<u8>>> {
+    let mut reader: Box<dyn Read> = Box::new(File::open(path).map_err(LuaError::external)?);
+    for encoding in encodings.iter().rev() {
+        reader = match encoding.as_str() {
+            "gzip" => Box::new(flate2::read::GzDecoder::new(reader)),
+            "deflate" => Box::new(flate2::read::ZlibDecoder::new(reader)),
+            "br" => Box::new(brotli::Decompressor::new(reader, 4096)),
+            "zstd" => match zstd::stream::read::Decoder::new(reader) {
+                Ok(decoder) => Box::new(decoder),
+                Err(_) => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+    }
+    let mut bytes = Vec::new();
+    if reader
+        .take(LUA_BODY_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return Ok(None);
+    }
+    if bytes.len() as u64 > LUA_BODY_LIMIT {
+        return Err(LuaError::runtime("body exceeds the 16 MiB Lua limit"));
+    }
+    Ok(Some(bytes))
+}
+
+fn is_textual(content_type: &str) -> bool {
+    content_type.starts_with("text/")
+        || ["json", "xml", "javascript", "x-www-form-urlencoded"]
+            .iter()
+            .any(|kind| content_type.contains(kind))
+}
+
+fn remove_content_encoding(state: &SharedInterceptorState, journal: &ModificationJournal) {
+    let mut headers = state
+        .headers
+        .lock()
+        .expect("Lua header state lock poisoned");
+    if let Some(values) = remove_header(&mut headers, "content-encoding") {
+        journal.push(Modification::HeaderRemove {
+            name: "content-encoding".into(),
+            values,
         });
     }
 }
@@ -1100,7 +1287,8 @@ mod tests {
     use crate::{
         log_buffer::{BufferLayer, LogBuffer},
         model::{
-            CaptureOutcome, CaptureSummary, HeaderValues, RequestData, ResponseData, ScriptKind,
+            CaptureOutcome, CaptureSummary, HeaderValues, RequestData, RequestTags, ResponseData,
+            ScriptKind,
         },
     };
 
@@ -1108,7 +1296,7 @@ mod tests {
         BodyReplacement, ColumnEvaluator, FilterEvaluator, ModificationJournal,
         ResponseScriptContext, SharedInterceptorState, evaluate_column, evaluate_column_named,
         evaluate_filter, evaluate_filter_named, evaluate_routing, execute_request,
-        execute_response, execute_response_with_state, validate_script,
+        execute_request_with_state, execute_response, execute_response_with_state, validate_script,
     };
 
     fn entry() -> CaptureSummary {
@@ -1157,7 +1345,7 @@ mod tests {
             "old"
         );
         assert!(
-            evaluate_filter("return entry.req:getTag('team') == 'checkout'", "", &entry).unwrap()
+            evaluate_filter("return entry.req:get_tag('team') == 'checkout'", "", &entry).unwrap()
         );
     }
 
@@ -1285,8 +1473,8 @@ mod tests {
              assert(req.method == 'BREW'); \
              assert(req.uri.host == 'alternate.example' and req.uri.path == '/new-path'); \
              req.headers:set('x-test', 'new'); req.body:replace_with_string('body'); \
-             assert(req:getTag('missing') == nil); req:setTag('empty', ''); \
-             req:setTag('team', 'one'); req:setTag('team', 'two')",
+             assert(req:get_tag('missing') == nil); req:set_tag('empty', ''); \
+             req:set_tag('team', 'one'); req:set_tag('team', 'two')",
             &entry().request,
         )
         .unwrap();
@@ -1305,6 +1493,94 @@ mod tests {
             crate::model::Modification::Snapshot { headers }
                 if headers["x-test"] == vec!["old"]
         ));
+    }
+
+    #[tokio::test]
+    async fn body_getters_follow_text_json_encoding_and_size_rules() {
+        let root = tempfile::tempdir().unwrap();
+        let store = crate::asset::AssetStore::open(root.path()).unwrap();
+        let mut invalid_upload = store
+            .begin_upload("invalid.gz", "text/plain".into())
+            .await
+            .unwrap();
+        invalid_upload.write(b"not gzip").await.unwrap();
+        invalid_upload.finish().await.unwrap();
+        let mut large_upload = store
+            .begin_upload("large.txt", "text/plain".into())
+            .await
+            .unwrap();
+        let chunk = vec![0; 1024 * 1024];
+        for _ in 0..16 {
+            large_upload.write(&chunk).await.unwrap();
+        }
+        large_upload.write(&[0]).await.unwrap();
+        large_upload.finish().await.unwrap();
+
+        let request = entry().request;
+        let state = SharedInterceptorState::new_request(
+            request.method.clone(),
+            request.uri.clone(),
+            HeaderValues::from([("content-type".into(), vec!["text/plain".into()])]),
+            RequestTags::new(),
+        );
+        state.set_asset_store(store.clone());
+        let journal = ModificationJournal::new(state.headers());
+        let run = |source: &str, state: SharedInterceptorState, journal: ModificationJournal| {
+            execute_request_with_state(source, &request, state, journal, "body-getters", None, None)
+                .unwrap()
+                .1
+        };
+
+        state.set_body(Some(BodyReplacement::String("{\"ok\":true}".into())));
+        assert!(run("assert(req.body:as_string() == '{\"ok\":true}'); assert(req.body:as_json().ok == true)", state.clone(), journal.clone()).is_none());
+        state.set_body(Some(BodyReplacement::String("not json".into())));
+        assert!(
+            run(
+                "assert(req.body:as_json() == nil)",
+                state.clone(),
+                journal.clone()
+            )
+            .is_none()
+        );
+
+        *state.headers.lock().unwrap() = HeaderValues::from([(
+            "content-type".into(),
+            vec!["application/octet-stream".into()],
+        )]);
+        assert!(
+            run(
+                "assert(req.body:as_string() == nil and req.body:as_json() == nil)",
+                state.clone(),
+                journal.clone()
+            )
+            .is_none()
+        );
+
+        *state.headers.lock().unwrap() = HeaderValues::from([
+            ("content-type".into(), vec!["text/plain".into()]),
+            ("content-encoding".into(), vec!["gzip".into()]),
+        ]);
+        state.set_body(Some(BodyReplacement::Asset(
+            store.get("invalid.gz").unwrap().unwrap(),
+        )));
+        assert!(
+            run(
+                "assert(req.body:as_string() == nil)",
+                state.clone(),
+                journal.clone()
+            )
+            .is_none()
+        );
+
+        state.headers.lock().unwrap().remove("content-encoding");
+        state.set_body(Some(BodyReplacement::Asset(
+            store.get("large.txt").unwrap().unwrap(),
+        )));
+        assert!(
+            run("req.body:as_string()", state, journal)
+                .unwrap()
+                .contains("16 MiB")
+        );
     }
 
     #[test]
@@ -1334,9 +1610,9 @@ mod tests {
              assert(req.version == 'HTTP/1.1'); \
              assert(req.uri.path == '/path' and req.uri.query == 'q=1'); \
              assert(req.headers:get('x-test') == 'old'); \
-             assert(req.body == nil and req:getTag('team') == 'checkout'); \
+             assert(req.body == nil and req:get_tag('team') == 'checkout'); \
              assert(resp.status == 200); resp.status = 777; \
-             req:setTag('empty', ''); error('boom')",
+             req:set_tag('empty', ''); error('boom')",
             ResponseScriptContext {
                 request: &request,
                 response: &response,

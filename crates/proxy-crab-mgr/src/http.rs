@@ -35,7 +35,7 @@ use tokio_util::{
 
 use crate::{
     dto::{
-        ActiveSession, BodyQuery, BreakpointQuery, BypassQuery, CreateSessionRequest,
+        ActiveSession, AssetQuery, BodyQuery, BreakpointQuery, BypassQuery, CreateSessionRequest,
         DebugFilterScriptRequest, DeleteBypassRequest, ExecuteTemporaryScriptRequest,
         ExportLogsRequest, ExtendBreakpointRequest, HttpApiChange, HttpApiResource,
         InterceptorCreateRequest, InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest,
@@ -181,6 +181,7 @@ fn router_with_changes(
     Router::new()
         .route("/api/agents.md", get(agents_markdown))
         .route("/api/workspace", get(get_workspace).put(set_workspace))
+        .route("/api/assets/{*asset_id}", get(asset).post(upload_asset))
         .route("/api/config", get(get_config).put(replace_config))
         .route("/api/proxy/status", get(proxy_status))
         .route("/api/proxy/start", post(start_proxy))
@@ -818,6 +819,105 @@ async fn export_logs(
     Ok(response)
 }
 
+async fn upload_asset(
+    State(manager): State<ManagerState>,
+    ApiPath(asset_id): ApiPath<String>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let content_type = request
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .trim()
+        .to_owned();
+    let mut upload = manager.begin_asset_upload(asset_id, content_type).await?;
+    let mut body = request.into_body().into_data_stream();
+    while let Some(bytes) = body.next().await {
+        let bytes = bytes.map_err(|error| {
+            ApiError(ManagerError::new(
+                "asset_store_failed",
+                format!("failed to read asset upload: {error}"),
+            ))
+        })?;
+        upload.write(&bytes).await.map_err(|error| {
+            ApiError(ManagerError::new("asset_store_failed", error.to_string()))
+        })?;
+    }
+    let metadata = upload.finish().await.map_err(|error| {
+        let error = match error {
+            proxy_crab_mitm::asset::AssetError::AlreadyExists(id) => {
+                ManagerError::new("asset_already_exists", format!("asset {id} already exists"))
+            }
+            proxy_crab_mitm::asset::AssetError::PathConflict(id) => ManagerError::new(
+                "asset_path_conflict",
+                format!("asset path conflicts with an existing file or directory: {id}"),
+            ),
+            other => ManagerError::new("asset_store_failed", other.to_string()),
+        };
+        ApiError(error)
+    })?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "ok": true, "data": metadata })),
+    )
+        .into_response())
+}
+
+async fn asset(
+    State(manager): State<ManagerState>,
+    ApiPath(asset_id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<AssetQuery>,
+) -> Result<Response, ApiError> {
+    let asset = manager.asset(asset_id).await?;
+    match query.format.as_deref() {
+        None => Ok(Json(json!({ "ok": true, "data": asset.metadata })).into_response()),
+        Some("raw") => {
+            let filename = asset
+                .metadata
+                .id
+                .rsplit('/')
+                .next()
+                .expect("validated asset id has a filename");
+            let file = tokio::fs::File::open(asset.path()).await.map_err(|error| {
+                ApiError(ManagerError::new(
+                    "asset_store_failed",
+                    format!("failed to open asset: {error}"),
+                ))
+            })?;
+            let stream = ReaderStream::new(file);
+            let mut response = Response::new(Body::from_stream(stream));
+            let headers = response.headers_mut();
+            headers.insert(
+                CONTENT_TYPE,
+                HeaderValue::from_str(&asset.metadata.content_type).map_err(|error| {
+                    ApiError(ManagerError::new("asset_store_failed", error.to_string()))
+                })?,
+            );
+            headers.insert(
+                CONTENT_LENGTH,
+                HeaderValue::from_str(&asset.metadata.size.to_string())
+                    .expect("u64 is always a valid Content-Length"),
+            );
+            headers.insert(
+                CONTENT_DISPOSITION,
+                HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+                    .expect("validated asset filenames are safe header values"),
+            );
+            headers.insert(
+                "x-proxycrab-asset-sha256",
+                HeaderValue::from_str(&asset.metadata.sha256)
+                    .expect("SHA-256 hex is a safe header value"),
+            );
+            Ok(response)
+        }
+        Some(_) => Err(ApiError(ManagerError::new(
+            "invalid_asset_format",
+            "asset format must be raw when present",
+        ))),
+    }
+}
+
 async fn log(
     State(manager): State<ManagerState>,
     ApiPath(id): ApiPath<u64>,
@@ -1284,10 +1384,19 @@ impl From<ManagerError> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match self.0.code.as_str() {
-            "bad_request" | "unsupported_export_format" => StatusCode::BAD_REQUEST,
-            "not_found" | "log_not_found" | "body_not_found" => StatusCode::NOT_FOUND,
+            "bad_request"
+            | "unsupported_export_format"
+            | "invalid_asset_id"
+            | "invalid_asset_format" => StatusCode::BAD_REQUEST,
+            "not_found" | "log_not_found" | "body_not_found" | "asset_not_found" => {
+                StatusCode::NOT_FOUND
+            }
             "forbidden_origin" => StatusCode::FORBIDDEN,
-            "conflict" | "proxy_running" | "session_in_use" => StatusCode::CONFLICT,
+            "conflict"
+            | "proxy_running"
+            | "session_in_use"
+            | "asset_already_exists"
+            | "asset_path_conflict" => StatusCode::CONFLICT,
             "body_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "body_decode_failed" => StatusCode::UNPROCESSABLE_ENTITY,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
@@ -2539,5 +2648,97 @@ mod tests {
             response.headers()["access-control-allow-origin"],
             "tauri://localhost"
         );
+    }
+
+    #[tokio::test]
+    async fn uploads_assets_and_returns_metadata_or_raw_bytes() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let app = router(MitmManager::new(runtime), allow_all());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/assets/fixtures/example.json")
+                    .header("content-type", "application/json; charset=utf-8")
+                    .body(Body::from(r#"{"ok":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let payload: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(payload["data"]["id"], "fixtures/example.json");
+        assert_eq!(payload["data"]["size"], 11);
+        assert_eq!(
+            payload["data"]["content_type"],
+            "application/json; charset=utf-8"
+        );
+        assert_eq!(payload["data"]["sha256"].as_str().unwrap().len(), 64);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/assets/fixtures/example.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let metadata: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(metadata["data"], payload["data"]);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/assets/fixtures/example.json?format=raw")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "application/json; charset=utf-8"
+        );
+        assert_eq!(response.headers()[axum::http::header::CONTENT_LENGTH], "11");
+        assert_eq!(
+            to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+            r#"{"ok":true}"#
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/assets/fixtures/example.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/assets/fixtures/example.json?format=decoded")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

@@ -88,7 +88,7 @@ captured request.
 
 When an interceptor replaces a body from a file, the historical modification records the absolute
 path, not a durable copy of that file's bytes. The interceptor source and modification history are
-durable capture evidence; the external file may later change.
+durable capture evidence; Asset metadata and immutable workspace content identify the replacement.
 
 ## Report with traceable evidence
 

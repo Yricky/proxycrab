@@ -484,13 +484,13 @@ mod tests {
         }
         let id = registry.list(&filter())[0].id;
         let first = registry
-            .execute_temporary(id, "req:setTag('team', 'one')")
+            .execute_temporary(id, "req:set_tag('team', 'one')")
             .unwrap();
         let second = registry
-            .execute_temporary(id, "req:setTag('team', 'two')")
+            .execute_temporary(id, "req:set_tag('team', 'two')")
             .unwrap();
         let rejected_breakpoint = registry
-            .execute_temporary(id, "req:setTag('before-error', 'kept'); breakpoint(1000)")
+            .execute_temporary(id, "req:set_tag('before-error', 'kept'); breakpoint(1000)")
             .unwrap();
         assert_eq!(
             first.execution.origin,

@@ -74,8 +74,8 @@ does not emit these conversion warnings.
 JSON nesting is limited to 128 containers. Encoding rejects `NaN` and infinities; decoding rejects
 numbers outside the finite `f64` range. JSON output is compact rather than pretty-printed.
 
-These codecs do not expose captured request or response body content. Interceptors still only
-replace bodies through the methods documented below.
+Interceptor body objects also use the same JSON representation through `body:as_json()` as
+documented below.
 
 ## Filter scripts
 
@@ -127,7 +127,7 @@ Header names are case-insensitive:
 local first = entry.req.headers:get("x-name")       -- string or nil
 local values = entry.req.headers:get_all("x-name") -- string array
 local all = entry.req.headers:all()                 -- name -> string array
-local tag = entry.req:getTag("trace")              -- string or nil
+local tag = entry.req:get_tag("trace")             -- string or nil
 ```
 
 ## Request interceptors
@@ -138,7 +138,8 @@ req.uri = "https://alternate.example.com/new-path?q=1"
 req.headers:remove("x-env")
 req.headers:append("x-env", "staging")
 req.headers:set("x-use-staging", "1")
-req:setTag("environment", "staging")
+req:set_tag("environment", "staging")
+local body = req.body:as_json()
 req.body:replace_with_string("new request body")
 breakpoint(30000)
 ```
@@ -148,7 +149,7 @@ Method accepts standard or extension HTTP tokens. URI accepts any value represen
 stack; normal upstream forwarding requires an absolute URI with a host. Changing URI does not
 automatically rewrite the `Host` header, so scripts can either preserve a mismatched Host or update
 it explicitly.
-`req:setTag(key, value)` stores a proxy-local string tag and `req:getTag(key)` returns its value or
+`req:set_tag(key, value)` stores a proxy-local string tag and `req:get_tag(key)` returns its value or
 `nil`; an empty value still means the tag exists. Tags are persisted with the capture but are never
 sent to the server. After all request interceptors finish, the presence of `_crab_skip` skips the
 upstream request, creates an empty HTTP/1.1 200 response, and continues through response interceptors.
@@ -197,21 +198,58 @@ if req.method == "GET" and req.uri.path == "/api/example" then
   resp.status = 777
 end
 resp.headers:append("x-proxy-crab-debug", "1")
-req:setTag("response-debugged", "")
-resp.body:replace_with_file("/absolute/path/to/body.bin")
+req:set_tag("response-debugged", "")
+local asset = get_asset("fixtures/example.json")
+if asset ~= nil then
+  resp.headers:set("content-type", asset.content_type)
+  resp.body:replace_with_asset(asset)
+end
 ```
 
 Response interceptors receive read-only `req.method`, `req.version`, `req.uri`, and `req.headers`,
-plus mutable request tags through `setTag` and `getTag`; request bodies remain unavailable.
+plus mutable request tags through `set_tag` and `get_tag`; `req.body` is unavailable in response
+interceptors.
 `resp.status` is mutable and accepts any integer from 100 through 999, including non-standard
-status codes and status/body combinations. `resp.version` remains read-only. File replacement
-requires an absolute path and is streamed from the file without an application-level size limit.
+status codes and status/body combinations. `resp.version` remains read-only.
 
-Request interceptors run once after downstream request headers arrive, before the original request
-body is consumed. Response interceptors run once after upstream response headers arrive, before the
-original response body is consumed. Lua cannot read either original body. Original bodies stream to
-their raw capture files while normal traffic or a replacement body proceeds independently;
-`replace_with_file` is streamed and `replace_with_string` remains Lua-managed memory.
+Request interceptors run once after downstream request headers arrive. Response interceptors run
+once after upstream response headers arrive. The first `as_string()` or `as_json()` call that needs
+the original body waits for it to finish downloading and being captured, then ProxyCrab replays it
+from the capture file. Without a getter call, bodies retain their normal streaming behavior. SSE or
+an infinite stream can therefore block a getter indefinitely unless the configured response-frame
+timeout terminates it.
+
+## Interceptor body and Asset API
+
+Request and response interceptor bodies provide:
+
+```lua
+local text = req.body:as_string() -- string or nil
+local value = resp.body:as_json() -- decoded value or nil
+body:replace_with_string("new body")
+local asset = get_asset("fixtures/body.json")
+if asset ~= nil then body:replace_with_asset(asset) end
+```
+
+The getters read the effective body at the instant of the call: the latest replacement in the
+current script, then a replacement made by an earlier interceptor, otherwise the original body.
+They use the current effective `Content-Type`; non-textual content returns `nil`. `as_string()` also
+returns `nil` for invalid UTF-8. `as_json()` attempts JSON parsing for every textual content type and
+returns `nil` for malformed JSON. An empty textual body is `""` from `as_string()` and `nil` from
+`as_json()`. gzip, br, deflate, and zstd content encodings are decoded first; unknown or malformed
+encoding returns `nil`. Decoded content over 16 MiB raises a runtime error.
+
+`get_asset(id)` is available to request and response interceptors. It returns `nil` when the ID is
+invalid or absent, and otherwise returns a read-only Asset with `id`, `size`, `content_type`,
+`sha256`, and `created_at`. `replace_with_asset` accepts only this Asset object and streams its
+workspace file without loading it into Lua memory. Assets are workspace-wide and immutable through
+the API. Both replacement methods remove an existing `Content-Encoding` header and record that
+removal; neither changes `Content-Type`, so the script should set it when appropriate.
+
+Asset IDs use only lowercase ASCII letters, digits, `_`, `.`, and `/`; they cannot start or end in
+`/`, contain `//`, or contain `.`, `..`, or `.metadata` as a path segment. IDs are at most 255 bytes
+and each segment is at most 100 bytes. Upload and download Assets through the management API
+documented in `backend-api.md`.
 
 `breakpoint(timeoutMs)` is available in saved request and response interceptors. Zero returns
 immediately. A positive value pauses the current request until the timeout or manual release; the

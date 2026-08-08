@@ -40,7 +40,7 @@
     {
       "id": 7,
       "prompt": "Find the active ProxyCrab breakpoint for request interceptor hold-checkout, inspect its live request, run a temporary script that sets tag agent-reviewed to yes without releasing it, and report the execution result. Do not alter unrelated breakpoints.",
-      "expected_output": "The agent filters active breakpoints by phase/name, reads the selected live detail, executes phase-valid Lua with req:setTag, keeps the request paused, and cites the temporary execution ID, error state, and tag_set modification.",
+      "expected_output": "The agent filters active breakpoints by phase/name, reads the selected live detail, executes phase-valid Lua with req:set_tag, keeps the request paused, and cites the temporary execution ID, error state, and tag_set modification.",
       "files": []
     },
     {
@@ -105,6 +105,18 @@
       "id": 17,
       "prompt": "Use a workspace-scoped ProxyCrab API key to inspect a capture. The call may require desktop approval. Keep the credential out of process arguments, URLs, logs, and your report, and do not bypass a denial by changing identities.",
       "expected_output": "The agent supplies the key only through PROXYCRAB_API_KEY, uses the bundled scripts with their approval-aware timeout, never prints the key, and treats invalid_api_key, permission_denied, and approval_timeout as distinct outcomes without automatic credential switching or retry loops.",
+      "files": []
+    },
+    {
+      "id": 18,
+      "prompt": "Upload /tmp/mobile-error.json to ProxyCrab as immutable Asset fixtures/mobile-error.json with content type application/json. Then create a response interceptor named serve-mobile-error that uses that Asset for /api/mobile-error and preserves both existing interceptor chains when attaching it.",
+      "expected_output": "The agent uses asset-upload.mjs with the exact requested ID/file/content type, does not overwrite or invent a new ID on conflict, writes valid Lua using get_asset and replace_with_asset, explicitly sets content-type from asset.content_type, preserves existing interceptor chains, and verifies the Asset replacement on a new capture.",
+      "files": []
+    },
+    {
+      "id": 19,
+      "prompt": "Create a ProxyCrab request interceptor named inspect-json-body that reads the current request body as JSON, sets x-order-id from body.order_id when present, and leaves non-JSON or non-text request bodies unchanged. Attach it without changing the response chain and verify it on a newly captured JSON request.",
+      "expected_output": "The agent uses req.body:as_json(), checks for nil before indexing, preserves the response chain, warns that the first raw body read waits for complete download and may block on an infinite stream, and verifies the header_set modification on a new capture.",
       "files": []
     }
   ]

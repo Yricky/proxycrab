@@ -5,20 +5,27 @@ use std::{
     io,
     pin::Pin,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc as std_mpsc,
     },
     task::{Context, Poll},
     time::Duration,
 };
 
 use bytes::Bytes;
+use futures::TryStreamExt;
 use http_body_util::{BodyExt, Full, combinators::UnsyncBoxBody};
-use hyper::body::{Body, Frame};
+use hyper::{
+    HeaderMap,
+    body::{Body, Frame},
+};
 use tokio::{
+    fs::File,
     sync::{mpsc, oneshot},
     time::{Instant, Sleep, timeout},
 };
+use tokio_util::io::ReaderStream;
 
 use crate::{bypass::BypassStore, storage::CaptureBodyWriter};
 
@@ -38,7 +45,7 @@ pub(super) enum PumpOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PumpResult {
+pub(crate) struct PumpResult {
     pub(super) outcome: PumpOutcome,
     pub(super) storage_error: Option<String>,
 }
@@ -46,6 +53,336 @@ pub(super) struct PumpResult {
 struct ChannelBody {
     receiver: mpsc::Receiver<Result<Frame<Bytes>, BoxError>>,
     size_hint: hyper::body::SizeHint,
+}
+
+enum DeferredCommand {
+    Read {
+        frame_timeout: Option<Duration>,
+        result: std_mpsc::Sender<Result<PathBuf, String>>,
+    },
+    Finish {
+        forward: bool,
+        bytes_per_second: Option<u64>,
+        frame_timeout: Option<Duration>,
+    },
+}
+
+#[derive(Clone)]
+pub(crate) struct DeferredBodyReader {
+    sender: mpsc::UnboundedSender<DeferredCommand>,
+}
+
+impl DeferredBodyReader {
+    pub(crate) fn read(&self, frame_timeout: Option<Duration>) -> Result<PathBuf, String> {
+        let (sender, receiver) = std_mpsc::channel();
+        self.sender
+            .send(DeferredCommand::Read {
+                frame_timeout,
+                result: sender,
+            })
+            .map_err(|_| "body reader is no longer available".to_owned())?;
+        receiver
+            .recv()
+            .map_err(|_| "body reader stopped before completing".to_owned())?
+    }
+}
+
+pub(crate) struct DeferredBody {
+    reader: DeferredBodyReader,
+    sender: mpsc::UnboundedSender<DeferredCommand>,
+    receiver: Mutex<Option<mpsc::Receiver<Result<Frame<Bytes>, BoxError>>>>,
+    size_hint: hyper::body::SizeHint,
+    done: Option<oneshot::Receiver<PumpResult>>,
+}
+
+impl DeferredBody {
+    pub(crate) fn new<B>(body: B, writer: CaptureBodyWriter, tracker: &TaskGroup) -> Self
+    where
+        B: Body<Data = Bytes> + Unpin + Send + 'static,
+        B::Error: Into<BoxError> + Send + Sync + 'static,
+    {
+        let size_hint = body.size_hint();
+        let path = writer.path().to_path_buf();
+        let (command_sender, command_receiver) = mpsc::unbounded_channel();
+        let (frame_sender, frame_receiver) = mpsc::channel(4);
+        let (done_sender, done_receiver) = oneshot::channel();
+        tracker.spawn(run_deferred_body(
+            body,
+            writer,
+            path,
+            command_receiver,
+            frame_sender,
+            done_sender,
+        ));
+        Self {
+            reader: DeferredBodyReader {
+                sender: command_sender.clone(),
+            },
+            sender: command_sender,
+            receiver: Mutex::new(Some(frame_receiver)),
+            size_hint,
+            done: Some(done_receiver),
+        }
+    }
+
+    pub(crate) fn reader(&self) -> DeferredBodyReader {
+        self.reader.clone()
+    }
+
+    pub(crate) fn finish(
+        mut self,
+        forward: bool,
+        bytes_per_second: Option<u64>,
+        frame_timeout: Option<Duration>,
+    ) -> (Option<ProxyBody>, oneshot::Receiver<PumpResult>) {
+        let _ = self.sender.send(DeferredCommand::Finish {
+            forward,
+            bytes_per_second,
+            frame_timeout,
+        });
+        let output = forward.then(|| {
+            ChannelBody {
+                receiver: self
+                    .receiver
+                    .lock()
+                    .expect("deferred body receiver lock poisoned")
+                    .take()
+                    .expect("deferred body can only be finished once"),
+                size_hint: self.size_hint,
+            }
+            .boxed_unsync()
+        });
+        (
+            output,
+            self.done.take().expect("deferred body has completion"),
+        )
+    }
+}
+
+use std::path::PathBuf;
+
+async fn run_deferred_body<B>(
+    mut body: B,
+    writer: CaptureBodyWriter,
+    path: PathBuf,
+    mut commands: mpsc::UnboundedReceiver<DeferredCommand>,
+    frames: mpsc::Sender<Result<Frame<Bytes>, BoxError>>,
+    done: oneshot::Sender<PumpResult>,
+) where
+    B: Body<Data = Bytes> + Unpin + Send + 'static,
+    B::Error: Into<BoxError> + Send + Sync + 'static,
+{
+    let mut writer = Some(writer);
+    let mut completed: Option<PumpResult> = None;
+    let mut trailers = Vec::new();
+    let mut read_waiters = Vec::new();
+    let (forward, speed, frame_timeout) = loop {
+        match commands.recv().await {
+            Some(DeferredCommand::Read {
+                frame_timeout,
+                result: waiter,
+            }) => {
+                if let Some(result) = &completed {
+                    let _ = waiter.send(read_result(result, &path));
+                    continue;
+                }
+                read_waiters.push(waiter);
+                let result = drain_body(
+                    &mut body,
+                    writer.as_mut(),
+                    frame_timeout,
+                    None,
+                    false,
+                    &frames,
+                    Some(&mut trailers),
+                )
+                .await;
+                let result = finish_writer(
+                    writer.take().expect("deferred body writer is available"),
+                    result,
+                )
+                .await;
+                for waiter in read_waiters.drain(..) {
+                    let _ = waiter.send(read_result(&result, &path));
+                }
+                completed = Some(result);
+            }
+            Some(DeferredCommand::Finish {
+                forward,
+                bytes_per_second,
+                frame_timeout,
+            }) => break (forward, bytes_per_second, frame_timeout),
+            None => {
+                let result = completed.unwrap_or(PumpResult {
+                    outcome: PumpOutcome::OutputClosed,
+                    storage_error: None,
+                });
+                let _ = done.send(result);
+                return;
+            }
+        }
+    };
+
+    let result = if let Some(result) = completed {
+        if forward && result.outcome == PumpOutcome::Complete && result.storage_error.is_none() {
+            match File::open(&path).await {
+                Ok(file) => {
+                    let mut replay = http_body_util::StreamBody::new(
+                        ReaderStream::new(file)
+                            .map_ok(Frame::data)
+                            .map_err(|error| Box::new(error) as BoxError),
+                    );
+                    let mut replay_result =
+                        drain_body(&mut replay, None, None, speed, true, &frames, None).await;
+                    if replay_result.outcome == PumpOutcome::Complete {
+                        for trailer in trailers {
+                            if send_frame(&frames, Frame::trailers(trailer), speed)
+                                .await
+                                .is_err()
+                            {
+                                replay_result.outcome = PumpOutcome::OutputClosed;
+                                break;
+                            }
+                        }
+                    }
+                    replay_result
+                }
+                Err(error) => PumpResult {
+                    outcome: PumpOutcome::InputError(error.to_string()),
+                    storage_error: None,
+                },
+            }
+        } else {
+            if forward {
+                let message = result
+                    .storage_error
+                    .clone()
+                    .or_else(|| match &result.outcome {
+                        PumpOutcome::InputError(error) => Some(error.clone()),
+                        PumpOutcome::FrameTimeout => Some("response body frame timed out".into()),
+                        PumpOutcome::OutputClosed => {
+                            Some("body output closed before completion".into())
+                        }
+                        PumpOutcome::Complete => None,
+                    });
+                if let Some(message) = message {
+                    let _ = frames.send(Err(Box::new(io::Error::other(message)))).await;
+                }
+            }
+            result
+        }
+    } else {
+        let result = drain_body(
+            &mut body,
+            writer.as_mut(),
+            frame_timeout,
+            speed,
+            forward,
+            &frames,
+            None,
+        )
+        .await;
+        finish_writer(
+            writer.take().expect("deferred body writer is available"),
+            result,
+        )
+        .await
+    };
+    let _ = done.send(result);
+}
+
+fn read_result(result: &PumpResult, path: &std::path::Path) -> Result<PathBuf, String> {
+    if let Some(error) = &result.storage_error {
+        return Err(error.clone());
+    }
+    match &result.outcome {
+        PumpOutcome::Complete => Ok(path.to_path_buf()),
+        PumpOutcome::InputError(error) => Err(error.clone()),
+        PumpOutcome::FrameTimeout => Err("response body frame timed out".into()),
+        PumpOutcome::OutputClosed => Err("body output closed before completion".into()),
+    }
+}
+
+async fn finish_writer(writer: CaptureBodyWriter, mut result: PumpResult) -> PumpResult {
+    if let Err(error) = writer.finish().await {
+        result.storage_error = Some(error.to_string());
+    }
+    result
+}
+
+async fn drain_body<B>(
+    body: &mut B,
+    mut writer: Option<&mut CaptureBodyWriter>,
+    frame_timeout: Option<Duration>,
+    bytes_per_second: Option<u64>,
+    forward: bool,
+    frames: &mpsc::Sender<Result<Frame<Bytes>, BoxError>>,
+    mut captured_trailers: Option<&mut Vec<HeaderMap>>,
+) -> PumpResult
+where
+    B: Body<Data = Bytes> + Unpin,
+    B::Error: Into<BoxError>,
+{
+    let mut storage_error = None;
+    let mut forwarding = forward;
+    let mut output_closed = false;
+    let outcome = loop {
+        let next = match frame_timeout {
+            Some(duration) => match timeout(duration, body.frame()).await {
+                Ok(frame) => frame,
+                Err(_) => {
+                    if forwarding {
+                        let _ = frames
+                            .send(Err(Box::new(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                "response body frame timed out",
+                            ))))
+                            .await;
+                    }
+                    break PumpOutcome::FrameTimeout;
+                }
+            },
+            None => body.frame().await,
+        };
+        let Some(frame) = next else {
+            break PumpOutcome::Complete;
+        };
+        let frame = match frame {
+            Ok(frame) => frame,
+            Err(error) => {
+                let error = error.into();
+                let message = error.to_string();
+                if forwarding {
+                    let _ = frames.send(Err(error)).await;
+                }
+                break PumpOutcome::InputError(message);
+            }
+        };
+        if let Some(trailers) = frame.trailers_ref()
+            && let Some(captured) = captured_trailers.as_deref_mut()
+        {
+            captured.push(trailers.clone());
+        }
+        if let Some(data) = frame.data_ref()
+            && let Some(active_writer) = writer.as_deref_mut()
+            && let Err(error) = active_writer.write_all(data).await
+        {
+            storage_error = Some(error.to_string());
+            writer = None;
+        }
+        if forwarding && send_frame(frames, frame, bytes_per_second).await.is_err() {
+            forwarding = false;
+            output_closed = true;
+        }
+    };
+    PumpResult {
+        outcome: if outcome == PumpOutcome::Complete && output_closed {
+            PumpOutcome::OutputClosed
+        } else {
+            outcome
+        },
+        storage_error,
+    }
 }
 
 impl Body for ChannelBody {
@@ -431,5 +768,61 @@ impl<B> Drop for TrackedBody<B> {
             self.transfer
                 .fail("downstream response body closed before completion");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        model::{HeaderValues, RequestData, RequestTags},
+        storage::{BodySide, CaptureStore},
+    };
+    use futures::stream;
+    use http_body_util::StreamBody;
+    use hyper::http::HeaderValue;
+    use tempfile::tempdir;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deferred_body_replays_trailers_after_a_complete_read() {
+        let root = tempdir().unwrap();
+        let store = CaptureStore::open(1, root.path()).unwrap();
+        let request = RequestData {
+            method: "POST".into(),
+            uri: "http://example.com/upload".into(),
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+            tags: RequestTags::new(),
+        };
+        let id = store.begin("test", &request, "request").unwrap();
+        let writer = store
+            .create_body_writer(id, BodySide::Request, false)
+            .await
+            .unwrap();
+        let mut trailers = HeaderMap::new();
+        trailers.insert("x-checksum", HeaderValue::from_static("complete"));
+        let body = StreamBody::new(stream::iter([
+            Ok::<_, Infallible>(Frame::data(Bytes::from_static(b"payload"))),
+            Ok(Frame::trailers(trailers)),
+        ]));
+        let tracker = TaskGroup::new();
+        let deferred = DeferredBody::new(body, writer, &tracker);
+        let reader = deferred.reader();
+
+        let path = tokio::task::spawn_blocking(move || reader.read(None))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(tokio::fs::read(path).await.unwrap(), b"payload");
+
+        let (replayed, done) = deferred.finish(true, None, None);
+        let collected = replayed.unwrap().collect().await.unwrap();
+        assert_eq!(
+            collected.trailers().unwrap().get("x-checksum").unwrap(),
+            "complete"
+        );
+        assert_eq!(collected.to_bytes().as_ref(), b"payload");
+        assert_eq!(done.await.unwrap().outcome, PumpOutcome::Complete);
+        tracker.shutdown(Duration::from_secs(1)).await;
     }
 }

@@ -180,3 +180,29 @@ fn action_view(action: &ApiAction) -> ApiActionView {
         default_mode: action.default_mode,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tempfile::tempdir;
+
+    use super::HttpPermissionService;
+
+    #[test]
+    fn desktop_catalog_exposes_asset_management_actions() {
+        let directory = tempdir().unwrap();
+        let service = HttpPermissionService::open(directory.path(), Arc::new(|_| {})).unwrap();
+        let catalog = service.catalog();
+
+        assert_eq!(catalog.len(), 65);
+        assert!(catalog.iter().any(|action| {
+            action.id == "GET /api/assets/{*asset_id}"
+                && action.route_template == "/api/assets/{*asset_id}"
+        }));
+        assert!(catalog.iter().any(|action| {
+            action.id == "POST /api/assets/{*asset_id}"
+                && action.route_template == "/api/assets/{*asset_id}"
+        }));
+    }
+}

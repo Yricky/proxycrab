@@ -2,7 +2,9 @@
 
 ## Shared management contract
 
-HTTP handlers and Tauri commands call the same `ProxyCrabManager` trait and use the same request/response DTOs. Except for raw `GET /api/agents.md` and body reads, HTTP successes use:
+HTTP handlers and Tauri commands call the same `ProxyCrabManager` trait and use the same
+request/response DTOs. Except for raw `GET /api/agents.md`, body reads, and raw Asset downloads,
+HTTP successes use:
 
 ```json
 { "ok": true, "data": {} }
@@ -105,6 +107,7 @@ values must also be local (including `tauri://localhost`) to prevent DNS-rebindi
 | `/api/archived-sessions/{id}/restore` | `POST` restore |
 | `/api/archived-sessions/{id}` | `DELETE` permanent archived-only deletion |
 | `/api/active-session` | `GET`, `PUT` nullable active Session |
+| `/api/assets/{id}` | `POST` immutable raw upload; `GET` metadata or raw bytes with `format=raw` |
 | `/api/logs/ids` | `POST` bounded/filterable log ID query |
 | `/api/logs/views` | `POST` batch incremental table-view rendering |
 | `/api/logs/{id}` | `GET` complete log detail |
@@ -126,6 +129,40 @@ values must also be local (including `tauri://localhost`) to prevent DNS-rebindi
 | `/api/system-logs` | `GET`, `DELETE` |
 
 System logs accept `after_seq` and are capped at 10,000 entries.
+
+## Workspace Assets
+
+Assets are immutable files shared by every Session and Lua interceptor in the active workspace.
+`POST /api/assets/{id}` streams the request body into a new Asset. Send its media type in
+`Content-Type`; omission stores `application/octet-stream`. A successful upload returns HTTP 201
+with the normal envelope and metadata:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "id": "fixtures/example.json",
+    "size": 13,
+    "content_type": "application/json",
+    "sha256": "...lowercase hex...",
+    "created_at": 1785380000000
+  }
+}
+```
+
+`GET /api/assets/{id}` returns the same metadata. `GET /api/assets/{id}?format=raw` streams the
+stored bytes without the JSON envelope and sets `Content-Type`, `Content-Length`,
+`Content-Disposition`, and `X-ProxyCrab-Asset-SHA256`. No listing, update, or delete operation is
+provided. Reusing an ID returns `409 asset_already_exists`; a file/directory hierarchy collision
+returns `409 asset_path_conflict`.
+
+IDs allow only lowercase ASCII letters, digits, `_`, `.`, and `/`. They cannot start or end with
+`/`, contain `//`, or contain `.`, `..`, or `.metadata` as a complete path segment. The total limit
+is 255 bytes and each segment is limited to 100 bytes. Invalid IDs return
+`400 invalid_asset_id`; unsupported `format` values return `400 invalid_asset_format`; missing
+Assets return `404 asset_not_found`; storage failures return `500 asset_store_failed`. Uploads are
+stored below `<workspace>/assets`, with sidecar metadata below `assets/.metadata`. SHA-256 is
+computed while uploading; manually changing workspace files later is outside the API contract.
 
 ## Workspace Agent instructions
 
@@ -511,12 +548,13 @@ Errors contain a stable `kind`, an execution `stage`, and the underlying message
 
 If the initial database insert fails, traffic is not forwarded. When the proxy stops it stops accepting immediately, waits up to five seconds, and marks unfinished rows with `proxy_shutdown`.
 
-Request and response interceptors run once at their respective header boundary and cannot read the
-original body. Original request and response bodies stream directly to append-only capture files
-without an application-level size limit. Normal bodies continue streaming through the proxy;
-replacement strings are sent from memory and replacement files are streamed from disk while the
-raw body is drained independently. Capture-storage failures are recorded without interrupting the
-business transfer. The proxy accepts at most 256 client connections.
+Request and response interceptors run once at their respective header boundary. Body getters may
+wait for the original body to finish downloading and being captured, after which the unmodified
+body is replayed from disk. Without a getter, original request and response bodies continue
+streaming directly to append-only capture files without an application-level size limit.
+Replacement strings are sent from memory and immutable Assets are streamed from disk while any
+unused raw body drains independently. Capture-storage failures are recorded without interrupting
+the business transfer when possible. The proxy accepts at most 256 client connections.
 
 `_crab_resp_bodyframe_timeout` optionally bounds idle time before each upstream response-body frame.
 For an unmodified response, expiry terminates the downstream stream and fails the capture. If a

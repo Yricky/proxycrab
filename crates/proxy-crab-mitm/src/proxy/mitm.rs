@@ -33,16 +33,16 @@ async fn prepare_body_replacement(
         BodyReplacement::String(content) => Ok(PreparedBodyReplacement::Bytes(
             Bytes::copy_from_slice(content.as_bytes()),
         )),
-        BodyReplacement::File(path) => {
-            let file = tokio::fs::File::open(path)
-                .await
-                .map_err(|error| anyhow::anyhow!("failed to open body file {path}: {error}"))?;
-            let metadata = file
-                .metadata()
-                .await
-                .map_err(|error| anyhow::anyhow!("failed to inspect body file {path}: {error}"))?;
+        BodyReplacement::Asset(asset) => {
+            let path = asset.path();
+            let file = tokio::fs::File::open(path).await.map_err(|error| {
+                anyhow::anyhow!("failed to open asset {}: {error}", asset.metadata.id)
+            })?;
+            let metadata = file.metadata().await.map_err(|error| {
+                anyhow::anyhow!("failed to inspect asset {}: {error}", asset.metadata.id)
+            })?;
             if !metadata.is_file() {
-                bail!("body replacement path is not a file: {path}");
+                bail!("asset is not a file: {}", asset.metadata.id);
             }
             Ok(PreparedBodyReplacement::File {
                 file,
@@ -276,6 +276,27 @@ pub(super) async fn handle_session_http_request(
             );
         }
     };
+    let raw_request_writer = match store
+        .create_body_writer(capture_id, BodySide::Request, false)
+        .await
+    {
+        Ok(writer) => writer,
+        Err(error) => {
+            fail_capture(
+                &store,
+                capture_id,
+                ErrorStage::RequestBody,
+                "request_body_store_failed",
+                &error.to_string(),
+            );
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "capture storage unavailable",
+            );
+        }
+    };
+    let raw_request = DeferredBody::new(incoming, raw_request_writer, &tracker);
+    let raw_request_reader = raw_request.reader();
     let mut request_replacement = None;
     let mut request_replacement_source = None;
     let mut request_modifications = Vec::new();
@@ -287,6 +308,8 @@ pub(super) async fn handle_session_http_request(
             request_data.tags.clone(),
         );
         state.set_body(request_replacement_source.clone());
+        state.set_raw_body(raw_request_reader.clone());
+        state.set_asset_store(runtime.asset_store());
         let journal = ModificationJournal::new(request_data.headers.clone());
         let execution_id = match store.begin_interceptor_run(
             capture_id,
@@ -451,29 +474,10 @@ pub(super) async fn handle_session_http_request(
     let local_response =
         is_ca_download(&request_data) || request_data.tags.contains_key("_crab_skip");
     let forward_original = request_replacement.is_none() && !local_response;
-    let raw_request_writer = match store
-        .create_body_writer(capture_id, BodySide::Request, false)
-        .await
-    {
-        Ok(writer) => Some(writer),
-        Err(error) => {
-            note_capture_error(
-                &store,
-                capture_id,
-                ErrorStage::RequestBody,
-                "request_body_store_failed",
-                &error.to_string(),
-            );
-            None
-        }
-    };
-    let (original_request_body, raw_request_done) = pump_body(
-        incoming,
-        raw_request_writer,
-        None,
-        forward_original.then_some(request_speed).flatten(),
+    let (original_request_body, raw_request_done) = raw_request.finish(
         forward_original,
-        &tracker,
+        forward_original.then_some(request_speed).flatten(),
+        None,
     );
 
     if is_ca_download(&request_data) {
@@ -686,6 +690,27 @@ async fn finish_session_response(
             "failed to persist response metadata",
         );
     }
+    let raw_response_writer = match store
+        .create_body_writer(capture_id, BodySide::Response, false)
+        .await
+    {
+        Ok(writer) => writer,
+        Err(error) => {
+            fail_capture(
+                &store,
+                capture_id,
+                ErrorStage::ResponseBody,
+                "response_body_store_failed",
+                &error.to_string(),
+            );
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "capture storage unavailable",
+            );
+        }
+    };
+    let raw_response = DeferredBody::new(raw_response_body, raw_response_writer, &tracker);
+    let raw_response_reader = raw_response.reader();
 
     let mut response_modifications = Vec::new();
     let mut response_replacement = None;
@@ -697,6 +722,8 @@ async fn finish_session_response(
             request_data.tags.clone(),
         );
         state.set_body(response_replacement_source.clone());
+        state.set_raw_body(raw_response_reader.clone());
+        state.set_asset_store(runtime.asset_store());
         let journal = ModificationJournal::new(response_data.headers.clone());
         let execution_id = match store.begin_interceptor_run(
             capture_id,
@@ -860,29 +887,10 @@ async fn finish_session_response(
     let head_response = request_data.method.eq_ignore_ascii_case("HEAD");
     let replacement_used = response_replacement.is_some();
     let forward_raw = !replacement_used && !head_response;
-    let raw_response_writer = match store
-        .create_body_writer(capture_id, BodySide::Response, false)
-        .await
-    {
-        Ok(writer) => Some(writer),
-        Err(error) => {
-            note_capture_error(
-                &store,
-                capture_id,
-                ErrorStage::ResponseBody,
-                "response_body_store_failed",
-                &error.to_string(),
-            );
-            None
-        }
-    };
-    let (forwarded_response_body, raw_response_done) = pump_body(
-        raw_response_body,
-        raw_response_writer,
-        response_frame_timeout,
-        forward_raw.then_some(response_speed).flatten(),
+    let (forwarded_response_body, raw_response_done) = raw_response.finish(
         forward_raw,
-        &tracker,
+        forward_raw.then_some(response_speed).flatten(),
+        response_frame_timeout,
     );
 
     let (replacement_response_body, modified_response_done) = match response_replacement {
@@ -1375,19 +1383,32 @@ fn tls_insecure_from_tags(tags: &RequestTags, capture_id: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::asset::AssetStore;
+
     use super::{BodyReplacement, PreparedBodyReplacement, prepare_body_replacement};
 
     #[tokio::test]
     async fn prepares_a_replacement_file_larger_than_the_old_limit_without_reading_it() {
-        let file = tempfile::NamedTempFile::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let store = AssetStore::open(root.path()).unwrap();
         let length = 65 * 1024 * 1024;
-        file.as_file().set_len(length).unwrap();
+        let mut upload = store
+            .begin_upload("large.bin", "application/octet-stream".into())
+            .await
+            .unwrap();
+        upload.write(&vec![0; 1024 * 1024]).await.unwrap();
+        upload.finish().await.unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(store.get("large.bin").unwrap().unwrap().path())
+            .unwrap()
+            .set_len(length)
+            .unwrap();
+        let asset = store.get("large.bin").unwrap().unwrap();
 
-        let replacement = prepare_body_replacement(&BodyReplacement::File(
-            file.path().to_string_lossy().into_owned(),
-        ))
-        .await
-        .unwrap();
+        let replacement = prepare_body_replacement(&BodyReplacement::Asset(asset))
+            .await
+            .unwrap();
 
         assert!(matches!(
             replacement,

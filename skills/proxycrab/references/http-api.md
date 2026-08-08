@@ -13,12 +13,13 @@ This reference documents the complete local HTTP surface used by ProxyCrab agent
 7. [Capture logs](#capture-logs)
 8. [Session views](#session-views)
 9. [Column, filter, and routing scripts](#column-filter-and-routing-scripts)
-10. [Interceptors](#interceptors)
-11. [Active breakpoints](#active-breakpoints)
-12. [Bypass traffic](#bypass-traffic)
-13. [Certificate authority](#certificate-authority)
-14. [System logs](#system-logs)
-15. [Errors and lifecycle notes](#errors-and-lifecycle-notes)
+10. [Workspace Assets](#workspace-assets)
+11. [Interceptors](#interceptors)
+12. [Active breakpoints](#active-breakpoints)
+13. [Bypass traffic](#bypass-traffic)
+14. [Certificate authority](#certificate-authority)
+15. [System logs](#system-logs)
+16. [Errors and lifecycle notes](#errors-and-lifecycle-notes)
 
 ## Connection, authentication, and envelopes
 
@@ -43,7 +44,7 @@ The server requires a loopback/`localhost` Host and accepts browser Origin value
 `http`, `https`, or `tauri` origins. Valid local CORS preflight permits `Authorization` and
 `Content-Type`; remote Host or Origin values remain forbidden.
 
-Except for the raw AGENTS.md and body endpoints documented below, every success is:
+Except for the raw AGENTS.md, body, and Asset download endpoints documented below, every success is:
 
 ```json
 {
@@ -728,6 +729,42 @@ the selected script resets all established downstream and upstream connections b
 Updating an unselected script or saving identical selected content does not. There is no rename or
 routing-debug endpoint.
 
+## Workspace Assets
+
+Assets are immutable files shared across the active workspace. They have no list, update, or delete
+endpoint. Upload with a raw request body:
+
+```text
+POST /api/assets/fixtures/example.json
+Content-Type: application/json
+
+{"fixture":true}
+```
+
+The success status is 201 and the normal envelope contains:
+
+```json
+{
+  "id": "fixtures/example.json",
+  "size": 16,
+  "content_type": "application/json",
+  "sha256": "lowercase SHA-256 hex",
+  "created_at": 1785380000000
+}
+```
+
+`GET /api/assets/{id}` returns that metadata. `GET /api/assets/{id}?format=raw` streams raw bytes
+without an envelope and returns `Content-Type`, `Content-Length`, `Content-Disposition`, and
+`X-ProxyCrab-Asset-SHA256`. If upload `Content-Type` is absent it defaults to
+`application/octet-stream`.
+
+IDs allow `[a-z0-9_./]`, up to 255 bytes total and 100 bytes per segment. They cannot start/end with
+`/`, contain `//`, or use `.`, `..`, or `.metadata` as a complete segment. Errors are
+`invalid_asset_id` (400), `invalid_asset_format` (400), `asset_not_found` (404),
+`asset_already_exists` (409), `asset_path_conflict` (409), and `asset_store_failed` (500). Uploads
+never overwrite existing Assets. SHA-256 is calculated during upload; later manual workspace file
+changes are outside the API contract.
+
 ## Interceptors
 
 ### `GET /api/interceptors?kind=request`
@@ -828,14 +865,14 @@ the current paused point.
 
 Uses the same raw response and query rules as the log body endpoint. It reads the persisted original
 body unless the paused phase has a live replacement. String replacements come from breakpoint
-memory; file replacements are read from their current absolute path. The result is a point-in-time
-snapshot and a referenced external file can change.
+memory; Asset replacements are read from their immutable workspace file. The result is a
+point-in-time snapshot.
 
 ### Breakpoint controls
 
 ```text
 POST /api/breakpoints/{id}/extend   body: {"timeout_ms":60000}
-POST /api/breakpoints/{id}/execute  body: {"content":"req:setTag('debug','1')"}
+POST /api/breakpoints/{id}/execute  body: {"content":"req:set_tag('debug','1')"}
 POST /api/breakpoints/{id}/release  no body
 ```
 
@@ -960,7 +997,8 @@ Routing and capture lifecycle details:
   forwarded.
 - A bypassed CONNECT is transparently tunneled without TLS decryption.
 - Request/response bodies stream to capture files without an application-level size limit.
-- Interceptors execute once at the request/response header boundary and cannot read original bodies.
+- Interceptors execute once at the request/response header boundary. Body getters may wait for the
+  complete original body and then switch the normal forwarding path to disk replay.
 - `_crab_resp_bodyframe_timeout` optionally bounds idle milliseconds before each upstream response
   body frame; normal responses fail on expiry, while replacement responses retain success and record
   the raw-drain timeout as diagnostic metadata.

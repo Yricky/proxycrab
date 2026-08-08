@@ -126,6 +126,11 @@ pub struct BodyQuery {
     pub max_size: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AssetQuery {
+    pub format: Option<String>,
+}
+
 pub const fn default_body_max_size() -> u64 {
     16 * 1024 * 1024
 }

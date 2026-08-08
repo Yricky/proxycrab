@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 63);
+    assert_eq!(actions.len(), 65);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -28,7 +28,11 @@ fn permission_catalog_contains_every_unique_route_action() {
             .all(|action| { action.id == format!("{} {}", action.method, action.route_template) })
     );
     assert!(actions.iter().all(|action| !action.method.is_empty()));
-    assert!(actions.iter().all(|action| !action.route_template.is_empty()));
+    assert!(
+        actions
+            .iter()
+            .all(|action| !action.route_template.is_empty())
+    );
 }
 
 #[test]
@@ -37,6 +41,7 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "GET /api/active-session",
         "GET /api/agents.md",
         "GET /api/archived-sessions",
+        "GET /api/assets/{*asset_id}",
         "GET /api/breakpoints",
         "GET /api/breakpoints/{id}",
         "GET /api/breakpoints/{id}/body",
@@ -66,6 +71,7 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
     ]);
     let approval = BTreeSet::from([
         "POST /api/archived-sessions/{id}/restore",
+        "POST /api/assets/{*asset_id}",
         "POST /api/breakpoints/{id}/execute",
         "POST /api/breakpoints/{id}/extend",
         "POST /api/breakpoints/{id}/release",
