@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:18089";
+export const REQUEST_TIMEOUT_MS = 40_000;
 
 export class UsageError extends Error {}
 
@@ -103,15 +104,28 @@ export function normalizeBaseUrl(args) {
   return url.toString().replace(/\/$/, "");
 }
 
+export function requestHeaders({ json = false } = {}) {
+  const headers = {};
+  if (json) headers["content-type"] = "application/json";
+  const apiKey = process.env.PROXYCRAB_API_KEY;
+  if (apiKey) {
+    if (/[\r\n]/.test(apiKey)) {
+      throw new UsageError("PROXYCRAB_API_KEY must not contain newlines");
+    }
+    headers.authorization = `Bearer ${apiKey}`;
+  }
+  return Object.keys(headers).length === 0 ? undefined : headers;
+}
+
 export async function apiRequest(args, pathname, { method = "GET", body } = {}) {
   const url = new URL(`${normalizeBaseUrl(args)}${pathname}`);
   let response;
   try {
     response = await fetch(url, {
       method,
-      headers: body === undefined ? undefined : { "content-type": "application/json" },
+      headers: requestHeaders({ json: body !== undefined }),
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
     throw new Error(`cannot reach ProxyCrab at ${url.origin}: ${error.message}`);
@@ -135,7 +149,10 @@ export async function apiTextRequest(args, pathname) {
   const url = new URL(`${normalizeBaseUrl(args)}${pathname}`);
   let response;
   try {
-    response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    response = await fetch(url, {
+      headers: requestHeaders(),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
   } catch (error) {
     throw new Error(`cannot reach ProxyCrab at ${url.origin}: ${error.message}`);
   }
@@ -160,8 +177,9 @@ export async function apiDownloadRequest(args, pathname, { method = "GET", body 
   try {
     response = await fetch(url, {
       method,
-      headers: body === undefined ? undefined : { "content-type": "application/json" },
+      headers: requestHeaders({ json: body !== undefined }),
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
     throw new Error(`cannot reach ProxyCrab at ${url.origin}: ${error.message}`);

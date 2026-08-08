@@ -12,7 +12,9 @@ arguments, unwrap the API envelope, emit machine-readable JSON, and return non-z
 failure.
 
 The default management API is `http://127.0.0.1:18089`. Every script also accepts
-`--base-url <url>` and honors `PROXYCRAB_API_URL`.
+`--base-url <url>` and honors `PROXYCRAB_API_URL`. If the selected management identity requires an
+API key, set it through `PROXYCRAB_API_KEY`; bundled scripts send it as `Authorization: Bearer ...`.
+Never put an API key in command arguments, URLs, output, or logs.
 
 ## Load active Agent instructions first
 
@@ -37,6 +39,10 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
   no selected routing script, traffic enters the active Session; if none is active, traffic is
   transparently forwarded and recorded in `bypass.db`.
 - Use Node.js 18 or newer. The scripts have no npm dependencies.
+- A management call may wait for desktop approval for up to 30 seconds. Bundled scripts allow 40
+  seconds for that decision. If a call returns `approval_timeout`, ask the user to retry and approve
+  it; do not loop automatically. `permission_denied` means the selected identity cannot perform the
+  action, and `invalid_api_key` means the environment key is missing, malformed, unknown, or deleted.
 - Successful management mutations synchronize into the open desktop UI. Archiving the viewed
   Session selects the first remaining Session; other mutations keep the viewed Session. Open
   editors preserve unsaved local changes.
@@ -219,6 +225,9 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
 - Follow the active AGENTS.md instructions before creating or changing Sessions, views, filters,
   scripts, routing selection, or interceptor chains. When the endpoint is unavailable, do not make
   those UI-visible changes unless the user explicitly requests them.
+- Respect management API permissions. Do not work around a denied or expired approval by switching
+  to the no-key identity, changing credentials, or repeatedly retrying. Ask the user to adjust the
+  selected identity in Settings > 管理接口 when authorization is required.
 - Do not archive or restore Sessions, permanently delete archived Sessions, delete scripts, start
   or stop the proxy, clear logs or records, regenerate the CA, replace application configuration,
   or change workspace paths unless the user explicitly requests that action. An active Session

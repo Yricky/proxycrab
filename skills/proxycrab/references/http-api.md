@@ -4,7 +4,7 @@ This reference documents the complete local HTTP surface used by ProxyCrab agent
 
 ## Contents
 
-1. [Connection and envelopes](#connection-and-envelopes)
+1. [Connection, authentication, and envelopes](#connection-authentication-and-envelopes)
 2. [Agent instructions](#agent-instructions)
 3. [Shared data types](#shared-data-types)
 4. [Workspace and configuration](#workspace-and-configuration)
@@ -20,7 +20,7 @@ This reference documents the complete local HTTP surface used by ProxyCrab agent
 14. [System logs](#system-logs)
 15. [Errors and lifecycle notes](#errors-and-lifecycle-notes)
 
-## Connection and envelopes
+## Connection, authentication, and envelopes
 
 Default base URL:
 
@@ -28,9 +28,20 @@ Default base URL:
 http://127.0.0.1:18089
 ```
 
-The desktop app starts the management service. It has no authentication, binds to loopback, emits
-no permissive CORS policy, requires a loopback/`localhost` Host, and accepts browser Origin values
-only from local `http`, `https`, or `tauri` origins.
+The desktop app starts the management service on loopback only. Requests with no `Authorization`
+header use the independently configurable `本机无 API Key` identity. API-key requests must send
+exactly one `Authorization: Bearer <key>` header; query credentials and `X-API-Key` are unsupported.
+Bundled scripts read the key from `PROXYCRAB_API_KEY`, never a command argument.
+
+Every method and route template has an `allow`, `approval`, or `deny` permission for each identity.
+Approval holds the original request for up to 30 seconds while the desktop window asks the user. A
+decision can apply once or for 5, 30, or 60 minutes to the same identity and route action. Temporary
+decisions are in-memory and disappear on restart. API-key creation, deletion, and permission editing
+are desktop-only operations under Settings > 管理接口; they are not HTTP resources.
+
+The server requires a loopback/`localhost` Host and accepts browser Origin values only from local
+`http`, `https`, or `tauri` origins. Valid local CORS preflight permits `Authorization` and
+`Content-Type`; remote Host or Origin values remain forbidden.
 
 Except for the raw AGENTS.md and body endpoints documented below, every success is:
 
@@ -924,7 +935,10 @@ HTTP status mapping:
 | Error code | HTTP status | Meaning |
 | --- | ---: | --- |
 | `bad_request` | 400 | Invalid JSON, arguments, script, filter, or operation |
+| `invalid_api_key` | 401 | Invalid Bearer syntax, or an unknown/deleted API key |
 | `forbidden_origin` | 403 | Non-local browser Origin |
+| `permission_denied` | 403 | The identity or an approval decision denied this route action |
+| `approval_timeout` | 403 | No desktop decision arrived within 30 seconds |
 | `not_found` | 404 | Missing endpoint, Session, log, or script |
 | `log_not_found` | 404 | Missing capture for a body request |
 | `body_not_found` | 404 | Requested side has not produced a body file |
@@ -932,6 +946,7 @@ HTTP status mapping:
 | `body_too_large` | 413 | Stored body exceeds `max_size`; includes both sizes |
 | `body_decode_failed` | 422 | Unsupported encoding when server decompression is requested |
 | `internal_error` | 500 | Storage, runtime, I/O, or other internal failure |
+| `permission_check_failed` | 500 | Permission storage or approval infrastructure failed closed |
 | `body_read_failed` | 500 | Body file cannot be opened or read |
 
 Routing and capture lifecycle details:

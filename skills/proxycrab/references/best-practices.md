@@ -1,5 +1,12 @@
 # ProxyCrab debugging best practices
 
+## Authenticate without leaking the key
+
+Use the least-privileged workspace API key suitable for the task and expose it only as
+`PROXYCRAB_API_KEY`. Bundled scripts attach the Bearer header and wait up to 40 seconds so a desktop
+approval can complete. Never pass a key as a CLI argument or query parameter, and never paste it
+into reports. A denial is a policy decision, not a signal to switch identities or retry in a loop.
+
 ## Load the workspace policy first
 
 Immediately after reading the Skill, read `GET /api/agents.md`. The user's current explicit request

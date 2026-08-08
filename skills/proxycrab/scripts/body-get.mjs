@@ -10,6 +10,8 @@ import {
   parseArgs,
   printHelp,
   printJson,
+  requestHeaders,
+  REQUEST_TIMEOUT_MS,
   requiredString,
   run,
   UsageError,
@@ -64,7 +66,10 @@ normally decodes the preserved Content-Encoding. max-size is only valid in raw s
 
   let response;
   try {
-    response = await fetch(url);
+    response = await fetch(url, {
+      headers: requestHeaders(),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
   } catch (error) {
     throw new Error(`cannot reach ProxyCrab at ${url.origin}: ${error.message}`);
   }

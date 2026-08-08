@@ -18,6 +18,7 @@ import BypassWindow from "./BypassWindow.vue";
 import BreakpointListWindow from "./BreakpointListWindow.vue";
 import AgentsPresetsWindow from "./AgentsPresetsWindow.vue";
 import ArchivedSessionsWindow from "./ArchivedSessionsWindow.vue";
+import ApprovalWindow from "./ApprovalWindow.vue";
 
 export function openLogDetail(sessionId: number, logId: number): void {
   windowsStore.open(`detail-${sessionId}-${logId}`, {
@@ -186,12 +187,21 @@ export function openSystemLogs(): void {
   });
 }
 
+export function openApprovals(): void {
+  windowsStore.open("http-approvals", {
+    title: "管理接口审批",
+    component: ApprovalWindow,
+    width: 760,
+    height: 520,
+  });
+}
+
 export function openSettings(): void {
   windowsStore.open("settings", {
     title: "设置",
     component: SettingsWindow,
-    width: 560,
-    height: 440,
+    width: 900,
+    height: 640,
   });
 }
 

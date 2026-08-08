@@ -21,6 +21,37 @@ HTTP failures use:
 ```
 
 Tauri commands return the data DTO directly or reject with the same `{code,message}` error.
+Direct Tauri calls are trusted desktop operations and do not pass through HTTP authentication.
+`ProxyCrabManager` remains unaware of credentials; the HTTP Router accepts a separate mandatory
+permission-manager implementation.
+
+## Management HTTP authentication and permissions
+
+The management server remains loopback-only at `http://127.0.0.1:18089`. Requests without an
+`Authorization` header use the workspace's independently configurable `本机无 API Key` identity.
+An API key is accepted only through exactly one `Authorization: Bearer <key>` header. `X-API-Key`,
+query-string credentials, duplicate Authorization headers, malformed schemes, and unknown or
+deleted keys are rejected. API-key management itself is desktop-only and is not exposed over HTTP.
+
+Each identity has one persisted permission for every HTTP method and route template:
+
+- `allow` executes immediately;
+- `approval` holds the complete original request for up to 30 seconds while the desktop asks;
+- `deny` returns `403 permission_denied`.
+
+Desktop approval supports allow or deny once, or for 5 minutes, 30 minutes, or 1 hour. A timed
+decision applies to the same identity plus route action, settles matching pending requests, stays
+in memory only, and disappears on restart. No decision within 30 seconds returns
+`403 approval_timeout`. Closing the approval window does not cancel pending requests.
+
+API keys and their permission tables follow the active workspace in
+`http_api_permissions.json`. Full keys are shown only once; the file stores a salted SHA-256 digest
+and is owner-only on Unix. A corrupt or unreadable permissions file prevents the HTTP service from
+starting and never falls back to allow-all. Existing requests already waiting for approval are not
+recomputed when permissions change or a key is deleted.
+
+Local Host/Origin validation remains mandatory. Valid local CORS preflight requests may use
+`Authorization` and `Content-Type`; non-local Host and Origin values remain forbidden.
 
 ## HTTP changes and desktop UI synchronization
 
@@ -56,7 +87,9 @@ instead of overwriting local edits.
 
 ## HTTP resources
 
-The server listens on loopback by default at `http://127.0.0.1:18089`. It has no authentication and emits no permissive CORS policy. Requests must use a loopback/`localhost` Host, and browser Origin values must also be local (including `tauri://localhost`) to prevent DNS-rebinding and CSRF access.
+The server listens on loopback by default at `http://127.0.0.1:18089` and applies the authentication
+and permission policy above. Requests must use a loopback/`localhost` Host, and browser Origin
+values must also be local (including `tauri://localhost`) to prevent DNS-rebinding and CSRF access.
 
 | Resource | Operations |
 | --- | --- |

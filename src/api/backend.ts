@@ -1,5 +1,6 @@
 import type {
   ActiveSession,
+  ApiActionView,
   AgentsPresetState,
   AppConfig,
   BreakpointDetailPayload,
@@ -8,6 +9,7 @@ import type {
   BypassPage,
   BypassQuery,
   CertificateResponse,
+  CreatedApiKey,
   CreateAgentsPresetRequest,
   CreateSessionRequest,
   DebugFilterScriptRequest,
@@ -18,14 +20,20 @@ import type {
   InterceptorKind,
   InterceptorLibraryList,
   InterceptorUpdateRequest,
+  HttpServiceStatus,
+  IdentityPermissions,
   LogDetail,
   LogIdsPayload,
   LogIdsRequest,
   LogViewsPayload,
   LogViewsRequest,
   ProxyStatus,
+  PendingApproval,
+  PermissionEntry,
+  PermissionIdentitySummary,
   ReplaceSessionInterceptorsRequest,
   ReplaceSessionViewRequest,
+  ResolveApprovalRequest,
   RoutingSelection,
   Script,
   ScriptRequest,
@@ -158,6 +166,18 @@ export interface Backend {
 
   // management HTTP service status
   getHttpServiceError(): Promise<string | null>;
+  getHttpServiceStatus(): Promise<HttpServiceStatus>;
+  getHttpPermissionCatalog(): Promise<ApiActionView[]>;
+  listHttpPermissionIdentities(): Promise<PermissionIdentitySummary[]>;
+  getHttpIdentityPermissions(id: string): Promise<IdentityPermissions>;
+  replaceHttpIdentityPermissions(
+    id: string,
+    permissions: PermissionEntry[],
+  ): Promise<IdentityPermissions>;
+  createHttpApiKey(name: string): Promise<CreatedApiKey>;
+  deleteHttpApiKey(id: string): Promise<void>;
+  listHttpApprovals(): Promise<PendingApproval[]>;
+  resolveHttpApproval(id: number, request: ResolveApprovalRequest): Promise<void>;
 
   // bundled Agent skill
   getProxyCrabSkillInstallInfo(parent: string): Promise<SkillInstallInfo>;

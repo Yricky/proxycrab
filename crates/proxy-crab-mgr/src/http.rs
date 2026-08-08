@@ -1,15 +1,18 @@
-use std::{io, pin::Pin, sync::Arc};
+use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 
 use async_compression::tokio::bufread::{BrotliDecoder, GzipDecoder, ZlibDecoder, ZstdDecoder};
 use axum::{
     Extension, Json, Router,
     body::Body,
-    extract::{FromRequest, FromRequestParts, Path, Query, Request, State},
+    extract::{
+        ConnectInfo, FromRequest, FromRequestParts, MatchedPath, Path, Query, Request, State,
+    },
     http::{
         HeaderValue, Method, StatusCode,
         header::{
-            ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LENGTH,
-            CONTENT_TYPE, HOST, ORIGIN, VARY,
+            ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+            ACCESS_CONTROL_ALLOW_ORIGIN, AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_ENCODING,
+            CONTENT_LENGTH, CONTENT_TYPE, HOST, ORIGIN, VARY,
         },
         request::Parts,
     },
@@ -18,7 +21,7 @@ use axum::{
     routing::{get, post, put},
 };
 use bytes::Bytes;
-use futures::stream;
+use futures::{StreamExt, stream};
 use proxy_crab_mitm::model::{AppConfig, InterceptorKind};
 use proxy_crab_mitm::storage::{BodySide, BodySource, BodySourceData};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -41,6 +44,10 @@ use crate::{
         UpdateScriptRequest, UpdateSessionRequest, default_body_max_size,
     },
     manager::ProxyCrabManager,
+    permission::{
+        PermissionAction, PermissionDenied, PermissionDeniedStatus, PermissionManager, api_actions,
+        api_actions_for_path, find_api_action,
+    },
 };
 
 type ManagerState = Arc<dyn ProxyCrabManager>;
@@ -119,7 +126,10 @@ impl HttpServerHandle {
     }
 }
 
-pub async fn start_http_server(manager: ManagerState) -> Result<HttpServerHandle, ManagerError> {
+pub async fn start_http_server(
+    manager: ManagerState,
+    permissions: Arc<dyn PermissionManager>,
+) -> Result<HttpServerHandle, ManagerError> {
     let config = manager.config().await?;
     let ip = config
         .api_host
@@ -137,11 +147,14 @@ pub async fn start_http_server(manager: ManagerState) -> Result<HttpServerHandle
     let cancellation = CancellationToken::new();
     let shutdown = cancellation.clone();
     let (changes, _) = broadcast::channel(128);
-    let app = secured_router_with_changes(manager, changes.clone());
+    let app = secured_router_with_changes(manager, permissions, changes.clone());
     let task = tokio::spawn(async move {
-        if let Err(error) = axum::serve(listener, app)
-            .with_graceful_shutdown(async move { shutdown.cancelled().await })
-            .await
+        if let Err(error) = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { shutdown.cancelled().await })
+        .await
         {
             tracing::error!("management HTTP server failed: {error}");
         }
@@ -155,12 +168,16 @@ pub async fn start_http_server(manager: ManagerState) -> Result<HttpServerHandle
     })
 }
 
-pub fn router(manager: ManagerState) -> Router {
+pub fn router(manager: ManagerState, permissions: Arc<dyn PermissionManager>) -> Router {
     let (changes, _) = broadcast::channel(128);
-    router_with_changes(manager, changes)
+    router_with_changes(manager, permissions, changes)
 }
 
-fn router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
+fn router_with_changes(
+    manager: ManagerState,
+    permissions: Arc<dyn PermissionManager>,
+    changes: ChangeSender,
+) -> Router {
     Router::new()
         .route("/api/agents.md", get(agents_markdown))
         .route("/api/workspace", get(get_workspace).put(set_workspace))
@@ -268,6 +285,10 @@ fn router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
             "/api/bypass/{id}",
             axum::routing::delete(delete_bypass_entry),
         )
+        .route_layer(middleware::from_fn_with_state(
+            permissions,
+            authorize_request,
+        ))
         .fallback(not_found)
         .with_state(manager)
         .layer(Extension(changes.clone()))
@@ -278,13 +299,166 @@ fn router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
 }
 
 #[cfg(test)]
-fn secured_router(manager: ManagerState) -> Router {
+fn secured_router(manager: ManagerState, permissions: Arc<dyn PermissionManager>) -> Router {
     let (changes, _) = broadcast::channel(128);
-    secured_router_with_changes(manager, changes)
+    secured_router_with_changes(manager, permissions, changes)
 }
 
-fn secured_router_with_changes(manager: ManagerState, changes: ChangeSender) -> Router {
-    router_with_changes(manager, changes).layer(middleware::from_fn(validate_local_browser_request))
+fn secured_router_with_changes(
+    manager: ManagerState,
+    permissions: Arc<dyn PermissionManager>,
+    changes: ChangeSender,
+) -> Router {
+    router_with_changes(manager, permissions, changes)
+        .layer(middleware::from_fn(validate_local_browser_request))
+}
+
+const BODY_PREVIEW_LIMIT: usize = 16 * 1024;
+
+async fn authorize_request(
+    State(permissions): State<Arc<dyn PermissionManager>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let route_template = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|path| path.as_str().to_owned());
+    let Some(route_template) = route_template else {
+        return next.run(request).await;
+    };
+    let Some(action) = find_api_action(request.method().as_str(), &route_template) else {
+        let known_template = api_actions()
+            .iter()
+            .any(|action| action.route_template == route_template);
+        if known_template || !route_template.starts_with("/api/") {
+            return next.run(request).await;
+        }
+        return permission_denied_response(PermissionDenied::internal(
+            "permission_check_failed",
+            "management API route is missing from the permission catalog",
+        ));
+    };
+
+    let authorization = match request
+        .headers()
+        .get_all(AUTHORIZATION)
+        .iter()
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [] => None,
+        [value] => match value.to_str() {
+            Ok(value) => Some(value.to_owned()),
+            Err(_) => {
+                return permission_denied_response(PermissionDenied::unauthorized(
+                    "invalid_api_key",
+                    "Authorization must contain one valid Bearer API key",
+                ));
+            }
+        },
+        _ => {
+            return permission_denied_response(PermissionDenied::unauthorized(
+                "invalid_api_key",
+                "Authorization must contain exactly one Bearer API key",
+            ));
+        }
+    };
+    let source = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|value| value.0);
+    let content_type = request
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let content_length = request
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok());
+    let actual_path = request.uri().path().to_owned();
+    let query = request.uri().query().map(str::to_owned);
+    let (request, body_preview, body_preview_truncated) =
+        preview_request_body(request, content_type.as_deref()).await;
+
+    let permission = PermissionAction {
+        action,
+        authorization,
+        actual_path,
+        query,
+        source,
+        content_type,
+        content_length,
+        body_preview,
+        body_preview_truncated: body_preview_truncated
+            || content_length.is_some_and(|length| length > BODY_PREVIEW_LIMIT as u64),
+    };
+    if let Some(denied) = permissions.check_permission(permission).await {
+        return permission_denied_response(denied);
+    }
+    next.run(request).await
+}
+
+async fn preview_request_body(
+    request: Request,
+    content_type: Option<&str>,
+) -> (Request, Option<String>, bool) {
+    let textual = content_type.is_some_and(|value| {
+        value.starts_with("text/")
+            || value.contains("json")
+            || value.contains("xml")
+            || value.contains("x-www-form-urlencoded")
+    });
+    if !textual {
+        return (request, None, false);
+    }
+    let (parts, body) = request.into_parts();
+    let mut stream = body.into_data_stream();
+    let mut buffered = Vec::new();
+    let mut preview = Vec::new();
+    let mut truncated = false;
+    while !truncated {
+        let Some(item) = stream.next().await else {
+            break;
+        };
+        match item {
+            Ok(bytes) => {
+                let remaining = BODY_PREVIEW_LIMIT - preview.len();
+                let has_bytes = !bytes.is_empty();
+                preview.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+                truncated |= bytes.len() > remaining;
+                buffered.push(Ok::<Bytes, axum::Error>(bytes));
+                if remaining == 0 && has_bytes {
+                    truncated = true;
+                }
+            }
+            Err(error) => {
+                buffered.push(Err(error));
+                break;
+            }
+        }
+    }
+    let body = Body::from_stream(stream::iter(buffered).chain(stream));
+    let preview = String::from_utf8(preview).ok();
+    (Request::from_parts(parts, body), preview, truncated)
+}
+
+fn permission_denied_response(denied: PermissionDenied) -> Response {
+    let status = match denied.status {
+        PermissionDeniedStatus::Unauthorized => StatusCode::UNAUTHORIZED,
+        PermissionDeniedStatus::Forbidden => StatusCode::FORBIDDEN,
+        PermissionDeniedStatus::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (
+        status,
+        Json(json!({
+            "ok": false,
+            "error": { "code": denied.code, "message": denied.message }
+        })),
+    )
+        .into_response()
 }
 
 async fn publish_successful_http_changes(
@@ -427,7 +601,23 @@ async fn validate_local_browser_request(request: Request, next: Next) -> Respons
             .into_response();
         }
     }
-    let mut response = next.run(request).await;
+    let is_preflight = request.method() == Method::OPTIONS;
+    let path = request.uri().path().to_owned();
+    let mut response = if is_preflight {
+        let methods = api_actions_for_path(&path)
+            .map(|action| action.method)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if methods.is_empty() {
+            ApiError(ManagerError::not_found("api endpoint not found")).into_response()
+        } else {
+            StatusCode::NO_CONTENT.into_response()
+        }
+    } else {
+        next.run(request).await
+    };
     if let Some(origin) = allowed_origin {
         response
             .headers_mut()
@@ -435,6 +625,23 @@ async fn validate_local_browser_request(request: Request, next: Next) -> Respons
         response
             .headers_mut()
             .insert(VARY, HeaderValue::from_static("Origin"));
+    }
+    if is_preflight && response.status().is_success() {
+        let methods = api_actions_for_path(&path)
+            .map(|action| action.method)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if let Ok(value) = HeaderValue::from_str(&methods) {
+            response
+                .headers_mut()
+                .insert(ACCESS_CONTROL_ALLOW_METHODS, value);
+        }
+        response.headers_mut().insert(
+            ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_static("Authorization, Content-Type"),
+        );
     }
     response
 }
@@ -1098,11 +1305,21 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Write, sync::Arc};
+    use std::{
+        io::Write,
+        sync::{Arc, Mutex},
+    };
 
+    use async_trait::async_trait;
     use axum::{
         body::{Body, to_bytes},
-        http::{Method, Request},
+        http::{
+            Method, Request, StatusCode,
+            header::{
+                ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+                ACCESS_CONTROL_ALLOW_ORIGIN, AUTHORIZATION,
+            },
+        },
         response::IntoResponse,
     };
     use flate2::{
@@ -1114,6 +1331,7 @@ mod tests {
         model::{CaptureError, ErrorStage, HeaderValues, RequestData, ResponseData},
         storage::{BodySide, BodySource, BodySourceData, CaptureStore},
     };
+    use serde_json::Value;
     use tempfile::tempdir;
     use tower::ServiceExt;
 
@@ -1124,7 +1342,228 @@ mod tests {
             secured_router,
         },
         manager::{MitmManager, ProxyCrabManager},
+        permission::{PermissionAction, PermissionDenied, PermissionManager},
     };
+
+    struct AllowAll;
+
+    #[async_trait]
+    impl PermissionManager for AllowAll {
+        async fn check_permission(&self, _action: PermissionAction) -> Option<PermissionDenied> {
+            None
+        }
+    }
+
+    fn allow_all() -> Arc<dyn PermissionManager> {
+        Arc::new(AllowAll)
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct RecordedPermission {
+        id: &'static str,
+        authorization: Option<String>,
+        actual_path: String,
+        query: Option<String>,
+        body_preview: Option<String>,
+        body_preview_truncated: bool,
+    }
+
+    struct RecordingPermissions {
+        items: Arc<Mutex<Vec<RecordedPermission>>>,
+        denied: Option<PermissionDenied>,
+    }
+
+    #[async_trait]
+    impl PermissionManager for RecordingPermissions {
+        async fn check_permission(&self, action: PermissionAction) -> Option<PermissionDenied> {
+            self.items.lock().unwrap().push(RecordedPermission {
+                id: action.action.id,
+                authorization: action.authorization,
+                actual_path: action.actual_path,
+                query: action.query,
+                body_preview: action.body_preview,
+                body_preview_truncated: action.body_preview_truncated,
+            });
+            self.denied.clone()
+        }
+    }
+
+    fn recording_permissions(
+        denied: Option<PermissionDenied>,
+    ) -> (
+        Arc<dyn PermissionManager>,
+        Arc<Mutex<Vec<RecordedPermission>>>,
+    ) {
+        let items = Arc::new(Mutex::new(Vec::new()));
+        (
+            Arc::new(RecordingPermissions {
+                items: items.clone(),
+                denied,
+            }),
+            items,
+        )
+    }
+
+    #[tokio::test]
+    async fn permission_middleware_records_template_and_preserves_json_body() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager = MitmManager::new(runtime);
+        let (permissions, recorded) = recording_permissions(None);
+        let app = router(manager, permissions);
+        let body = r#"{"name":"through approval","description":"complete body"}"#;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/sessions?source=test")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer pcrab_example")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *recorded.lock().unwrap(),
+            vec![RecordedPermission {
+                id: "POST /api/sessions",
+                authorization: Some("Bearer pcrab_example".into()),
+                actual_path: "/api/sessions".into(),
+                query: Some("source=test".into()),
+                body_preview: Some(body.into()),
+                body_preview_truncated: false,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_denial_uses_stable_envelope_and_skips_handler() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        assert!(runtime.sessions().is_empty());
+        let manager = MitmManager::new(runtime.clone());
+        let (permissions, recorded) = recording_permissions(Some(PermissionDenied::forbidden(
+            "permission_denied",
+            "this action is blocked",
+        )));
+        let app = router(manager, permissions);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"must not exist"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"]["code"], "permission_denied");
+        assert_eq!(recorded.lock().unwrap().len(), 1);
+        assert!(runtime.sessions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn permission_middleware_uses_route_template_for_path_parameters() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
+        let manager = MitmManager::new(runtime);
+        let (permissions, recorded) = recording_permissions(None);
+        let app = router(manager, permissions);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/sessions/{}", session.id))
+                    .method(Method::PUT)
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"renamed"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(recorded.lock().unwrap()[0].id, "PUT /api/sessions/{id}");
+    }
+
+    #[tokio::test]
+    async fn duplicate_authorization_headers_are_rejected_before_permission_check() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let (permissions, recorded) = recording_permissions(None);
+        let app = router(MitmManager::new(runtime), permissions);
+
+        let mut request = Request::builder()
+            .uri("/api/config")
+            .header("authorization", "Bearer first")
+            .body(Body::empty())
+            .unwrap();
+        request
+            .headers_mut()
+            .append(AUTHORIZATION, "Bearer second".parse().unwrap());
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(recorded.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn local_cors_preflight_allows_authorization_without_permission_check() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager = MitmManager::new(runtime);
+        let (permissions, recorded) = recording_permissions(Some(PermissionDenied::forbidden(
+            "permission_denied",
+            "must not run for preflight",
+        )));
+        let app = secured_router(manager, permissions);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/api/sessions/42")
+                    .header("host", "127.0.0.1:18089")
+                    .header("origin", "http://localhost:5173")
+                    .header("access-control-request-method", "PUT")
+                    .header(
+                        "access-control-request-headers",
+                        "authorization, content-type",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            response.headers()[ACCESS_CONTROL_ALLOW_ORIGIN],
+            "http://localhost:5173"
+        );
+        assert!(
+            response.headers()[ACCESS_CONTROL_ALLOW_METHODS]
+                .to_str()
+                .unwrap()
+                .contains("PUT")
+        );
+        assert_eq!(
+            response.headers()[ACCESS_CONTROL_ALLOW_HEADERS],
+            "Authorization, Content-Type"
+        );
+        assert!(recorded.lock().unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn raw_body_response_defaults_to_stored_bytes_and_optionally_decodes() {
@@ -1240,7 +1679,7 @@ mod tests {
         store
             .save_body(id, BodySide::Request, false, b"captured bytes")
             .unwrap();
-        let app = router(MitmManager::new(runtime));
+        let app = router(MitmManager::new(runtime), allow_all());
 
         let response = app
             .clone()
@@ -1402,7 +1841,7 @@ mod tests {
     async fn returns_the_standard_success_envelope() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let app = router(MitmManager::new(runtime));
+        let app = router(MitmManager::new(runtime), allow_all());
 
         let response = app
             .oneshot(
@@ -1421,7 +1860,7 @@ mod tests {
     async fn agents_markdown_is_returned_as_raw_plain_text() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let app = router(MitmManager::new(runtime));
+        let app = router(MitmManager::new(runtime), allow_all());
 
         let response = app
             .oneshot(
@@ -1451,7 +1890,7 @@ mod tests {
         let session = runtime
             .create_session(Some("capture".into()), None)
             .unwrap();
-        let app = router(MitmManager::new(runtime));
+        let app = router(MitmManager::new(runtime), allow_all());
 
         let response = app
             .clone()
@@ -1503,7 +1942,7 @@ mod tests {
         let archived = runtime
             .create_session(Some("archive-me".into()), Some("kept".into()))
             .unwrap();
-        let app = router(MitmManager::new(runtime));
+        let app = router(MitmManager::new(runtime), allow_all());
 
         let response = app
             .clone()
@@ -1613,7 +2052,7 @@ mod tests {
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let manager = MitmManager::new(runtime);
         let expected = serde_json::to_value(manager.config().await.unwrap()).unwrap();
-        let app = router(manager);
+        let app = router(manager, allow_all());
 
         let response = app
             .oneshot(
@@ -1634,7 +2073,7 @@ mod tests {
     async fn invalid_json_uses_the_standard_error_envelope() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let app = router(MitmManager::new(runtime));
+        let app = router(MitmManager::new(runtime), allow_all());
 
         let response = app
             .oneshot(
@@ -1661,7 +2100,7 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
-        let app = router_with_changes(MitmManager::new(runtime), changes);
+        let app = router_with_changes(MitmManager::new(runtime), allow_all(), changes);
 
         let response = app
             .clone()
@@ -1707,7 +2146,7 @@ mod tests {
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
         let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
-        let app = router_with_changes(MitmManager::new(runtime), changes);
+        let app = router_with_changes(MitmManager::new(runtime), allow_all(), changes);
         let body = r#"{"filter":{"option":{"kind":"column","column":{"kind":"uri"},"case_sensitive":false},"input":"example"}}"#;
 
         for _ in 0..2 {
@@ -1763,7 +2202,7 @@ mod tests {
     async fn invalid_path_uses_the_standard_error_envelope() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let app = router(MitmManager::new(runtime));
+        let app = router(MitmManager::new(runtime), allow_all());
 
         let response = app
             .oneshot(
@@ -1788,7 +2227,7 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         runtime.create_session(None, None).unwrap();
-        let app = router(MitmManager::new(runtime));
+        let app = router(MitmManager::new(runtime), allow_all());
 
         for (method, uri, body) in [
             ("POST", "/api/logs/ids", r#"{}"#),
@@ -1879,7 +2318,7 @@ mod tests {
     async fn script_updates_reject_the_removed_rename_shape() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let app = router(MitmManager::new(runtime));
+        let app = router(MitmManager::new(runtime), allow_all());
 
         for uri in [
             "/api/column-scripts/old",
@@ -1946,7 +2385,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let app = router(MitmManager::new(runtime));
+        let app = router(MitmManager::new(runtime), allow_all());
 
         let response = app
             .oneshot(
@@ -1991,7 +2430,7 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
-        let app = router(MitmManager::new(runtime));
+        let app = router(MitmManager::new(runtime), allow_all());
 
         for (body, expected_status, expected_code) in [
             (r#"{}"#, axum::http::StatusCode::BAD_REQUEST, "bad_request"),
@@ -2048,7 +2487,7 @@ mod tests {
         let no_session_data = tempdir().unwrap();
         let no_session_runtime =
             ProxyCrab::open(no_session_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let response = router(MitmManager::new(no_session_runtime))
+        let response = router(MitmManager::new(no_session_runtime), allow_all())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -2067,7 +2506,7 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let manager = MitmManager::new(runtime);
-        let app = secured_router(manager);
+        let app = secured_router(manager, allow_all());
 
         let response = app
             .clone()

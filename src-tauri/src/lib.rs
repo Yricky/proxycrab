@@ -1,3 +1,4 @@
+mod http_permissions;
 mod skill_install;
 
 use std::sync::{Arc, Mutex, RwLock};
@@ -29,10 +30,16 @@ use proxy_crab_mitm::{
 use tauri::{Emitter, Manager, RunEvent, State};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::http_permissions::{
+    ApiActionView, CreatedApiKey, HttpPermissionService, IdentityPermissions, PendingApproval,
+    PermissionEntry, PermissionIdentitySummary, ResolveApprovalRequest,
+};
 use crate::skill_install::SkillInstallInfo;
 
 struct BackendState {
     manager: Arc<dyn ProxyCrabManager>,
+    permissions: Option<Arc<HttpPermissionService>>,
+    permission_error: Option<String>,
     http: Mutex<Option<HttpServerHandle>>,
     http_error: RwLock<Option<String>>,
 }
@@ -40,6 +47,16 @@ struct BackendState {
 impl BackendState {
     fn manager(&self) -> Arc<dyn ProxyCrabManager> {
         self.manager.clone()
+    }
+
+    fn permissions(&self) -> Result<Arc<HttpPermissionService>, ManagerError> {
+        self.permissions.clone().ok_or_else(|| {
+            ManagerError::internal(
+                self.permission_error
+                    .clone()
+                    .unwrap_or_else(|| "management API permissions are unavailable".into()),
+            )
+        })
     }
 }
 
@@ -626,6 +643,66 @@ async fn get_http_service_status(
     })
 }
 
+#[tauri::command]
+fn get_http_permission_catalog(
+    state: State<'_, BackendState>,
+) -> Result<Vec<ApiActionView>, ManagerError> {
+    Ok(state.permissions()?.catalog())
+}
+
+#[tauri::command]
+fn list_http_permission_identities(
+    state: State<'_, BackendState>,
+) -> Result<Vec<PermissionIdentitySummary>, ManagerError> {
+    state.permissions()?.identities()
+}
+
+#[tauri::command]
+fn get_http_identity_permissions(
+    state: State<'_, BackendState>,
+    id: String,
+) -> Result<IdentityPermissions, ManagerError> {
+    state.permissions()?.identity_permissions(&id)
+}
+
+#[tauri::command]
+fn replace_http_identity_permissions(
+    state: State<'_, BackendState>,
+    id: String,
+    permissions: Vec<PermissionEntry>,
+) -> Result<IdentityPermissions, ManagerError> {
+    state.permissions()?.replace_permissions(&id, permissions)
+}
+
+#[tauri::command]
+fn create_http_api_key(
+    state: State<'_, BackendState>,
+    name: String,
+) -> Result<CreatedApiKey, ManagerError> {
+    state.permissions()?.create_api_key(name)
+}
+
+#[tauri::command]
+fn delete_http_api_key(state: State<'_, BackendState>, id: String) -> Result<(), ManagerError> {
+    state.permissions()?.delete_api_key(&id)
+}
+
+#[tauri::command]
+fn list_http_approvals(
+    state: State<'_, BackendState>,
+) -> Result<Vec<PendingApproval>, ManagerError> {
+    state.permissions()?.approvals()
+}
+
+#[tauri::command]
+fn resolve_http_approval(
+    state: State<'_, BackendState>,
+    id: u64,
+    request: ResolveApprovalRequest,
+) -> Result<(), ManagerError> {
+    state.permissions()?.resolve_approval(id, request)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -642,15 +719,33 @@ pub fn run() {
                 .with(BufferLayer::new(log_buffer.clone()))
                 .try_init();
             let runtime = ProxyCrab::open(app_data_dir, log_buffer)?;
+            let workspace = runtime.workspace_paths().current_path;
             let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
-            let (http, http_error) =
-                match tauri::async_runtime::block_on(start_http_server(manager.clone())) {
+            let approval_handle = app.handle().clone();
+            let permissions = HttpPermissionService::open(
+                std::path::Path::new(&workspace),
+                Arc::new(move |count| {
+                    if let Err(error) = approval_handle.emit("proxycrab://approval-change", count) {
+                        tracing::warn!("failed to emit approval change: {error}");
+                    }
+                }),
+            );
+            let permission_error = permissions.as_ref().err().map(ToString::to_string);
+            let permissions = permissions.ok();
+            let (http, http_error) = if let Some(permissions) = permissions.as_ref() {
+                match tauri::async_runtime::block_on(start_http_server(
+                    manager.clone(),
+                    permissions.clone(),
+                )) {
                     Ok(handle) => (Some(handle), None),
                     Err(error) => {
                         tracing::error!("management HTTP service did not start: {error}");
                         (None, Some(error.to_string()))
                     }
-                };
+                }
+            } else {
+                (None, permission_error.clone())
+            };
             if let Some(http) = http.as_ref() {
                 let mut changes = http.subscribe_changes();
                 let app_handle = app.handle().clone();
@@ -676,6 +771,8 @@ pub fn run() {
             }
             app.manage(BackendState {
                 manager,
+                permissions,
+                permission_error,
                 http: Mutex::new(http),
                 http_error: RwLock::new(http_error),
             });
@@ -750,6 +847,14 @@ pub fn run() {
             clear_bypass_entries,
             get_http_service_error,
             get_http_service_status,
+            get_http_permission_catalog,
+            list_http_permission_identities,
+            get_http_identity_permissions,
+            replace_http_identity_permissions,
+            create_http_api_key,
+            delete_http_api_key,
+            list_http_approvals,
+            resolve_http_approval,
             get_proxycrab_skill_install_info,
             install_proxycrab_skill,
         ]);

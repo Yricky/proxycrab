@@ -2,9 +2,11 @@
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { proxyStore } from "../stores/proxy";
 import { appStore, type ThemeMode } from "../stores/app";
+import { approvalsStore } from "../stores/approvals";
 import {
   openBase64,
   openAgentsPresets,
+  openApprovals,
   openCertManager,
   openColumnManager,
   openFilterManager,
@@ -16,6 +18,7 @@ import {
   openSkillInstall,
   openSystemLogs,
 } from "../windows/launcher";
+import { IoHandRight } from "vue-icons-plus/io";
 import {
   Io5ArrowDown,
   Io5ArrowUp,
@@ -169,6 +172,16 @@ onBeforeUnmount(() => {
     <div class="tb-spacer" />
 
     <div ref="toolbarMenus" class="tb-group tb-menus">
+      <button
+        v-if="approvalsStore.count > 0"
+        class="approval-trigger"
+        :title="`${approvalsStore.count} 个管理接口请求待审批`"
+        aria-label="打开管理接口审批"
+        @click="openApprovals"
+      >
+        <IoHandRight :size="17" class="approval-hand" />
+        <span>{{ approvalsStore.count }}</span>
+      </button>
       <div class="tb-menu-wrap">
         <button
           class="tb-menu-trigger"
@@ -327,6 +340,32 @@ onBeforeUnmount(() => {
 .tb-menus {
   align-self: stretch;
   gap: 2px;
+}
+.approval-trigger {
+  align-self: center;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 3px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 13%, transparent);
+  color: var(--warning);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.approval-trigger:hover { background: color-mix(in srgb, var(--warning) 21%, transparent); }
+.approval-hand { transform-origin: 50% 80%; animation: approval-wave 0.8s ease-in-out infinite alternate; }
+@keyframes approval-wave {
+  from { transform: rotate(-30deg); }
+  to { transform: rotate(30deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .approval-hand { animation: none; }
 }
 .tb-menu-wrap {
   position: relative;

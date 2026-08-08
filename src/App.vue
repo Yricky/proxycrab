@@ -15,9 +15,11 @@ import { proxyStore } from "./stores/proxy";
 import { logsStore } from "./stores/logs";
 import { startHttpApiSync, stopHttpApiSync } from "./stores/http-api-sync";
 import { breakpointsStore } from "./stores/breakpoints";
+import { approvalsStore } from "./stores/approvals";
 
 onMounted(async () => {
   await startHttpApiSync();
+  await approvalsStore.start();
   proxyStore.startPolling();
   await sessionsStore.init();
   logsStore.startPolling();
@@ -29,6 +31,7 @@ onBeforeUnmount(() => {
   logsStore.stopPolling();
   breakpointsStore.stopPolling();
   stopHttpApiSync();
+  approvalsStore.stop();
 });
 </script>
 

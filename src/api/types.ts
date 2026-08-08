@@ -433,3 +433,68 @@ export interface SystemLogsQuery {
 export interface CertificateResponse {
   pem: string;
 }
+
+export interface HttpServiceStatus {
+  running: boolean;
+  host: string;
+  port: number;
+  error: string | null;
+}
+
+export type PermissionMode = "allow" | "approval" | "deny";
+export type PermissionIdentityKind = "local" | "api_key";
+
+export interface ApiActionView {
+  id: string;
+  method: string;
+  route_template: string;
+  default_mode: PermissionMode;
+}
+
+export interface PermissionIdentitySummary {
+  id: string;
+  kind: PermissionIdentityKind;
+  name: string;
+  prefix: string | null;
+  created_at: number | null;
+  last_used_at: number | null;
+}
+
+export interface PermissionEntry {
+  action_id: string;
+  mode: PermissionMode;
+}
+
+export interface IdentityPermissions {
+  identity: PermissionIdentitySummary;
+  permissions: PermissionEntry[];
+}
+
+export interface CreatedApiKey {
+  identity: PermissionIdentitySummary;
+  api_key: string;
+}
+
+export interface PendingApproval {
+  id: number;
+  identity: PermissionIdentitySummary;
+  action_id: string;
+  method: string;
+  route_template: string;
+  actual_path: string;
+  query: string | null;
+  source: string | null;
+  content_type: string | null;
+  content_length: number | null;
+  body_preview: string | null;
+  body_preview_truncated: boolean;
+  created_at: number;
+  deadline_at: number;
+}
+
+export type ApprovalDecision = "allow" | "deny";
+
+export interface ResolveApprovalRequest {
+  decision: ApprovalDecision;
+  duration_seconds: number | null;
+}

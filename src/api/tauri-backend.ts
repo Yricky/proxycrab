@@ -2,7 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Backend } from "./backend";
 import type {
   ActiveSession,
+  ApiActionView,
   AppConfig,
+  CreatedApiKey,
   CreateAgentsPresetRequest,
   BreakpointQuery,
   BypassQuery,
@@ -13,12 +15,18 @@ import type {
   InterceptorCreateRequest,
   InterceptorKind,
   InterceptorUpdateRequest,
+  HttpServiceStatus,
+  IdentityPermissions,
   LogDetail,
   LogIdsRequest,
   LogViewsRequest,
   ManagerError,
+  PendingApproval,
+  PermissionEntry,
+  PermissionIdentitySummary,
   ReplaceSessionInterceptorsRequest,
   ReplaceSessionViewRequest,
+  ResolveApprovalRequest,
   RoutingSelection,
   ScriptRequest,
   SystemLogsQuery,
@@ -168,6 +176,21 @@ export function createTauriBackend(): Backend {
     clearBypassEntries: () => call("clear_bypass_entries"),
 
     getHttpServiceError: () => call("get_http_service_error"),
+    getHttpServiceStatus: () => call<HttpServiceStatus>("get_http_service_status"),
+    getHttpPermissionCatalog: () =>
+      call<ApiActionView[]>("get_http_permission_catalog"),
+    listHttpPermissionIdentities: () =>
+      call<PermissionIdentitySummary[]>("list_http_permission_identities"),
+    getHttpIdentityPermissions: (id: string) =>
+      call<IdentityPermissions>("get_http_identity_permissions", { id }),
+    replaceHttpIdentityPermissions: (id: string, permissions: PermissionEntry[]) =>
+      call<IdentityPermissions>("replace_http_identity_permissions", { id, permissions }),
+    createHttpApiKey: (name: string) =>
+      call<CreatedApiKey>("create_http_api_key", { name }),
+    deleteHttpApiKey: (id: string) => call("delete_http_api_key", { id }),
+    listHttpApprovals: () => call<PendingApproval[]>("list_http_approvals"),
+    resolveHttpApproval: (id: number, request: ResolveApprovalRequest) =>
+      call("resolve_http_approval", { id, request }),
 
     getProxyCrabSkillInstallInfo: (parent: string) =>
       call("get_proxycrab_skill_install_info", { parent }),

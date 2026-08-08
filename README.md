@@ -5,7 +5,7 @@ ProxyCrab is a macOS-first Tauri application backend for HTTP/HTTPS MITM capture
 ## Rust workspace
 
 - `crates/proxy-crab-mitm`: proxy lifecycle, CA/TLS, sessions, SQLite captures, request/response bodies, Lua scripts, diagnostic failures, and the in-memory system-log ring.
-- `crates/proxy-crab-mgr`: the object-safe `ProxyCrabManager` trait, its MITM adapter, typed DTOs, stable errors, and the local management HTTP server.
+- `crates/proxy-crab-mgr`: the object-safe `ProxyCrabManager` trait, its MITM adapter, typed DTOs, stable errors, the local management HTTP server, and a route-level permission contract.
 - `src-tauri`: Tauri initialization, application lifecycle, and thin commands that call the same management trait as HTTP handlers.
 
 Neither reusable crate depends on Tauri.
@@ -20,6 +20,18 @@ Neither reusable crate depends on Tauri.
 - Blocking capture/bypass queries and management Lua evaluations: at most eight concurrently; excess work waits without occupying Tokio worker threads.
 
 The Tauri application data directory contains `config.json`, which points at the workspace. When the pointer is absent or invalid, `app_data_dir/workspace` is used and persisted. A changed pointer takes effect only on the next application launch.
+
+The management API is loopback-only and supports workspace-scoped API keys through exactly one
+`Authorization: Bearer <key>` header. Every API key and the local no-key identity have independent
+per-route `allow`, `approval`, or `deny` permissions. Approval waits for a desktop decision for up
+to 30 seconds; the toolbar hand indicator opens the pending list. API keys and permissions are
+managed under Settings > 管理接口 and are not exposed as HTTP management endpoints. Direct Tauri
+commands remain trusted and bypass HTTP authentication.
+
+Permission state is stored in the active workspace's `http_api_permissions.json`; a corrupt file
+stops only the management HTTP service rather than widening access. Full API keys are displayed once
+at creation and are never persisted. Bundled ProxyCrab Skill scripts accept a key only through the
+`PROXYCRAB_API_KEY` environment variable.
 
 Each workspace root has a `workspace_schema.json` version label. All persisted-data upgrades are
 registered in the centralized migration module and run before workspace stores are opened.
