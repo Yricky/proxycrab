@@ -26,6 +26,7 @@ hyper-util = { version = "0.1", features = ["full"] }
 if-addrs = "0.15.0"
 mlua = { version = "0.11", features = ["lua54", "vendored", "send"] }
 rcgen = { version = "0.14", features = ["x509-parser"] }
+regex = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 rustls = "0.23.43"
 serde = { version = "1", features = ["derive"] }

@@ -314,6 +314,12 @@ function cellClass(index: number, value: string): string {
   }
   return "";
 }
+
+function outcomeDotClass(outcome: string): string {
+  if (outcome === "in_progress") return "active";
+  if (outcome === "failed") return "failed";
+  return "";
+}
 </script>
 
 <template>
@@ -367,6 +373,12 @@ function cellClass(index: number, value: string): string {
               :title="String(entry.row.id)"
               @contextmenu="showCellMenu($event, String(entry.row.id))"
             >
+              <span
+                v-if="outcomeDotClass(entry.row.outcome)"
+                class="lt-outcome-dot"
+                :class="outcomeDotClass(entry.row.outcome)"
+                aria-hidden="true"
+              />
               {{ entry.row.id }}
             </div>
             <div
@@ -517,6 +529,19 @@ function cellClass(index: number, value: string): string {
   text-overflow: ellipsis;
   border-right: 1px solid var(--border);
   min-width: 0;
+}
+.lt-outcome-dot {
+  width: 4px;
+  height: 4px;
+  flex: none;
+  margin-right: 5px;
+  border-radius: 50%;
+}
+.lt-outcome-dot.active {
+  background: var(--accent);
+}
+.lt-outcome-dot.failed {
+  background: var(--danger);
 }
 .lt-cell:last-child {
   border-right: none;

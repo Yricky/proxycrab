@@ -1195,7 +1195,7 @@ mod tests {
                             column: FilterColumn::Script {
                                 script_name: "old".into(),
                             },
-                            case_sensitive: false,
+                            regex: false,
                         }),
                         input: "example".into(),
                     },

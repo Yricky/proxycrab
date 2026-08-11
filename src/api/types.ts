@@ -29,7 +29,7 @@ export type FilterColumn =
   | { kind: "script"; script_name: string };
 
 export type FilterOption =
-  | { kind: "column"; column: FilterColumn; case_sensitive: boolean }
+  | { kind: "column"; column: FilterColumn; regex: boolean }
   | { kind: "script"; script_name: string };
 
 export interface SessionFilter {
@@ -249,6 +249,7 @@ export interface ColumnView {
 export interface LogViewRow {
   id: number;
   updated_at: number;
+  outcome: CaptureOutcome;
   cells: string[];
 }
 

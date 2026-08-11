@@ -28,7 +28,6 @@ run(async () => {
     "column-script",
     "filter-script",
     "input",
-    "case-sensitive",
     "include-in-progress",
   ]);
   if (args.help) {
@@ -51,7 +50,6 @@ Matching (may be combined):
   --stage TEXT
   --column-script NAME [--input TEXT]
   --filter-script NAME [--input TEXT]
-  --case-sensitive
 
 One condition is evaluated remotely without changing the Session's persisted filter. Additional
 built-in conditions are checked locally against full capture details.

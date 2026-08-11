@@ -85,7 +85,8 @@ pub enum FilterColumn {
 pub enum FilterOption {
     Column {
         column: FilterColumn,
-        case_sensitive: bool,
+        #[serde(default)]
+        regex: bool,
     },
     Script {
         script_name: String,
@@ -409,4 +410,25 @@ pub struct SystemLogEntry {
 pub struct WorkspacePaths {
     pub current_path: String,
     pub configured_path: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FilterColumn, FilterOption};
+
+    #[test]
+    fn obsolete_case_sensitive_field_is_ignored() {
+        let option: FilterOption = serde_json::from_str(
+            r#"{"kind":"column","column":{"kind":"uri"},"case_sensitive":false}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            option,
+            FilterOption::Column {
+                column: FilterColumn::Uri,
+                regex: false,
+            }
+        );
+    }
 }

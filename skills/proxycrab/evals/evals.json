@@ -118,6 +118,12 @@
       "prompt": "Create a ProxyCrab request interceptor named inspect-json-body that reads the current request body as JSON, sets x-order-id from body.order_id when present, and leaves non-JSON or non-text request bodies unchanged. Attach it without changing the response chain and verify it on a newly captured JSON request.",
       "expected_output": "The agent uses req.body:as_json(), checks for nil before indexing, preserves the response chain, warns that the first raw body read waits for complete download and may block on an infinite stream, and verifies the header_set modification on a new capture.",
       "files": []
+    },
+    {
+      "id": 20,
+      "prompt": "Use ProxyCrab to find captures in Session 3 whose URI is exactly /api/orders/42 without changing the Session's saved filter, then report each returned row's capture outcome.",
+      "expected_output": "The agent queries IDs with persist_filter=false and a column filter using regex=true plus an escaped anchored Rust regex, batch-renders the matching logs, and reports each row's explicit outcome field without inferring it from status or stage.",
+      "files": []
     }
   ]
 }

@@ -17,6 +17,7 @@ use proxy_crab_mitm::{
     },
     storage::{BodySide, BodySource},
 };
+use regex::Regex;
 
 use crate::{
     agents::AgentsStore,
@@ -192,7 +193,7 @@ enum PreparedFilter {
     Column {
         column: FilterColumn,
         input: String,
-        case_sensitive: bool,
+        regex: Option<Regex>,
         script: Option<PreparedColumnScript>,
     },
     Script {
@@ -276,10 +277,7 @@ impl MitmManager {
         }
         match &filter.option {
             None => Ok(PreparedFilter::All),
-            Some(FilterOption::Column {
-                column,
-                case_sensitive,
-            }) => {
+            Some(FilterOption::Column { column, regex }) => {
                 let script = match column {
                     FilterColumn::Script { script_name } => {
                         let script = runtime
@@ -295,7 +293,10 @@ impl MitmManager {
                 Ok(PreparedFilter::Column {
                     column: column.clone(),
                     input: filter.input.clone(),
-                    case_sensitive: *case_sensitive,
+                    regex: regex
+                        .then(|| Regex::new(&filter.input))
+                        .transpose()
+                        .map_err(|error| ManagerError::bad_request(error.to_string()))?,
                     script,
                 })
             }
@@ -326,7 +327,7 @@ impl MitmManager {
             PreparedFilter::Column {
                 column,
                 input,
-                case_sensitive,
+                regex,
                 script,
             } => {
                 let value = match column {
@@ -352,11 +353,9 @@ impl MitmManager {
                         value
                     }
                 };
-                if *case_sensitive {
-                    value.contains(input)
-                } else {
-                    value.to_lowercase().contains(&input.to_lowercase())
-                }
+                regex
+                    .as_ref()
+                    .map_or_else(|| value.contains(input), |regex| regex.is_match(&value))
             }
         }
     }
@@ -711,6 +710,7 @@ impl ProxyCrabManager for MitmManager {
                 rows.push(LogViewRow {
                     id,
                     updated_at: item.updated_at,
+                    outcome: outcome_name(item.outcome).into(),
                     cells,
                 });
             }
@@ -1584,7 +1584,7 @@ mod tests {
                 filter: Some(SessionFilter {
                     option: Some(FilterOption::Column {
                         column: FilterColumn::Uri,
-                        case_sensitive: true,
+                        regex: false,
                     }),
                     input: "/first".into(),
                 }),
@@ -1686,6 +1686,7 @@ mod tests {
 
         assert_eq!(payload.columns.len(), 2);
         assert_eq!(payload.rows[0].cells, vec!["GET", ""]);
+        assert_eq!(payload.rows[0].outcome, "in_progress");
         assert_eq!(payload.exceptions.len(), 2);
         assert!(payload.exceptions.iter().any(|error| {
             error.id == second
@@ -1730,17 +1731,17 @@ mod tests {
             .unwrap();
         let manager = MitmManager::new(runtime);
 
-        let insensitive = SessionFilter {
+        let regex_filter = SessionFilter {
             option: Some(FilterOption::Column {
                 column: FilterColumn::Uri,
-                case_sensitive: false,
+                regex: true,
             }),
-            input: "EXAMPLE.COM/FIRST".into(),
+            input: r"(?i)^http://example\.com/first$".into(),
         };
         let ids = manager
             .log_ids(LogIdsRequest {
                 session_id: Some(session.id),
-                filter: Some(insensitive.clone()),
+                filter: Some(regex_filter.clone()),
                 min_id: None,
                 max_id: None,
                 limit: None,
@@ -1751,7 +1752,7 @@ mod tests {
         assert_eq!(ids.ids, vec![first]);
         assert_eq!(
             manager.session_view(Some(session.id)).await.unwrap().filter,
-            insensitive
+            regex_filter
         );
         assert_eq!(
             manager
@@ -1772,7 +1773,7 @@ mod tests {
         let exact = SessionFilter {
             option: Some(FilterOption::Column {
                 column: FilterColumn::Uri,
-                case_sensitive: true,
+                regex: false,
             }),
             input: "EXAMPLE.COM/FIRST".into(),
         };
@@ -1792,6 +1793,25 @@ mod tests {
                 .is_empty()
         );
 
+        let invalid = manager
+            .log_ids(LogIdsRequest {
+                session_id: Some(session.id),
+                filter: Some(SessionFilter {
+                    option: Some(FilterOption::Column {
+                        column: FilterColumn::Uri,
+                        regex: true,
+                    }),
+                    input: "(".into(),
+                }),
+                min_id: None,
+                max_id: None,
+                limit: None,
+                persist_filter: true,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(invalid.code, "bad_request");
+
         manager
             .create_column_script(ScriptRequest {
                 name: "path".into(),
@@ -1804,9 +1824,9 @@ mod tests {
                 column: FilterColumn::Script {
                     script_name: "path".into(),
                 },
-                case_sensitive: true,
+                regex: true,
             }),
-            input: "First".into(),
+            input: "^/First$".into(),
         };
         assert_eq!(
             manager
@@ -1840,7 +1860,7 @@ mod tests {
                             column: FilterColumn::Script {
                                 script_name: "broken-column".into(),
                             },
-                            case_sensitive: false,
+                            regex: false,
                         }),
                         input: "anything".into(),
                     }),
@@ -1964,7 +1984,7 @@ mod tests {
         let spaced = SessionFilter {
             option: Some(FilterOption::Column {
                 column: FilterColumn::Uri,
-                case_sensitive: true,
+                regex: false,
             }),
             input: " /First ".into(),
         };

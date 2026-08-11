@@ -105,7 +105,8 @@ skill directory.
 
    The bundled query script applies supplied filters statelessly and does not change the Session's
    persisted filter. A direct `POST /api/logs/ids` persists a supplied filter unless it explicitly
-   sets `persist_filter: false`.
+   sets `persist_filter: false`. Column matching is case-sensitive; add `--regex` to
+   `log-query.mjs` for Rust regex syntax such as anchored exact matches or inline `(?i)` flags.
 
 4. Fetch only the candidate captures needed for diagnosis:
 

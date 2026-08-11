@@ -2256,7 +2256,7 @@ mod tests {
         let session = runtime.create_session(None, None).unwrap();
         let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
         let app = router_with_changes(MitmManager::new(runtime), allow_all(), changes);
-        let body = r#"{"filter":{"option":{"kind":"column","column":{"kind":"uri"},"case_sensitive":false},"input":"example"}}"#;
+        let body = r#"{"filter":{"option":{"kind":"column","column":{"kind":"uri"},"regex":false},"input":"example"}}"#;
 
         for _ in 0..2 {
             let response = app
@@ -2343,7 +2343,7 @@ mod tests {
             (
                 "POST",
                 "/api/logs/ids",
-                r#"{"filter":{"option":{"kind":"column","column":{"kind":"uri"},"case_sensitive":false},"input":""}}"#,
+                r#"{"filter":{"option":{"kind":"column","column":{"kind":"uri"},"regex":false},"input":""}}"#,
             ),
             ("POST", "/api/logs/views", r#"{"logs":[]}"#),
             ("GET", "/api/session-view", ""),

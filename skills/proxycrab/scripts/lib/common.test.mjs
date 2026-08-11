@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { requestHeaders, REQUEST_TIMEOUT_MS, UsageError } from "./common.mjs";
+import {
+  buildRemoteFilter,
+  parseArgs,
+  requestHeaders,
+  REQUEST_TIMEOUT_MS,
+  UsageError,
+} from "./common.mjs";
 
 test("requestHeaders omits authorization without an API key", () => {
   const previous = process.env.PROXYCRAB_API_KEY;
@@ -35,4 +41,18 @@ test("requestHeaders rejects newline injection", () => {
     if (previous === undefined) delete process.env.PROXYCRAB_API_KEY;
     else process.env.PROXYCRAB_API_KEY = previous;
   }
+});
+
+test("column filters use the regex wire flag", () => {
+  assert.deepEqual(
+    buildRemoteFilter(parseArgs(["--uri", "^/api", "--regex"])),
+    {
+      option: { kind: "column", column: { kind: "uri" }, regex: true },
+      input: "^/api",
+    },
+  );
+  assert.deepEqual(buildRemoteFilter(parseArgs(["--method", "GET"])), {
+    option: { kind: "column", column: { kind: "method" }, regex: false },
+    input: "GET",
+  });
 });

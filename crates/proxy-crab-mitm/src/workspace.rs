@@ -658,7 +658,7 @@ mod tests {
                     filter: SessionFilter {
                         option: Some(FilterOption::Column {
                             column: FilterColumn::Stage,
-                            case_sensitive: true,
+                            regex: false,
                         }),
                         input: "response".into(),
                     },

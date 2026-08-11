@@ -54,6 +54,7 @@ export const logsStore = reactive({
         this.rowsById.get(id) ?? {
           id,
           updated_at: 0,
+          outcome: "success",
           cells: this.columns.map(() => ""),
         },
     );

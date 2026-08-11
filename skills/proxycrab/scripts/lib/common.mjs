@@ -25,7 +25,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
     }
     const key = token.slice(2);
     if (!key) throw new UsageError("empty option name");
-    if (key === "help" || key === "case-sensitive" || key === "include-in-progress") {
+    if (key === "help" || key === "regex" || key === "include-in-progress") {
       args[key] = true;
       continue;
     }
@@ -295,20 +295,17 @@ export function buildRemoteFilter(args, { allowMultiple = false } = {}) {
     option: {
       kind: "column",
       column: selectedColumn,
-      case_sensitive: args["case-sensitive"] === true,
+      regex: args.regex === true,
     },
     input: key === "column-script" ? (args.input ?? "") : value,
   };
 }
 
 export function matchesBuiltInCriteria(detail, args) {
-  const caseSensitive = args["case-sensitive"] === true;
   const contains = (actual, expected) => {
     if (expected === undefined) return true;
     const left = String(actual ?? "");
-    return caseSensitive
-      ? left.includes(expected)
-      : left.toLowerCase().includes(expected.toLowerCase());
+    return left.includes(expected);
   };
   return (
     contains(detail.request?.uri, args.uri) &&

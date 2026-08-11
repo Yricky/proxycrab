@@ -253,6 +253,17 @@ async fn get_log_views(
 }
 
 #[tauri::command]
+fn validate_filter_regex(pattern: String) -> Option<String> {
+    filter_regex_error(&pattern)
+}
+
+fn filter_regex_error(pattern: &str) -> Option<String> {
+    regex::Regex::new(pattern)
+        .err()
+        .map(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn get_log(
     state: State<'_, BackendState>,
     session_id: Option<u64>,
@@ -804,6 +815,7 @@ pub fn run() {
             delete_archived_session,
             get_log_ids,
             get_log_views,
+            validate_filter_regex,
             get_log,
             list_breakpoints,
             get_breakpoint,
@@ -883,6 +895,12 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn filter_regex_validation_uses_rust_regex_syntax() {
+        assert!(super::filter_regex_error(r"(?i)^get$").is_none());
+        assert!(super::filter_regex_error("(").is_some());
+    }
+
     #[test]
     fn list_local_ips_returns_sorted_unique_ipv4() {
         let ips = super::list_local_ips();

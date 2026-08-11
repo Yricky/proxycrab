@@ -200,7 +200,7 @@ Session. If no Session is active, the operation returns `409 conflict`.
     "option": {
       "kind": "column",
       "column": { "kind": "uri" },
-      "case_sensitive": false
+      "regex": false
     },
     "input": "example.com"
   },
@@ -217,7 +217,7 @@ applies the draft to this query and persists it only after the ID scan succeeds.
 event; omitting the field retains the compatible default of `true`. `option: null` or an empty
 `input` matches all logs; an empty input still preserves the selected option.
 
-A column option supports `method`, `uri`, `code`, `source`, `stage`, or `{ "kind": "script", "script_name": "..." }`. Built-in and custom-column output are matched with contains; `case_sensitive` controls Unicode case folding. A script option has the form `{ "kind": "script", "script_name": "..." }` and passes `input` to that global Lua filter script. Custom-column and filter-script execution errors silently count as non-matches.
+A column option supports `method`, `uri`, `code`, `source`, `stage`, or `{ "kind": "script", "script_name": "..." }`. With `regex: false`, built-in and custom-column output use case-sensitive contains matching. With `regex: true`, `input` uses Rust `regex` syntax and substring matching unless the pattern is anchored; inline flags such as `(?i)` control case folding. Invalid patterns return `400 bad_request`. A script option has the form `{ "kind": "script", "script_name": "..." }` and passes `input` to that global Lua filter script. Custom-column and filter-script execution errors silently count as non-matches.
 
 `min_id` and `max_id` are exclusive (`id > min_id && id < max_id`). The default and maximum page size are both 10,000.
 
@@ -230,7 +230,7 @@ When only `min_id` is supplied, the database scans toward newer IDs. When `max_i
     "option": {
       "kind": "column",
       "column": { "kind": "uri" },
-      "case_sensitive": false
+      "regex": false
     },
     "input": "example.com"
   }
@@ -272,6 +272,7 @@ The response columns and cells do not contain the ID column; `row.id` is a separ
     {
       "id": 124,
       "updated_at": 1720000000100,
+      "outcome": "success",
       "cells": ["GET"]
     }
   ],
@@ -291,7 +292,7 @@ The response columns and cells do not contain the ID column; `row.id` is a separ
 }
 ```
 
-`column_index` is zero-based and aligns with `columns` and `cells`. A custom-column error leaves that cell empty while preserving the rest of the row. A missing log has no row and no `column_index`. Unchanged logs appear in neither `rows` nor `exceptions`.
+`column_index` is zero-based and aligns with `columns` and `cells`. Every returned row includes its capture `outcome` (`in_progress`, `success`, `failed`, or `tunneled`). A custom-column error leaves that cell empty while preserving the rest of the row. A missing log has no row and no `column_index`. Unchanged logs appear in neither `rows` nor `exceptions`.
 
 `updated_at` is a monotonic Unix-millisecond version for the complete log. Metadata transitions and request/response body writes advance it, even when multiple updates happen in the same wall-clock millisecond.
 

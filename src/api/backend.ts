@@ -92,6 +92,7 @@ export interface Backend {
   // capture logs
   getLogIds(request: LogIdsRequest): Promise<LogIdsPayload>;
   getLogViews(request: LogViewsRequest): Promise<LogViewsPayload>;
+  validateFilterRegex(pattern: string): Promise<string | null>;
   getLog(sessionId: number | null, id: number): Promise<LogDetail>;
   listBreakpoints(query: BreakpointQuery): Promise<BreakpointSummary[]>;
   getBreakpoint(id: number): Promise<BreakpointDetailPayload>;

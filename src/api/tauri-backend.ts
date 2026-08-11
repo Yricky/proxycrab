@@ -107,6 +107,8 @@ export function createTauriBackend(): Backend {
 
     getLogIds: (request: LogIdsRequest) => call("get_log_ids", { request }),
     getLogViews: (request: LogViewsRequest) => call("get_log_views", { request }),
+    validateFilterRegex: (pattern: string) =>
+      call("validate_filter_regex", { pattern }),
     getLog: (sessionId: number | null, id: number) =>
       call<LogDetail>("get_log", { sessionId, id }),
     listBreakpoints: (query: BreakpointQuery) => call("list_breakpoints", { query }),

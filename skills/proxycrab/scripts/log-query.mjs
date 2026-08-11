@@ -25,7 +25,7 @@ run(async () => {
     "column-script",
     "filter-script",
     "input",
-    "case-sensitive",
+    "regex",
   ]);
   if (args.help) {
     printHelp(`
@@ -47,7 +47,7 @@ Choose at most one filter selector:
   --stage TEXT
   --column-script NAME [--input TEXT]
   --filter-script NAME [--input TEXT]
-  --case-sensitive
+  --regex                 Treat the selected column input as Rust regex syntax
 
 With no selector or --input, the Session's persisted filter is reused. Supplying a selector applies
 it only to this query and does not change the Session's persisted filter.

@@ -191,7 +191,7 @@ Built-in or custom-column contains filter:
   "option": {
     "kind": "column",
     "column": { "kind": "uri" },
-    "case_sensitive": false
+    "regex": false
   },
   "input": "example.com"
 }
@@ -383,7 +383,7 @@ Request:
     "option": {
       "kind": "column",
       "column": { "kind": "uri" },
-      "case_sensitive": false
+      "regex": false
     },
     "input": "/api/orders"
   },
@@ -402,8 +402,9 @@ Every field is optional.
   the desktop UI. Omitting `persist_filter` preserves the compatible default of `true`.
 - `option: null` or an empty `input` matches all captures; an empty input still preserves the
   selected option.
-- Built-in and custom-column filters use contains matching. `case_sensitive: false` performs Unicode
-  lowercase matching.
+- With `regex: false`, built-in and custom-column filters use case-sensitive contains matching.
+- With `regex: true`, input uses Rust `regex` syntax and substring matching unless anchored. Inline
+  flags such as `(?i)` control case folding; invalid patterns return `bad_request`.
 - Lua filter input is passed exactly, including whitespace.
 - Filter/custom-column errors count as non-matches in this endpoint.
 - `min_id` and `max_id` are exclusive.
@@ -420,7 +421,7 @@ Response:
     "option": {
       "kind": "column",
       "column": { "kind": "uri" },
-      "case_sensitive": false
+      "regex": false
     },
     "input": "/api/orders"
   }
@@ -460,7 +461,12 @@ newer.
     { "key": "method", "name": "method", "kind": "method", "width": 50.0 }
   ],
   "rows": [
-    { "id": 1043, "updated_at": 1785380000100, "cells": ["GET"] }
+    {
+      "id": 1043,
+      "updated_at": 1785380000100,
+      "outcome": "success",
+      "cells": ["GET"]
+    }
   ],
   "exceptions": [
     {
@@ -478,9 +484,10 @@ newer.
 }
 ```
 
-The ID is separate from cells. `column_index` is zero-based. A column error leaves that cell empty;
-a missing log has no row or `column_index`. IDs and rows are unordered. Unchanged logs appear in
-neither `rows` nor `exceptions`.
+The ID and capture `outcome` (`in_progress`, `success`, `failed`, or `tunneled`) are separate from
+cells. `column_index` is zero-based. A column error leaves that cell empty; a missing log has no row
+or `column_index`. IDs and rows are unordered. Unchanged logs appear in neither `rows` nor
+`exceptions`.
 
 ### `POST /api/logs/export`
 

@@ -188,6 +188,7 @@ pub struct ColumnView {
 pub struct LogViewRow {
     pub id: u64,
     pub updated_at: u64,
+    pub outcome: String,
     pub cells: Vec<String>,
 }
 

@@ -23,6 +23,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 proxy-crab-mgr = { path = "../crates/proxy-crab-mgr" }
 proxy-crab-mitm = { path = "../crates/proxy-crab-mitm" }
+regex.workspace = true
 if-addrs.workspace = true
 base64.workspace = true
 getrandom.workspace = true
