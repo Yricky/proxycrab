@@ -545,6 +545,16 @@ impl ProxyCrab {
         }
     }
 
+    /// 代理启动时把上次异常退出遗留的 in_progress 记录终态化（failed/proxy_shutdown），
+    /// 避免前端持续把僵尸记录当作活跃记录轮询。
+    pub fn mark_stale_in_progress_as_failed(&self) {
+        for session in self.sessions() {
+            if let Ok(pin) = self.pin_capture_store(session.id) {
+                let _ = pin.store.mark_stale_in_progress_as_failed();
+            }
+        }
+    }
+
     pub fn scripts(&self, kind: ScriptKind) -> Result<Vec<Script>> {
         self.workspace.list_scripts(kind)
     }

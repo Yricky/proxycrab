@@ -57,6 +57,10 @@ impl CaptureBodyWriter {
     }
     pub(crate) async fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
         self.writer.write_all(bytes).await?;
+        // macOS 上 tokio File 的 write_all 解析后，写入对其它线程的 stat() 未必可见
+        // （inode 大小滞后，实测 ~99% 概率读到 0）。flush 会等待在途写任务完成，
+        // 保证 write_all 返回后 body_source 能立即读到已写入的部分（无 fsync，Idle 时为无操作）。
+        self.writer.flush().await?;
         Ok(())
     }
 
@@ -554,14 +558,12 @@ impl CaptureStore {
     }
 
     pub fn mark_in_progress_as_shutdown(&self) -> Result<usize> {
-        Ok(self.connection()?.execute(
-            "UPDATE captures SET outcome='failed', stage='connect',
-                error_stage='connect', error_kind='proxy_shutdown',
-                error_message='proxy stopped before the request completed',
-                updated_at=MAX(updated_at + 1, ?1)
-             WHERE outcome='in_progress'",
-            params![now_millis() as i64],
-        )?)
+        self.mark_in_progress_failed("proxy stopped before the request completed")
+    }
+
+    /// 代理启动时清理上次异常退出遗留的 in_progress 记录，统一标记为失败终态。
+    pub fn mark_stale_in_progress_as_failed(&self) -> Result<usize> {
+        self.mark_in_progress_failed("previous proxy run ended before the request completed")
     }
 
     pub fn mark_in_progress_through_as_shutdown(&self, max_id: u64) -> Result<usize> {
@@ -572,6 +574,17 @@ impl CaptureStore {
                 updated_at=MAX(updated_at + 1, ?1)
              WHERE id<=?2 AND outcome='in_progress'",
             params![now_millis() as i64, max_id as i64],
+        )?)
+    }
+
+    fn mark_in_progress_failed(&self, message: &str) -> Result<usize> {
+        Ok(self.connection()?.execute(
+            "UPDATE captures SET outcome='failed', stage='connect',
+                error_stage='connect', error_kind='proxy_shutdown',
+                error_message=?1,
+                updated_at=MAX(updated_at + 1, ?2)
+             WHERE outcome='in_progress'",
+            params![message, now_millis() as i64],
         )?)
     }
 
@@ -963,7 +976,7 @@ mod tests {
     use crate::model::{
         BodyPayload, CaptureError, CaptureOutcome, ErrorStage, HeaderValues,
         InterceptorExecutionOrigin, InterceptorKind, InterceptorRun, RequestData,
-        script_content_hash,
+        ResponseData, script_content_hash,
     };
 
     use super::{BodySide, BodySourceData, CaptureStore, decode_body};
@@ -1015,6 +1028,44 @@ mod tests {
         let detail = store.get(id).unwrap().unwrap();
         assert_eq!(detail.summary.outcome, CaptureOutcome::Failed);
         assert_eq!(detail.summary.error.unwrap().kind, "client_rejected_ca");
+    }
+
+    #[test]
+    fn stale_in_progress_captures_are_finalized_as_failed() {
+        let root = tempdir().unwrap();
+        let store = CaptureStore::open(7, root.path()).unwrap();
+        let request = RequestData {
+            method: "GET".into(),
+            uri: "https://example.com/".into(),
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+            tags: Default::default(),
+        };
+        let stale = store.begin("127.0.0.1", &request, "connect").unwrap();
+        let completed = store.begin("127.0.0.1", &request, "connect").unwrap();
+        store
+            .complete(
+                completed,
+                &ResponseData {
+                    status: 200,
+                    version: "HTTP/1.1".into(),
+                    headers: HeaderValues::new(),
+                },
+                &[],
+            )
+            .unwrap();
+
+        let updated = store.mark_stale_in_progress_as_failed().unwrap();
+        assert_eq!(updated, 1, "only the leftover in_progress capture is finalized");
+
+        let stale_detail = store.get(stale).unwrap().unwrap();
+        assert_eq!(stale_detail.summary.outcome, CaptureOutcome::Failed);
+        let error = stale_detail.summary.error.unwrap();
+        assert_eq!(error.kind, "proxy_shutdown");
+        assert_eq!(error.stage, ErrorStage::Connect);
+
+        let completed_detail = store.get(completed).unwrap().unwrap();
+        assert_eq!(completed_detail.summary.outcome, CaptureOutcome::Success);
     }
 
     #[test]

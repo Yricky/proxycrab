@@ -1,7 +1,7 @@
 import { reactive, watch } from "vue";
 import { createTauriBackend } from "../api/tauri-backend";
 import type {
-  ColumnView,
+  Column,
   LogViewRow,
   LogViewsPayload,
   SessionFilter,
@@ -13,7 +13,10 @@ const backend = createTauriBackend();
 
 const VIEW_BATCH_SIZE = 200;
 const ID_PAGE_SIZE = 10_000;
+/** 有活跃（in_progress）记录时的快轮询间隔。 */
 const POLL_INTERVAL = 1000;
+/** 无活跃记录时的低频 ID 探测间隔（新记录只能靠轮询发现，不能完全停）。 */
+const IDLE_POLL_INTERVAL = 2000;
 const FILTER_POLL_INTERVAL = 2000;
 
 let pollTimer: number | undefined;
@@ -33,7 +36,7 @@ export function cloneSessionFilter(filter: SessionFilter): SessionFilter {
 }
 
 export const logsStore = reactive({
-  columns: [] as ColumnView[],
+  columns: [] as Column[],
   /** IDs are retained newest first regardless of display direction. */
   ids: [] as number[],
   rowsById: new Map<number, LogViewRow>(),
@@ -45,6 +48,14 @@ export const logsStore = reactive({
 
   get filterActive(): boolean {
     return this.appliedFilter.option !== null && this.appliedFilter.input.length > 0;
+  },
+
+  /** 是否存在尚未完成的 in_progress 记录（已完成记录不会再变化，无需刷新）。 */
+  get hasActive(): boolean {
+    for (const row of this.rowsById.values()) {
+      if (row.outcome === "in_progress") return true;
+    }
+    return false;
   },
 
   get displayRows(): LogViewRow[] {
@@ -177,7 +188,12 @@ export const logsStore = reactive({
     if (sessionsStore.viewingSessionId !== sessionId) return;
     this.syncAppliedFilter(payload.filter);
     const added = this.mergeIds(payload.ids);
-    await this.hydrate(added);
+    if (added.length > 0) {
+      await this.hydrate(added);
+    } else if (this.columns.length === 0) {
+      // 会话暂无日志：仅在列定义缺失（如 loadSession 失败后的恢复路径）时才发空列表请求补列。
+      await this.hydrate(added);
+    }
   },
 
   async poll(): Promise<void> {
@@ -185,15 +201,19 @@ export const logsStore = reactive({
     if (sessionId === null || pollInFlight || this.loading) return;
     pollInFlight = true;
     try {
-      if (this.filterActive) {
+      const isActiveView = sessionsStore.activeSessionId === sessionId;
+      if (!isActiveView) {
+        // 查看非活跃会话：不会有新记录到达，只需跟踪已有活跃记录直到完成。
+        await this.hydrateActive();
+      } else if (this.filterActive) {
         const payload = await backend.getLogIds({
           session_id: sessionId,
         });
         if (sessionsStore.viewingSessionId !== sessionId) return;
         this.syncAppliedFilter(payload.filter);
         const added = this.replaceNewestIdPage(payload.ids);
-        await this.hydrate(added);
-        await this.hydrate(this.ids.slice(0, VIEW_BATCH_SIZE));
+        if (added.length > 0) await this.hydrate(added);
+        await this.hydrateActive();
       } else if (this.ids.length === 0) {
         await this.discoverInitial();
       } else {
@@ -204,13 +224,27 @@ export const logsStore = reactive({
         if (sessionsStore.viewingSessionId !== sessionId) return;
         this.syncAppliedFilter(payload.filter);
         const added = this.mergeIds(payload.ids);
-        await this.hydrate(added);
-        await this.hydrate(this.ids.slice(0, VIEW_BATCH_SIZE));
+        if (added.length > 0) await this.hydrate(added);
+        await this.hydrateActive();
       }
     } catch {
       // Polling failures are transient (for example, while sessions switch).
     } finally {
       pollInFlight = false;
+    }
+  },
+
+  /** 只轮询处于 in_progress 的活跃记录；无活跃记录时跳过（已完成记录不会再变化）。 */
+  async hydrateActive(): Promise<void> {
+    const ids: number[] = [];
+    for (const [id, row] of this.rowsById) {
+      if (row.outcome === "in_progress") ids.push(id);
+    }
+    if (ids.length > 0) {
+      await this.hydrate(ids);
+    } else if (this.columns.length === 0) {
+      // 列定义缺失（如 loadSession 失败后的恢复路径）时补取列。
+      await this.hydrate([]);
     }
   },
 
@@ -236,7 +270,7 @@ export const logsStore = reactive({
       this.syncAppliedFilter(payload.filter);
       this.olderExhausted = payload.ids.length === 0;
       const added = this.mergeIds(payload.ids);
-      await this.hydrate(added);
+      if (added.length > 0) await this.hydrate(added);
     } catch (error) {
       reportError(error, "加载更早记录失败");
     } finally {
@@ -300,7 +334,11 @@ export const logsStore = reactive({
       void this.poll();
       pollTimer = window.setTimeout(
         tick,
-        this.filterActive ? FILTER_POLL_INTERVAL : POLL_INTERVAL,
+        this.filterActive
+          ? FILTER_POLL_INTERVAL
+          : this.hasActive
+            ? POLL_INTERVAL
+            : IDLE_POLL_INTERVAL,
       );
     };
     pollTimer = window.setTimeout(tick, POLL_INTERVAL);

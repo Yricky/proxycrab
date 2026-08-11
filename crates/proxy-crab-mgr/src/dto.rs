@@ -175,16 +175,6 @@ pub struct LogViewsRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ColumnView {
-    pub key: String,
-    pub name: String,
-    pub kind: String,
-    pub width: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub script_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogViewRow {
     pub id: u64,
     pub updated_at: u64,
@@ -203,7 +193,7 @@ pub struct LogViewException {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogViewsPayload {
-    pub columns: Vec<ColumnView>,
+    pub columns: Vec<Column>,
     pub rows: Vec<LogViewRow>,
     pub exceptions: Vec<LogViewException>,
 }

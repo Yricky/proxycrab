@@ -458,7 +458,7 @@ newer.
 ```json
 {
   "columns": [
-    { "key": "method", "name": "method", "kind": "method", "width": 50.0 }
+    { "kind": "method", "width": 50.0 }
   ],
   "rows": [
     {

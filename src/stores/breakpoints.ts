@@ -1,6 +1,7 @@
 import { reactive } from "vue";
 import { createTauriBackend } from "../api/tauri-backend";
 import type { BreakpointSummary, InterceptorKind } from "../api/types";
+import { logsStore } from "./logs";
 import { sessionsStore } from "./sessions";
 
 const backend = createTauriBackend();
@@ -41,6 +42,9 @@ export const breakpointsStore = reactive({
       this.items = [];
       return;
     }
+    // 断点只能伴随 in_progress 记录存在：无活跃记录且无已知断点时跳过轮询。
+    // 已知断点存在时继续轮询，直到其被放行/超时。
+    if (!logsStore.hasActive && this.items.length === 0) return;
     if (inFlight) return;
     inFlight = true;
     try {

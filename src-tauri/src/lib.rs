@@ -714,6 +714,33 @@ fn resolve_http_approval(
     state.permissions()?.resolve_approval(id, request)
 }
 
+/// Wraps the generated IPC handler so every Tauri command invocation is echoed
+/// directly to the terminal (stderr), bypassing tracing filters. The payload is
+/// the JSON of the command's arguments, truncated for readability.
+/// 仅在 dev 构建（`debug_assertions`）下输出日志；release 构建中为无操作包装。
+fn logging_invoke_handler(
+    handler: impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        #[cfg(debug_assertions)]
+        {
+            let args = match invoke.message.payload() {
+                tauri::ipc::InvokeBody::Json(value) => value.to_string(),
+                tauri::ipc::InvokeBody::Raw(bytes) => format!("<raw:{} bytes>", bytes.len()),
+            };
+            let args = if args.chars().count() > 500 {
+                let mut truncated: String = args.chars().take(500).collect();
+                truncated.push_str("...<truncated>");
+                truncated
+            } else {
+                args
+            };
+            eprintln!("[tauri-command] {} args={}", invoke.message.command(), args);
+        }
+        handler(invoke)
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -789,7 +816,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(logging_invoke_handler(tauri::generate_handler![
             get_workspace,
             set_workspace_for_next_start,
             get_config,
@@ -869,7 +896,7 @@ pub fn run() {
             resolve_http_approval,
             get_proxycrab_skill_install_info,
             install_proxycrab_skill,
-        ]);
+        ]));
 
     let app = builder
         .build(tauri::generate_context!())

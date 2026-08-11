@@ -238,14 +238,6 @@ export interface LogViewsRequest {
   view?: SessionViewInput | null;
 }
 
-export interface ColumnView {
-  key: string;
-  name: string;
-  kind: string;
-  width: number | null;
-  script_name?: string;
-}
-
 export interface LogViewRow {
   id: number;
   updated_at: number;
@@ -261,7 +253,7 @@ export interface LogViewException {
 }
 
 export interface LogViewsPayload {
-  columns: ColumnView[];
+  columns: Column[];
   rows: LogViewRow[];
   exceptions: LogViewException[];
 }

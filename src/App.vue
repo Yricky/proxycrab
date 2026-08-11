@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from "vue";
+import { onBeforeUnmount, onMounted, watch } from "vue";
 import AppToolbar from "./components/AppToolbar.vue";
 import SessionSidebar from "./components/SessionSidebar.vue";
 import FilterBar from "./components/FilterBar.vue";
@@ -17,13 +17,42 @@ import { startHttpApiSync, stopHttpApiSync } from "./stores/http-api-sync";
 import { breakpointsStore } from "./stores/breakpoints";
 import { approvalsStore } from "./stores/approvals";
 
+// 日志与断点轮询仅在代理运行且存在活跃、正在查看的 Session 时才有意义：
+// 代理停止后不会有新抓包或断点进展；无活跃 Session 时流量被直接放行（no_active_session），
+// 无查看 Session 时轮询请求也只是空转。
+function syncCapturePolling(): void {
+  const canPoll =
+    proxyStore.running &&
+    sessionsStore.activeSessionId !== null &&
+    sessionsStore.viewingSessionId !== null;
+  if (canPoll) {
+    logsStore.startPolling();
+    breakpointsStore.startPolling();
+  } else {
+    logsStore.stopPolling();
+    breakpointsStore.stopPolling();
+  }
+}
+
+watch(
+  [
+    () => proxyStore.running,
+    () => sessionsStore.activeSessionId,
+    () => sessionsStore.viewingSessionId,
+  ],
+  () => {
+    syncCapturePolling();
+  },
+);
+
 onMounted(async () => {
   await startHttpApiSync();
   await approvalsStore.start();
   proxyStore.startPolling();
   await sessionsStore.init();
-  logsStore.startPolling();
-  breakpointsStore.startPolling();
+  // 确保启动时状态已刷新，避免 syncCapturePolling 拿到过期的 stopped 状态。
+  await proxyStore.refresh();
+  syncCapturePolling();
 });
 
 onBeforeUnmount(() => {

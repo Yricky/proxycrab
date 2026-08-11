@@ -178,6 +178,8 @@ impl ProxyController {
             host: host.clone(),
             port,
         };
+        // 启动时把上次异常退出遗留的 in_progress 记录终态化，避免僵尸记录残留。
+        runtime.mark_stale_in_progress_as_failed();
         tracing::info!("MITM proxy listening on {host}:{port}");
 
         let task = tokio::spawn(async move {

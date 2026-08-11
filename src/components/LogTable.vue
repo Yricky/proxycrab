@@ -32,7 +32,18 @@ const viewportHeight = ref(0);
 /** Local width overrides (view column index → px) for live resize. */
 const widthOverrides = ref<Record<number, number>>({});
 
-const columns = computed(() => logsStore.columns);
+/** 展示用列：key/name 由 Column 派生（key=`script:${name}` 或 kind，name=kind 或 script_name）。 */
+type TableColumn = Column & { key: string; name: string };
+
+const columns = computed<TableColumn[]>(() =>
+  logsStore.columns.map((column) => {
+    const key =
+      column.kind === "script" ? `script:${column.script_name}` : column.kind;
+    const name =
+      column.kind === "script" ? column.script_name : column.kind;
+    return { ...column, key, name };
+  }),
+);
 
 function columnWidth(index: number): number {
   if (widthOverrides.value[index] !== undefined) return widthOverrides.value[index];

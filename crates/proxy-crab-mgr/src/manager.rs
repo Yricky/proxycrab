@@ -23,7 +23,7 @@ use crate::{
     agents::AgentsStore,
     dto::{
         ActiveSession, AgentsPresetState, BreakpointDetailPayload, BreakpointQuery, BypassPage,
-        BypassQuery, CertificateResponse, ColumnView, CreateAgentsPresetRequest,
+        BypassQuery, CertificateResponse, CreateAgentsPresetRequest,
         CreateSessionRequest, DebugFilterScriptRequest, DeleteCount, ExecuteTemporaryScriptRequest,
         ExportLogsRequest, ExtendBreakpointRequest, HeaderItem, InterceptorCreateRequest,
         InterceptorDetail, InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogExport,
@@ -637,7 +637,6 @@ impl ProxyCrabManager for MitmManager {
             {
                 return Err(ManagerError::bad_request("column width must be positive"));
             }
-            let column_views = columns.iter().map(column_view).collect::<Vec<_>>();
             let mut requested = HashMap::new();
             for item in request.logs {
                 requested.insert(item.id, item.updated_at);
@@ -715,7 +714,7 @@ impl ProxyCrabManager for MitmManager {
                 });
             }
             Ok(LogViewsPayload {
-                columns: column_views,
+                columns,
                 rows,
                 exceptions,
             })
@@ -1332,31 +1331,6 @@ impl ProxyCrabManager for MitmManager {
                 .map_err(map_error)
         })
         .await
-    }
-}
-
-fn column_view(column: &Column) -> ColumnView {
-    let kind = match column {
-        Column::Method { .. } => "method",
-        Column::Uri { .. } => "uri",
-        Column::Code { .. } => "code",
-        Column::Source { .. } => "source",
-        Column::Stage { .. } => "stage",
-        Column::Script { .. } => "script",
-    };
-    let script_name = match column {
-        Column::Script { script_name, .. } => Some(script_name.clone()),
-        _ => None,
-    };
-    ColumnView {
-        key: script_name
-            .as_ref()
-            .map(|name| format!("script:{name}"))
-            .unwrap_or_else(|| kind.into()),
-        name: script_name.clone().unwrap_or_else(|| kind.into()),
-        kind: kind.into(),
-        width: Some(column.width()),
-        script_name,
     }
 }
 

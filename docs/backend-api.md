@@ -261,12 +261,12 @@ The response always includes the effective persisted filter. If a referenced scr
 
 `view` is optional and defaults to the selected Session's view. Duplicate IDs are deduplicated using the last supplied timestamp. A row is returned only when no timestamp was supplied or the stored `updated_at` is strictly greater than the supplied timestamp. IDs and response rows are unordered.
 
-The response columns and cells do not contain the ID column; `row.id` is a separate field which the frontend displays as its fixed first column:
+The response columns and cells do not contain the ID column; `row.id` is a separate field which the frontend displays as its fixed first column. `columns` are the Session view's raw `Column` entries (kind/width, plus `script_name` for custom-column scripts); the frontend derives display metadata (label, key) from them:
 
 ```json
 {
   "columns": [
-    { "key": "method", "name": "method", "kind": "method", "width": 50.0 }
+    { "kind": "method", "width": 50.0 }
   ],
   "rows": [
     {
