@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useBackend } from "../api";
 import type {
-  BodyPayload,
   BreakpointSummary,
   HeaderItem,
   InterceptorExecution,
@@ -13,7 +12,6 @@ import { BackendError } from "../api/tauri-backend";
 import { appStore, reportError } from "../stores/app";
 import { proxyStore } from "../stores/proxy";
 import { isStaleInProgress } from "../utils/capture-outcome";
-import { formatBytes } from "../utils/format";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import BodyViewer from "../components/BodyViewer.vue";
 import { Io5Checkmark, Io5ChevronDown, Io5Copy, Io5Warning } from "vue-icons-plus/io5";
@@ -262,15 +260,15 @@ const bodyTarget = computed<BodyTarget>(() => {
 
 // ---------- 信息区 / Body 分隔条 ----------
 
-const topRatio = ref(0.45);
+const leftRatio = ref(0.6);
 
 function startSplit(event: PointerEvent): void {
   const page = (event.currentTarget as HTMLElement).parentElement;
   if (!page) return;
   const rect = page.getBoundingClientRect();
   const onMove = (e: PointerEvent) => {
-    const ratio = (e.clientY - rect.top) / rect.height;
-    topRatio.value = Math.min(0.85, Math.max(0.15, ratio));
+    const ratio = (e.clientX - rect.left) / rect.width;
+    leftRatio.value = Math.min(0.85, Math.max(0.15, ratio));
   };
   const onUp = () => {
     window.removeEventListener("pointermove", onMove);
@@ -385,23 +383,6 @@ const urlSegments = computed<UrlSegment[]>(() => {
   if (!uri) return [];
   return parseUrlSegments(uri) ?? [{ text: uri, cls: "url-path" }];
 });
-
-const bodySizeLabel = computed(() => {
-  const body = detail.value?.request.body;
-  return body ? bodySize(body) : "";
-});
-
-function bodySize(body: BodyPayload): string {
-  switch (body.type) {
-    case "empty":
-      return "0 B";
-    case "text":
-    case "json":
-    case "binary":
-    case "large":
-      return formatBytes(body.size);
-  }
-}
 
 // ---------- copy ----------
 
@@ -533,16 +514,19 @@ function headerCount(headers: HeaderItem[]): string {
       <!-- 固定摘要栏 -->
       <header class="summary">
         <div class="summary-line">
-          <span class="method-chip mono" :class="methodClass">{{ detail.request.method }}</span>
-          <span
-            v-if="detail.response"
-            class="status-chip mono"
-            :class="statusClass(detail.response.status)"
-          >
-            {{ detail.response.status }} {{ detail.response.status_text }}
-          </span>
+          <span>{{ detail.request.version }}</span>
           <span class="outcome-chip" :class="stale ? 'o-stale' : 'o-' + detail.outcome">
             <span class="o-dot" />{{ outcomeLabel(detail.outcome) }}
+          </span>
+          <span class="method-chip" :class="methodClass">{{ detail.request.method }}</span>
+          <span v-if="detail.response" class="status-chip mono" :class="statusClass(detail.response.status)">
+            {{ detail.response.status }} {{ detail.response.status_text }}
+          </span>
+          <span class="meta-item">
+            <span class="meta-label">来源</span>{{ detail.source_addr ?? "未知" }}
+          </span>
+          <span class="meta-item">
+            <span class="meta-label">阶段</span>{{ detail.stage }}
           </span>
           <span v-if="loading" class="refreshing text-faint">刷新中…</span>
           <span class="summary-spacer" />
@@ -555,45 +539,23 @@ function headerCount(headers: HeaderItem[]): string {
         <div class="url mono" :title="detail.request.uri">
           <span v-for="(seg, i) in urlSegments" :key="i" :class="seg.cls">{{ seg.text }}</span>
         </div>
-        <div class="meta-strip">
-          <span class="meta-item">
-            <span class="meta-label">来源</span>{{ detail.source_addr ?? "未知" }}
-          </span>
-          <span class="meta-item">
-            <span class="meta-label">阶段</span>{{ detail.stage }}
-          </span>
-          <span class="meta-item">
-            <span class="meta-label">HTTP</span>{{ detail.request.version }}
-          </span>
-          <span v-if="bodySizeLabel" class="meta-item">
-            <span class="meta-label">请求体</span>{{ bodySizeLabel }}
-          </span>
+        <!-- 错误横幅 -->
+        <div v-if="detail.error" class="error-banner">
+          <Io5Warning :size="14" class="error-icon" />
+          <div class="error-body">
+            <div class="error-head mono">{{ detail.error.stage }} · {{ detail.error.kind }}</div>
+            <div class="error-message mono">{{ detail.error.message }}</div>
+          </div>
         </div>
       </header>
-
-      <!-- 错误横幅 -->
-      <div v-if="detail.error" class="error-banner">
-        <Io5Warning :size="14" class="error-icon" />
-        <div class="error-body">
-          <div class="error-head mono">{{ detail.error.stage }} · {{ detail.error.kind }}</div>
-          <div class="error-message mono">{{ detail.error.message }}</div>
-        </div>
-      </div>
-
       <section v-if="breakpoint" class="breakpoint-panel">
         <div class="breakpoint-actions">
           <span class="breakpoint-state">
             断点等待中 · {{ breakpoint.interceptor_name }} · 剩余 {{ remainingLabel() }}
           </span>
           <span class="summary-spacer" />
-          <input
-            v-model.number="extensionSeconds"
-            class="input extension-input mono"
-            type="number"
-            min="0"
-            step="1"
-            aria-label="延长秒数"
-          />
+          <input v-model.number="extensionSeconds" class="input extension-input mono" type="number" min="0" step="1"
+            aria-label="延长秒数" />
           <span class="extension-unit">秒</span>
           <button class="btn" :disabled="extending" @click="extendBreakpoint">
             {{ extending ? "延长中…" : "延长" }}
@@ -611,11 +573,7 @@ function headerCount(headers: HeaderItem[]): string {
           </div>
           <div class="temporary-footer">
             <span>能力与当前阶段一致；临时脚本中不可再次调用 breakpoint()</span>
-            <button
-              class="btn primary"
-              :disabled="executingScript"
-              @click="executeTemporaryScript"
-            >
+            <button class="btn primary" :disabled="executingScript" @click="executeTemporaryScript">
               {{ executingScript ? "执行中…" : "应用修改（保持断点）" }}
             </button>
           </div>
@@ -624,14 +582,8 @@ function headerCount(headers: HeaderItem[]): string {
 
       <!-- Tab 栏 -->
       <nav class="tab-bar">
-        <button
-          v-for="tab in tabs"
-          :key="tab.key"
-          class="tab-btn"
-          :class="{ active: activeTab === tab.key }"
-          :disabled="tab.disabled"
-          @click="activeTab = tab.key"
-        >
+        <button v-for="tab in tabs" :key="tab.key" class="tab-btn" :class="{ active: activeTab === tab.key }"
+          :disabled="tab.disabled" @click="activeTab = tab.key">
           {{ tab.label }}
           <span v-if="tab.count" class="tab-count">{{ tab.count }}</span>
         </button>
@@ -639,7 +591,7 @@ function headerCount(headers: HeaderItem[]): string {
 
       <!-- 请求 -->
       <div v-show="activeTab === 'request'" class="tab-page">
-        <div class="pane-top" :style="{ height: `calc(${topRatio * 100}% - 3px)` }">
+        <div class="pane-top" :style="{ width: `calc(${leftRatio * 100}% - 3px)` }">
           <section v-if="queryParams.length > 0" class="card">
             <div class="card-title">
               Query 参数 <span class="count-badge">{{ queryParams.length }}</span>
@@ -672,20 +624,14 @@ function headerCount(headers: HeaderItem[]): string {
 
         <div class="splitter" title="拖动调整区域大小" @pointerdown="startSplit" />
 
-        <BodyViewer
-          label="请求体"
-          :body="detail.request.body"
-          :headers="detail.request.headers"
-          side="request"
-          :target="bodyTarget"
-          :revision="bodyRevision"
-        />
+        <BodyViewer label="请求体" :body="detail.request.body" :headers="detail.request.headers" side="request"
+          :target="bodyTarget" :revision="bodyRevision" />
       </div>
 
       <!-- 响应 -->
       <div v-show="activeTab === 'response'" class="tab-page">
         <template v-if="detail.response">
-          <div class="pane-top" :style="{ height: `calc(${topRatio * 100}% - 3px)` }">
+          <div class="pane-top" :style="{ width: `calc(${leftRatio * 100}% - 3px)` }">
             <section class="card">
               <div class="card-title">
                 响应头 <span class="count-badge">{{ headerCount(detail.response.headers) }}</span>
@@ -705,14 +651,8 @@ function headerCount(headers: HeaderItem[]): string {
 
           <div class="splitter" title="拖动调整区域大小" @pointerdown="startSplit" />
 
-          <BodyViewer
-            label="响应体"
-            :body="detail.response.body"
-            :headers="detail.response.headers"
-            side="response"
-            :target="bodyTarget"
-            :revision="bodyRevision"
-          />
+          <BodyViewer label="响应体" :body="detail.response.body" :headers="detail.response.headers" side="response"
+            :target="bodyTarget" :revision="bodyRevision" />
         </template>
       </div>
 
@@ -721,11 +661,8 @@ function headerCount(headers: HeaderItem[]): string {
         <div class="pane-top full">
           <section v-if="detail.request_interceptors.length > 0" class="execution-section">
             <div class="execution-section-title">请求拦截器</div>
-            <article
-              v-for="execution in detail.request_interceptors"
-              :key="execution.execution_id"
-              class="card execution-card"
-            >
+            <article v-for="execution in detail.request_interceptors" :key="execution.execution_id"
+              class="card execution-card">
               <button class="execution-head" @click="openExecution(execution)">
                 <span class="execution-order">#{{ execution.position + 1 }}</span>
                 <span class="execution-name mono">{{ execution.name }}</span>
@@ -737,18 +674,11 @@ function headerCount(headers: HeaderItem[]): string {
               <div v-if="execution.error" class="execution-error mono">
                 {{ execution.error }}
               </div>
-              <div
-                v-if="visibleModifications(execution).length === 0"
-                class="execution-no-change"
-              >
+              <div v-if="visibleModifications(execution).length === 0" class="execution-no-change">
                 已执行，未产生修改
               </div>
               <ul v-else class="mod-list">
-                <li
-                  v-for="(mod, i) in visibleModifications(execution)"
-                  :key="i"
-                  class="mod-item"
-                >
+                <li v-for="(mod, i) in visibleModifications(execution)" :key="i" class="mod-item">
                   <span class="mod-badge">{{ modificationLabel(mod) }}</span>
                   <span class="mod-detail mono">{{ modificationDetail(mod) }}</span>
                 </li>
@@ -757,11 +687,8 @@ function headerCount(headers: HeaderItem[]): string {
           </section>
           <section v-if="detail.response_interceptors.length > 0" class="execution-section">
             <div class="execution-section-title">响应拦截器</div>
-            <article
-              v-for="execution in detail.response_interceptors"
-              :key="execution.execution_id"
-              class="card execution-card"
-            >
+            <article v-for="execution in detail.response_interceptors" :key="execution.execution_id"
+              class="card execution-card">
               <button class="execution-head" @click="openExecution(execution)">
                 <span class="execution-order">#{{ execution.position + 1 }}</span>
                 <span class="execution-name mono">{{ execution.name }}</span>
@@ -773,18 +700,11 @@ function headerCount(headers: HeaderItem[]): string {
               <div v-if="execution.error" class="execution-error mono">
                 {{ execution.error }}
               </div>
-              <div
-                v-if="visibleModifications(execution).length === 0"
-                class="execution-no-change"
-              >
+              <div v-if="visibleModifications(execution).length === 0" class="execution-no-change">
                 已执行，未产生修改
               </div>
               <ul v-else class="mod-list">
-                <li
-                  v-for="(mod, i) in visibleModifications(execution)"
-                  :key="i"
-                  class="mod-item"
-                >
+                <li v-for="(mod, i) in visibleModifications(execution)" :key="i" class="mod-item">
                   <span class="mod-badge">{{ modificationLabel(mod) }}</span>
                   <span class="mod-detail mono">{{ modificationDetail(mod) }}</span>
                 </li>
@@ -816,9 +736,11 @@ function headerCount(headers: HeaderItem[]): string {
   gap: var(--space-2);
   color: var(--text-faint);
 }
+
 .state-error {
   color: var(--danger);
 }
+
 .state-error p {
   margin: 0;
   color: var(--text-secondary);
@@ -831,98 +753,181 @@ function headerCount(headers: HeaderItem[]): string {
 
 .summary {
   flex: none;
-  padding: 12px 14px 10px;
+  padding: 6px 12px 6px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
 }
+
 .summary-line {
   display: flex;
   align-items: center;
   gap: 8px;
 }
+
 .summary-spacer {
   flex: 1;
 }
+
 .refreshing {
   font-size: 11px;
 }
 
 .method-chip {
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 10px;
   font-weight: 700;
+  height: 16px;
   color: #fff;
 }
-.m-get { background: var(--success); }
-.m-post { background: var(--accent); }
-.m-put { background: var(--warning); }
-.m-patch { background: #8b5cf6; }
-.m-delete { background: var(--danger); }
-.m-other { background: var(--text-faint); }
+
+.m-get {
+  background: var(--success);
+}
+
+.m-post {
+  background: var(--accent);
+}
+
+.m-put {
+  background: var(--warning);
+}
+
+.m-patch {
+  background: #8b5cf6;
+}
+
+.m-delete {
+  background: var(--danger);
+}
+
+.m-other {
+  background: var(--text-faint);
+}
 
 .status-chip {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
 }
-.s-2xx { color: var(--success); }
-.s-3xx { color: var(--accent); }
-.s-4xx { color: var(--warning); }
-.s-5xx { color: var(--danger); }
-.s-other { color: var(--text-secondary); }
+
+.s-2xx {
+  color: var(--success);
+}
+
+.s-3xx {
+  color: var(--accent);
+}
+
+.s-4xx {
+  color: var(--warning);
+}
+
+.s-5xx {
+  color: var(--danger);
+}
+
+.s-other {
+  color: var(--text-secondary);
+}
 
 .outcome-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
-  padding: 2px 8px;
+  font-size: 10px;
+  padding: 2px 6px;
   border-radius: 10px;
+  height: 16px;
   background: var(--bg-active);
   color: var(--text-secondary);
 }
+
 .o-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--text-faint);
 }
-.o-in_progress { color: var(--warning); }
-.o-in_progress .o-dot { background: var(--warning); }
-.o-success { color: var(--success); }
-.o-success .o-dot { background: var(--success); }
-.o-failed { color: var(--danger); }
-.o-failed .o-dot { background: var(--danger); }
-.o-stale { color: var(--text-faint); }
-.o-stale .o-dot { background: var(--text-faint); }
+
+.o-in_progress {
+  color: var(--warning);
+}
+
+.o-in_progress .o-dot {
+  background: var(--warning);
+}
+
+.o-success {
+  color: var(--success);
+}
+
+.o-success .o-dot {
+  background: var(--success);
+}
+
+.o-failed {
+  color: var(--danger);
+}
+
+.o-failed .o-dot {
+  background: var(--danger);
+}
+
+.o-stale {
+  color: var(--text-faint);
+}
+
+.o-stale .o-dot {
+  background: var(--text-faint);
+}
 
 /* URL 分段着色 */
 .url {
-  margin-top: 8px;
+  margin-top: 4px;
   font-size: 12px;
   line-height: 1.4;
   word-break: break-all;
 }
-.url-scheme { color: var(--text-faint); }
-.url-host { color: var(--accent); font-weight: 600; }
-.url-path { color: var(--text); }
-.url-query { color: var(--warning); }
-.url-query-key { color: var(--warning); }
-.url-query-eq { color: var(--text-faint); }
-.url-query-value { color: var(--accent); }
-.url-query-sep { color: var(--text-faint); }
 
-.meta-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  margin-top: 8px;
+.url-scheme {
+  color: var(--text-faint);
 }
+
+.url-host {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.url-path {
+  color: var(--text);
+}
+
+.url-query {
+  color: var(--warning);
+}
+
+.url-query-key {
+  color: var(--warning);
+}
+
+.url-query-eq {
+  color: var(--text-faint);
+}
+
+.url-query-value {
+  color: var(--accent);
+}
+
+.url-query-sep {
+  color: var(--text-faint);
+}
+
 .meta-item {
   font-size: 11px;
   color: var(--text);
   font-family: var(--font-mono);
 }
+
 .meta-label {
   color: var(--text-faint);
   font-family: var(--font-ui);
@@ -935,25 +940,29 @@ function headerCount(headers: HeaderItem[]): string {
   flex: none;
   display: flex;
   gap: 8px;
-  margin: 10px 12px 0;
+  margin: 8px 0;
   padding: 8px 10px;
   border: 1px solid var(--danger);
   border-radius: var(--radius-md);
   background: rgba(227, 77, 89, 0.07);
 }
+
 .error-icon {
   color: var(--danger);
   flex: none;
   margin-top: 2px;
 }
+
 .error-body {
   min-width: 0;
 }
+
 .error-head {
   font-size: 11px;
   font-weight: 600;
   color: var(--danger);
 }
+
 .error-message {
   font-size: 11px;
   word-break: break-all;
@@ -968,23 +977,57 @@ function headerCount(headers: HeaderItem[]): string {
   border-bottom: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
   background: color-mix(in srgb, var(--warning) 8%, var(--bg-panel));
 }
+
 .breakpoint-actions {
   display: flex;
   align-items: center;
   gap: 7px;
   padding: 8px 12px;
 }
+
 .breakpoint-state {
   color: var(--warning);
   font-size: 11px;
   font-weight: 600;
 }
-.extension-input { width: 68px; padding: 4px 7px; }
-.extension-unit, .temporary-footer { color: var(--text-faint); font-size: 10px; }
-.temporary-script { height: 210px; display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--bg-panel); }
-.temporary-editor { flex: 1; min-height: 0; display: flex; }
-.temporary-footer { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-top: 1px solid var(--border); }
-.temporary-footer span { flex: 1; }
+
+.extension-input {
+  width: 68px;
+  padding: 4px 7px;
+}
+
+.extension-unit,
+.temporary-footer {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.temporary-script {
+  height: 210px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.temporary-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.temporary-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.temporary-footer span {
+  flex: 1;
+}
 
 .tab-bar {
   flex: none;
@@ -993,6 +1036,7 @@ function headerCount(headers: HeaderItem[]): string {
   padding: 0 8px 0;
   border-bottom: 1px solid var(--border);
 }
+
 .tab-btn {
   position: relative;
   display: inline-flex;
@@ -1007,14 +1051,17 @@ function headerCount(headers: HeaderItem[]): string {
   cursor: pointer;
   border-radius: 6px 6px 0 0;
 }
+
 .tab-btn:hover:not(:disabled):not(.active) {
   color: var(--text);
   background: var(--bg-hover);
 }
+
 .tab-btn.active {
   color: var(--accent);
   font-weight: 600;
 }
+
 .tab-btn.active::after {
   content: "";
   position: absolute;
@@ -1025,10 +1072,12 @@ function headerCount(headers: HeaderItem[]): string {
   border-radius: 1px;
   background: var(--accent);
 }
+
 .tab-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
 .tab-count {
   font-size: 10px;
   padding: 0 5px;
@@ -1042,42 +1091,47 @@ function headerCount(headers: HeaderItem[]): string {
   flex: 1;
   min-height: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   padding: 10px 12px 12px;
   overflow: hidden;
 }
+
 .pane-top {
   flex: none;
-  min-height: 60px;
-  overflow-y: auto;
+  min-width: 0;
+  min-height: 0;
+  /* 滚动条浮于内容之上，不额外占用布局宽度 */
+  overflow-y: overlay;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding-right: 2px;
 }
+
 .pane-top.full {
   flex: 1;
-  height: auto !important;
+  width: auto !important;
 }
 
 .splitter {
   flex: none;
-  height: 7px;
-  margin: 0 -2px;
-  cursor: row-resize;
+  width: 8px;
+  margin: 0 1px;
+  cursor: col-resize;
   position: relative;
 }
+
 .splitter::after {
   content: "";
   position: absolute;
-  left: 40%;
-  right: 40%;
-  top: 3px;
-  height: 2px;
+  top: 40%;
+  bottom: 40%;
+  left: 3px;
+  width: 2px;
   border-radius: 1px;
   background: var(--border-strong);
   transition: background 0.12s;
 }
+
 .splitter:hover::after,
 .splitter:active::after {
   background: var(--accent);
@@ -1090,6 +1144,7 @@ function headerCount(headers: HeaderItem[]): string {
   overflow: hidden;
   flex: none;
 }
+
 .card-title {
   display: flex;
   align-items: center;
@@ -1104,11 +1159,13 @@ function headerCount(headers: HeaderItem[]): string {
   top: 0;
   z-index: 1;
 }
+
 .card-title-extra {
   margin-left: auto;
   font-weight: 400;
   color: var(--text-faint);
 }
+
 .count-badge {
   font-size: 10px;
   font-weight: 500;
@@ -1121,23 +1178,28 @@ function headerCount(headers: HeaderItem[]): string {
   width: 100%;
   border-collapse: collapse;
 }
-.kv-table tr + tr {
+
+.kv-table tr+tr {
   border-top: 1px solid var(--border);
 }
+
 .kv-table tr:hover {
   background: var(--bg-hover);
 }
+
 .kv-table td {
   padding: 4px 10px;
   vertical-align: top;
   font-size: 11px;
 }
+
 .kv-name {
   color: var(--text);
   white-space: nowrap;
   width: 1%;
   padding-right: 16px;
 }
+
 .kv-value {
   color: var(--success);
   word-break: break-all;
@@ -1150,14 +1212,17 @@ function headerCount(headers: HeaderItem[]): string {
   flex-direction: column;
   gap: 7px;
 }
+
 .execution-section-title {
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 600;
 }
+
 .execution-card {
   overflow: visible;
 }
+
 .execution-head {
   width: 100%;
   display: flex;
@@ -1172,14 +1237,17 @@ function headerCount(headers: HeaderItem[]): string {
   cursor: pointer;
   text-align: left;
 }
+
 .execution-head:hover {
   background: var(--bg-hover);
 }
+
 .execution-order {
   color: var(--accent);
   font-size: 10px;
   font-weight: 700;
 }
+
 .execution-name {
   min-width: 0;
   overflow: hidden;
@@ -1187,11 +1255,13 @@ function headerCount(headers: HeaderItem[]): string {
   white-space: nowrap;
   font-weight: 600;
 }
+
 .execution-hash {
   flex: none;
   color: var(--text-faint);
   font-size: 10px;
 }
+
 .execution-origin {
   flex: none;
   border-radius: 7px;
@@ -1200,15 +1270,18 @@ function headerCount(headers: HeaderItem[]): string {
   color: var(--accent);
   font-size: 9px;
 }
+
 .execution-origin.waiting {
   background: color-mix(in srgb, var(--warning) 12%, transparent);
   color: var(--warning);
 }
+
 .execution-open {
   margin-left: auto;
   color: var(--accent);
   font-size: 10px;
 }
+
 .execution-error {
   padding: 7px 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border));
@@ -1217,6 +1290,7 @@ function headerCount(headers: HeaderItem[]): string {
   font-size: 10px;
   word-break: break-all;
 }
+
 .execution-no-change {
   padding: 9px 10px;
   color: var(--text-faint);
@@ -1231,12 +1305,14 @@ function headerCount(headers: HeaderItem[]): string {
   flex-direction: column;
   gap: 6px;
 }
+
 .mod-item {
   display: flex;
   align-items: baseline;
   gap: 8px;
   font-size: 11px;
 }
+
 .mod-badge {
   flex: none;
   font-size: 10px;
@@ -1245,6 +1321,7 @@ function headerCount(headers: HeaderItem[]): string {
   background: rgba(51, 112, 255, 0.12);
   color: var(--accent);
 }
+
 .mod-detail {
   word-break: break-all;
   color: var(--text-secondary);

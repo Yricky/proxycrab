@@ -185,4 +185,25 @@ if (!monaco.languages.getLanguages().some((language) => language.id === "lua")) 
   });
 }
 
+// 应用自定义主题：编辑器背景对齐 base.css 的 --bg-app 色板，
+// 避免浅色模式下 Monaco 默认纯白背景与 --bg-panel 白色面板融为一体而无法区分。
+// 颜色值需与 src/styles/base.css 中的 --bg-app 保持同步。
+monaco.editor.defineTheme("proxycrab-light", {
+  base: "vs",
+  inherit: true,
+  rules: [],
+  colors: {
+    "editor.background": "#f5f6f8", // --bg-app (light)
+    "editor.lineHighlightBackground": "#e9edf3", // 活动行高亮与背景区分
+  },
+});
+monaco.editor.defineTheme("proxycrab-dark", {
+  base: "vs-dark",
+  inherit: true,
+  rules: [],
+  colors: {
+    "editor.background": "#1a1b1e", // --bg-app (dark)
+  },
+});
+
 export default monaco;

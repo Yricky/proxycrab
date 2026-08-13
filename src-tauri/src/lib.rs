@@ -27,7 +27,10 @@ use proxy_crab_mitm::{
         SystemLogEntry, TemporaryExecutionResult, WorkspacePaths,
     },
 };
-use tauri::{Emitter, Manager, RunEvent, State};
+use tauri::{
+    Emitter, Manager, RunEvent, State,
+    menu::{Menu, MenuItem, Submenu},
+};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::http_permissions::{
@@ -741,11 +744,40 @@ fn logging_invoke_handler(
     }
 }
 
+const DEVTOOLS_MENU_ID: &str = "open-devtools";
+
+/// 注册全局菜单中的「打开开发者工具」项。
+/// 非 macOS 平台应用默认没有菜单栏，自建一个极简菜单；macOS 保留系统默认菜单
+/// （应用名菜单 / 编辑 / 视图 等），仅追加一个「工具」子菜单，避免破坏系统惯例。
+fn setup_global_menu(app: &tauri::App) -> tauri::Result<()> {
+    let devtools = MenuItem::with_id(
+        app,
+        DEVTOOLS_MENU_ID,
+        "打开开发者工具",
+        true,
+        Some("CmdOrCtrl+Alt+I"),
+    )?;
+    let tools = Submenu::with_items(app, "工具", true, &[&devtools])?;
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 默认菜单由 Tauri 在 build 阶段生成，此处直接追加子菜单
+        if let Some(menu) = app.menu() {
+            menu.append(&tools)?;
+            return Ok(());
+        }
+        // 兜底：默认菜单不存在时回退为自建菜单
+    }
+    let menu = Menu::with_items(app, &[&tools])?;
+    app.set_menu(menu)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            setup_global_menu(app)?;
             let app_data_dir = app.path().app_data_dir()?;
             let log_buffer = Arc::new(LogBuffer::default());
             let _ = tracing_subscriber::registry()
@@ -815,6 +847,13 @@ pub fn run() {
                 http_error: RwLock::new(http_error),
             });
             Ok(())
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == DEVTOOLS_MENU_ID {
+                if let Some(window) = app.get_webview_window("main") {
+                    window.open_devtools();
+                }
+            }
         })
         .invoke_handler(logging_invoke_handler(tauri::generate_handler![
             get_workspace,
