@@ -159,10 +159,12 @@ Exactly one of:
 ```json
 { "status": "stopped" }
 { "status": "starting" }
-{ "status": "running", "host": "0.0.0.0", "port": 8089 }
+{ "status": "running", "host": "0.0.0.0", "port": 8089, "started_at": 1785380000000 }
 { "status": "stopping" }
 { "status": "failed", "message": "bind failed" }
 ```
+
+`started_at` is a Unix-millisecond timestamp and is exposed only while the listener is running.
 
 ### Script
 
@@ -297,8 +299,10 @@ Starts the MITM listener and returns `ProxyStatus`.
 
 ### `POST /api/proxy/stop`
 
-Stops accepting immediately, waits up to five seconds for active exchanges, marks unfinished
-captures with `proxy_shutdown`, and returns `ProxyStatus`.
+Stops accepting immediately, waits up to five seconds for active exchanges, and returns
+`ProxyStatus`. Starting and stopping do not rewrite persisted outcomes. A connection generation
+that must be drained or aborted can still mark only its own unfinished captures with
+`proxy_shutdown`.
 
 Agents using this skill should leave lifecycle control to the user unless explicitly asked.
 
@@ -463,6 +467,7 @@ newer.
   "rows": [
     {
       "id": 1043,
+      "created_at": 1785380000000,
       "updated_at": 1785380000100,
       "outcome": "success",
       "cells": ["GET"]
@@ -484,10 +489,10 @@ newer.
 }
 ```
 
-The ID and capture `outcome` (`in_progress`, `success`, `failed`, or `tunneled`) are separate from
-cells. `column_index` is zero-based. A column error leaves that cell empty; a missing log has no row
-or `column_index`. IDs and rows are unordered. Unchanged logs appear in neither `rows` nor
-`exceptions`.
+The ID, immutable `created_at`, and persisted capture `outcome` (`in_progress`, `success`, `failed`,
+or `tunneled`) are separate from cells. `column_index` is zero-based. A column error leaves that cell
+empty; a missing log has no row or `column_index`. IDs and rows are unordered. Unchanged logs appear
+in neither `rows` nor `exceptions`.
 
 ### `POST /api/logs/export`
 
@@ -924,12 +929,14 @@ Default limit is 200; valid range is 1–1000. Outcomes are `in_progress`, `succ
 ```text
 DELETE /api/bypass/{id}
 POST   /api/bypass/delete      body: {"ids":[1,2,3]}
-DELETE /api/bypass             clears all terminal entries
+DELETE /api/bypass             clears all terminal and stale entries
 ```
 
-Single delete returns `{}`. Batch and clear return `{ "deleted": N }`. In-progress entries cannot
-be deleted; clearing skips them. Proxy shutdown marks unfinished rows failed with
-`error: "proxy_shutdown"`.
+Single delete returns `{}`. Batch and clear return `{ "deleted": N }`. A current-run in-progress
+entry cannot be deleted and clearing skips it. An in-progress entry is stale and deletable when the
+proxy is not running or its `created_at` is earlier than `ProxyStatus.running.started_at`. Database
+open and proxy start/stop preserve its outcome; generation-scoped forced draining may still mark
+that generation's unfinished rows failed with `error: "proxy_shutdown"`.
 
 ## Certificate authority
 

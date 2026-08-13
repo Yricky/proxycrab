@@ -393,9 +393,15 @@ pub struct TemporaryExecutionResult {
 pub enum ProxyStatus {
     Stopped,
     Starting,
-    Running { host: String, port: u16 },
+    Running {
+        host: String,
+        port: u16,
+        started_at: u64,
+    },
     Stopping,
-    Failed { message: String },
+    Failed {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

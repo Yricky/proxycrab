@@ -3,10 +3,12 @@ import { computed, ref, watch } from "vue";
 import { useBackend } from "../api";
 import { logsStore } from "../stores/logs";
 import { sessionsStore } from "../stores/sessions";
+import { proxyStore } from "../stores/proxy";
 import { appStore, reportError } from "../stores/app";
 import { openContextMenu, openDropdownMenu, type MenuItem } from "../stores/dialog";
 import { openLogDetail } from "../windows/launcher";
-import type { Column, Script } from "../api/types";
+import type { Column, LogViewRow, Script } from "../api/types";
+import { isStaleInProgress } from "../utils/capture-outcome";
 import {
   Io5Add,
   Io5ArrowDown,
@@ -326,9 +328,10 @@ function cellClass(index: number, value: string): string {
   return "";
 }
 
-function outcomeDotClass(outcome: string): string {
-  if (outcome === "in_progress") return "active";
-  if (outcome === "failed") return "failed";
+function outcomeDotClass(row: LogViewRow): string {
+  if (isStaleInProgress(row.outcome, row.created_at, proxyStore.status)) return "stale";
+  if (row.outcome === "in_progress") return "active";
+  if (row.outcome === "failed") return "failed";
   return "";
 }
 </script>
@@ -385,9 +388,9 @@ function outcomeDotClass(outcome: string): string {
               @contextmenu="showCellMenu($event, String(entry.row.id))"
             >
               <span
-                v-if="outcomeDotClass(entry.row.outcome)"
+                v-if="outcomeDotClass(entry.row)"
                 class="lt-outcome-dot"
-                :class="outcomeDotClass(entry.row.outcome)"
+                :class="outcomeDotClass(entry.row)"
                 aria-hidden="true"
               />
               {{ entry.row.id }}
@@ -553,6 +556,9 @@ function outcomeDotClass(outcome: string): string {
 }
 .lt-outcome-dot.failed {
   background: var(--danger);
+}
+.lt-outcome-dot.stale {
+  background: var(--text-faint);
 }
 .lt-cell:last-child {
   border-right: none;

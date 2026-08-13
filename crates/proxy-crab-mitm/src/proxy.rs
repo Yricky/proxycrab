@@ -47,6 +47,7 @@ use crate::{
     },
     runtime::SessionPin,
     storage::{BodySide, CaptureStore},
+    workspace::now_millis,
 };
 
 pub(crate) mod body;
@@ -174,12 +175,12 @@ impl ProxyController {
         let status = self.status.clone();
         let host = config.proxy_host.clone();
         let port = config.proxy_port;
+        let started_at = now_millis();
         *status.write().expect("proxy status lock poisoned") = ProxyStatus::Running {
             host: host.clone(),
             port,
+            started_at,
         };
-        // 启动时把上次异常退出遗留的 in_progress 记录终态化，避免僵尸记录残留。
-        runtime.mark_stale_in_progress_as_failed();
         tracing::info!("MITM proxy listening on {host}:{port}");
 
         let task = tokio::spawn(async move {
@@ -191,7 +192,7 @@ impl ProxyController {
         Ok(self.status())
     }
 
-    pub async fn stop(&self, runtime: &ProxyCrab) -> Result<ProxyStatus> {
+    pub async fn stop(&self, _runtime: &ProxyCrab) -> Result<ProxyStatus> {
         let _operation = self.operation.lock().await;
         if matches!(self.status(), ProxyStatus::Stopped) {
             return Ok(ProxyStatus::Stopped);
@@ -217,8 +218,6 @@ impl ProxyController {
             .lock()
             .expect("proxy connections lock poisoned")
             .take();
-        runtime.mark_in_progress_as_shutdown();
-        let _ = runtime.bypass_store().mark_in_progress_as_shutdown();
         *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Stopped;
         Ok(ProxyStatus::Stopped)
     }
@@ -239,8 +238,8 @@ pub(crate) struct TaskGroup {
 struct TaskGroupState {
     closing: bool,
     abort_handles: Vec<AbortHandle>,
-    capture_high_watermarks: HashMap<u64, (CaptureStore, u64)>,
-    bypass_high_watermark: Option<(BypassStore, u64)>,
+    capture_id_ranges: HashMap<u64, (CaptureStore, u64, u64)>,
+    bypass_id_range: Option<(BypassStore, u64, u64)>,
 }
 
 #[derive(Clone)]
@@ -304,8 +303,8 @@ impl TaskGroup {
             state: Arc::new(Mutex::new(TaskGroupState {
                 closing: false,
                 abort_handles: Vec::new(),
-                capture_high_watermarks: HashMap::new(),
-                bypass_high_watermark: None,
+                capture_id_ranges: HashMap::new(),
+                bypass_id_range: None,
             })),
         }
     }
@@ -328,10 +327,13 @@ impl TaskGroup {
         }
         let id = begin()?;
         state
-            .capture_high_watermarks
+            .capture_id_ranges
             .entry(store.session_id())
-            .and_modify(|(_, max_id)| *max_id = (*max_id).max(id))
-            .or_insert((store.clone(), id));
+            .and_modify(|(_, min_id, max_id)| {
+                *min_id = (*min_id).min(id);
+                *max_id = (*max_id).max(id);
+            })
+            .or_insert((store.clone(), id, id));
         Ok(id)
     }
 
@@ -345,9 +347,12 @@ impl TaskGroup {
             bail!("proxy connection is closing");
         }
         let id = begin()?;
-        match &mut state.bypass_high_watermark {
-            Some((_, max_id)) => *max_id = (*max_id).max(id),
-            watermark @ None => *watermark = Some((store.clone(), id)),
+        match &mut state.bypass_id_range {
+            Some((_, min_id, max_id)) => {
+                *min_id = (*min_id).min(id);
+                *max_id = (*max_id).max(id);
+            }
+            range @ None => *range = Some((store.clone(), id, id)),
         }
         Ok(id)
     }
@@ -387,18 +392,18 @@ impl TaskGroup {
                 tracing::error!("aborted proxy tasks did not finish promptly");
             }
         }
-        let (capture_high_watermarks, bypass_high_watermark) = {
+        let (capture_id_ranges, bypass_id_range) = {
             let mut state = self.state.lock().expect("proxy task state lock poisoned");
             (
-                std::mem::take(&mut state.capture_high_watermarks),
-                state.bypass_high_watermark.take(),
+                std::mem::take(&mut state.capture_id_ranges),
+                state.bypass_id_range.take(),
             )
         };
-        for (_, (store, max_id)) in capture_high_watermarks {
-            let _ = store.mark_in_progress_through_as_shutdown(max_id);
+        for (_, (store, min_id, max_id)) in capture_id_ranges {
+            let _ = store.mark_in_progress_range_as_shutdown(min_id, max_id);
         }
-        if let Some((store, max_id)) = bypass_high_watermark {
-            let _ = store.mark_in_progress_through_as_shutdown(max_id);
+        if let Some((store, min_id, max_id)) = bypass_id_range {
+            let _ = store.mark_in_progress_range_as_shutdown(min_id, max_id);
         }
     }
 }

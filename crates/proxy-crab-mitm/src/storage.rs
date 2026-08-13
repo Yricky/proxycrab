@@ -557,34 +557,14 @@ impl CaptureStore {
         }))
     }
 
-    pub fn mark_in_progress_as_shutdown(&self) -> Result<usize> {
-        self.mark_in_progress_failed("proxy stopped before the request completed")
-    }
-
-    /// 代理启动时清理上次异常退出遗留的 in_progress 记录，统一标记为失败终态。
-    pub fn mark_stale_in_progress_as_failed(&self) -> Result<usize> {
-        self.mark_in_progress_failed("previous proxy run ended before the request completed")
-    }
-
-    pub fn mark_in_progress_through_as_shutdown(&self, max_id: u64) -> Result<usize> {
+    pub fn mark_in_progress_range_as_shutdown(&self, min_id: u64, max_id: u64) -> Result<usize> {
         Ok(self.connection()?.execute(
             "UPDATE captures SET outcome='failed', stage='connect',
                 error_stage='connect', error_kind='proxy_shutdown',
                 error_message='proxy stopped before the request completed',
                 updated_at=MAX(updated_at + 1, ?1)
-             WHERE id<=?2 AND outcome='in_progress'",
-            params![now_millis() as i64, max_id as i64],
-        )?)
-    }
-
-    fn mark_in_progress_failed(&self, message: &str) -> Result<usize> {
-        Ok(self.connection()?.execute(
-            "UPDATE captures SET outcome='failed', stage='connect',
-                error_stage='connect', error_kind='proxy_shutdown',
-                error_message=?1,
-                updated_at=MAX(updated_at + 1, ?2)
-             WHERE outcome='in_progress'",
-            params![message, now_millis() as i64],
+             WHERE id>=?2 AND id<=?3 AND outcome='in_progress'",
+            params![now_millis() as i64, min_id as i64, max_id as i64],
         )?)
     }
 
@@ -976,7 +956,7 @@ mod tests {
     use crate::model::{
         BodyPayload, CaptureError, CaptureOutcome, ErrorStage, HeaderValues,
         InterceptorExecutionOrigin, InterceptorKind, InterceptorRun, RequestData,
-        ResponseData, script_content_hash,
+        script_content_hash,
     };
 
     use super::{BodySide, BodySourceData, CaptureStore, decode_body};
@@ -1031,41 +1011,32 @@ mod tests {
     }
 
     #[test]
-    fn stale_in_progress_captures_are_finalized_as_failed() {
+    fn generation_shutdown_only_finalizes_ids_inside_its_range() {
         let root = tempdir().unwrap();
         let store = CaptureStore::open(7, root.path()).unwrap();
-        let request = RequestData {
-            method: "GET".into(),
-            uri: "https://example.com/".into(),
-            version: "HTTP/1.1".into(),
-            headers: HeaderValues::new(),
-            tags: Default::default(),
-        };
-        let stale = store.begin("127.0.0.1", &request, "connect").unwrap();
-        let completed = store.begin("127.0.0.1", &request, "connect").unwrap();
-        store
-            .complete(
-                completed,
-                &ResponseData {
-                    status: 200,
-                    version: "HTTP/1.1".into(),
-                    headers: HeaderValues::new(),
-                },
-                &[],
-            )
-            .unwrap();
+        let request = request("https://example.com/");
+        let stale = store.begin("old", &request, "request").unwrap();
+        let generation = store.begin("current", &request, "request").unwrap();
+        let later = store.begin("later", &request, "request").unwrap();
 
-        let updated = store.mark_stale_in_progress_as_failed().unwrap();
-        assert_eq!(updated, 1, "only the leftover in_progress capture is finalized");
-
-        let stale_detail = store.get(stale).unwrap().unwrap();
-        assert_eq!(stale_detail.summary.outcome, CaptureOutcome::Failed);
-        let error = stale_detail.summary.error.unwrap();
-        assert_eq!(error.kind, "proxy_shutdown");
-        assert_eq!(error.stage, ErrorStage::Connect);
-
-        let completed_detail = store.get(completed).unwrap().unwrap();
-        assert_eq!(completed_detail.summary.outcome, CaptureOutcome::Success);
+        assert_eq!(
+            store
+                .mark_in_progress_range_as_shutdown(generation, generation)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            store.get(stale).unwrap().unwrap().summary.outcome,
+            CaptureOutcome::InProgress
+        );
+        assert_eq!(
+            store.get(generation).unwrap().unwrap().summary.outcome,
+            CaptureOutcome::Failed
+        );
+        assert_eq!(
+            store.get(later).unwrap().unwrap().summary.outcome,
+            CaptureOutcome::InProgress
+        );
     }
 
     #[test]

@@ -138,7 +138,7 @@ export type InterceptorExecutionOrigin = "saved" | "temporary";
 export type ProxyStatus =
   | { status: "stopped" }
   | { status: "starting" }
-  | { status: "running"; host: string; port: number }
+  | { status: "running"; host: string; port: number; started_at: number }
   | { status: "stopping" }
   | { status: "failed"; message: string };
 
@@ -240,6 +240,7 @@ export interface LogViewsRequest {
 
 export interface LogViewRow {
   id: number;
+  created_at: number;
   updated_at: number;
   outcome: CaptureOutcome;
   cells: string[];

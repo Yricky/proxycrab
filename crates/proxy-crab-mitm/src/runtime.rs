@@ -537,24 +537,6 @@ impl ProxyCrab {
         self.pin_capture_store(session_id)?.store.get_many(ids)
     }
 
-    pub fn mark_in_progress_as_shutdown(&self) {
-        for session in self.sessions() {
-            if let Ok(pin) = self.pin_capture_store(session.id) {
-                let _ = pin.store.mark_in_progress_as_shutdown();
-            }
-        }
-    }
-
-    /// 代理启动时把上次异常退出遗留的 in_progress 记录终态化（failed/proxy_shutdown），
-    /// 避免前端持续把僵尸记录当作活跃记录轮询。
-    pub fn mark_stale_in_progress_as_failed(&self) {
-        for session in self.sessions() {
-            if let Ok(pin) = self.pin_capture_store(session.id) {
-                let _ = pin.store.mark_stale_in_progress_as_failed();
-            }
-        }
-    }
-
     pub fn scripts(&self, kind: ScriptKind) -> Result<Vec<Script>> {
         self.workspace.list_scripts(kind)
     }
@@ -891,15 +873,22 @@ impl ProxyCrab {
     }
 
     pub fn delete_bypass_entry(&self, id: u64) -> Result<()> {
-        self.bypass.delete(id)
+        self.bypass.delete(id, self.proxy_started_at())
     }
 
     pub fn delete_bypass_entries(&self, ids: &[u64]) -> Result<usize> {
-        self.bypass.delete_many(ids)
+        self.bypass.delete_many(ids, self.proxy_started_at())
     }
 
     pub fn clear_bypass_entries(&self) -> Result<usize> {
-        self.bypass.clear_terminal()
+        self.bypass.clear_deletable(self.proxy_started_at())
+    }
+
+    fn proxy_started_at(&self) -> Option<u64> {
+        match self.proxy_status() {
+            ProxyStatus::Running { started_at, .. } => Some(started_at),
+            _ => None,
+        }
     }
 
     pub(crate) fn bypass_store(&self) -> &BypassStore {

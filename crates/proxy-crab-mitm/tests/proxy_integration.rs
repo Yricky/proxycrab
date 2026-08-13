@@ -2295,15 +2295,80 @@ async fn concurrent_lifecycle_calls_are_serialized() {
 
     let (first, second) = tokio::join!(runtime.start_proxy(), runtime.start_proxy());
     assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
-    assert!(matches!(
-        runtime.proxy_status(),
-        ProxyStatus::Running { .. }
-    ));
+    let started_at = match runtime.proxy_status() {
+        ProxyStatus::Running { started_at, .. } => started_at,
+        status => panic!("expected running status, got {status:?}"),
+    };
+    assert!(started_at > 0);
 
     let (first, second) = tokio::join!(runtime.stop_proxy(), runtime.stop_proxy());
     first.unwrap();
     second.unwrap();
     assert!(matches!(runtime.proxy_status(), ProxyStatus::Stopped));
+}
+
+#[tokio::test]
+async fn lifecycle_preserves_preexisting_in_progress_outcomes() {
+    let app_data = tempdir().unwrap();
+    let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+    let session = runtime.create_session(None, None).unwrap();
+    let capture_store = proxy_crab_mitm::storage::CaptureStore::open(
+        session.id,
+        &runtime.workspace().session_dir(session.id),
+    )
+    .unwrap();
+    let capture_id = capture_store
+        .begin(
+            "127.0.0.1",
+            &proxy_crab_mitm::model::RequestData {
+                method: "GET".into(),
+                uri: "http://stale.example.com".into(),
+                version: "HTTP/1.1".into(),
+                headers: Default::default(),
+                tags: Default::default(),
+            },
+            "request",
+        )
+        .unwrap();
+    let bypass_store =
+        proxy_crab_mitm::bypass::BypassStore::open(runtime.workspace().root()).unwrap();
+    let bypass_id = bypass_store
+        .begin(
+            "127.0.0.1",
+            "GET",
+            "http://stale.example.com",
+            "HTTP/1.1",
+            "no_active_session",
+        )
+        .unwrap();
+    let mut config = runtime.config();
+    config.proxy_host = "127.0.0.1".into();
+    config.proxy_port = unused_port();
+    runtime.replace_config(config).await.unwrap();
+
+    runtime.start_proxy().await.unwrap();
+    runtime.stop_proxy().await.unwrap();
+
+    assert_eq!(
+        runtime
+            .capture(session.id, capture_id)
+            .unwrap()
+            .unwrap()
+            .summary
+            .outcome,
+        CaptureOutcome::InProgress
+    );
+    assert_eq!(
+        runtime
+            .bypass_entries(10, None)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.id == bypass_id)
+            .unwrap()
+            .outcome,
+        BypassOutcome::InProgress
+    );
+    assert_eq!(runtime.proxy_status(), ProxyStatus::Stopped);
 }
 
 #[tokio::test]
