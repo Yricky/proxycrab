@@ -122,7 +122,8 @@ skill directory.
    - `request_interceptors` and `response_interceptors` preserve exact executed source, order,
      modifications, hashes, and runtime errors.
    - An absent response can be normal for `in_progress`, a tunnel, or a failed exchange; interpret it
-     with `outcome`, `stage`, and `error`.
+     with `outcome`, `stage`, and `error`. A persisted `in_progress` row is stale rather than active
+     when the proxy is not running or its `created_at` predates `ProxyStatus.running.started_at`.
 
 6. Report the Session ID and log IDs used, the observed evidence, the most likely cause, uncertainty,
    and a concrete next check. Redact secrets from the user-facing explanation.

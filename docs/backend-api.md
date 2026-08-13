@@ -271,6 +271,7 @@ The response columns and cells do not contain the ID column; `row.id` is a separ
   "rows": [
     {
       "id": 124,
+      "created_at": 1720000000000,
       "updated_at": 1720000000100,
       "outcome": "success",
       "cells": ["GET"]
@@ -292,7 +293,7 @@ The response columns and cells do not contain the ID column; `row.id` is a separ
 }
 ```
 
-`column_index` is zero-based and aligns with `columns` and `cells`. Every returned row includes its capture `outcome` (`in_progress`, `success`, `failed`, or `tunneled`). A custom-column error leaves that cell empty while preserving the rest of the row. A missing log has no row and no `column_index`. Unchanged logs appear in neither `rows` nor `exceptions`.
+`column_index` is zero-based and aligns with `columns` and `cells`. Every returned row includes its immutable capture creation time and persisted `outcome` (`in_progress`, `success`, `failed`, or `tunneled`). A custom-column error leaves that cell empty while preserving the rest of the row. A missing log has no row and no `column_index`. Unchanged logs appear in neither `rows` nor `exceptions`.
 
 `updated_at` is a monotonic Unix-millisecond version for the complete log. Metadata transitions and request/response body writes advance it, even when multiple updates happen in the same wall-clock millisecond.
 
@@ -547,7 +548,7 @@ Capture outcomes are:
 
 Errors contain a stable `kind`, an execution `stage`, and the underlying message. A provisional `CONNECT` row is inserted before the proxy acknowledges the tunnel, so even an idle connection is represented. TLS failures update that row. After a successful TLS handshake, the row is retained and finalized as `success` at stage `tls_mitm` with an HTTP 200 response; decrypted requests are stored as additional captures.
 
-If the initial database insert fails, traffic is not forwarded. When the proxy stops it stops accepting immediately, waits up to five seconds, and marks unfinished rows with `proxy_shutdown`.
+If the initial database insert fails, traffic is not forwarded. Starting or stopping the proxy does not rewrite persisted outcomes. When the proxy stops it stops accepting immediately and waits up to five seconds; a connection generation that must be drained or aborted still marks only its own unfinished rows with `proxy_shutdown`.
 
 Request and response interceptors run once at their respective header boundary. Body getters may
 wait for the original body to finish downloading and being captured, after which the unmodified
@@ -576,8 +577,11 @@ carry between rows or scripts.
 Bypassed metadata is persisted in `<workspace>/bypass.db` without headers or bodies. Each row stores
 timestamps, source, method, URI, version, routing reason, outcome, optional HTTP status/error, and
 nullable upload/download byte counts. `GET /api/bypass` pages newest first; single, batch, and
-terminal-clear deletion are supported. In-progress entries cannot be deleted and are marked failed
-with `proxy_shutdown` when the proxy stops.
+deletable-record clearing are supported. A current-run `in_progress` entry cannot be deleted. An
+`in_progress` entry is stale and deletable when the proxy is not running or its `created_at` is
+earlier than the current `ProxyStatus.running.started_at`. Opening the database and starting or
+stopping the proxy do not rewrite its outcome; generation-scoped forced draining can still mark
+that generation's unfinished rows with `proxy_shutdown`.
 
 ## Workspace and CA
 

@@ -15,11 +15,14 @@ import {
 } from "../utils/column-groups";
 import { reportError } from "./app";
 import { logsStore } from "./logs";
+import { proxyStore } from "./proxy";
+import { isStaleInProgress } from "../utils/capture-outcome";
 
 const ID_PAGE_SIZE = 10_000;
 const VIEW_BATCH_SIZE = 200;
 
 interface CachedGroupRow {
+  createdAt: number;
   updatedAt: number;
   outcome: CaptureOutcome;
   value: string;
@@ -144,6 +147,7 @@ function replaceRow(cache: ColumnGroupCache, row: LogViewRow, error: boolean): v
   const previous = cache.rows.get(row.id);
   if (previous) removeContribution(cache, previous);
   const next: CachedGroupRow = {
+    createdAt: row.created_at,
     updatedAt: row.updated_at,
     outcome: row.outcome,
     value: row.cells[0] ?? "",
@@ -281,7 +285,11 @@ async function refreshInProgress(
   runId: number,
 ): Promise<void> {
   const ids = [...cache.rows.entries()]
-    .filter(([, row]) => row.outcome === "in_progress")
+    .filter(
+      ([, row]) =>
+        row.outcome === "in_progress" &&
+        !isStaleInProgress(row.outcome, row.createdAt, proxyStore.status),
+    )
     .map(([id]) => id);
   await hydrateIds(backend, cache, ids, true, runId);
 }

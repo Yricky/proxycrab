@@ -73,7 +73,6 @@ impl BypassStore {
              ON bypass_entries(updated_at DESC, id DESC);",
         )?;
         drop(connection);
-        store.mark_in_progress_as_shutdown()?;
         Ok(store)
     }
 
@@ -185,11 +184,11 @@ impl BypassStore {
             .context("failed to read bypass entries")
     }
 
-    pub fn delete(&self, id: u64) -> Result<()> {
-        self.delete_many(&[id]).map(|_| ())
+    pub fn delete(&self, id: u64, started_at: Option<u64>) -> Result<()> {
+        self.delete_many(&[id], started_at).map(|_| ())
     }
 
-    pub fn delete_many(&self, ids: &[u64]) -> Result<usize> {
+    pub fn delete_many(&self, ids: &[u64], started_at: Option<u64>) -> Result<usize> {
         if ids.is_empty() {
             return Ok(0);
         }
@@ -199,18 +198,25 @@ impl BypassStore {
             .map(|index| format!("?{index}"))
             .collect::<Vec<_>>()
             .join(",");
-        let in_progress: Option<i64> = transaction
+        let started_at_parameter = ids.len() + 1;
+        let active: Option<i64> = transaction
             .query_row(
                 &format!(
                     "SELECT id FROM bypass_entries
                      WHERE id IN ({placeholders}) AND outcome='in_progress'
+                       AND ?{started_at_parameter} IS NOT NULL
+                       AND created_at>=?{started_at_parameter}
                      LIMIT 1"
                 ),
-                params_from_iter(ids.iter().map(|id| *id as i64)),
+                params_from_iter(
+                    ids.iter()
+                        .map(|id| Some(*id as i64))
+                        .chain(std::iter::once(started_at.map(|value| value as i64))),
+                ),
                 |row| row.get(0),
             )
             .optional()?;
-        if let Some(id) = in_progress {
+        if let Some(id) = active {
             bail!("bypass entry {id} is still in progress");
         }
         let deleted = transaction.execute(
@@ -221,32 +227,22 @@ impl BypassStore {
         Ok(deleted)
     }
 
-    pub fn clear_terminal(&self) -> Result<usize> {
+    pub fn clear_deletable(&self, started_at: Option<u64>) -> Result<usize> {
         let connection = self.connection()?;
         Ok(connection.execute(
-            "DELETE FROM bypass_entries WHERE outcome != 'in_progress'",
-            [],
+            "DELETE FROM bypass_entries
+             WHERE outcome != 'in_progress' OR ?1 IS NULL OR created_at<?1",
+            [started_at.map(|value| value as i64)],
         )?)
     }
 
-    pub fn mark_in_progress_as_shutdown(&self) -> Result<()> {
+    pub fn mark_in_progress_range_as_shutdown(&self, min_id: u64, max_id: u64) -> Result<()> {
         let connection = self.connection()?;
         connection.execute(
             "UPDATE bypass_entries
              SET updated_at=?1, outcome='failed', error='proxy_shutdown'
-             WHERE outcome='in_progress'",
-            [now_millis() as i64],
-        )?;
-        Ok(())
-    }
-
-    pub fn mark_in_progress_through_as_shutdown(&self, max_id: u64) -> Result<()> {
-        let connection = self.connection()?;
-        connection.execute(
-            "UPDATE bypass_entries
-             SET updated_at=?1, outcome='failed', error='proxy_shutdown'
-             WHERE id<=?2 AND outcome='in_progress'",
-            params![now_millis() as i64, max_id as i64],
+             WHERE id>=?2 AND id<=?3 AND outcome='in_progress'",
+            params![now_millis() as i64, min_id as i64, max_id as i64],
         )?;
         Ok(())
     }
@@ -305,17 +301,17 @@ mod tests {
                 "nil",
             )
             .unwrap();
-        assert!(store.delete(pending).is_err());
+        assert!(store.delete(pending, Some(0)).is_err());
         store.complete(pending, None, Some(12), Some(34)).unwrap();
         let rows = store.list(10, None).unwrap();
         assert_eq!(rows[0].outcome, BypassOutcome::Success);
         assert_eq!(rows[0].upload_bytes, Some(12));
-        assert_eq!(store.clear_terminal().unwrap(), 1);
+        assert_eq!(store.clear_deletable(Some(0)).unwrap(), 1);
         assert!(store.list(10, None).unwrap().is_empty());
     }
 
     #[test]
-    fn startup_marks_in_progress_as_failed() {
+    fn reopening_preserves_in_progress_outcome() {
         let root = tempdir().unwrap();
         let store = BypassStore::open(root.path()).unwrap();
         store
@@ -332,7 +328,102 @@ mod tests {
         let reopened = BypassStore::open(root.path()).unwrap();
         assert_eq!(
             reopened.list(10, None).unwrap()[0].outcome,
+            BypassOutcome::InProgress
+        );
+    }
+
+    #[test]
+    fn stale_in_progress_entries_are_deletable() {
+        let root = tempdir().unwrap();
+        let store = BypassStore::open(root.path()).unwrap();
+        let stale = store
+            .begin(
+                "127.0.0.1:1",
+                "GET",
+                "http://stale.example.com",
+                "HTTP/1.1",
+                "no_active_session",
+            )
+            .unwrap();
+        let created_at = store.list(10, None).unwrap()[0].created_at;
+
+        assert!(store.delete(stale, Some(created_at)).is_err());
+        assert_eq!(
+            store.delete_many(&[stale], Some(created_at + 1)).unwrap(),
+            1
+        );
+
+        let stopped = store
+            .begin(
+                "127.0.0.1:1",
+                "GET",
+                "http://stopped.example.com",
+                "HTTP/1.1",
+                "no_active_session",
+            )
+            .unwrap();
+        store.delete(stopped, None).unwrap();
+    }
+
+    #[test]
+    fn clear_deletable_retains_current_run_in_progress_entries() {
+        let root = tempdir().unwrap();
+        let store = BypassStore::open(root.path()).unwrap();
+        let stale = store
+            .begin("old", "GET", "http://old", "HTTP/1.1", "nil")
+            .unwrap();
+        let stale_created_at = store.list(10, None).unwrap()[0].created_at;
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let completed = store
+            .begin("done", "GET", "http://done", "HTTP/1.1", "nil")
+            .unwrap();
+        store.complete(completed, None, None, None).unwrap();
+        let current = store
+            .begin("new", "GET", "http://new", "HTTP/1.1", "nil")
+            .unwrap();
+
+        assert_eq!(
+            store.clear_deletable(Some(stale_created_at + 1)).unwrap(),
+            2
+        );
+        let rows = store.list(10, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, current);
+        assert_ne!(rows[0].id, stale);
+    }
+
+    #[test]
+    fn generation_shutdown_only_finalizes_ids_inside_its_range() {
+        let root = tempdir().unwrap();
+        let store = BypassStore::open(root.path()).unwrap();
+        let stale = store
+            .begin("old", "GET", "http://old", "HTTP/1.1", "nil")
+            .unwrap();
+        let generation = store
+            .begin("current", "GET", "http://current", "HTTP/1.1", "nil")
+            .unwrap();
+        let later = store
+            .begin("later", "GET", "http://later", "HTTP/1.1", "nil")
+            .unwrap();
+
+        store
+            .mark_in_progress_range_as_shutdown(generation, generation)
+            .unwrap();
+        let rows = store.list(10, None).unwrap();
+        assert_eq!(
+            rows.iter().find(|row| row.id == stale).unwrap().outcome,
+            BypassOutcome::InProgress
+        );
+        assert_eq!(
+            rows.iter()
+                .find(|row| row.id == generation)
+                .unwrap()
+                .outcome,
             BypassOutcome::Failed
+        );
+        assert_eq!(
+            rows.iter().find(|row| row.id == later).unwrap().outcome,
+            BypassOutcome::InProgress
         );
     }
 }

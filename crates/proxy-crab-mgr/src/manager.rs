@@ -23,15 +23,15 @@ use crate::{
     agents::AgentsStore,
     dto::{
         ActiveSession, AgentsPresetState, BreakpointDetailPayload, BreakpointQuery, BypassPage,
-        BypassQuery, CertificateResponse, CreateAgentsPresetRequest,
-        CreateSessionRequest, DebugFilterScriptRequest, DeleteCount, ExecuteTemporaryScriptRequest,
-        ExportLogsRequest, ExtendBreakpointRequest, HeaderItem, InterceptorCreateRequest,
-        InterceptorDetail, InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogExport,
-        LogIdsPayload, LogIdsRequest, LogViewException, LogViewRow, LogViewsPayload,
-        LogViewsRequest, ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest,
-        ReplaceSessionViewRequest, RequestDetail, ResponseDetail, RoutingSelection, ScriptRequest,
-        SessionInterceptorItem, SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery,
-        UpdateAgentsPresetRequest, UpdateScriptRequest, UpdateSessionRequest,
+        BypassQuery, CertificateResponse, CreateAgentsPresetRequest, CreateSessionRequest,
+        DebugFilterScriptRequest, DeleteCount, ExecuteTemporaryScriptRequest, ExportLogsRequest,
+        ExtendBreakpointRequest, HeaderItem, InterceptorCreateRequest, InterceptorDetail,
+        InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogExport, LogIdsPayload,
+        LogIdsRequest, LogViewException, LogViewRow, LogViewsPayload, LogViewsRequest,
+        ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest,
+        RequestDetail, ResponseDetail, RoutingSelection, ScriptRequest, SessionInterceptorItem,
+        SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery, UpdateAgentsPresetRequest,
+        UpdateScriptRequest, UpdateSessionRequest,
     },
     har::{self, HarCapture},
 };
@@ -708,6 +708,7 @@ impl ProxyCrabManager for MitmManager {
                 }
                 rows.push(LogViewRow {
                     id,
+                    created_at: item.created_at,
                     updated_at: item.updated_at,
                     outcome: outcome_name(item.outcome).into(),
                     cells,
@@ -1660,6 +1661,7 @@ mod tests {
 
         assert_eq!(payload.columns.len(), 2);
         assert_eq!(payload.rows[0].cells, vec!["GET", ""]);
+        assert!(payload.rows[0].created_at > 0);
         assert_eq!(payload.rows[0].outcome, "in_progress");
         assert_eq!(payload.exceptions.len(), 2);
         assert!(payload.exceptions.iter().any(|error| {

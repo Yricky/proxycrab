@@ -11,6 +11,8 @@ import type {
 } from "../api/types";
 import { BackendError } from "../api/tauri-backend";
 import { appStore, reportError } from "../stores/app";
+import { proxyStore } from "../stores/proxy";
+import { isStaleInProgress } from "../utils/capture-outcome";
 import { formatBytes } from "../utils/format";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import BodyViewer from "../components/BodyViewer.vue";
@@ -44,6 +46,12 @@ let autoRefreshTimer: number | undefined;
 let breakpointRefreshTimer: number | undefined;
 let loadInFlight = false;
 const AUTO_REFRESH_INTERVAL = 2000;
+
+const stale = computed(
+  () =>
+    detail.value !== null &&
+    isStaleInProgress(detail.value.outcome, detail.value.created_at, proxyStore.status),
+);
 
 async function load(silent = false): Promise<void> {
   if (loadInFlight) return;
@@ -153,6 +161,7 @@ function shouldAutoRefresh(): boolean {
   return (
     props.breakpointId === undefined &&
     detail.value?.outcome === "in_progress" &&
+    !stale.value &&
     document.hasFocus()
   );
 }
@@ -170,10 +179,12 @@ function scheduleAutoRefresh(): void {
 
 function handleWindowFocus(): void {
   if (props.breakpointId !== undefined) {
-    if (breakpoint.value || detail.value?.outcome === "in_progress") void load(true);
+    if (!stale.value && (breakpoint.value || detail.value?.outcome === "in_progress")) {
+      void load(true);
+    }
     return;
   }
-  if (detail.value?.outcome === "in_progress") {
+  if (detail.value?.outcome === "in_progress" && !stale.value) {
     void load(true).finally(scheduleAutoRefresh);
   }
 }
@@ -184,7 +195,7 @@ function handleWindowBlur(): void {
 
 // 请求仍在进行且窗口聚焦时持续轮询，完成或失焦后停止
 watch(
-  () => detail.value?.outcome,
+  [() => detail.value?.outcome, stale],
   () => scheduleAutoRefresh(),
 );
 
@@ -196,6 +207,7 @@ onMounted(() => {
     breakpointRefreshTimer = window.setInterval(() => {
       if (
         document.hasFocus() &&
+        !stale.value &&
         (breakpoint.value || detail.value?.outcome === "in_progress")
       ) {
         void load(true);
@@ -297,6 +309,7 @@ const outcomeLabels: Record<string, string> = {
 };
 
 function outcomeLabel(outcome: string): string {
+  if (stale.value) return "已失效";
   return outcomeLabels[outcome] ?? outcome;
 }
 
@@ -335,24 +348,42 @@ function querySegments(search: string): UrlSegment[] {
   return segments;
 }
 
+// 只有带显式 scheme（scheme://）的 URI 才交给 URL 解析器。HTTPS CONNECT 请求的
+// URI 是裸 authority（如 internal-api-lark-api-usttp.larksuite.com:443），
+// new URL 会把 host 误解析成 scheme、把 port 当成 opaque path，
+// 导致显示成 internal-api-lark-api-usttp.larksuite.com://443。
+function parseUrlSegments(uri: string): UrlSegment[] | null {
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(uri)) {
+    try {
+      const url = new URL(uri);
+      const segments: UrlSegment[] = [
+        { text: `${url.protocol}//`, cls: "url-scheme" },
+        { text: url.host, cls: "url-host" },
+      ];
+      const path = url.pathname;
+      if (path && path !== "/") segments.push({ text: path, cls: "url-path" });
+      else if (path) segments.push({ text: path, cls: "url-scheme" });
+      if (url.search) segments.push(...querySegments(url.search));
+      if (url.hash) segments.push({ text: url.hash, cls: "url-query" });
+      return segments;
+    } catch {
+      return null;
+    }
+  }
+  // 裸 authority（CONNECT 目标）：host、host:port 或 [ipv6]:port
+  const authority = /^(\[[^\]]+\]|[^\s:/?#]+)(?::(\d{1,5}))?$/.exec(uri);
+  if (authority) {
+    const segments: UrlSegment[] = [{ text: authority[1], cls: "url-host" }];
+    if (authority[2]) segments.push({ text: `:${authority[2]}`, cls: "url-path" });
+    return segments;
+  }
+  return null;
+}
+
 const urlSegments = computed<UrlSegment[]>(() => {
   const uri = detail.value?.request.uri;
   if (!uri) return [];
-  try {
-    const url = new URL(uri);
-    const segments: UrlSegment[] = [
-      { text: `${url.protocol}//`, cls: "url-scheme" },
-      { text: url.host, cls: "url-host" },
-    ];
-    const path = url.pathname;
-    if (path && path !== "/") segments.push({ text: path, cls: "url-path" });
-    else if (path) segments.push({ text: path, cls: "url-scheme" });
-    if (url.search) segments.push(...querySegments(url.search));
-    if (url.hash) segments.push({ text: url.hash, cls: "url-query" });
-    return segments;
-  } catch {
-    return [{ text: uri, cls: "url-path" }];
-  }
+  return parseUrlSegments(uri) ?? [{ text: uri, cls: "url-path" }];
 });
 
 const bodySizeLabel = computed(() => {
@@ -418,6 +449,7 @@ interface QueryParam {
 const queryParams = computed<QueryParam[]>(() => {
   const uri = detail.value?.request.uri;
   if (!uri) return [];
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(uri)) return [];
   try {
     const url = new URL(uri);
     const params: QueryParam[] = [];
@@ -509,7 +541,7 @@ function headerCount(headers: HeaderItem[]): string {
           >
             {{ detail.response.status }} {{ detail.response.status_text }}
           </span>
-          <span class="outcome-chip" :class="'o-' + detail.outcome">
+          <span class="outcome-chip" :class="stale ? 'o-stale' : 'o-' + detail.outcome">
             <span class="o-dot" />{{ outcomeLabel(detail.outcome) }}
           </span>
           <span v-if="loading" class="refreshing text-faint">刷新中…</span>
@@ -861,6 +893,8 @@ function headerCount(headers: HeaderItem[]): string {
 .o-success .o-dot { background: var(--success); }
 .o-failed { color: var(--danger); }
 .o-failed .o-dot { background: var(--danger); }
+.o-stale { color: var(--text-faint); }
+.o-stale .o-dot { background: var(--text-faint); }
 
 /* URL 分段着色 */
 .url {

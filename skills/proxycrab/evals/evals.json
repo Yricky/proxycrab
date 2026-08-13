@@ -122,7 +122,7 @@
     {
       "id": 20,
       "prompt": "Use ProxyCrab to find captures in Session 3 whose URI is exactly /api/orders/42 without changing the Session's saved filter, then report each returned row's capture outcome.",
-      "expected_output": "The agent queries IDs with persist_filter=false and a column filter using regex=true plus an escaped anchored Rust regex, batch-renders the matching logs, and reports each row's explicit outcome field without inferring it from status or stage.",
+      "expected_output": "The agent queries IDs with persist_filter=false and a column filter using regex=true plus an escaped anchored Rust regex, batch-renders the matching logs, and reports each row's explicit outcome and created_at fields. It does not infer persisted outcome from status or stage; if asked whether an in_progress row is active, it compares created_at with ProxyStatus.running.started_at and treats all in_progress rows as stale while the proxy is not running.",
       "files": []
     }
   ]

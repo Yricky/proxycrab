@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "test:unit": "node --experimental-strip-types --test src/utils/*.test.mts",
     "test:column-groups": "node --experimental-strip-types --test src/utils/column-groups.test.mts",
     "preview": "vite preview",
     "tauri": "tauri"

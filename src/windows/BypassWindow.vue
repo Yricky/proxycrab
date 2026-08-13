@@ -1,25 +1,43 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted, watch } from "vue";
 import { Io5Refresh, Io5Trash } from "vue-icons-plus/io5";
 import type { BypassEntry, HttpApiChange } from "../api/types";
 import VirtualList from "../components/VirtualList.vue";
 import { appStore } from "../stores/app";
 import { bypassStore } from "../stores/bypass";
 import { confirmDialog } from "../stores/dialog";
+import { proxyStore } from "../stores/proxy";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
+import { isStaleInProgress } from "../utils/capture-outcome";
 import { formatDateTime } from "../utils/format";
 
 let timer: number | undefined;
 
-const selectedTerminalCount = computed(
+function isStale(entry: BypassEntry): boolean {
+  return isStaleInProgress(entry.outcome, entry.created_at, proxyStore.status);
+}
+
+function isDeletable(entry: BypassEntry): boolean {
+  return entry.outcome !== "in_progress" || isStale(entry);
+}
+
+const selectedDeletableCount = computed(
   () =>
     [...bypassStore.selectedIds].filter(
-      (id) => bypassStore.rows.find((row) => row.id === id)?.outcome !== "in_progress",
+      (id) => {
+        const row = bypassStore.rows.find((entry) => entry.id === id);
+        return row !== undefined && isDeletable(row);
+      },
     ).length,
 );
 
-function outcomeLabel(outcome: BypassEntry["outcome"]): string {
-  return outcome === "in_progress" ? "转发中" : outcome === "success" ? "完成" : "失败";
+function outcomeLabel(entry: BypassEntry): string {
+  if (isStale(entry)) return "已失效";
+  return entry.outcome === "in_progress"
+    ? "转发中"
+    : entry.outcome === "success"
+      ? "完成"
+      : "失败";
 }
 
 function reasonLabel(reason: string): string {
@@ -40,10 +58,10 @@ function bytes(value: number | null): string {
 }
 
 async function removeSelected(): Promise<void> {
-  if (!selectedTerminalCount.value) return;
+  if (!selectedDeletableCount.value) return;
   const ok = await confirmDialog({
     title: "删除透明转发记录",
-    message: `确定删除选中的 ${selectedTerminalCount.value} 条终态记录吗？`,
+    message: `确定删除选中的 ${selectedDeletableCount.value} 条记录吗？`,
     confirmText: "删除",
     danger: true,
   });
@@ -55,7 +73,7 @@ async function removeSelected(): Promise<void> {
 async function clearTerminal(): Promise<void> {
   const ok = await confirmDialog({
     title: "清空透明转发记录",
-    message: "确定清空全部已完成和失败的记录吗？进行中的记录会保留。",
+    message: "确定清空全部已完成、失败和已失效的记录吗？当前正在转发的记录会保留。",
     confirmText: "清空",
     danger: true,
   });
@@ -74,8 +92,15 @@ function onHttpApiChange(event: Event): void {
 onMounted(() => {
   void bypassStore.refresh();
   window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
-  timer = window.setInterval(() => void bypassStore.refreshNewest(), 1500);
+  timer = window.setInterval(() => {
+    if (proxyStore.running) void bypassStore.refreshNewest();
+  }, 1500);
 });
+
+watch(
+  () => proxyStore.running,
+  () => void bypassStore.refreshNewest(),
+);
 
 onBeforeUnmount(() => {
   if (timer !== undefined) window.clearInterval(timer);
@@ -94,13 +119,13 @@ onBeforeUnmount(() => {
       </button>
       <button
         class="btn"
-        :disabled="selectedTerminalCount === 0"
+        v-if="selectedDeletableCount > 0"
         @click="removeSelected"
       >
         删除选中
       </button>
       <button class="btn danger" @click="clearTerminal">
-        <Io5Trash :size="14" />清空终态
+        <Io5Trash :size="14" />清空
       </button>
     </div>
 
@@ -124,7 +149,7 @@ onBeforeUnmount(() => {
           <input
             type="checkbox"
             :checked="bypassStore.selectedIds.has((item as BypassEntry).id)"
-            :disabled="(item as BypassEntry).outcome === 'in_progress'"
+            :disabled="!isDeletable(item as BypassEntry)"
             @change="bypassStore.toggle((item as BypassEntry).id)"
           />
           <span class="text-faint">{{ formatDateTime((item as BypassEntry).created_at) }}</span>
@@ -132,8 +157,11 @@ onBeforeUnmount(() => {
           <span class="bp-uri mono">{{ (item as BypassEntry).uri }}</span>
           <span class="mono">{{ (item as BypassEntry).source }}</span>
           <span>{{ reasonLabel((item as BypassEntry).reason) }}</span>
-          <span class="badge" :class="`outcome-${(item as BypassEntry).outcome}`">
-            {{ outcomeLabel((item as BypassEntry).outcome) }}
+          <span
+            class="badge"
+            :class="isStale(item as BypassEntry) ? 'outcome-stale' : `outcome-${(item as BypassEntry).outcome}`"
+          >
+            {{ outcomeLabel(item as BypassEntry) }}
           </span>
           <span>{{ (item as BypassEntry).response_status ?? "—" }}</span>
           <span class="mono">
@@ -212,6 +240,9 @@ onBeforeUnmount(() => {
 }
 .outcome-failed {
   color: var(--danger);
+}
+.outcome-stale {
+  color: var(--text-faint);
 }
 .bp-more {
   align-self: center;

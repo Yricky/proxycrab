@@ -7,7 +7,9 @@ import type {
   SessionFilter,
 } from "../api/types";
 import { reportError } from "./app";
+import { proxyStore } from "./proxy";
 import { sessionsStore } from "./sessions";
+import { isStaleInProgress } from "../utils/capture-outcome";
 
 const backend = createTauriBackend();
 
@@ -53,7 +55,12 @@ export const logsStore = reactive({
   /** 是否存在尚未完成的 in_progress 记录（已完成记录不会再变化，无需刷新）。 */
   get hasActive(): boolean {
     for (const row of this.rowsById.values()) {
-      if (row.outcome === "in_progress") return true;
+      if (
+        row.outcome === "in_progress" &&
+        !isStaleInProgress(row.outcome, row.created_at, proxyStore.status)
+      ) {
+        return true;
+      }
     }
     return false;
   },
@@ -64,6 +71,7 @@ export const logsStore = reactive({
       (id) =>
         this.rowsById.get(id) ?? {
           id,
+          created_at: 0,
           updated_at: 0,
           outcome: "success",
           cells: this.columns.map(() => ""),
@@ -238,7 +246,12 @@ export const logsStore = reactive({
   async hydrateActive(): Promise<void> {
     const ids: number[] = [];
     for (const [id, row] of this.rowsById) {
-      if (row.outcome === "in_progress") ids.push(id);
+      if (
+        row.outcome === "in_progress" &&
+        !isStaleInProgress(row.outcome, row.created_at, proxyStore.status)
+      ) {
+        ids.push(id);
+      }
     }
     if (ids.length > 0) {
       await this.hydrate(ids);
