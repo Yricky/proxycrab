@@ -295,8 +295,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.body-viewer { flex: 1; min-height: 80px; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-panel); overflow: hidden; margin-top: 3px; }
-.body-head { flex: none; display: flex; align-items: center; gap: 8px; min-height: 31px; padding: 5px 10px; border-bottom: 1px solid var(--border); background: var(--bg-app); color: var(--text-secondary); font-size: 11px; font-weight: 600; }
+.body-viewer { flex: 1; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-panel); overflow: hidden; }
+.body-head { flex: none; display: flex; align-items: center; gap: 8px; min-height: 24px; padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--bg-app); color: var(--text-secondary); font-size: 11px; font-weight: 600; }
 .size-note { color: var(--text-faint); font-family: var(--font-mono); font-size: 10px; font-weight: 400; }
 .body-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; }
 .tool-btn { border: 1px solid var(--border); background: var(--bg-panel); color: var(--text-secondary); font: inherit; font-size: 10px; padding: 1px 8px; cursor: pointer; }

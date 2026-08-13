@@ -25,7 +25,7 @@ let resizeObserver: ResizeObserver | null = null;
 let themeObserver: MutationObserver | null = null;
 
 function currentTheme(): string {
-  return document.documentElement.dataset.theme === "dark" ? "vs-dark" : "vs";
+  return document.documentElement.dataset.theme === "dark" ? "proxycrab-dark" : "proxycrab-light";
 }
 
 function focus(): void {

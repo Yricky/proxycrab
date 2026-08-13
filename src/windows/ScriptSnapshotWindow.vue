@@ -1,25 +1,9 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { Io5Checkmark, Io5Copy } from "vue-icons-plus/io5";
 import type { InterceptorExecution } from "../api/types";
 import MonacoEditor from "../components/MonacoEditor.vue";
-import { appStore, reportError } from "../stores/app";
 
 const props = defineProps<{ execution: InterceptorExecution }>();
-const copied = ref(false);
-let copiedTimer: number | undefined;
 
-async function copyHash(): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(props.execution.script_hash);
-    copied.value = true;
-    if (copiedTimer !== undefined) window.clearTimeout(copiedTimer);
-    copiedTimer = window.setTimeout(() => (copied.value = false), 1200);
-    appStore.toast("Hash 已复制", "success");
-  } catch (error) {
-    reportError(error, "复制 Hash 失败");
-  }
-}
 </script>
 
 <template>
@@ -36,11 +20,6 @@ async function copyHash(): Promise<void> {
         暂停中
       </span>
       <span class="snapshot-spacer" />
-      <button class="hash-button mono" title="复制 SHA-256" @click="copyHash">
-        <span>{{ execution.script_hash }}</span>
-        <Io5Checkmark v-if="copied" :size="13" class="text-success" />
-        <Io5Copy v-else :size="13" />
-      </button>
     </div>
     <MonacoEditor :model-value="execution.content" language="lua" readonly />
   </div>

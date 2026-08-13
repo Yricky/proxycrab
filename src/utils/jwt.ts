@@ -287,7 +287,7 @@ async function importJwkKey(alg: string, jwk: JsonWebKey): Promise<CryptoKey> {
   throw new Error(`不支持通过 JWK 导入的算法：${alg}`);
 }
 
-async function importVerificationKey(alg: string, keyText: string): Promise<CryptoKey> {
+async function importVerificationKey(alg: string, keyText: string, secretBase64: boolean): Promise<CryptoKey> {
   const trimmed = keyText.trim();
 
   if (trimmed.startsWith("{")) {
@@ -302,8 +302,18 @@ async function importVerificationKey(alg: string, keyText: string): Promise<Cryp
   }
 
   if (alg.startsWith("HS")) {
-    // HMAC：整段文本按 UTF-8 作为密钥
-    return crypto.subtle.importKey("raw", toArrayBuffer(textEncoder.encode(trimmed)), { name: "HMAC", hash: HASH_BY_ALG[alg] ?? "SHA-256" }, false, ["verify"]);
+    // HMAC：整段文本按 UTF-8 作为密钥；勾选 "secret base64 encoded" 时先按 Base64 解码（与 jwt.io 一致）
+    let keyBytes: Uint8Array;
+    if (secretBase64) {
+      try {
+        keyBytes = base64Decode(trimmed);
+      } catch {
+        throw new Error("密钥不是合法的 Base64 内容");
+      }
+    } else {
+      keyBytes = textEncoder.encode(trimmed);
+    }
+    return crypto.subtle.importKey("raw", toArrayBuffer(keyBytes), { name: "HMAC", hash: HASH_BY_ALG[alg] ?? "SHA-256" }, false, ["verify"]);
   }
 
   const pemKind = detectPem(trimmed);
@@ -342,9 +352,10 @@ function keyErrorMessage(error: unknown): string {
 
 /**
  * 验签（与 jwt.io 行为对齐）：用所选算法与密钥校验 header.payload 的签名。
- * 密钥格式按算法族自动判断：HS 系列用明文密钥；RS/PS/ES 系列支持 PEM 公钥与 JWK。
+ * 密钥格式按算法族自动判断：HS 系列用明文密钥（secretBase64 时按 Base64 解码）；
+ * RS/PS/ES 系列支持 PEM 公钥与 JWK。
  */
-export async function verifySignature(token: string, alg: string, keyText: string): Promise<VerifyOutcome> {
+export async function verifySignature(token: string, alg: string, keyText: string, secretBase64 = false): Promise<VerifyOutcome> {
   const decoded = decodeToken(token);
   if (!decoded.ok) {
     return { status: "token-error", message: decoded.error || "令牌格式无效" };
@@ -371,7 +382,7 @@ export async function verifySignature(token: string, alg: string, keyText: strin
   if (signature.length === 0) return { status: "invalid", message: "签名数据为空" };
 
   try {
-    const key = await importVerificationKey(alg, keyText);
+    const key = await importVerificationKey(alg, keyText, secretBase64);
     // Web Crypto 的 ECDSA 签名即为裸 r||s（P1363），无需转换
     const verified = await crypto.subtle.verify(verifyParams(alg), key, toArrayBuffer(signature), toArrayBuffer(signingInput));
     return verified
