@@ -81,6 +81,31 @@ impl ProxyCrab {
     pub fn open(app_data_dir: impl Into<PathBuf>, log_buffer: Arc<LogBuffer>) -> Result<Arc<Self>> {
         let app_data_dir = app_data_dir.into();
         let workspace_paths = resolve_workspace(&app_data_dir)?;
+        Self::build(app_data_dir, workspace_paths, log_buffer)
+    }
+
+    /// Opens a runtime rooted directly at `workspace_root`, bypassing the
+    /// app-data-dir/pointer mechanism used by the desktop app. Used by the
+    /// headless CLI, which takes the workspace directory explicitly.
+    pub fn open_workspace(
+        workspace_root: impl Into<PathBuf>,
+        log_buffer: Arc<LogBuffer>,
+    ) -> Result<Arc<Self>> {
+        let workspace_root = workspace_root.into();
+        std::fs::create_dir_all(&workspace_root)?;
+        let path = workspace_root.to_string_lossy().into_owned();
+        let workspace_paths = WorkspacePaths {
+            current_path: path.clone(),
+            configured_path: path,
+        };
+        Self::build(workspace_root, workspace_paths, log_buffer)
+    }
+
+    fn build(
+        app_data_dir: PathBuf,
+        workspace_paths: WorkspacePaths,
+        log_buffer: Arc<LogBuffer>,
+    ) -> Result<Arc<Self>> {
         let workspace = Workspace::open(PathBuf::from(&workspace_paths.current_path))?;
         let assets = AssetStore::open(workspace.root())?;
         let authority = Arc::new(CertificateAuthority::load_or_generate(workspace.root())?);

@@ -1,0 +1,360 @@
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
+
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use proxy_crab_mgr::{
+    dto::ManagerError,
+    permission::{PermissionMode, api_actions},
+};
+use proxy_crab_mitm::workspace::now_millis;
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
+
+use super::model::{
+    ApiKeyRecord, LOCAL_IDENTITY_ID, LocalPermissionRecord, PERMISSION_FILE_VERSION,
+    PermissionFile, PermissionIdentityKind, PermissionIdentitySummary,
+};
+
+const PERMISSION_FILE_NAME: &str = "http_api_permissions.json";
+const LAST_USED_WRITE_INTERVAL_MS: u64 = 60_000;
+
+pub struct PermissionStore {
+    path: PathBuf,
+    state: Mutex<PermissionFile>,
+}
+
+#[derive(Clone)]
+pub struct AuthenticatedIdentity {
+    pub summary: PermissionIdentitySummary,
+    pub permissions: BTreeMap<String, PermissionMode>,
+}
+
+impl PermissionStore {
+    pub fn open(workspace: &Path) -> Result<Self, ManagerError> {
+        let path = workspace.join(PERMISSION_FILE_NAME);
+        let (mut state, existed) = if path.exists() {
+            let bytes = fs::read(&path).map_err(|error| permission_file_error(&path, error))?;
+            let state = serde_json::from_slice(&bytes).map_err(|error| {
+                ManagerError::internal(format!(
+                    "failed to parse permission file {}: {error}",
+                    path.display()
+                ))
+            })?;
+            (state, true)
+        } else {
+            (PermissionFile::default(), false)
+        };
+        let normalized = validate_and_normalize(&mut state)?;
+        let store = Self {
+            path,
+            state: Mutex::new(state),
+        };
+        if !existed || normalized {
+            let state = store.state.lock().map_err(lock_error)?;
+            store.save_locked(&state)?;
+        }
+        Ok(store)
+    }
+
+    pub fn authenticate(
+        &self,
+        authorization: Option<&str>,
+    ) -> Result<AuthenticatedIdentity, ManagerError> {
+        let Some(authorization) = authorization else {
+            let state = self.state.lock().map_err(lock_error)?;
+            return Ok(AuthenticatedIdentity {
+                summary: local_summary(),
+                permissions: state.local.permissions.clone(),
+            });
+        };
+        let api_key = parse_bearer(authorization)?;
+        let prefix = api_key
+            .strip_prefix("pcrab_")
+            .and_then(|value| value.split_once('_'))
+            .map(|(prefix, _)| prefix)
+            .ok_or_else(invalid_api_key)?;
+        let mut state = self.state.lock().map_err(lock_error)?;
+        let record = state
+            .api_keys
+            .iter_mut()
+            .find(|record| record.prefix == prefix)
+            .ok_or_else(invalid_api_key)?;
+        let salt = URL_SAFE_NO_PAD
+            .decode(&record.salt)
+            .map_err(|_| ManagerError::internal("stored API key salt is invalid"))?;
+        let expected = URL_SAFE_NO_PAD
+            .decode(&record.hash)
+            .map_err(|_| ManagerError::internal("stored API key hash is invalid"))?;
+        let actual = key_hash(&salt, api_key);
+        if expected.len() != actual.len() || expected.ct_eq(actual.as_slice()).unwrap_u8() != 1 {
+            return Err(invalid_api_key());
+        }
+        let now = now_millis();
+        let should_save = record
+            .last_used_at
+            .is_none_or(|last| now.saturating_sub(last) >= LAST_USED_WRITE_INTERVAL_MS);
+        let identity = AuthenticatedIdentity {
+            summary: api_key_summary(record),
+            permissions: record.permissions.clone(),
+        };
+        if should_save {
+            let mut next = state.clone();
+            if let Some(record) = next
+                .api_keys
+                .iter_mut()
+                .find(|candidate| candidate.id == identity.summary.id)
+            {
+                record.last_used_at = Some(now);
+            }
+            match self.save_locked(&next) {
+                Ok(()) => *state = next,
+                Err(error) => {
+                    tracing::error!("failed to persist API key last-used time: {error}");
+                }
+            }
+        }
+        Ok(identity)
+    }
+
+    fn save_locked(&self, state: &PermissionFile) -> Result<(), ManagerError> {
+        write_permission_file(&self.path, state)
+    }
+}
+
+impl Default for PermissionFile {
+    fn default() -> Self {
+        Self {
+            version: PERMISSION_FILE_VERSION,
+            local: LocalPermissionRecord {
+                permissions: api_actions()
+                    .iter()
+                    .map(|action| (action.id.to_owned(), PermissionMode::Allow))
+                    .collect(),
+            },
+            api_keys: Vec::new(),
+        }
+    }
+}
+
+fn validate_and_normalize(state: &mut PermissionFile) -> Result<bool, ManagerError> {
+    if state.version != PERMISSION_FILE_VERSION {
+        return Err(ManagerError::internal(format!(
+            "unsupported permission file version {}",
+            state.version
+        )));
+    }
+    let known = known_action_ids();
+    validate_permission_keys(&state.local.permissions, &known)?;
+    let mut changed = add_missing_defaults(&mut state.local.permissions);
+    let mut ids = BTreeSet::new();
+    let mut names = BTreeSet::new();
+    let mut prefixes = BTreeSet::new();
+    for record in &mut state.api_keys {
+        if record.id.is_empty() || !ids.insert(record.id.clone()) {
+            return Err(ManagerError::internal(
+                "permission file contains duplicate API key IDs",
+            ));
+        }
+        if record.name.trim().is_empty()
+            || record.name != record.name.trim()
+            || record.name.chars().count() > 64
+            || !names.insert(record.name.clone())
+        {
+            return Err(ManagerError::internal(
+                "permission file contains invalid API key names",
+            ));
+        }
+        if record.prefix.is_empty() || !prefixes.insert(record.prefix.clone()) {
+            return Err(ManagerError::internal(
+                "permission file contains duplicate API key prefixes",
+            ));
+        }
+        let salt = URL_SAFE_NO_PAD
+            .decode(&record.salt)
+            .map_err(|_| ManagerError::internal("permission file contains an invalid salt"))?;
+        let hash = URL_SAFE_NO_PAD
+            .decode(&record.hash)
+            .map_err(|_| ManagerError::internal("permission file contains an invalid hash"))?;
+        if salt.len() != 16 || hash.len() != 32 {
+            return Err(ManagerError::internal(
+                "permission file contains invalid API key credentials",
+            ));
+        }
+        validate_permission_keys(&record.permissions, &known)?;
+        changed |= add_missing_defaults(&mut record.permissions);
+    }
+    Ok(changed)
+}
+
+fn validate_permission_keys(
+    permissions: &BTreeMap<String, PermissionMode>,
+    known: &BTreeSet<String>,
+) -> Result<(), ManagerError> {
+    if let Some(unknown) = permissions.keys().find(|id| !known.contains(*id)) {
+        return Err(ManagerError::internal(format!(
+            "permission file contains unknown action {unknown}"
+        )));
+    }
+    Ok(())
+}
+
+fn add_missing_defaults(permissions: &mut BTreeMap<String, PermissionMode>) -> bool {
+    let before = permissions.len();
+    for action in api_actions() {
+        permissions
+            .entry(action.id.to_owned())
+            .or_insert(action.default_mode);
+    }
+    permissions.len() != before
+}
+
+fn local_summary() -> PermissionIdentitySummary {
+    PermissionIdentitySummary {
+        id: LOCAL_IDENTITY_ID.into(),
+        kind: PermissionIdentityKind::Local,
+        name: "本机无 API Key".into(),
+        prefix: None,
+        created_at: None,
+        last_used_at: None,
+    }
+}
+
+fn api_key_summary(record: &ApiKeyRecord) -> PermissionIdentitySummary {
+    PermissionIdentitySummary {
+        id: record.id.clone(),
+        kind: PermissionIdentityKind::ApiKey,
+        name: record.name.clone(),
+        prefix: Some(record.prefix.clone()),
+        created_at: Some(record.created_at),
+        last_used_at: record.last_used_at,
+    }
+}
+
+fn known_action_ids() -> BTreeSet<String> {
+    api_actions()
+        .iter()
+        .map(|action| action.id.to_owned())
+        .collect()
+}
+
+fn parse_bearer(value: &str) -> Result<&str, ManagerError> {
+    let mut parts = value.split_whitespace();
+    let scheme = parts.next().ok_or_else(invalid_api_key)?;
+    let key = parts.next().ok_or_else(invalid_api_key)?;
+    if !scheme.eq_ignore_ascii_case("bearer") || key.is_empty() || parts.next().is_some() {
+        return Err(invalid_api_key());
+    }
+    Ok(key)
+}
+
+fn invalid_api_key() -> ManagerError {
+    ManagerError::new(
+        "invalid_api_key",
+        "Authorization must contain a valid Bearer API key",
+    )
+}
+
+fn random_text(bytes: usize) -> Result<String, ManagerError> {
+    Ok(URL_SAFE_NO_PAD.encode(random_bytes(bytes)?))
+}
+
+fn random_bytes(length: usize) -> Result<Vec<u8>, ManagerError> {
+    let mut bytes = vec![0; length];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| ManagerError::internal(format!("secure random generation failed: {error}")))?;
+    Ok(bytes)
+}
+
+fn key_hash(salt: &[u8], key: &str) -> Vec<u8> {
+    let mut digest = Sha256::new();
+    digest.update(salt);
+    digest.update(key.as_bytes());
+    digest.finalize().to_vec()
+}
+
+fn write_permission_file(path: &Path, state: &PermissionFile) -> Result<(), ManagerError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| ManagerError::internal("permission file has no parent directory"))?;
+    fs::create_dir_all(parent).map_err(|error| permission_file_error(path, error))?;
+    let temporary = parent.join(format!(".{PERMISSION_FILE_NAME}.{}.tmp", random_text(8)?));
+    let result = (|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&temporary)
+            .map_err(|error| permission_file_error(&temporary, error))?;
+        serde_json::to_writer_pretty(&mut file, state)
+            .map_err(|error| ManagerError::internal(format!("serialize permission file: {error}")))?;
+        file.write_all(b"\n")
+            .map_err(|error| permission_file_error(&temporary, error))?;
+        file.sync_all()
+            .map_err(|error| permission_file_error(&temporary, error))?;
+        fs::rename(&temporary, path).map_err(|error| permission_file_error(path, error))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .map_err(|error| permission_file_error(path, error))?;
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| permission_file_error(parent, error))?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn permission_file_error(path: &Path, error: std::io::Error) -> ManagerError {
+    ManagerError::internal(format!(
+        "permission file {} could not be read or written: {error}",
+        path.display()
+    ))
+}
+
+fn lock_error<T>(_: std::sync::PoisonError<T>) -> ManagerError {
+    ManagerError::internal("permission state lock poisoned")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn missing_file_creates_local_allow_all() {
+        let directory = tempdir().unwrap();
+        let store = PermissionStore::open(directory.path()).unwrap();
+        let identity = store.authenticate(None).unwrap();
+        assert_eq!(identity.summary.id, LOCAL_IDENTITY_ID);
+        assert!(
+            identity
+                .permissions
+                .values()
+                .all(|mode| *mode == PermissionMode::Allow)
+        );
+    }
+
+    #[test]
+    fn corrupt_file_fails_without_replacing_it() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join(PERMISSION_FILE_NAME);
+        fs::write(&path, b"not json").unwrap();
+        let error = PermissionStore::open(directory.path()).err().unwrap();
+        assert!(error.message.contains("failed to parse permission file"));
+        assert_eq!(fs::read(&path).unwrap(), b"not json");
+    }
+}
