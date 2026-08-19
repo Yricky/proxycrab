@@ -131,7 +131,7 @@ onMounted(() => void breakpointsStore.refresh());
 
 <style scoped>
 .breakpoint-list { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.list-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
+.list-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 8px 8px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
 .list-head div { display: flex; align-items: baseline; gap: 8px; }
 .list-head span, .count { color: var(--text-secondary); font-size: 11px; }
 .list-head .list-actions { align-items: center; }

@@ -1,5 +1,4 @@
 mod http_permissions;
-mod skill_install;
 
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -18,6 +17,7 @@ use proxy_crab_mgr::{
         UpdateSessionRequest,
     },
     http::{HttpServerHandle, start_http_server},
+    skill_install::{self, SkillInstallInfo},
 };
 use proxy_crab_mitm::{
     ProxyCrab,
@@ -37,7 +37,6 @@ use crate::http_permissions::{
     ApiActionView, CreatedApiKey, HttpPermissionService, IdentityPermissions, PendingApproval,
     PermissionEntry, PermissionIdentitySummary, ResolveApprovalRequest,
 };
-use crate::skill_install::SkillInstallInfo;
 
 struct BackendState {
     manager: Arc<dyn ProxyCrabManager>,

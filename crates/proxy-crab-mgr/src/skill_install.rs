@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use proxy_crab_mgr::dto::ManagerError;
+use crate::dto::ManagerError;
 use serde::Serialize;
 
 const SKILL_DIRECTORY_NAME: &str = "proxycrab";

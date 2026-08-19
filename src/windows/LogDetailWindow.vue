@@ -754,7 +754,6 @@ function headerCount(headers: HeaderItem[]): string {
 .summary {
   flex: none;
   padding: 6px 12px 6px;
-  border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
 }
 
@@ -974,7 +973,6 @@ function headerCount(headers: HeaderItem[]): string {
 
 .breakpoint-panel {
   flex: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
   background: color-mix(in srgb, var(--warning) 8%, var(--bg-panel));
 }
 
@@ -1035,6 +1033,7 @@ function headerCount(headers: HeaderItem[]): string {
   gap: 2px;
   padding: 0 8px 0;
   border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .tab-btn {
