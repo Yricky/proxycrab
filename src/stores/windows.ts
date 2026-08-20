@@ -1,4 +1,4 @@
-import { reactive } from "vue";
+import { markRaw, reactive } from "vue";
 import type { Component } from "vue";
 
 export interface WindowState {
@@ -48,7 +48,7 @@ export const windowsStore = reactive({
     const win: WindowState = {
       id,
       title: options.title,
-      component: options.component,
+      component: markRaw(options.component),
       props: options.props ?? {},
       x: 120 + base,
       y: 80 + base,

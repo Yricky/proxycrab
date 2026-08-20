@@ -15,7 +15,7 @@ import { isStaleInProgress } from "../utils/capture-outcome";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import BodyViewer from "../components/BodyViewer.vue";
 import { Io5Checkmark, Io5ChevronDown, Io5Copy, Io5Warning } from "vue-icons-plus/io5";
-import { openScriptSnapshot } from "./launcher";
+import { openModificationValue, openScriptSnapshot } from "./launcher";
 import { openDropdownMenu } from "../stores/dialog";
 import { fullCurl } from "../utils/curl";
 import type { BodyTarget } from "../api/body";
@@ -490,6 +490,35 @@ function visibleModifications(execution: InterceptorExecution): Modification[] {
   return execution.modifications.filter((mod) => mod.kind !== "snapshot");
 }
 
+const MOD_DETAIL_LIMIT = 200;
+
+interface ModRow {
+  mod: Modification;
+  text: string;
+  truncated: boolean;
+}
+
+function modificationRows(execution: InterceptorExecution): ModRow[] {
+  return visibleModifications(execution).map((mod) => {
+    const full = modificationDetail(mod);
+    const truncated = full.length > MOD_DETAIL_LIMIT;
+    return {
+      mod,
+      text: truncated ? `${full.slice(0, MOD_DETAIL_LIMIT)}…` : full,
+      truncated,
+    };
+  });
+}
+
+function openModDetail(execution: InterceptorExecution, index: number, row: ModRow): void {
+  if (!row.truncated || !detail.value) return;
+  openModificationValue(
+    `${detail.value.session_id}-${detail.value.id}-${execution.execution_id}-${index}`,
+    `${execution.name} · ${modificationLabel(row.mod)}`,
+    modificationDetail(row.mod),
+  );
+}
+
 function openExecution(execution: InterceptorExecution): void {
   if (!detail.value) return;
   openScriptSnapshot(detail.value.session_id, detail.value.id, execution);
@@ -678,9 +707,11 @@ function headerCount(headers: HeaderItem[]): string {
                 已执行，未产生修改
               </div>
               <ul v-else class="mod-list">
-                <li v-for="(mod, i) in visibleModifications(execution)" :key="i" class="mod-item">
-                  <span class="mod-badge">{{ modificationLabel(mod) }}</span>
-                  <span class="mod-detail mono">{{ modificationDetail(mod) }}</span>
+                <li v-for="(row, i) in modificationRows(execution)" :key="i" class="mod-item">
+                  <span class="mod-badge">{{ modificationLabel(row.mod) }}</span>
+                  <span class="mod-detail mono" :class="{ clickable: row.truncated }"
+                    :title="row.truncated ? '点击查看完整内容' : undefined"
+                    @click="openModDetail(execution, i, row)">{{ row.text }}</span>
                 </li>
               </ul>
             </article>
@@ -704,9 +735,11 @@ function headerCount(headers: HeaderItem[]): string {
                 已执行，未产生修改
               </div>
               <ul v-else class="mod-list">
-                <li v-for="(mod, i) in visibleModifications(execution)" :key="i" class="mod-item">
-                  <span class="mod-badge">{{ modificationLabel(mod) }}</span>
-                  <span class="mod-detail mono">{{ modificationDetail(mod) }}</span>
+                <li v-for="(row, i) in modificationRows(execution)" :key="i" class="mod-item">
+                  <span class="mod-badge">{{ modificationLabel(row.mod) }}</span>
+                  <span class="mod-detail mono" :class="{ clickable: row.truncated }"
+                    :title="row.truncated ? '点击查看完整内容' : undefined"
+                    @click="openModDetail(execution, i, row)">{{ row.text }}</span>
                 </li>
               </ul>
             </article>
@@ -1324,5 +1357,13 @@ function headerCount(headers: HeaderItem[]): string {
 .mod-detail {
   word-break: break-all;
   color: var(--text-secondary);
+}
+
+.mod-detail.clickable {
+  cursor: pointer;
+}
+
+.mod-detail.clickable:hover {
+  color: var(--accent);
 }
 </style>
