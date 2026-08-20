@@ -95,8 +95,9 @@ export function normalizeBaseUrl(args) {
     throw new UsageError("ProxyCrab base URL must use http or https");
   }
   const hostname = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
-  if (hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "::1") {
-    throw new UsageError("ProxyCrab base URL must use a loopback host");
+  const loopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  if (!loopback && !process.env.PROXYCRAB_API_KEY) {
+    throw new UsageError("remote ProxyCrab base URLs require PROXYCRAB_API_KEY");
   }
   url.pathname = url.pathname.replace(/\/+$/, "");
   url.search = "";

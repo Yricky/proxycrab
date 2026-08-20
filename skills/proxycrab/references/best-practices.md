@@ -80,11 +80,11 @@ connection pool.
 `text` and `json` bodies embed decoded content only through 64 KiB. Every non-empty persisted body
 includes its stored-byte size and local capture path. `binary` and `large` detail variants remain
 metadata-only; use `body-get.mjs` with an explicit stored-size maximum and output file before
-claiming to have inspected their bytes. The endpoint defaults to streaming stored bytes with the
-captured `Content-Encoding`, allowing HTTP clients to decode without ProxyCrab doing the work.
-Explicit server decompression is unbounded and single-pass, so reserve it for clients that cannot
-handle the captured encoding. `size` and `path` always describe stored bytes used to reproduce the
-captured request.
+claiming to have inspected their bytes. The endpoint negotiates from the client's `Accept-Encoding`:
+it preserves original bytes when every captured encoding is accepted, otherwise it streams a
+gzip, deflate, or identity fallback. The explicit maximum always checks the original stored file,
+not the decoded or recompressed byte count. `size` and `path` always describe stored bytes used to
+reproduce the captured request.
 
 When an interceptor replaces a body from a file, the historical modification records the absolute
 path, not a durable copy of that file's bytes. The interceptor source and modification history are

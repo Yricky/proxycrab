@@ -22,7 +22,7 @@ Neither reusable crate depends on Tauri.
 
 The Tauri application data directory contains `config.json`, which points at the workspace. When the pointer is absent or invalid, `app_data_dir/workspace` is used and persisted. A changed pointer takes effect only on the next application launch.
 
-The management API is loopback-only and supports workspace-scoped API keys through exactly one
+The management API defaults to loopback and supports workspace-scoped API keys through exactly one
 `Authorization: Bearer <key>` header. Every API key and the local no-key identity have independent
 per-route permissions. The desktop target supports `allow`, `approval`, and `deny`; approval waits
 for a desktop decision for up to 30 seconds. The CLI target exposes only `allow` and `deny`, and
@@ -72,6 +72,13 @@ At startup the CLI prints its browser URL and a 256-bit, per-run `pcrab_ui_…` 
 the URL and enter that token on the landing page. The cleartext token is not persisted; the process
 keeps only its SHA-256 digest. It authorizes the browser UI's internal `/ui-api/*` operations and
 trusted calls to the shared `/api/*` management resources for that process lifetime.
+
+For access from another machine, the safer setup is to keep the default loopback listener and use
+an SSH local port forward. The browser still opens `http://127.0.0.1:18089` on the client. If the
+CLI is deliberately started with `--api-host 0.0.0.0` or another non-loopback address, open the
+server's reachable IP or hostname instead. Remote `/api/*` requests require the Bearer token, and
+the token travels in cleartext over plain HTTP, so direct exposure should be limited to a trusted
+network or placed behind authenticated TLS.
 
 The CLI browser backend deliberately has no ProxyCrab Skill installation capability or HTTP route.
 This remains true even if the CLI frontend bundle is hosted outside the local binary. Users who

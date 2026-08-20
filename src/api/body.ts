@@ -60,7 +60,6 @@ export async function fetchBodyFromBase(
       : `/api/breakpoints/${target.id}/body`;
   const url = new URL(path, base);
   url.searchParams.set("side", side);
-  url.searchParams.set("decompress", "false");
   url.searchParams.set("max_size", String(maxSize));
   if (target.kind === "log") url.searchParams.set("session_id", String(target.sessionId));
 

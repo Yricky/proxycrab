@@ -29,7 +29,7 @@ Default base URL:
 http://127.0.0.1:18089
 ```
 
-The desktop app or CLI starts the management service on loopback only. Requests with no
+The desktop app or CLI starts the management service on loopback by default. Local requests with no
 `Authorization` header use the independently configurable `本机无 API Key` identity. API-key requests must send
 exactly one `Authorization: Bearer <key>` header; query credentials and `X-API-Key` are unsupported.
 Bundled scripts read the key from `PROXYCRAB_API_KEY`, never a command argument.
@@ -46,9 +46,12 @@ The CLI also prints a per-run `pcrab_ui_…` token for its browser landing page.
 UI routes and trusted UI calls, is not an Agent API key, and must never be copied into
 `PROXYCRAB_API_KEY`. The browser backend exposes no Skill-install method or HTTP route.
 
-The server requires a loopback/`localhost` Host and accepts browser Origin values only from local
-`http`, `https`, or `tauri` origins. Valid local CORS preflight permits `Authorization` and
-`Content-Type`; remote Host or Origin values remain forbidden.
+The CLI may bind to a non-loopback address for its browser UI. Public UI assets can load remotely,
+but a remote Host or Origin on `/api/*` requires Bearer authorization. Remote CORS preflight is
+accepted only when it requests `Authorization`; the subsequent request still passes normal token
+authentication and route permissions. Bundled Agent scripts accept a remote `--base-url` or
+`PROXYCRAB_API_URL` only when `PROXYCRAB_API_KEY` is set. Prefer authenticated TLS or an SSH local
+port forward because plain HTTP exposes the Bearer key and captured data.
 
 Except for the raw AGENTS.md, body, and Asset download endpoints documented below, every success is:
 
@@ -616,14 +619,11 @@ Other modification variants are `method_set` with `method`, `uri_set` with `uri`
 may share the same phase and position; use `execution_id` and array order rather than treating
 position as unique.
 
-### `GET /api/logs/{id}/body?session_id=3&side=request&decompress=false&max_size=16777216`
+### `GET /api/logs/{id}/body?session_id=3&side=request&max_size=16777216`
 
 Returns an unwrapped raw byte stream. `side` is required and must be `request` or `response`.
-`decompress` defaults to `false`.
-
-With `decompress=false`, ProxyCrab streams the stored bytes without decoding, preserves the captured
-`Content-Encoding`, and limits the stored/compressed size. `max_size` defaults to 16 MiB and has no
-server maximum. Oversized bodies return 413 with the stored sizes:
+`max_size` defaults to 16 MiB, has no server maximum, and always checks the original stored capture
+file before any decoding or recompression. Oversized bodies return 413 with the stored sizes:
 
 ```json
 {
@@ -637,13 +637,22 @@ server maximum. Oversized bodies return 413 with the stored sizes:
 }
 ```
 
-Browsers and Node fetch normally decode the preserved `Content-Encoding` themselves without using
-ProxyCrab CPU. With `decompress=true`, `max_size` is forbidden and ProxyCrab performs one streaming
-decode pass for gzip, br, deflate, zstd, or stacked encodings. That response omits both
-`Content-Encoding` and `Content-Length`; a malformed stream can terminate after HTTP 200 has begun.
-`X-ProxyCrab-Body-Size` always reports the stored byte count. Empty body files return 200 with zero
-bytes. Missing/not-yet-produced bodies return `body_not_found`; unreadable files return
-`body_read_failed`; unsupported encodings requested with decompression return `body_decode_failed`.
+ProxyCrab negotiates the response from `Accept-Encoding`. If every captured content encoding is
+accepted, including through `*`, it streams the original bytes and preserves the complete captured
+`Content-Encoding` stack and stored `Content-Length`. A specific `q=0` prohibition overrides `*`.
+Otherwise ProxyCrab decodes gzip, br, deflate, zstd, or stacked encodings and chooses the first
+allowed output from the fixed `gzip`, `deflate`, identity fallback chain. Nonzero q weights do not
+change that order; malformed entries are ignored. Missing or empty `Accept-Encoding` selects
+identity. If no output is allowed, the endpoint returns `406 not_acceptable_encoding`.
+
+Transcoded and identity responses omit `Content-Length`; gzip and deflate responses set their
+selected `Content-Encoding`. Every response includes `Vary: Accept-Encoding`, and
+`X-ProxyCrab-Body-Size` always reports the original stored byte count. The removed `decompress`
+query parameter is ignored for compatibility with older clients. A malformed encoded stream can
+terminate after HTTP 200 has begun. Empty body files return 200 with zero bytes.
+Missing/not-yet-produced bodies return `body_not_found`; unreadable files return
+`body_read_failed`; an original encoding that cannot be decoded for fallback returns
+`body_decode_failed`.
 
 ## Session views
 
@@ -882,7 +891,7 @@ capture IDs, phase/position/name, method/URI, timestamps, and `remaining_ms`.
 Returns `{ "breakpoint": <summary>, "log": <live LogDetail> }`. The log reflects mutations up to
 the current paused point.
 
-### `GET /api/breakpoints/{id}/body?side=request&decompress=false&max_size=16777216`
+### `GET /api/breakpoints/{id}/body?side=request&max_size=16777216`
 
 Uses the same raw response and query rules as the log body endpoint. It reads the persisted original
 body unless the paused phase has a live replacement. String replacements come from breakpoint
@@ -996,15 +1005,16 @@ HTTP status mapping:
 | --- | ---: | --- |
 | `bad_request` | 400 | Invalid JSON, arguments, script, filter, or operation |
 | `invalid_api_key` | 401 | Invalid Bearer syntax, or an unknown/deleted API key |
-| `forbidden_origin` | 403 | Non-local browser Origin |
+| `remote_auth_required` | 401 | A non-local Host or Origin omitted Bearer authorization |
 | `permission_denied` | 403 | The identity or an approval decision denied this route action |
 | `approval_timeout` | 403 | No desktop decision arrived within 30 seconds |
 | `not_found` | 404 | Missing endpoint, Session, log, or script |
 | `log_not_found` | 404 | Missing capture for a body request |
 | `body_not_found` | 404 | Requested side has not produced a body file |
+| `not_acceptable_encoding` | 406 | `Accept-Encoding` prohibits the original and every fallback encoding |
 | `conflict` | 409 | State conflict, including no active Session or archiving an active/in-use Session |
 | `body_too_large` | 413 | Stored body exceeds `max_size`; includes both sizes |
-| `body_decode_failed` | 422 | Unsupported encoding when server decompression is requested |
+| `body_decode_failed` | 422 | Original encoding cannot be decoded for a negotiated fallback |
 | `internal_error` | 500 | Storage, runtime, I/O, or other internal failure |
 | `permission_check_failed` | 500 | Permission storage or approval infrastructure failed closed |
 | `body_read_failed` | 500 | Body file cannot be opened or read |

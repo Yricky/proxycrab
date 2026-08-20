@@ -19,16 +19,16 @@ import {
 
 run(async () => {
   const args = parseArgs();
-  assertAllowedArgs(args, ["session-id", "log-id", "breakpoint-id", "side", "decompress", "max-size", "output"]);
+  assertAllowedArgs(args, ["session-id", "log-id", "breakpoint-id", "side", "max-size", "output"]);
   if (args.help) {
     printHelp(`
 Usage:
   node body-get.mjs --log-id ID [--session-id ID] --side request|response --output FILE [--max-size BYTES]
-  node body-get.mjs --breakpoint-id ID --side request|response --output FILE [--decompress true]
+  node body-get.mjs --breakpoint-id ID --side request|response --output FILE [--max-size BYTES]
 
 Read the complete decoded body into FILE. The default maximum is 16777216 stored bytes. Exactly one
-of --log-id and --breakpoint-id is required. Server-side decompression defaults to false; Node
-normally decodes the preserved Content-Encoding. max-size is only valid in raw server mode.
+of --log-id and --breakpoint-id is required. ProxyCrab negotiates the response encoding from the
+client's Accept-Encoding header, while max-size always limits the original stored capture file.
 `);
     return;
   }
@@ -47,20 +47,11 @@ normally decodes the preserved Content-Encoding. max-size is only valid in raw s
     throw new UsageError("--side must be request or response");
   }
   const maxSize = optionalInteger(args, "max-size", { min: 1 });
-  const decompressValue = args.decompress ?? "false";
-  if (decompressValue !== "true" && decompressValue !== "false") {
-    throw new UsageError("--decompress must be true or false");
-  }
-  const decompress = decompressValue === "true";
-  if (decompress && maxSize !== undefined) {
-    throw new UsageError("--max-size is not supported with --decompress true");
-  }
   const output = path.resolve(requiredString(args, "output"));
   const pathname =
     logId !== undefined ? `/api/logs/${logId}/body` : `/api/breakpoints/${breakpointId}/body`;
   const url = new URL(`${normalizeBaseUrl(args)}${pathname}`);
   url.searchParams.set("side", side);
-  url.searchParams.set("decompress", String(decompress));
   if (sessionId !== undefined) url.searchParams.set("session_id", String(sessionId));
   if (maxSize !== undefined) url.searchParams.set("max_size", String(maxSize));
 

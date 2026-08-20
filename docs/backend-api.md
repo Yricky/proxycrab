@@ -29,8 +29,9 @@ permission-manager implementation.
 
 ## Management HTTP authentication and permissions
 
-The management server remains loopback-only at `http://127.0.0.1:18089`. Requests without an
-`Authorization` header use the workspace's independently configurable `本机无 API Key` identity.
+The management server defaults to `http://127.0.0.1:18089`. Requests received through a loopback
+Host and local browser Origin may omit `Authorization` and use the workspace's independently
+configurable `本机无 API Key` identity.
 An API key is accepted only through exactly one `Authorization: Bearer <key>` header. `X-API-Key`,
 query-string credentials, duplicate Authorization headers, malformed schemes, and unknown or
 deleted keys are rejected. API-key management itself is desktop-only and is not exposed over HTTP.
@@ -52,8 +53,11 @@ and is owner-only on Unix. A corrupt or unreadable permissions file prevents the
 starting and never falls back to allow-all. Existing requests already waiting for approval are not
 recomputed when permissions change or a key is deleted.
 
-Local Host/Origin validation remains mandatory. Valid local CORS preflight requests may use
-`Authorization` and `Content-Type`; non-local Host and Origin values remain forbidden.
+The CLI may bind the management server to a non-loopback address. Public CLI UI assets can load
+through that address, but every remote `/api/*` request must include `Authorization`. Remote CORS
+preflight is accepted only when it requests the `Authorization` header; the authenticated request
+is then evaluated by the normal UI-token or API-key permission path. This preserves anonymous local
+access without exposing anonymous management access remotely.
 
 ### CLI browser authentication and target capabilities
 
@@ -112,8 +116,10 @@ instead of overwriting local edits.
 ## HTTP resources
 
 The server listens on loopback by default at `http://127.0.0.1:18089` and applies the authentication
-and permission policy above. Requests must use a loopback/`localhost` Host, and browser Origin
-values must also be local (including `tauri://localhost`) to prevent DNS-rebinding and CSRF access.
+and permission policy above. Local requests accept loopback/`localhost` Host values and local
+browser origins, including `tauri://localhost`. A non-local Host or Origin requires Bearer
+authorization, preventing anonymous DNS-rebinding and CSRF access while supporting the remote CLI
+browser UI.
 
 | Resource | Operations |
 | --- | --- |
@@ -396,14 +402,19 @@ proxy-generated errors retain their existing unpaced behavior.
 
 Log detail embeds decoded text/JSON only through 64 KiB. Every non-empty body includes the stored
 byte size and selected absolute capture path; compressed bodies therefore report their compressed
-file size. `GET /api/logs/{id}/body?session_id=1&side=request&decompress=false&max_size=16777216`
-returns the stored byte stream, preserves `Content-Encoding`, and applies `max_size` to stored bytes.
+file size. `GET /api/logs/{id}/body?session_id=1&side=request&max_size=16777216`
+negotiates its response from `Accept-Encoding` and always applies `max_size` to the original stored
+file before decoding or recompressing it. If the client accepts every captured content encoding,
+the original bytes and encoding stack are preserved. Otherwise ProxyCrab streams one decode pass
+and falls back in fixed `gzip`, `deflate`, then identity order; nonzero q weights do not reorder that
+preference, while `q=0` forbids an encoding. Responses include `Vary: Accept-Encoding`.
 An empty original request or response has no blob file. An explicitly modified empty body still
 persists its zero-byte `.modified` blob. Raw body endpoints continue to return a successful
 zero-byte stream for empty originals.
-The default limit is 16 MiB and there is no server maximum. `decompress=true` forbids `max_size` and
-performs one streaming server decode for gzip, br, deflate, zstd, or stacked encodings, without a
-pre-scan or decoded `Content-Length`. Active breakpoints expose the same contract at
+The default stored-file limit is 16 MiB and there is no server maximum. Transcoded and identity
+responses omit decoded `Content-Length`; original responses retain the stored length. The removed
+`decompress` query parameter is ignored when supplied by an older client. Active breakpoints expose
+the same contract at
 `GET /api/breakpoints/{id}/body` and include current replacements for the paused phase.
 
 ## Session table views

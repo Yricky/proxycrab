@@ -1,12 +1,12 @@
 ---
 name: proxycrab
-description: Use ProxyCrab's local management API to inspect captured or bypassed HTTP/HTTPS traffic, isolate failing requests, configure Lua bypass routing, export evidence, and create or attach Lua filters, custom columns, and request/response interceptors. Use this skill whenever the user mentions ProxyCrab, MITM capture debugging, captured requests or responses, ProxyCrab Sessions, ProxyCrab Lua scripts, traffic filtering, or asks an agent to diagnose an API call through the running ProxyCrab desktop app.
-compatibility: Requires a running ProxyCrab desktop app or CLI management service, Node.js 18 or newer, and access to its loopback management API.
+description: Use ProxyCrab's management API to inspect captured or bypassed HTTP/HTTPS traffic, isolate failing requests, configure Lua bypass routing, export evidence, and create or attach Lua filters, custom columns, and request/response interceptors. Use this skill whenever the user mentions ProxyCrab, MITM capture debugging, captured requests or responses, ProxyCrab Sessions, ProxyCrab Lua scripts, traffic filtering, or asks an agent to diagnose an API call through the running ProxyCrab desktop app.
+compatibility: Requires a running ProxyCrab desktop app or CLI management service, Node.js 18 or newer, and access to its management API.
 ---
 
 # ProxyCrab
 
-Use the running ProxyCrab desktop application or CLI process as a local, inspectable HTTP/HTTPS
+Use the running ProxyCrab desktop application or CLI process as an inspectable HTTP/HTTPS
 debugging environment. Prefer the bundled scripts for high-frequency operations because they validate
 arguments, unwrap the API envelope, emit machine-readable JSON, and return non-zero exit codes on
 failure.
@@ -47,6 +47,10 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
   action, and `invalid_api_key` means the environment key is missing, malformed, unknown, or deleted.
 - Never use the per-run `pcrab_ui_…` browser token as an Agent API key. It is a trusted UI credential
   printed for a human; do not copy it into `PROXYCRAB_API_KEY` or any Agent command.
+- Bundled Agent scripts allow a remote base URL only when `PROXYCRAB_API_KEY` is set. The remote
+  service must be deliberately bound to a reachable address, and that API-key identity must allow
+  the requested route. Prefer authenticated TLS or an SSH local port forward; plain HTTP exposes
+  the Bearer key and captured data, so use it only on a trusted network.
 - Successful management mutations synchronize into the open desktop UI. Archiving the viewed
   Session selects the first remaining Session; other mutations keep the viewed Session. Open
   editors preserve unsaved local changes.
@@ -263,7 +267,9 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
 - Log detail embeds at most 64 KiB of decoded text/JSON. Every non-empty persisted body includes its
   stored-byte size and local capture path. Use `body-get.mjs` for complete, normally client-decoded
   binary or oversized bytes;
-  always set a deliberate maximum and output path because bodies can contain credentials or personal data.
+  always set a deliberate stored-file maximum and output path because bodies can contain
+  credentials or personal data. The body endpoint negotiates a browser-safe response encoding from
+  `Accept-Encoding`; the limit remains based on the original capture file.
 - An empty original request or response has no capture blob file. An explicitly modified empty body
   still persists its zero-byte `.modified` blob.
 - Interceptor mutations applied before a Lua runtime error remain applied. Inspect both

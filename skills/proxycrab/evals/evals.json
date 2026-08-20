@@ -124,6 +124,18 @@
       "prompt": "Use ProxyCrab to find captures in Session 3 whose URI is exactly /api/orders/42 without changing the Session's saved filter, then report each returned row's capture outcome.",
       "expected_output": "The agent queries IDs with persist_filter=false and a column filter using regex=true plus an escaped anchored Rust regex, batch-renders the matching logs, and reports each row's explicit outcome and created_at fields. It does not infer persisted outcome from status or stage; if asked whether an in_progress row is active, it compares created_at with ProxyStatus.running.started_at and treats all in_progress rows as stale while the proxy is not running.",
       "files": []
+    },
+    {
+      "id": 21,
+      "prompt": "ProxyCrab CLI is running on another machine. Configure the bundled Agent scripts to access its management API directly at http://server.example:18089 and inspect a capture.",
+      "expected_output": "The agent sets http://server.example:18089 through PROXYCRAB_API_URL or --base-url, requires an Agent API key through PROXYCRAB_API_KEY, and never substitutes or exposes the pcrab_ui_ browser token. It warns that plain HTTP exposes the Bearer key and captured data, so direct access is appropriate only on a trusted network; authenticated TLS or an SSH tunnel is preferred.",
+      "files": []
+    },
+    {
+      "id": 22,
+      "prompt": "Save the complete response body for log 42 with a 32 MiB safety limit. The capture is Brotli encoded but this HTTP client accepts only gzip and deflate.",
+      "expected_output": "The agent uses body-get.mjs with max-size 33554432 and an output path, relies on server Accept-Encoding negotiation rather than a decompress option, and explains that max-size checks the original stored capture file while the client receives the negotiated decoded body without exposing its bytes.",
+      "files": []
     }
   ]
 }
