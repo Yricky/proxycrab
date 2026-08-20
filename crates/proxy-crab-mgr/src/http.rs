@@ -1,6 +1,8 @@
 use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 
-use async_compression::tokio::bufread::{BrotliDecoder, GzipDecoder, ZlibDecoder, ZstdDecoder};
+use async_compression::tokio::bufread::{
+    BrotliDecoder, GzipDecoder, GzipEncoder, ZlibDecoder, ZlibEncoder, ZstdDecoder,
+};
 use axum::{
     Extension, Json, Router,
     body::Body,
@@ -8,11 +10,12 @@ use axum::{
         ConnectInfo, FromRequest, FromRequestParts, MatchedPath, Path, Query, Request, State,
     },
     http::{
-        HeaderValue, Method, StatusCode,
+        HeaderMap, HeaderValue, Method, StatusCode,
         header::{
-            ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
-            ACCESS_CONTROL_ALLOW_ORIGIN, AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_ENCODING,
-            CONTENT_LENGTH, CONTENT_TYPE, HOST, ORIGIN, VARY,
+            ACCEPT_ENCODING, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+            ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_REQUEST_HEADERS, AUTHORIZATION,
+            CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HOST, ORIGIN,
+            VARY,
         },
         request::Parts,
     },
@@ -599,38 +602,36 @@ fn session_id_from_query(query: Option<&str>) -> Option<u64> {
 }
 
 async fn validate_local_browser_request(request: Request, next: Next) -> Response {
+    let path = request.uri().path().to_owned();
+    if !path.starts_with("/api/") {
+        return next.run(request).await;
+    }
     let local_authority = request
         .headers()
         .get(HOST)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<axum::http::uri::Authority>().ok())
         .is_some_and(|authority| is_local_host(authority.host()));
-    if !local_authority {
-        return ApiError(ManagerError::bad_request(
-            "management API Host must be loopback or localhost",
-        ))
-        .into_response();
-    }
     let allowed_origin = request.headers().get(ORIGIN).cloned();
-    if let Some(origin) = &allowed_origin {
-        let local_origin = origin
+    let local_origin = allowed_origin.as_ref().is_none_or(|origin| {
+        origin
             .to_str()
             .ok()
             .and_then(|value| value.parse::<axum::http::Uri>().ok())
             .is_some_and(|origin| {
                 matches!(origin.scheme_str(), Some("http" | "https" | "tauri"))
                     && origin.host().is_some_and(is_local_host)
-            });
-        if !local_origin {
-            return ApiError(ManagerError::new(
-                "forbidden_origin",
-                "management API Origin must be local",
-            ))
-            .into_response();
-        }
-    }
+            })
+    });
     let is_preflight = request.method() == Method::OPTIONS;
-    let path = request.uri().path().to_owned();
+    if (!local_authority || !local_origin)
+        && !request_has_remote_authorization(&request, is_preflight)
+    {
+        return permission_denied_response(PermissionDenied::unauthorized(
+            "remote_auth_required",
+            "remote management API requests require Authorization",
+        ));
+    }
     let mut response = if is_preflight {
         let methods = api_actions_for_path(&path)
             .map(|action| action.method)
@@ -652,7 +653,7 @@ async fn validate_local_browser_request(request: Request, next: Next) -> Respons
             .insert(ACCESS_CONTROL_ALLOW_ORIGIN, origin);
         response
             .headers_mut()
-            .insert(VARY, HeaderValue::from_static("Origin"));
+            .append(VARY, HeaderValue::from_static("Origin"));
     }
     if is_preflight && response.status().is_success() {
         let methods = api_actions_for_path(&path)
@@ -672,6 +673,19 @@ async fn validate_local_browser_request(request: Request, next: Next) -> Respons
         );
     }
     response
+}
+
+fn request_has_remote_authorization(request: &Request, is_preflight: bool) -> bool {
+    if !is_preflight {
+        return request.headers().contains_key(AUTHORIZATION);
+    }
+    request
+        .headers()
+        .get_all(ACCESS_CONTROL_REQUEST_HEADERS)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|name| name.trim().eq_ignore_ascii_case("authorization"))
 }
 
 fn is_local_host(host: &str) -> bool {
@@ -957,11 +971,12 @@ async fn log_body(
     State(manager): State<ManagerState>,
     ApiPath(id): ApiPath<u64>,
     ApiQuery(query): ApiQuery<BodyQuery>,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let side = parse_body_side(&query.side)?;
     validate_body_query(&query)?;
     let source = manager.log_body_source(query.session_id, id, side).await?;
-    body_response(source, query.decompress, query.max_size)
+    body_response(source, &headers, query.max_size)
         .await
         .map_err(ApiError)
 }
@@ -981,11 +996,12 @@ async fn breakpoint_body(
     State(manager): State<ManagerState>,
     ApiPath(id): ApiPath<u64>,
     ApiQuery(query): ApiQuery<BodyQuery>,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let side = parse_body_side(&query.side)?;
     validate_body_query(&query)?;
     let source = manager.breakpoint_body_source(id, side).await?;
-    body_response(source, query.decompress, query.max_size)
+    body_response(source, &headers, query.max_size)
         .await
         .map_err(ApiError)
 }
@@ -1297,11 +1313,6 @@ fn parse_body_side(side: &str) -> Result<BodySide, ApiError> {
 }
 
 fn validate_body_query(query: &BodyQuery) -> Result<(), ApiError> {
-    if query.decompress && query.max_size.is_some() {
-        return Err(ApiError(ManagerError::bad_request(
-            "max_size is not supported when decompress=true",
-        )));
-    }
     if query.max_size == Some(0) {
         Err(ApiError(ManagerError::bad_request(
             "max_size must be greater than zero",
@@ -1309,6 +1320,148 @@ fn validate_body_query(query: &BodyQuery) -> Result<(), ApiError> {
     } else {
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BodyResponseEncoding {
+    Original,
+    Gzip,
+    Deflate,
+    Identity,
+}
+
+#[derive(Debug)]
+struct EncodingPreference {
+    name: String,
+    allowed: bool,
+}
+
+#[derive(Debug, Default)]
+struct AcceptedEncodings {
+    values: Vec<EncodingPreference>,
+}
+
+impl AcceptedEncodings {
+    fn from_headers(headers: &HeaderMap) -> Self {
+        let values = headers
+            .get_all(ACCEPT_ENCODING)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .filter_map(parse_encoding_preference)
+            .collect();
+        Self { values }
+    }
+
+    fn allows(&self, name: &str) -> bool {
+        if let Some(allowed) = self.explicit(name) {
+            return allowed;
+        }
+        if name.eq_ignore_ascii_case("identity") {
+            return true;
+        }
+        self.explicit("*").unwrap_or(false)
+    }
+
+    fn explicit(&self, name: &str) -> Option<bool> {
+        let mut found = false;
+        let mut allowed = true;
+        for value in &self.values {
+            if value.name.eq_ignore_ascii_case(name) {
+                found = true;
+                allowed &= value.allowed;
+            }
+        }
+        found.then_some(allowed)
+    }
+
+    fn select(&self, source: &BodySource) -> Result<BodyResponseEncoding, ManagerError> {
+        let original_allowed = if source.content_encodings.is_empty() {
+            self.allows("identity")
+        } else {
+            source
+                .content_encodings
+                .iter()
+                .all(|encoding| self.allows(encoding))
+        };
+        if original_allowed {
+            return Ok(BodyResponseEncoding::Original);
+        }
+        for (name, encoding) in [
+            ("gzip", BodyResponseEncoding::Gzip),
+            ("deflate", BodyResponseEncoding::Deflate),
+            ("identity", BodyResponseEncoding::Identity),
+        ] {
+            if self.allows(name) {
+                return Ok(encoding);
+            }
+        }
+        Err(ManagerError::new(
+            "not_acceptable_encoding",
+            "the client prohibited every available response content encoding",
+        ))
+    }
+}
+
+fn parse_encoding_preference(value: &str) -> Option<EncodingPreference> {
+    let mut parts = value.split(';');
+    let name = parts.next()?.trim();
+    if !is_encoding_token(name) {
+        return None;
+    }
+    let mut allowed = true;
+    let mut quality_seen = false;
+    for parameter in parts {
+        let (key, value) = parameter.split_once('=')?;
+        if !key.trim().eq_ignore_ascii_case("q") {
+            return None;
+        }
+        if quality_seen {
+            return None;
+        }
+        quality_seen = true;
+        allowed = parse_quality(value.trim())?;
+    }
+    Some(EncodingPreference {
+        name: name.to_ascii_lowercase(),
+        allowed,
+    })
+}
+
+fn parse_quality(value: &str) -> Option<bool> {
+    let (whole, fractional) = value.split_once('.').unwrap_or((value, ""));
+    if fractional.len() > 3 || !fractional.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    match whole {
+        "0" => Some(fractional.bytes().any(|byte| byte != b'0')),
+        "1" if fractional.bytes().all(|byte| byte == b'0') => Some(true),
+        _ => None,
+    }
+}
+
+fn is_encoding_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
 }
 
 pub(crate) type DynBodyReader = Pin<Box<dyn AsyncRead + Send>>;
@@ -1354,17 +1507,27 @@ pub(crate) async fn body_reader(
 
 async fn body_response(
     source: BodySource,
-    decompress: bool,
+    request_headers: &HeaderMap,
     max_size: Option<u64>,
 ) -> ManagerResult<Response> {
-    if !decompress {
-        let max_size = max_size.unwrap_or_else(default_body_max_size);
-        if source.stored_size > max_size {
-            return Err(ManagerError::body_too_large(source.stored_size, max_size));
-        }
+    let max_size = max_size.unwrap_or_else(default_body_max_size);
+    if source.stored_size > max_size {
+        return Err(ManagerError::body_too_large(source.stored_size, max_size));
     }
 
-    let reader = body_reader(&source, decompress).await?;
+    let encoding = AcceptedEncodings::from_headers(request_headers).select(&source)?;
+    let reader: DynBodyReader = match encoding {
+        BodyResponseEncoding::Original => body_reader(&source, false).await?,
+        BodyResponseEncoding::Identity => body_reader(&source, true).await?,
+        BodyResponseEncoding::Gzip => {
+            let reader = body_reader(&source, true).await?;
+            Box::pin(GzipEncoder::new(BufReader::new(reader)))
+        }
+        BodyResponseEncoding::Deflate => {
+            let reader = body_reader(&source, true).await?;
+            Box::pin(ZlibEncoder::new(BufReader::new(reader)))
+        }
+    };
     let stream = ReaderStream::new(reader);
     let mut response = Response::new(Body::from_stream(stream));
     *response.status_mut() = StatusCode::OK;
@@ -1374,7 +1537,7 @@ async fn body_response(
         .and_then(|value| HeaderValue::from_str(value).ok())
         .unwrap_or_else(|| HeaderValue::from_static("application/octet-stream"));
     response.headers_mut().insert(CONTENT_TYPE, content_type);
-    if !decompress {
+    if encoding == BodyResponseEncoding::Original {
         response.headers_mut().insert(
             CONTENT_LENGTH,
             HeaderValue::from_str(&source.stored_size.to_string())
@@ -1387,7 +1550,16 @@ async fn body_response(
                     .map_err(|error| ManagerError::new("body_read_failed", error.to_string()))?,
             );
         }
+    } else if let Some(value) = match encoding {
+        BodyResponseEncoding::Gzip => Some(HeaderValue::from_static("gzip")),
+        BodyResponseEncoding::Deflate => Some(HeaderValue::from_static("deflate")),
+        BodyResponseEncoding::Original | BodyResponseEncoding::Identity => None,
+    } {
+        response.headers_mut().insert(CONTENT_ENCODING, value);
     }
+    response
+        .headers_mut()
+        .insert(VARY, HeaderValue::from_static("Accept-Encoding"));
     response.headers_mut().insert(
         "x-proxycrab-body-size",
         HeaderValue::from_str(&source.stored_size.to_string())
@@ -1410,6 +1582,7 @@ impl From<ManagerError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        let varies_on_accept_encoding = self.0.code == "not_acceptable_encoding";
         let status = match self.0.code.as_str() {
             "bad_request"
             | "unsupported_export_format"
@@ -1426,23 +1599,30 @@ impl IntoResponse for ApiError {
             | "asset_path_conflict" => StatusCode::CONFLICT,
             "body_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "body_decode_failed" => StatusCode::UNPROCESSABLE_ENTITY,
+            "not_acceptable_encoding" => StatusCode::NOT_ACCEPTABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        (
+        let mut response = (
             status,
             Json(json!({
                 "ok": false,
                 "error": self.0
             })),
         )
-            .into_response()
+            .into_response();
+        if varies_on_accept_encoding {
+            response
+                .headers_mut()
+                .insert(VARY, HeaderValue::from_static("Accept-Encoding"));
+        }
+        response
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
-        io::Write,
+        io::{Read, Write},
         sync::{Arc, Mutex},
     };
 
@@ -1450,16 +1630,17 @@ mod tests {
     use axum::{
         body::{Body, to_bytes},
         http::{
-            Method, Request, StatusCode,
+            HeaderMap, Method, Request, StatusCode,
             header::{
                 ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
-                ACCESS_CONTROL_ALLOW_ORIGIN, AUTHORIZATION,
+                ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_REQUEST_HEADERS, AUTHORIZATION,
             },
         },
         response::IntoResponse,
     };
     use flate2::{
         Compression,
+        read::{GzDecoder, ZlibDecoder},
         write::{GzEncoder, ZlibEncoder},
     };
     use proxy_crab_mitm::{ProxyCrab, log_buffer::LogBuffer};
@@ -1702,7 +1883,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn raw_body_response_defaults_to_stored_bytes_and_optionally_decodes() {
+    async fn body_response_negotiates_original_gzip_deflate_and_identity() {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(b"decoded body").unwrap();
         let compressed = encoder.finish().unwrap();
@@ -1714,7 +1895,9 @@ mod tests {
             content_encodings: vec!["gzip".into()],
         };
 
-        let response = body_response(source.clone(), false, Some(64))
+        let mut headers = HeaderMap::new();
+        headers.insert("accept-encoding", "gzip".parse().unwrap());
+        let response = body_response(source.clone(), &headers, Some(64))
             .await
             .unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::OK);
@@ -1727,16 +1910,31 @@ mod tests {
             source.stored_size.to_string()
         );
         assert_eq!(response.headers()["content-encoding"], "gzip");
+        assert_eq!(response.headers()["vary"], "Accept-Encoding");
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(body.len() as u64, source.stored_size);
 
-        let response = body_response(source.clone(), true, None).await.unwrap();
+        headers.insert("accept-encoding", "gzip;q=0, deflate;q=0".parse().unwrap());
+        let response = body_response(source.clone(), &headers, None).await.unwrap();
         assert!(response.headers().get("content-length").is_none());
         assert!(response.headers().get("content-encoding").is_none());
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(body.as_ref(), b"decoded body");
 
-        let error = body_response(source.clone(), false, Some(4))
+        headers.insert(
+            "accept-encoding",
+            "gzip;q=0, deflate;q=0, identity;q=0".parse().unwrap(),
+        );
+        let error = body_response(source.clone(), &headers, None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "not_acceptable_encoding");
+        let response = ApiError(error).into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(response.headers()["vary"], "Accept-Encoding");
+
+        headers.insert("accept-encoding", "deflate".parse().unwrap());
+        let error = body_response(source.clone(), &headers, Some(4))
             .await
             .unwrap_err();
         assert_eq!(error.code, "body_too_large");
@@ -1744,6 +1942,69 @@ mod tests {
         assert_eq!(error.max_size, Some(4));
         let response = ApiError(error).into_response();
         assert_eq!(response.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn body_response_prefers_original_then_fixed_fallback_order() {
+        let original = b"negotiated body";
+        let mut brotli = Vec::new();
+        {
+            let mut writer = brotli::CompressorWriter::new(&mut brotli, 4096, 5, 22);
+            writer.write_all(original).unwrap();
+        }
+        let source = BodySource {
+            stored_size: brotli.len() as u64,
+            data: BodySourceData::Bytes(brotli.clone()),
+            path: None,
+            content_type: Some("text/plain".into()),
+            content_encodings: vec!["br".into()],
+        };
+
+        for value in ["br", "*"] {
+            let mut headers = HeaderMap::new();
+            headers.insert("accept-encoding", value.parse().unwrap());
+            let response = body_response(source.clone(), &headers, None).await.unwrap();
+            assert_eq!(response.headers()["content-encoding"], "br", "{value}");
+            assert_eq!(
+                response.headers()["content-length"],
+                brotli.len().to_string()
+            );
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(body.as_ref(), brotli.as_slice(), "{value}");
+        }
+
+        let mut headers = HeaderMap::new();
+        headers.insert("accept-encoding", "*;q=1, br;q=0".parse().unwrap());
+        let response = body_response(source.clone(), &headers, None).await.unwrap();
+        assert_eq!(response.headers()["content-encoding"], "gzip");
+        assert!(response.headers().get("content-length").is_none());
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let mut decoder = GzDecoder::new(body.as_ref());
+        let mut decoded = Vec::new();
+        decoder.read_to_end(&mut decoded).unwrap();
+        assert_eq!(decoded, original);
+
+        headers.insert(
+            "accept-encoding",
+            "gzip;q=0.1, deflate;q=1".parse().unwrap(),
+        );
+        let response = body_response(source.clone(), &headers, None).await.unwrap();
+        assert_eq!(response.headers()["content-encoding"], "gzip");
+
+        headers.insert("accept-encoding", "gzip;q=.5, deflate".parse().unwrap());
+        let response = body_response(source.clone(), &headers, None).await.unwrap();
+        assert_eq!(response.headers()["content-encoding"], "deflate");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let mut decoder = ZlibDecoder::new(body.as_ref());
+        let mut decoded = Vec::new();
+        decoder.read_to_end(&mut decoded).unwrap();
+        assert_eq!(decoded, original);
+
+        headers.insert("accept-encoding", "".parse().unwrap());
+        let response = body_response(source, &headers, None).await.unwrap();
+        assert!(response.headers().get("content-encoding").is_none());
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), original);
     }
 
     #[tokio::test]
@@ -1767,7 +2028,10 @@ mod tests {
                 content_type: None,
                 content_encodings: vec![encoding.into()],
             };
-            let response = body_response(source, true, None).await.unwrap();
+            let response = body_response(source, &HeaderMap::new(), None)
+                .await
+                .unwrap();
+            assert!(response.headers().get("content-encoding").is_none());
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             assert_eq!(body.as_ref(), original, "{encoding}");
         }
@@ -1787,7 +2051,18 @@ mod tests {
             content_type: None,
             content_encodings: vec!["gzip".into(), "br".into()],
         };
-        let response = body_response(source, true, None).await.unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("accept-encoding", "gzip, br".parse().unwrap());
+        let response = body_response(source.clone(), &headers, None).await.unwrap();
+        assert_eq!(response.headers()["content-encoding"], "gzip, br");
+        assert_eq!(
+            response.headers()["content-length"],
+            source.stored_size.to_string()
+        );
+
+        let response = body_response(source, &HeaderMap::new(), None)
+            .await
+            .unwrap();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(body.as_ref(), original);
     }
@@ -1822,7 +2097,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/api/logs/{id}/body?session_id={}&side=request&decompress=false&max_size=64",
+                        "/api/logs/{id}/body?session_id={}&side=request&decompress=true&max_size=64",
                         session.id
                     ))
                     .body(Body::empty())
@@ -2638,7 +2913,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_non_local_host_and_origin() {
+    async fn remote_management_requests_require_authorization() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let manager = MitmManager::new(runtime);
@@ -2657,7 +2932,91 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"]["code"], "remote_auth_required");
+    }
+
+    #[tokio::test]
+    async fn remote_management_requests_with_authorization_reach_permission_check() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager = MitmManager::new(runtime);
+        let (permissions, recorded) = recording_permissions(None);
+        let app = secured_router(manager, permissions);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/proxy/status")
+                    .header("host", "proxy.example:18089")
+                    .header("origin", "https://proxy.example")
+                    .header(AUTHORIZATION, "Bearer pcrab_ui_test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response.headers()[ACCESS_CONTROL_ALLOW_ORIGIN],
+            "https://proxy.example"
+        );
+        assert_eq!(
+            recorded.lock().unwrap()[0].authorization,
+            Some("Bearer pcrab_ui_test".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_cors_preflight_requires_authorization_header() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager = MitmManager::new(runtime);
+        let app = secured_router(manager, allow_all());
+
+        let request = || {
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/api/sessions/42")
+                .header("host", "proxy.example:18089")
+                .header("origin", "https://proxy.example")
+                .header("access-control-request-method", "PUT")
+        };
+        let response = app
+            .clone()
+            .oneshot(request().body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                request()
+                    .header(
+                        ACCESS_CONTROL_REQUEST_HEADERS,
+                        "authorization, content-type",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::NO_CONTENT);
+        assert_eq!(
+            response.headers()[ACCESS_CONTROL_ALLOW_ORIGIN],
+            "https://proxy.example"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_management_requests_remain_unauthenticated() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager = MitmManager::new(runtime);
+        let app = secured_router(manager, allow_all());
 
         let response = app
             .oneshot(
@@ -2675,6 +3034,27 @@ mod tests {
             response.headers()["access-control-allow-origin"],
             "tauri://localhost"
         );
+    }
+
+    #[tokio::test]
+    async fn non_api_routes_allow_remote_host_for_cli_ui_assets() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager = MitmManager::new(runtime);
+        let app = secured_router(manager, allow_all());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header("host", "proxy.example:18089")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

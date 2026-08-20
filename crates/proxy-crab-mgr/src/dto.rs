@@ -121,8 +121,6 @@ pub struct SessionQuery {
 pub struct BodyQuery {
     pub session_id: Option<u64>,
     pub side: String,
-    #[serde(default)]
-    pub decompress: bool,
     pub max_size: Option<u64>,
 }
 
