@@ -16,8 +16,10 @@ const props = withDefaults(
     placeholder?: string;
     disabled?: boolean;
     ariaLabel?: string;
+    /** 菜单弹出方向，默认向下；底部状态栏等场景可设为 up。 */
+    placement?: "down" | "up";
   }>(),
-  { placeholder: "请选择", disabled: false, ariaLabel: "选择" },
+  { placeholder: "请选择", disabled: false, ariaLabel: "选择", placement: "down" },
 );
 
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
@@ -129,7 +131,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
       </span>
       <Io5ChevronDown :size="13" />
     </button>
-    <div v-if="open" class="select-menu" role="listbox" :aria-label="ariaLabel">
+    <div v-if="open" class="select-menu" :class="{ 'menu-up': placement === 'up' }" role="listbox" :aria-label="ariaLabel">
       <button
         v-for="(option, index) in options"
         :key="option.value"
@@ -165,6 +167,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
 .select-copy small { overflow: hidden; color: var(--text-faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .placeholder { color: var(--text-faint); }
 .select-menu { position: absolute; z-index: 100006; top: calc(100% + 4px); left: 0; right: 0; min-width: 150px; max-height: 280px; overflow-y: auto; padding: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg-elevated); box-shadow: var(--shadow-popup); }
+.select-menu.menu-up { top: auto; bottom: calc(100% + 4px); }
 .select-option { width: 100%; min-height: 30px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 7px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .select-option.active:not(:disabled) { background: var(--bg-hover); }
 .select-option.selected { color: var(--accent); }

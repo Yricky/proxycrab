@@ -93,6 +93,13 @@ watch(
 );
 
 watch(
+  () => props.options,
+  (options) => {
+    editor?.updateOptions({ ...options });
+  },
+);
+
+watch(
   () => appStore.theme,
   () => {
     monacoRef?.editor.setTheme(currentTheme());

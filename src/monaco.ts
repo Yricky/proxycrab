@@ -188,6 +188,21 @@ if (!monaco.languages.getLanguages().some((language) => language.id === "lua")) 
 // 应用自定义主题：编辑器背景对齐 base.css 的 --bg-app 色板，
 // 避免浅色模式下 Monaco 默认纯白背景与 --bg-panel 白色面板融为一体而无法区分。
 // 颜色值需与 src/styles/base.css 中的 --bg-app 保持同步。
+// Monaco 默认通过 window.open 打开链接，在 Tauri webview 中是 no-op。
+// registerLinkOpener 会插入到 opener 链最前面，优先于内置的 window.open 兜底逻辑，
+// 拦截 http/https 链接的打开行为，转到内置浏览器窗口。
+monaco.editor.registerLinkOpener({
+  async open(resource) {
+    const url = resource.toString();
+    if (/^https?:\/\//i.test(url)) {
+      const { openBrowser } = await import("./windows/launcher");
+      openBrowser(url);
+      return true;
+    }
+    return false;
+  },
+});
+
 monaco.editor.defineTheme("proxycrab-light", {
   base: "vs",
   inherit: true,

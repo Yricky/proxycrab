@@ -11,7 +11,7 @@ import JwtWindow from "./JwtWindow.vue";
 import CertManagerWindow from "./CertManagerWindow.vue";
 import SystemLogsWindow from "./SystemLogsWindow.vue";
 import SettingsWindow from "./SettingsWindow.vue";
-import ScriptSnapshotWindow from "./ScriptSnapshotWindow.vue";
+import ReadonlyViewerWindow from "./ReadonlyViewerWindow.vue";
 import SkillInstallWindow from "./SkillInstallWindow.vue";
 import RoutingManagerWindow from "./RoutingManagerWindow.vue";
 import BypassWindow from "./BypassWindow.vue";
@@ -19,6 +19,24 @@ import BreakpointListWindow from "./BreakpointListWindow.vue";
 import AgentsPresetsWindow from "./AgentsPresetsWindow.vue";
 import ArchivedSessionsWindow from "./ArchivedSessionsWindow.vue";
 import ApprovalWindow from "./ApprovalWindow.vue";
+import BrowserWindow from "./BrowserWindow.vue";
+
+/** 内置浏览器窗口：同一 URL 复用已有窗口。 */
+export function openBrowser(url: string): void {
+  let host = url;
+  try {
+    host = new URL(url).host;
+  } catch {
+    // 保留原始 url 作为标题
+  }
+  windowsStore.open(`browser-${url}`, {
+    title: host,
+    component: BrowserWindow,
+    props: { url },
+    width: 960,
+    height: 640,
+  });
+}
 
 export function openLogDetail(sessionId: number, logId: number): void {
   windowsStore.open(`detail-${sessionId}-${logId}`, {
@@ -69,21 +87,41 @@ export function openScriptEditor(kind: InterceptorKind, name: string): void {
   );
 }
 
+/** 通用只读编辑器窗口：展示完整内容，底部状态栏可切换高亮格式与自动换行。 */
+export function openReadonlyViewer(
+  id: string,
+  title: string,
+  content: string,
+  language = "plaintext",
+): void {
+  windowsStore.open(`readonly-viewer-${id}`, {
+    title,
+    component: ReadonlyViewerWindow,
+    props: { content, language },
+    width: 720,
+    height: 520,
+  });
+}
+
 export function openScriptSnapshot(
   sessionId: number,
   logId: number,
   execution: InterceptorExecution,
 ): void {
-  windowsStore.open(
+  openReadonlyViewer(
     `script-snapshot-${sessionId}-${logId}-${execution.execution_id}`,
-    {
-      title: `${execution.name} — 历史脚本`,
-      component: ScriptSnapshotWindow,
-      props: { execution },
-      width: 720,
-      height: 520,
-    },
+    `${execution.name} — 历史脚本`,
+    execution.content,
+    "lua",
   );
+}
+
+export function openModificationValue(
+  id: string,
+  label: string,
+  value: string,
+): void {
+  openReadonlyViewer(`mod-value-${id}`, `${label} — 完整内容`, value);
 }
 
 export function openRequestInterceptorManager(): void {
