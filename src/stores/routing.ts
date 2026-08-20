@@ -1,9 +1,7 @@
 import { reactive } from "vue";
-import { createTauriBackend } from "../api/tauri-backend";
+import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { Script } from "../api/types";
 import { reportError } from "./app";
-
-const backend = createTauriBackend();
 
 export const routingStore = reactive({
   scripts: [] as Script[],

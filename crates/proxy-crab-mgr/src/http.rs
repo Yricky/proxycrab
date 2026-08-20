@@ -130,16 +130,22 @@ pub async fn start_http_server(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
 ) -> Result<HttpServerHandle, ManagerError> {
+    start_http_server_with_routes(manager, permissions, |_| Router::new()).await
+}
+
+pub async fn start_http_server_with_routes<F>(
+    manager: ManagerState,
+    permissions: Arc<dyn PermissionManager>,
+    extra_routes: F,
+) -> Result<HttpServerHandle, ManagerError>
+where
+    F: FnOnce(broadcast::Sender<HttpApiChange>) -> Router,
+{
     let config = manager.config().await?;
     let ip = config
         .api_host
         .parse::<std::net::IpAddr>()
         .map_err(|_| ManagerError::bad_request("management API host must be an IP address"))?;
-    if !ip.is_loopback() {
-        return Err(ManagerError::bad_request(
-            "management API host must be a loopback address",
-        ));
-    }
     let address = std::net::SocketAddr::new(ip, config.api_port);
     let listener = tokio::net::TcpListener::bind(&address)
         .await
@@ -147,7 +153,8 @@ pub async fn start_http_server(
     let cancellation = CancellationToken::new();
     let shutdown = cancellation.clone();
     let (changes, _) = broadcast::channel(128);
-    let app = secured_router_with_changes(manager, permissions, changes.clone());
+    let extra = extra_routes(changes.clone());
+    let app = secured_router_with_changes_and_extra(manager, permissions, changes.clone(), extra);
     let task = tokio::spawn(async move {
         if let Err(error) = axum::serve(
             listener,
@@ -177,6 +184,15 @@ fn router_with_changes(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
     changes: ChangeSender,
+) -> Router {
+    router_with_changes_and_extra(manager, permissions, changes, Router::new())
+}
+
+fn router_with_changes_and_extra(
+    manager: ManagerState,
+    permissions: Arc<dyn PermissionManager>,
+    changes: ChangeSender,
+    extra: Router,
 ) -> Router {
     Router::new()
         .route("/api/agents.md", get(agents_markdown))
@@ -290,13 +306,14 @@ fn router_with_changes(
             permissions,
             authorize_request,
         ))
-        .fallback(not_found)
         .with_state(manager)
         .layer(Extension(changes.clone()))
         .layer(middleware::from_fn_with_state(
             changes,
             publish_successful_http_changes,
         ))
+        .merge(extra)
+        .fallback(not_found)
 }
 
 #[cfg(test)]
@@ -305,12 +322,22 @@ fn secured_router(manager: ManagerState, permissions: Arc<dyn PermissionManager>
     secured_router_with_changes(manager, permissions, changes)
 }
 
+#[cfg(test)]
 fn secured_router_with_changes(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
     changes: ChangeSender,
 ) -> Router {
-    router_with_changes(manager, permissions, changes)
+    secured_router_with_changes_and_extra(manager, permissions, changes, Router::new())
+}
+
+fn secured_router_with_changes_and_extra(
+    manager: ManagerState,
+    permissions: Arc<dyn PermissionManager>,
+    changes: ChangeSender,
+    extra: Router,
+) -> Router {
+    router_with_changes_and_extra(manager, permissions, changes, extra)
         .layer(middleware::from_fn(validate_local_browser_request))
 }
 

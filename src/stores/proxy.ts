@@ -1,13 +1,11 @@
 import { reactive } from "vue";
-import { createTauriBackend } from "../api/tauri-backend";
+import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { AppConfig, ProxyStatus } from "../api/types";
 import { reportError } from "./app";
 
 // Stores are module singletons; they use their own backend handle so that
 // polling logic can live outside component setup. Components still go
 // through useBackend() for user-triggered actions.
-const backend = createTauriBackend();
-
 let pollTimer: number | undefined;
 let portPersistTimer: number | undefined;
 

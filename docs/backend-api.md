@@ -55,6 +55,28 @@ recomputed when permissions change or a key is deleted.
 Local Host/Origin validation remains mandatory. Valid local CORS preflight requests may use
 `Authorization` and `Content-Type`; non-local Host and Origin values remain forbidden.
 
+### CLI browser authentication and target capabilities
+
+When the CLI starts its management server, it also prints a 256-bit, per-run `pcrab_ui_…` token.
+The browser landing page verifies the token through `GET /ui-api/bootstrap`, installs an HTTP
+Backend in `window.proxyCrabBackend`, and then mounts the shared application. The cleartext token is
+not written to the workspace; the CLI stores only a SHA-256 digest in memory.
+
+The token protects target-private `/ui-api/*` routes for bootstrap, long-poll UI changes, local IP
+and regex helpers, Agent preset management, and API-key/permission management. It is also accepted
+as a trusted credential for the shared `/api/*` resources so the UI remains usable even when the
+ordinary local identity denies an action. These routes and this token are UI internals, not public
+agent API credentials.
+
+The CLI permission editor offers only `allow` and `deny`. Existing persisted `approval` entries are
+displayed and evaluated as `deny`, and CLI updates reject `approval`. The Tauri target retains its
+approval workflow. The CLI workspace path is read-only in the UI because `--workspace` selects it
+at process startup.
+
+The CLI Backend intentionally does not define a Skill installer, and the CLI HTTP router has no
+Skill-install endpoint. Skill installation is a local, explicit CLI subcommand or a trusted Tauri
+operation; it cannot be initiated by the browser bundle, which may be hosted remotely.
+
 ## HTTP changes and desktop UI synchronization
 
 Successful HTTP operations that mutate application-visible state publish an internal change event
@@ -376,6 +398,9 @@ Log detail embeds decoded text/JSON only through 64 KiB. Every non-empty body in
 byte size and selected absolute capture path; compressed bodies therefore report their compressed
 file size. `GET /api/logs/{id}/body?session_id=1&side=request&decompress=false&max_size=16777216`
 returns the stored byte stream, preserves `Content-Encoding`, and applies `max_size` to stored bytes.
+An empty original request or response has no blob file. An explicitly modified empty body still
+persists its zero-byte `.modified` blob. Raw body endpoints continue to return a successful
+zero-byte stream for empty originals.
 The default limit is 16 MiB and there is no server maximum. `decompress=true` forbids `max_size` and
 performs one streaming server decode for gzip, br, deflate, zstd, or stacked encodings, without a
 pre-scan or decoded `Content-Length`. Active breakpoints expose the same contract at

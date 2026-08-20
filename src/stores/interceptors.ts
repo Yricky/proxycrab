@@ -1,13 +1,11 @@
 import { reactive } from "vue";
-import { createTauriBackend } from "../api/tauri-backend";
+import { runtimeBackend as backend } from "../api/runtime-backend";
 import type {
   InterceptorKind,
   SessionInterceptorItem,
   SessionInterceptorsPayload,
 } from "../api/types";
 import { reportError } from "./app";
-
-const backend = createTauriBackend();
 
 function clone(items: SessionInterceptorItem[]): SessionInterceptorItem[] {
   return items.map((item) => ({ ...item }));

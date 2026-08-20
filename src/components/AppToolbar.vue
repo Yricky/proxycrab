@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import { proxyStore } from "../stores/proxy";
 import { appStore, type ThemeMode } from "../stores/app";
 import { approvalsStore } from "../stores/approvals";
+import { useBackend } from "../api";
 import {
   openBase64,
   openAgentsPresets,
@@ -43,6 +44,8 @@ import {
 } from "vue-icons-plus/io5";
 
 type ToolbarMenu = "ai" | "scripts" | "tools" | "system";
+
+const backend = useBackend();
 
 const toolbarMenus = ref<HTMLElement | null>(null);
 const activeMenu = ref<ToolbarMenu | null>(null);
@@ -197,7 +200,11 @@ onBeforeUnmount(() => {
             <Io5DocumentText :size="14" />
             <span>AGENTS.md 预设…</span>
           </button>
-          <button class="tb-menu-item" @click="runMenuAction(openSkillInstall)">
+          <button
+            v-if="backend.skillInstaller"
+            class="tb-menu-item"
+            @click="runMenuAction(openSkillInstall)"
+          >
             <Io5Download :size="14" />
             <span>安装 ProxyCrab Skill…</span>
           </button>

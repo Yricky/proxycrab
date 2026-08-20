@@ -22,7 +22,7 @@ use crate::{
         CaptureSummary, HeaderValues, Modification, RequestData, RequestTags, ResponseData,
         ScriptKind,
     },
-    proxy::body::DeferredBodyReader,
+    proxy::body::{DeferredBodyRead, DeferredBodyReader},
 };
 
 mod codec;
@@ -1162,14 +1162,14 @@ fn effective_text_bytes(body: &MutableBody) -> mlua::Result<Option<Vec<u8>>> {
         return Ok(None);
     }
     let replacement = body.state.body();
-    let path = match replacement {
+    let source = match replacement {
         Some(BodyReplacement::String(content)) => {
             if content.len() as u64 > LUA_BODY_LIMIT {
                 return Err(LuaError::runtime("body exceeds the 16 MiB Lua limit"));
             }
             return Ok(Some(content.into_bytes()));
         }
-        Some(BodyReplacement::Asset(asset)) => asset.path().to_path_buf(),
+        Some(BodyReplacement::Asset(asset)) => DeferredBodyRead::File(asset.path().to_path_buf()),
         None => {
             let reader = body
                 .state
@@ -1200,11 +1200,25 @@ fn effective_text_bytes(body: &MutableBody) -> mlua::Result<Option<Vec<u8>>> {
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty() && value != "identity")
         .collect::<Vec<_>>();
-    read_body_file(&path, &encodings)
+    match source {
+        DeferredBodyRead::Empty => {
+            read_body_reader(Box::new(std::io::Cursor::new(Vec::new())), &encodings)
+        }
+        DeferredBodyRead::File(path) => read_body_file(&path, &encodings),
+    }
 }
 
 fn read_body_file(path: &std::path::Path, encodings: &[String]) -> mlua::Result<Option<Vec<u8>>> {
-    let mut reader: Box<dyn Read> = Box::new(File::open(path).map_err(LuaError::external)?);
+    read_body_reader(
+        Box::new(File::open(path).map_err(LuaError::external)?),
+        encodings,
+    )
+}
+
+fn read_body_reader(
+    mut reader: Box<dyn Read>,
+    encodings: &[String],
+) -> mlua::Result<Option<Vec<u8>>> {
     for encoding in encodings.iter().rev() {
         reader = match encoding.as_str() {
             "gzip" => Box::new(flate2::read::GzDecoder::new(reader)),

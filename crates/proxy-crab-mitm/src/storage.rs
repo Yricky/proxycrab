@@ -47,7 +47,7 @@ pub struct BodySource {
 pub(crate) struct CaptureBodyWriter {
     store: CaptureStore,
     id: u64,
-    writer: tokio::fs::File,
+    writer: Option<tokio::fs::File>,
     path: PathBuf,
 }
 
@@ -55,17 +55,31 @@ impl CaptureBodyWriter {
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
+
+    pub(crate) fn has_file(&self) -> bool {
+        self.writer.is_some()
+    }
+
     pub(crate) async fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
-        self.writer.write_all(bytes).await?;
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        if self.writer.is_none() {
+            self.writer = Some(tokio::fs::File::create(&self.path).await?);
+        }
+        let writer = self.writer.as_mut().expect("body file was created");
+        writer.write_all(bytes).await?;
         // macOS 上 tokio File 的 write_all 解析后，写入对其它线程的 stat() 未必可见
         // （inode 大小滞后，实测 ~99% 概率读到 0）。flush 会等待在途写任务完成，
         // 保证 write_all 返回后 body_source 能立即读到已写入的部分（无 fsync，Idle 时为无操作）。
-        self.writer.flush().await?;
+        writer.flush().await?;
         Ok(())
     }
 
     pub(crate) async fn finish(mut self) -> Result<()> {
-        self.writer.flush().await?;
+        if let Some(writer) = &mut self.writer {
+            writer.flush().await?;
+        }
         self.store.touch(self.id)
     }
 }
@@ -272,6 +286,9 @@ impl CaptureStore {
     }
 
     pub fn save_body(&self, id: u64, side: BodySide, modified: bool, bytes: &[u8]) -> Result<()> {
+        if bytes.is_empty() && !modified {
+            return self.touch(id);
+        }
         fs::write(self.body_path(id, side, modified), bytes)?;
         self.touch(id)
     }
@@ -283,11 +300,15 @@ impl CaptureStore {
         modified: bool,
     ) -> Result<CaptureBodyWriter> {
         let path = self.body_path(id, side, modified);
-        let file = tokio::fs::File::create(&path).await?;
+        let writer = if modified {
+            Some(tokio::fs::File::create(&path).await?)
+        } else {
+            None
+        };
         Ok(CaptureBodyWriter {
             store: self.clone(),
             id,
-            writer: file,
+            writer,
             path,
         })
     }
@@ -331,7 +352,15 @@ impl CaptureStore {
         let path = self.body_path(id, side, modified);
         let metadata = match fs::metadata(&path) {
             Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Some(BodySource {
+                    data: BodySourceData::Bytes(Vec::new()),
+                    path: None,
+                    stored_size: 0,
+                    content_type: first_header(&headers, "content-type").map(str::to_owned),
+                    content_encodings: content_encodings(&headers),
+                }));
+            }
             Err(error) => return Err(error.into()),
         };
         Ok(Some(BodySource {
@@ -1133,6 +1162,50 @@ mod tests {
         let after = store.get(id).unwrap().unwrap().summary.updated_at;
 
         assert!(after > before);
+    }
+
+    #[tokio::test]
+    async fn empty_original_body_writer_does_not_create_a_file() {
+        let root = tempdir().unwrap();
+        let store = CaptureStore::open(7, root.path()).unwrap();
+        let id = store
+            .begin("127.0.0.1", &request("http://example.com"), "request")
+            .unwrap();
+        let path = store.body_path(id, BodySide::Request, false);
+
+        store
+            .create_body_writer(id, BodySide::Request, false)
+            .await
+            .unwrap()
+            .finish()
+            .await
+            .unwrap();
+
+        assert!(!path.exists());
+        let source = store.body_source(id, BodySide::Request).unwrap().unwrap();
+        assert_eq!(source.path, None);
+        assert_eq!(source.stored_size, 0);
+        assert!(matches!(source.data, BodySourceData::Bytes(bytes) if bytes.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn empty_modified_body_writer_still_creates_a_file() {
+        let root = tempdir().unwrap();
+        let store = CaptureStore::open(7, root.path()).unwrap();
+        let id = store
+            .begin("127.0.0.1", &request("http://example.com"), "request")
+            .unwrap();
+        let path = store.body_path(id, BodySide::Request, true);
+
+        store
+            .create_body_writer(id, BodySide::Request, true)
+            .await
+            .unwrap()
+            .finish()
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::metadata(path).unwrap().len(), 0);
     }
 
     #[tokio::test]

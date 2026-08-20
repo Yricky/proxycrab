@@ -16,6 +16,9 @@ import { logsStore } from "./stores/logs";
 import { startHttpApiSync, stopHttpApiSync } from "./stores/http-api-sync";
 import { breakpointsStore } from "./stores/breakpoints";
 import { approvalsStore } from "./stores/approvals";
+import { useBackend } from "./api";
+
+const backend = useBackend();
 
 // 日志与断点轮询仅在代理运行且存在活跃、正在查看的 Session 时才有意义：
 // 代理停止后不会有新抓包或断点进展；无活跃 Session 时流量被直接放行（no_active_session），
@@ -47,7 +50,7 @@ watch(
 
 onMounted(async () => {
   await startHttpApiSync();
-  await approvalsStore.start();
+  if (backend.capabilities.approvals) await approvalsStore.start();
   proxyStore.startPolling();
   await sessionsStore.init();
   // 确保启动时状态已刷新，避免 syncCapturePolling 拿到过期的 stopped 状态。
@@ -60,7 +63,7 @@ onBeforeUnmount(() => {
   logsStore.stopPolling();
   breakpointsStore.stopPolling();
   stopHttpApiSync();
-  approvalsStore.stop();
+  if (backend.capabilities.approvals) approvalsStore.stop();
 });
 </script>
 

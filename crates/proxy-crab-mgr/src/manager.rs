@@ -396,11 +396,6 @@ impl ProxyCrabManager for MitmManager {
     }
 
     async fn replace_config(&self, config: AppConfig) -> ManagerResult<AppConfig> {
-        if config.api_host != "127.0.0.1" && config.api_host != "::1" {
-            return Err(ManagerError::bad_request(
-                "management API host must be a loopback address",
-            ));
-        }
         self.runtime.replace_config(config).await.map_err(map_error)
     }
 

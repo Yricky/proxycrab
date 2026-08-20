@@ -3,6 +3,7 @@ use std::{
     error::Error as StdError,
     future::Future,
     io,
+    path::PathBuf,
     pin::Pin,
     sync::{
         Arc, Mutex,
@@ -58,7 +59,7 @@ struct ChannelBody {
 enum DeferredCommand {
     Read {
         frame_timeout: Option<Duration>,
-        result: std_mpsc::Sender<Result<PathBuf, String>>,
+        result: std_mpsc::Sender<Result<DeferredBodyRead, String>>,
     },
     Finish {
         forward: bool,
@@ -67,13 +68,19 @@ enum DeferredCommand {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DeferredBodyRead {
+    Empty,
+    File(PathBuf),
+}
+
 #[derive(Clone)]
 pub(crate) struct DeferredBodyReader {
     sender: mpsc::UnboundedSender<DeferredCommand>,
 }
 
 impl DeferredBodyReader {
-    pub(crate) fn read(&self, frame_timeout: Option<Duration>) -> Result<PathBuf, String> {
+    pub(crate) fn read(&self, frame_timeout: Option<Duration>) -> Result<DeferredBodyRead, String> {
         let (sender, receiver) = std_mpsc::channel();
         self.sender
             .send(DeferredCommand::Read {
@@ -159,8 +166,6 @@ impl DeferredBody {
     }
 }
 
-use std::path::PathBuf;
-
 async fn run_deferred_body<B>(
     mut body: B,
     writer: CaptureBodyWriter,
@@ -173,7 +178,7 @@ async fn run_deferred_body<B>(
     B::Error: Into<BoxError> + Send + Sync + 'static,
 {
     let mut writer = Some(writer);
-    let mut completed: Option<PumpResult> = None;
+    let mut completed: Option<(PumpResult, bool)> = None;
     let mut trailers = Vec::new();
     let mut read_waiters = Vec::new();
     let (forward, speed, frame_timeout) = loop {
@@ -182,8 +187,8 @@ async fn run_deferred_body<B>(
                 frame_timeout,
                 result: waiter,
             }) => {
-                if let Some(result) = &completed {
-                    let _ = waiter.send(read_result(result, &path));
+                if let Some((result, stored)) = &completed {
+                    let _ = waiter.send(read_result(result, *stored, &path));
                     continue;
                 }
                 read_waiters.push(waiter);
@@ -197,15 +202,15 @@ async fn run_deferred_body<B>(
                     Some(&mut trailers),
                 )
                 .await;
-                let result = finish_writer(
+                let (result, stored) = finish_writer(
                     writer.take().expect("deferred body writer is available"),
                     result,
                 )
                 .await;
                 for waiter in read_waiters.drain(..) {
-                    let _ = waiter.send(read_result(&result, &path));
+                    let _ = waiter.send(read_result(&result, stored, &path));
                 }
-                completed = Some(result);
+                completed = Some((result, stored));
             }
             Some(DeferredCommand::Finish {
                 forward,
@@ -213,7 +218,7 @@ async fn run_deferred_body<B>(
                 frame_timeout,
             }) => break (forward, bytes_per_second, frame_timeout),
             None => {
-                let result = completed.unwrap_or(PumpResult {
+                let result = completed.map(|(result, _)| result).unwrap_or(PumpResult {
                     outcome: PumpOutcome::OutputClosed,
                     storage_error: None,
                 });
@@ -223,35 +228,38 @@ async fn run_deferred_body<B>(
         }
     };
 
-    let result = if let Some(result) = completed {
+    let result = if let Some((result, stored)) = completed {
         if forward && result.outcome == PumpOutcome::Complete && result.storage_error.is_none() {
-            match File::open(&path).await {
-                Ok(file) => {
-                    let mut replay = http_body_util::StreamBody::new(
-                        ReaderStream::new(file)
-                            .map_ok(Frame::data)
-                            .map_err(|error| Box::new(error) as BoxError),
-                    );
-                    let mut replay_result =
-                        drain_body(&mut replay, None, None, speed, true, &frames, None).await;
-                    if replay_result.outcome == PumpOutcome::Complete {
-                        for trailer in trailers {
-                            if send_frame(&frames, Frame::trailers(trailer), speed)
-                                .await
-                                .is_err()
-                            {
-                                replay_result.outcome = PumpOutcome::OutputClosed;
-                                break;
-                            }
-                        }
+            let mut replay_result = if stored {
+                match File::open(&path).await {
+                    Ok(file) => {
+                        let mut replay = http_body_util::StreamBody::new(
+                            ReaderStream::new(file)
+                                .map_ok(Frame::data)
+                                .map_err(|error| Box::new(error) as BoxError),
+                        );
+                        drain_body(&mut replay, None, None, speed, true, &frames, None).await
                     }
-                    replay_result
+                    Err(error) => PumpResult {
+                        outcome: PumpOutcome::InputError(error.to_string()),
+                        storage_error: None,
+                    },
                 }
-                Err(error) => PumpResult {
-                    outcome: PumpOutcome::InputError(error.to_string()),
-                    storage_error: None,
-                },
+            } else {
+                result
+            };
+            if replay_result.outcome == PumpOutcome::Complete {
+                for trailer in trailers {
+                    if send_frame(&frames, Frame::trailers(trailer), speed)
+                        .await
+                        .is_err()
+                    {
+                        replay_result.outcome = PumpOutcome::OutputClosed;
+                        break;
+                    }
+                }
             }
+            replay_result
         } else {
             if forward {
                 let message = result
@@ -287,27 +295,34 @@ async fn run_deferred_body<B>(
             result,
         )
         .await
+        .0
     };
     let _ = done.send(result);
 }
 
-fn read_result(result: &PumpResult, path: &std::path::Path) -> Result<PathBuf, String> {
+fn read_result(
+    result: &PumpResult,
+    stored: bool,
+    path: &std::path::Path,
+) -> Result<DeferredBodyRead, String> {
     if let Some(error) = &result.storage_error {
         return Err(error.clone());
     }
     match &result.outcome {
-        PumpOutcome::Complete => Ok(path.to_path_buf()),
+        PumpOutcome::Complete if stored => Ok(DeferredBodyRead::File(path.to_path_buf())),
+        PumpOutcome::Complete => Ok(DeferredBodyRead::Empty),
         PumpOutcome::InputError(error) => Err(error.clone()),
         PumpOutcome::FrameTimeout => Err("response body frame timed out".into()),
         PumpOutcome::OutputClosed => Err("body output closed before completion".into()),
     }
 }
 
-async fn finish_writer(writer: CaptureBodyWriter, mut result: PumpResult) -> PumpResult {
+async fn finish_writer(writer: CaptureBodyWriter, mut result: PumpResult) -> (PumpResult, bool) {
+    let stored = writer.has_file();
     if let Err(error) = writer.finish().await {
         result.storage_error = Some(error.to_string());
     }
-    result
+    (result, stored)
 }
 
 async fn drain_body<B>(
@@ -784,6 +799,41 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deferred_empty_body_can_be_read_and_replayed_without_a_file() {
+        let root = tempdir().unwrap();
+        let store = CaptureStore::open(1, root.path()).unwrap();
+        let request = RequestData {
+            method: "POST".into(),
+            uri: "http://example.com/upload".into(),
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+            tags: RequestTags::new(),
+        };
+        let id = store.begin("test", &request, "request").unwrap();
+        let writer = store
+            .create_body_writer(id, BodySide::Request, false)
+            .await
+            .unwrap();
+        let path = writer.path().to_path_buf();
+        let tracker = TaskGroup::new();
+        let deferred = DeferredBody::new(http_body_util::Empty::new(), writer, &tracker);
+        let reader = deferred.reader();
+
+        let body = tokio::task::spawn_blocking(move || reader.read(None))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(body, DeferredBodyRead::Empty));
+
+        let (replayed, done) = deferred.finish(true, None, None);
+        let collected = replayed.unwrap().collect().await.unwrap();
+        assert!(collected.to_bytes().is_empty());
+        assert_eq!(done.await.unwrap().outcome, PumpOutcome::Complete);
+        assert!(!path.exists());
+        tracker.shutdown(Duration::from_secs(1)).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn deferred_body_replays_trailers_after_a_complete_read() {
         let root = tempdir().unwrap();
         let store = CaptureStore::open(1, root.path()).unwrap();
@@ -809,10 +859,13 @@ mod tests {
         let deferred = DeferredBody::new(body, writer, &tracker);
         let reader = deferred.reader();
 
-        let path = tokio::task::spawn_blocking(move || reader.read(None))
+        let body = tokio::task::spawn_blocking(move || reader.read(None))
             .await
             .unwrap()
             .unwrap();
+        let DeferredBodyRead::File(path) = body else {
+            panic!("non-empty deferred body should be backed by a file");
+        };
         assert_eq!(tokio::fs::read(path).await.unwrap(), b"payload");
 
         let (replayed, done) = deferred.finish(true, None, None);

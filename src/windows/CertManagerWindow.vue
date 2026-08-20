@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { openUrl } from "@tauri-apps/plugin-opener";
 import QRCode from "qrcode";
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { Io5Copy, Io5Download, Io5Refresh, Io5Warning } from "vue-icons-plus/io5";
@@ -54,7 +53,7 @@ async function copyDownloadUrl(): Promise<void> {
 
 async function openDownloadUrl(): Promise<void> {
   try {
-    await openUrl(CERT_DOWNLOAD_URL);
+    await backend.openExternal(CERT_DOWNLOAD_URL);
   } catch (error) {
     reportError(error, "打开证书下载地址失败");
   }

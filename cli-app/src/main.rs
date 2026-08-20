@@ -1,4 +1,5 @@
 mod permissions;
+mod ui;
 
 use std::{
     path::{Path, PathBuf},
@@ -6,10 +7,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use clap::{Parser, Subcommand};
 use include_dir::{Dir, include_dir};
 use proxy_crab_mgr::{
-    MitmManager, ProxyCrabManager, http::start_http_server, skill_install,
+    MitmManager, ProxyCrabManager, http::start_http_server_with_routes, skill_install,
 };
 use proxy_crab_mitm::{
     ProxyCrab,
@@ -17,7 +19,7 @@ use proxy_crab_mitm::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::permissions::CliPermissionService;
+use crate::permissions::{CliPermissionService, UiAccess};
 
 /// The ProxyCrab agent skill, embedded at compile time. Mirrors the desktop
 /// app's bundled resources: SKILL.md, references/, and scripts/ (no evals/).
@@ -97,9 +99,9 @@ async fn main() -> Result<()> {
 
 async fn run(mut args: RunArgs) -> Result<()> {
     apply_api_url_env(&mut args)?;
-    let workspace_arg = args.workspace.ok_or_else(|| {
-        anyhow::anyhow!("--workspace is required (or set PROXYCRAB_WORKSPACE)")
-    })?;
+    let workspace_arg = args
+        .workspace
+        .ok_or_else(|| anyhow::anyhow!("--workspace is required (or set PROXYCRAB_WORKSPACE)"))?;
 
     let log_buffer = Arc::new(LogBuffer::default());
     tracing_subscriber::registry()
@@ -144,16 +146,23 @@ async fn run(mut args: RunArgs) -> Result<()> {
 
     let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
 
+    let mut ui_token = None;
     let http = if args.no_api {
         None
     } else {
-        let permissions = CliPermissionService::open(&workspace)
+        let token = generate_ui_token().context("generate CLI UI access token")?;
+        let access = Arc::new(UiAccess::new(&token));
+        let permissions = CliPermissionService::open(&workspace, Some(access.clone()))
             .context("open management API permission store")?;
-        Some(
-            start_http_server(manager.clone(), permissions)
-                .await
-                .context("start management HTTP API")?,
-        )
+        let ui_manager = manager.clone();
+        let ui_permissions = permissions.clone();
+        let handle = start_http_server_with_routes(manager.clone(), permissions, move |changes| {
+            ui::router(ui_manager, ui_permissions, access, changes)
+        })
+        .await
+        .context("start management HTTP API")?;
+        ui_token = Some(token);
+        Some(handle)
     };
 
     if let Err(error) = manager.start_proxy().await {
@@ -170,11 +179,21 @@ async fn run(mut args: RunArgs) -> Result<()> {
         workspace = %workspace.display(),
         "proxy listening"
     );
-    if http.is_some() {
+    if let Some(http) = &http {
         tracing::info!(
             host = config.api_host,
             port = config.api_port,
             "management API listening"
+        );
+        let host = if http.host.contains(':') {
+            format!("[{}]", http.host)
+        } else {
+            http.host.clone()
+        };
+        println!("ProxyCrab UI: http://{host}:{}/", http.port);
+        println!(
+            "Access token: {}",
+            ui_token.as_deref().expect("UI token exists")
         );
     }
 
@@ -187,6 +206,13 @@ async fn run(mut args: RunArgs) -> Result<()> {
         http.shutdown().await;
     }
     Ok(())
+}
+
+fn generate_ui_token() -> Result<String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| anyhow::anyhow!("read secure random bytes: {error}"))?;
+    Ok(format!("pcrab_ui_{}", URL_SAFE_NO_PAD.encode(bytes)))
 }
 
 /// PROXYCRAB_API_URL (aligned with the agent skill's bundled scripts) fills in
@@ -202,8 +228,7 @@ fn apply_api_url_env(args: &mut RunArgs) -> Result<()> {
     if raw.trim().is_empty() {
         return Ok(());
     }
-    let url = url::Url::parse(&raw)
-        .with_context(|| format!("invalid PROXYCRAB_API_URL: {raw}"))?;
+    let url = url::Url::parse(&raw).with_context(|| format!("invalid PROXYCRAB_API_URL: {raw}"))?;
     if !matches!(url.scheme(), "http" | "https") {
         bail!("PROXYCRAB_API_URL must use http or https: {raw}");
     }

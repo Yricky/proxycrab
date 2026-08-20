@@ -1,14 +1,10 @@
 import { reactive } from "vue";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { createTauriBackend } from "../api/tauri-backend";
+import type { Unsubscribe } from "../api/backend";
+import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { PendingApproval, ResolveApprovalRequest } from "../api/types";
 import { reportError } from "./app";
 
-const APPROVAL_CHANGE_EVENT = "proxycrab://approval-change";
-// This store is a module singleton and starts before component setup, so it
-// uses its own backend handle instead of Vue's setup-only injection.
-const backend = createTauriBackend();
-let unlisten: UnlistenFn | undefined;
+let unlisten: Unsubscribe | undefined;
 let refreshTimer: number | undefined;
 
 export const approvalsStore = reactive({
@@ -40,8 +36,8 @@ export const approvalsStore = reactive({
   async start(): Promise<void> {
     if (unlisten) return;
     try {
-      unlisten = await listen<number>(APPROVAL_CHANGE_EVENT, (event) => {
-        this.count = event.payload;
+      unlisten = await backend.subscribeApprovalChanges((count) => {
+        this.count = count;
         this.scheduleRefresh();
       });
       await this.refresh();
