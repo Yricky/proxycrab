@@ -1,12 +1,13 @@
-# ProxyCrab Tauri
+# ProxyCrab
 
-ProxyCrab is a macOS-first Tauri application backend for HTTP/HTTPS MITM capture. The frontend is intentionally maintained separately; this repository's Rust workspace exposes the complete backend through matching management HTTP and Tauri command surfaces.
+ProxyCrab is a macOS-first HTTP/HTTPS MITM capture application. The same Vue management UI runs in the Tauri desktop application and from the headless CLI's loopback HTTP server through target-specific backends.
 
 ## Rust workspace
 
 - `crates/proxy-crab-mitm`: proxy lifecycle, CA/TLS, sessions, SQLite captures, request/response bodies, Lua scripts, diagnostic failures, and the in-memory system-log ring.
 - `crates/proxy-crab-mgr`: the object-safe `ProxyCrabManager` trait, its MITM adapter, typed DTOs, stable errors, the local management HTTP server, and a route-level permission contract.
 - `src-tauri`: Tauri initialization, application lifecycle, and thin commands that call the same management trait as HTTP handlers.
+- `cli-app`: headless proxy runner, embedded browser UI, per-run UI authentication, and CLI-specific allow/deny permission management.
 
 Neither reusable crate depends on Tauri.
 
@@ -23,9 +24,10 @@ The Tauri application data directory contains `config.json`, which points at the
 
 The management API is loopback-only and supports workspace-scoped API keys through exactly one
 `Authorization: Bearer <key>` header. Every API key and the local no-key identity have independent
-per-route `allow`, `approval`, or `deny` permissions. Approval waits for a desktop decision for up
-to 30 seconds; the toolbar hand indicator opens the pending list. API keys and permissions are
-managed under Settings > 管理接口 and are not exposed as HTTP management endpoints. Direct Tauri
+per-route permissions. The desktop target supports `allow`, `approval`, and `deny`; approval waits
+for a desktop decision for up to 30 seconds. The CLI target exposes only `allow` and `deny`, and
+evaluates any persisted `approval` value as `deny`. API keys and permissions are managed under
+Settings > 管理接口 through target-private operations, not the public agent API. Direct Tauri
 commands remain trusted and bypass HTTP authentication.
 
 Permission state is stored in the active workspace's `http_api_permissions.json`; a corrupt file
@@ -51,14 +53,39 @@ other management calls. A supplied log filter can be kept stateless with
 
 The Tauri command surface also reports the management HTTP service's `running`, `host`, `port`, and startup error state through `get_http_service_status`.
 
+## CLI browser UI
+
+Build the CLI frontend before compiling the binary so Cargo can embed the generated assets:
+
+```bash
+pnpm build:cli
+cargo build -p proxycrab-cli
+```
+
+Run the CLI with a workspace:
+
+```bash
+target/debug/proxycrab-cli run --workspace /path/to/workspace
+```
+
+At startup the CLI prints its browser URL and a 256-bit, per-run `pcrab_ui_…` Access Token. Open
+the URL and enter that token on the landing page. The cleartext token is not persisted; the process
+keeps only its SHA-256 digest. It authorizes the browser UI's internal `/ui-api/*` operations and
+trusted calls to the shared `/api/*` management resources for that process lifetime.
+
+The CLI browser backend deliberately has no ProxyCrab Skill installation capability or HTTP route.
+This remains true even if the CLI frontend bundle is hosted outside the local binary. Users who
+want to install the bundled Skill must explicitly run the local
+`proxycrab-cli install-skill` command; a browser page cannot trigger it.
+
 ## Development
 
 ```bash
 cargo check --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+pnpm build:tauri
+pnpm build:cli
 ```
-
-The frontend source under `src/` is not part of the backend implementation.
 
 See [backend API](docs/backend-api.md) and [Lua API](docs/lua-api.md).

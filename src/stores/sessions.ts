@@ -1,9 +1,7 @@
 import { reactive } from "vue";
-import { createTauriBackend } from "../api/tauri-backend";
+import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { SessionMetadata } from "../api/types";
 import { reportError } from "./app";
-
-const backend = createTauriBackend();
 
 export const sessionsStore = reactive({
   sessions: [] as SessionMetadata[],

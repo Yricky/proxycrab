@@ -6,12 +6,11 @@ import {
   BodyFetchError,
   DEFAULT_BODY_MAX_SIZE,
   UI_BODY_MAX_SIZE,
-  fetchBody,
   type BodySide,
   type BodyTarget,
   type LoadedBody,
 } from "../api/body";
-import type { AppConfig, BodyPayload, HeaderItem } from "../api/types";
+import type { BodyPayload, HeaderItem } from "../api/types";
 import { appStore } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 import { formatBytes } from "../utils/format";
@@ -28,7 +27,6 @@ const props = defineProps<{
 }>();
 
 const backend = useBackend();
-const config = ref<AppConfig | null>(null);
 const loaded = ref<LoadedBody | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -163,8 +161,7 @@ async function load(maxSize = DEFAULT_BODY_MAX_SIZE): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    config.value ??= await backend.getConfig();
-    const value = await fetchBody(config.value, props.target, props.side, maxSize);
+    const value = await backend.fetchBody(props.target, props.side, maxSize);
     if (version !== loadVersion) return;
     loaded.value = value;
     await preparePreview(value);

@@ -1,13 +1,13 @@
 ---
 name: proxycrab
 description: Use ProxyCrab's local management API to inspect captured or bypassed HTTP/HTTPS traffic, isolate failing requests, configure Lua bypass routing, export evidence, and create or attach Lua filters, custom columns, and request/response interceptors. Use this skill whenever the user mentions ProxyCrab, MITM capture debugging, captured requests or responses, ProxyCrab Sessions, ProxyCrab Lua scripts, traffic filtering, or asks an agent to diagnose an API call through the running ProxyCrab desktop app.
-compatibility: Requires a running ProxyCrab desktop app, Node.js 18 or newer, and access to its loopback management API.
+compatibility: Requires a running ProxyCrab desktop app or CLI management service, Node.js 18 or newer, and access to its loopback management API.
 ---
 
 # ProxyCrab
 
-Use the running ProxyCrab desktop application as a local, inspectable HTTP/HTTPS debugging
-environment. Prefer the bundled scripts for high-frequency operations because they validate
+Use the running ProxyCrab desktop application or CLI process as a local, inspectable HTTP/HTTPS
+debugging environment. Prefer the bundled scripts for high-frequency operations because they validate
 arguments, unwrap the API envelope, emit machine-readable JSON, and return non-zero exit codes on
 failure.
 
@@ -32,17 +32,21 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
 ## Preconditions
 
 - Confirm that the ProxyCrab desktop app is open. A connection failure usually means the app or its
-  management HTTP service is not running.
+  management HTTP service is not running. For the headless target, confirm that the CLI process and
+  its management service are running instead.
 - Proxy lifecycle is user-controlled. Do not start or stop the proxy unless the user explicitly
   asks for that separate action.
 - Capturing traffic requires an active Session and a proxy that the user has already started. With
   no selected routing script, traffic enters the active Session; if none is active, traffic is
   transparently forwarded and recorded in `bypass.db`.
 - Use Node.js 18 or newer. The scripts have no npm dependencies.
-- A management call may wait for desktop approval for up to 30 seconds. Bundled scripts allow 40
-  seconds for that decision. If a call returns `approval_timeout`, ask the user to retry and approve
-  it; do not loop automatically. `permission_denied` means the selected identity cannot perform the
+- On the desktop target, a management call may wait for approval for up to 30 seconds. Bundled
+  scripts allow 40 seconds for that decision. If a call returns `approval_timeout`, ask the user to
+  retry and approve it; do not loop automatically. The CLI target has no approval decisions and
+  treats `approval` as deny. `permission_denied` means the selected identity cannot perform the
   action, and `invalid_api_key` means the environment key is missing, malformed, unknown, or deleted.
+- Never use the per-run `pcrab_ui_…` browser token as an Agent API key. It is a trusted UI credential
+  printed for a human; do not copy it into `PROXYCRAB_API_KEY` or any Agent command.
 - Successful management mutations synchronize into the open desktop UI. Archiving the viewed
   Session selects the first remaining Session; other mutations keep the viewed Session. Open
   editors preserve unsaved local changes.
@@ -260,6 +264,8 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
   stored-byte size and local capture path. Use `body-get.mjs` for complete, normally client-decoded
   binary or oversized bytes;
   always set a deliberate maximum and output path because bodies can contain credentials or personal data.
+- An empty original request or response has no capture blob file. An explicitly modified empty body
+  still persists its zero-byte `.modified` blob.
 - Interceptor mutations applied before a Lua runtime error remain applied. Inspect both
   `modifications` and `error`.
 - Request tags are capture-local metadata. Presence of `_crab_skip`, including an empty value,

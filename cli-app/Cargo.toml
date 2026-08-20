@@ -10,10 +10,13 @@ proxy-crab-mgr = { path = "../crates/proxy-crab-mgr" }
 proxy-crab-mitm = { path = "../crates/proxy-crab-mitm" }
 anyhow.workspace = true
 async-trait.workspace = true
+axum.workspace = true
 base64.workspace = true
 clap.workspace = true
 getrandom.workspace = true
 include_dir = "0.7"
+if-addrs.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

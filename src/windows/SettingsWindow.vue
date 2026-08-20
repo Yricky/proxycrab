@@ -57,6 +57,7 @@ const identityOptions = computed<CustomSelectOption[]>(() =>
   })),
 );
 const managementDisabled = computed(() => permissionConfigError.value !== null);
+const canSwitchWorkspace = backend.capabilities.workspaceSwitch;
 const serviceUrl = computed(() => {
   const status = serviceStatus.value;
   return status ? `http://${status.host}:${status.port}` : "—";
@@ -112,7 +113,10 @@ async function loadIdentity(id: string): Promise<void> {
   try {
     const result = await backend.getHttpIdentityPermissions(id);
     const next = Object.fromEntries(
-      result.permissions.map((entry) => [entry.action_id, entry.mode]),
+      result.permissions.map((entry) => [
+        entry.action_id,
+        backend.capabilities.permissionModes.includes(entry.mode) ? entry.mode : "deny",
+      ]),
     ) as Record<string, PermissionMode>;
     selectedIdentityId.value = id;
     permissions.value = next;
@@ -305,8 +309,8 @@ onBeforeUnmount(() => {
           <label class="settings-field">
             <span>下次启动工作区</span>
             <div class="field-row">
-              <input v-model="configuredPath" class="input" placeholder="工作区目录路径" />
-              <button class="btn primary" :disabled="!workspaceDirty" @click="saveWorkspace">
+              <input v-model="configuredPath" class="input" placeholder="工作区目录路径" :disabled="!canSwitchWorkspace" />
+              <button v-if="canSwitchWorkspace" class="btn primary" :disabled="!workspaceDirty" @click="saveWorkspace">
                 保存
               </button>
             </div>
@@ -408,6 +412,7 @@ onBeforeUnmount(() => {
               v-model="permissions"
               :catalog="catalog"
               :dimension="dimension"
+              :allowed-modes="backend.capabilities.permissionModes"
               :disabled="savingPermissions"
             />
           </section>

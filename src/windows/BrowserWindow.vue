@@ -7,9 +7,10 @@ import {
   Io5OpenOutline,
   Io5Refresh,
 } from "vue-icons-plus/io5";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { useBackend } from "../api";
 
 const props = defineProps<{ url: string }>();
+const backend = useBackend();
 
 /**
  * 自维护的导航历史栈。
@@ -57,7 +58,7 @@ function refresh(): void {
 }
 
 async function openExternal(): Promise<void> {
-  await openUrl(currentUrl.value);
+  await backend.openExternal(currentUrl.value);
 }
 
 function onAddressKeydown(event: KeyboardEvent): void {

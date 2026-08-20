@@ -29,16 +29,22 @@ Default base URL:
 http://127.0.0.1:18089
 ```
 
-The desktop app starts the management service on loopback only. Requests with no `Authorization`
-header use the independently configurable `本机无 API Key` identity. API-key requests must send
+The desktop app or CLI starts the management service on loopback only. Requests with no
+`Authorization` header use the independently configurable `本机无 API Key` identity. API-key requests must send
 exactly one `Authorization: Bearer <key>` header; query credentials and `X-API-Key` are unsupported.
 Bundled scripts read the key from `PROXYCRAB_API_KEY`, never a command argument.
 
-Every method and route template has an `allow`, `approval`, or `deny` permission for each identity.
-Approval holds the original request for up to 30 seconds while the desktop window asks the user. A
-decision can apply once or for 5, 30, or 60 minutes to the same identity and route action. Temporary
-decisions are in-memory and disappear on restart. API-key creation, deletion, and permission editing
-are desktop-only operations under Settings > 管理接口; they are not HTTP resources.
+Every method and route template has a permission for each identity. The desktop target supports
+`allow`, `approval`, and `deny`; approval holds the original request for up to 30 seconds while the
+desktop window asks the user. A decision can apply once or for 5, 30, or 60 minutes to the same
+identity and route action. Temporary decisions are in-memory and disappear on restart. The CLI
+target supports only `allow` and `deny`, treats a persisted `approval` as deny, and never creates an
+approval request. API-key creation, deletion, and permission editing are management-UI-only
+operations under Settings > 管理接口; they are not public Agent HTTP resources.
+
+The CLI also prints a per-run `pcrab_ui_…` token for its browser landing page. It authorizes private
+UI routes and trusted UI calls, is not an Agent API key, and must never be copied into
+`PROXYCRAB_API_KEY`. The browser backend exposes no Skill-install method or HTTP route.
 
 The server requires a loopback/`localhost` Host and accepts browser Origin values only from local
 `http`, `https`, or `tauri` origins. Valid local CORS preflight permits `Authorization` and
@@ -70,8 +76,8 @@ percent-encoded normally.
 
 ### Desktop UI side effects
 
-Successful HTTP mutations notify the running Tauri frontend through an internal event channel. The
-HTTP envelope does not change and there is no public event endpoint.
+Successful HTTP mutations notify the running management frontend through a target-private channel.
+The HTTP envelope does not change and there is no public Agent event endpoint.
 
 - Session and active-Session changes refresh the sidebar without forcing the user to view another
   Session.
@@ -86,7 +92,7 @@ HTTP envelope does not change and there is no public event endpoint.
   instead of overwriting it.
 - Adjacent changes are coalesced and normal synchronization is silent.
 
-This means Agent operations become visible in the desktop app shortly after the HTTP success
+This means Agent operations become visible in the open desktop or CLI browser UI shortly after the HTTP success
 response. Do not assume the user wants their currently viewed Session changed.
 
 ## Agent instructions
@@ -109,7 +115,7 @@ agents/presets/<preset-id>.md
 ```
 
 Newly initialized workspaces contain `充分使用能力` and `静默排查`, with `充分使用能力` active.
-Preset CRUD and selection are desktop management operations, not public HTTP endpoints.
+Preset CRUD and selection are management-UI operations, not public Agent HTTP endpoints.
 
 ## Shared data types
 
@@ -245,6 +251,9 @@ Exactly one of:
 Text/JSON content is embedded only when its decoded representation is at most 64 KiB. `size` and
 `path` describe stored bytes, which may still be content-encoded. Active breakpoint string
 replacements use `path: null` until persisted. Retrieve body bytes through the raw endpoints below.
+An empty original request or response is represented as `empty` without creating a blob file. An
+explicitly modified empty body remains `empty` in detail but persists a zero-byte `.modified` blob.
+The raw body endpoint still returns a successful zero-byte stream for an empty original body.
 
 ### CaptureError
 

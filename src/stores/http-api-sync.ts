@@ -1,4 +1,5 @@
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Unsubscribe } from "../api/backend";
+import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { HttpApiChange, HttpApiResource } from "../api/types";
 import { reportError } from "./app";
 import { interceptorsStore } from "./interceptors";
@@ -9,7 +10,6 @@ import { routingStore } from "./routing";
 import { bypassStore } from "./bypass";
 
 export const HTTP_API_CHANGE_EVENT = "proxycrab-http-api-change";
-const TAURI_EVENT = "proxycrab://http-api-change";
 const ALL_RESOURCES: HttpApiResource[] = [
   "workspace",
   "config",
@@ -29,7 +29,7 @@ const ALL_RESOURCES: HttpApiResource[] = [
   "system_logs",
 ];
 
-let unlisten: UnlistenFn | undefined;
+let unlisten: Unsubscribe | undefined;
 let flushTimer: number | undefined;
 const pending = new Map<HttpApiResource, Set<number | null>>();
 
@@ -115,7 +115,7 @@ async function flush(): Promise<void> {
 export async function startHttpApiSync(): Promise<void> {
   if (unlisten) return;
   try {
-    unlisten = await listen<HttpApiChange>(TAURI_EVENT, (event) => enqueue(event.payload));
+    unlisten = await backend.subscribeChanges(enqueue);
   } catch (error) {
     reportError(error, "启动 HTTP API 界面同步失败");
   }

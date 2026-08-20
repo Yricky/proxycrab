@@ -5,8 +5,19 @@ import process from "node:process";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
-export default defineConfig(() => ({
+export default defineConfig(({ mode }) => {
+  const target = mode === "cli" ? "cli" : "tauri";
+  return {
   plugins: [vue()],
+  resolve: {
+    alias: {
+      "@proxycrab/target-landing": `/src/landing/${target === "cli" ? "CliLanding" : "TauriLanding"}.vue`,
+    },
+  },
+  build: {
+    outDir: `dist/${target}`,
+    emptyOutDir: true,
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
@@ -29,4 +40,5 @@ export default defineConfig(() => ({
       ignored: ["**/src-tauri/**"],
     },
   },
-}));
+};
+});

@@ -16,8 +16,9 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use super::model::{
-    ApiKeyRecord, LOCAL_IDENTITY_ID, LocalPermissionRecord, PERMISSION_FILE_VERSION,
-    PermissionFile, PermissionIdentityKind, PermissionIdentitySummary,
+    ApiKeyRecord, CreatedApiKey, IdentityPermissions, LOCAL_IDENTITY_ID, LocalPermissionRecord,
+    PERMISSION_FILE_VERSION, PermissionEntry, PermissionFile, PermissionIdentityKind,
+    PermissionIdentitySummary,
 };
 
 const PERMISSION_FILE_NAME: &str = "http_api_permissions.json";
@@ -121,6 +122,99 @@ impl PermissionStore {
         Ok(identity)
     }
 
+    pub fn identities(&self) -> Result<Vec<PermissionIdentitySummary>, ManagerError> {
+        let state = self.state.lock().map_err(lock_error)?;
+        let mut identities = Vec::with_capacity(state.api_keys.len() + 1);
+        identities.push(local_summary());
+        identities.extend(state.api_keys.iter().map(api_key_summary));
+        Ok(identities)
+    }
+
+    pub fn identity_permissions(&self, id: &str) -> Result<IdentityPermissions, ManagerError> {
+        let state = self.state.lock().map_err(lock_error)?;
+        let (identity, permissions) = identity_record(&state, id)?;
+        Ok(IdentityPermissions {
+            identity,
+            permissions: permission_entries(permissions),
+        })
+    }
+
+    pub fn replace_permissions(
+        &self,
+        id: &str,
+        entries: Vec<PermissionEntry>,
+    ) -> Result<IdentityPermissions, ManagerError> {
+        let permissions = validate_complete_permissions(entries)?;
+        let mut state = self.state.lock().map_err(lock_error)?;
+        let mut next = state.clone();
+        if id == LOCAL_IDENTITY_ID {
+            next.local.permissions = permissions;
+        } else {
+            let record = next
+                .api_keys
+                .iter_mut()
+                .find(|record| record.id == id)
+                .ok_or_else(|| ManagerError::not_found("API key not found"))?;
+            record.permissions = permissions;
+        }
+        self.save_locked(&next)?;
+        *state = next;
+        let (identity, permissions) = identity_record(&state, id)?;
+        Ok(IdentityPermissions {
+            identity,
+            permissions: permission_entries(permissions),
+        })
+    }
+
+    pub fn create_api_key(&self, name: String) -> Result<CreatedApiKey, ManagerError> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 64 {
+            return Err(ManagerError::bad_request(
+                "API key name must contain 1 to 64 characters",
+            ));
+        }
+        let mut state = self.state.lock().map_err(lock_error)?;
+        if state.api_keys.iter().any(|record| record.name == name) {
+            return Err(ManagerError::conflict("API key name already exists"));
+        }
+        let id = random_text(12)?;
+        let prefix = random_text(6)?;
+        let secret = random_text(32)?;
+        let api_key = format!("pcrab_{prefix}_{secret}");
+        let salt = random_bytes(16)?;
+        let hash = key_hash(&salt, &api_key);
+        let record = ApiKeyRecord {
+            id,
+            name: name.to_owned(),
+            prefix,
+            salt: URL_SAFE_NO_PAD.encode(salt),
+            hash: URL_SAFE_NO_PAD.encode(hash),
+            created_at: now_millis(),
+            last_used_at: None,
+            permissions: cli_default_permissions(),
+        };
+        let identity = api_key_summary(&record);
+        let mut next = state.clone();
+        next.api_keys.push(record);
+        self.save_locked(&next)?;
+        *state = next;
+        Ok(CreatedApiKey { identity, api_key })
+    }
+
+    pub fn delete_api_key(&self, id: &str) -> Result<(), ManagerError> {
+        let mut state = self.state.lock().map_err(lock_error)?;
+        let index = state
+            .api_keys
+            .iter()
+            .position(|record| record.id == id)
+            .ok_or_else(|| ManagerError::not_found("API key not found"))?;
+        let mut next = state.clone();
+        next.api_keys.remove(index);
+        self.save_locked(&next)?;
+        *state = next;
+        Ok(())
+    }
+
     fn save_locked(&self, state: &PermissionFile) -> Result<(), ManagerError> {
         write_permission_file(&self.path, state)
     }
@@ -213,6 +307,80 @@ fn add_missing_defaults(permissions: &mut BTreeMap<String, PermissionMode>) -> b
     permissions.len() != before
 }
 
+fn validate_complete_permissions(
+    entries: Vec<PermissionEntry>,
+) -> Result<BTreeMap<String, PermissionMode>, ManagerError> {
+    let known = known_action_ids();
+    let mut permissions = BTreeMap::new();
+    for entry in entries {
+        if entry.mode == PermissionMode::Approval {
+            return Err(ManagerError::bad_request(
+                "CLI permissions only support allow and deny",
+            ));
+        }
+        if !known.contains(&entry.action_id)
+            || permissions.insert(entry.action_id, entry.mode).is_some()
+        {
+            return Err(ManagerError::bad_request(
+                "permission table contains unknown or duplicate actions",
+            ));
+        }
+    }
+    if permissions.len() != known.len() {
+        return Err(ManagerError::bad_request(
+            "permission table must contain every API action",
+        ));
+    }
+    Ok(permissions)
+}
+
+fn identity_record<'a>(
+    state: &'a PermissionFile,
+    id: &str,
+) -> Result<
+    (
+        PermissionIdentitySummary,
+        &'a BTreeMap<String, PermissionMode>,
+    ),
+    ManagerError,
+> {
+    if id == LOCAL_IDENTITY_ID {
+        return Ok((local_summary(), &state.local.permissions));
+    }
+    let record = state
+        .api_keys
+        .iter()
+        .find(|record| record.id == id)
+        .ok_or_else(|| ManagerError::not_found("API key not found"))?;
+    Ok((api_key_summary(record), &record.permissions))
+}
+
+fn permission_entries(permissions: &BTreeMap<String, PermissionMode>) -> Vec<PermissionEntry> {
+    api_actions()
+        .iter()
+        .map(|action| PermissionEntry {
+            action_id: action.id.to_owned(),
+            mode: match permissions[action.id] {
+                PermissionMode::Approval => PermissionMode::Deny,
+                mode => mode,
+            },
+        })
+        .collect()
+}
+
+fn cli_default_permissions() -> BTreeMap<String, PermissionMode> {
+    api_actions()
+        .iter()
+        .map(|action| {
+            let mode = match action.default_mode {
+                PermissionMode::Approval => PermissionMode::Deny,
+                mode => mode,
+            };
+            (action.id.to_owned(), mode)
+        })
+        .collect()
+}
+
 fn local_summary() -> PermissionIdentitySummary {
     PermissionIdentitySummary {
         id: LOCAL_IDENTITY_ID.into(),
@@ -265,8 +433,9 @@ fn random_text(bytes: usize) -> Result<String, ManagerError> {
 
 fn random_bytes(length: usize) -> Result<Vec<u8>, ManagerError> {
     let mut bytes = vec![0; length];
-    getrandom::fill(&mut bytes)
-        .map_err(|error| ManagerError::internal(format!("secure random generation failed: {error}")))?;
+    getrandom::fill(&mut bytes).map_err(|error| {
+        ManagerError::internal(format!("secure random generation failed: {error}"))
+    })?;
     Ok(bytes)
 }
 
@@ -294,8 +463,9 @@ fn write_permission_file(path: &Path, state: &PermissionFile) -> Result<(), Mana
         let mut file = options
             .open(&temporary)
             .map_err(|error| permission_file_error(&temporary, error))?;
-        serde_json::to_writer_pretty(&mut file, state)
-            .map_err(|error| ManagerError::internal(format!("serialize permission file: {error}")))?;
+        serde_json::to_writer_pretty(&mut file, state).map_err(|error| {
+            ManagerError::internal(format!("serialize permission file: {error}"))
+        })?;
         file.write_all(b"\n")
             .map_err(|error| permission_file_error(&temporary, error))?;
         file.sync_all()
@@ -356,5 +526,62 @@ mod tests {
         let error = PermissionStore::open(directory.path()).err().unwrap();
         assert!(error.message.contains("failed to parse permission file"));
         assert_eq!(fs::read(&path).unwrap(), b"not json");
+    }
+
+    #[test]
+    fn cli_permission_views_and_updates_never_expose_approval() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join(PERMISSION_FILE_NAME);
+        fs::write(
+            &path,
+            r#"{"version":1,"local":{"permissions":{"POST /api/proxy/start":"approval"}},"api_keys":[]}"#,
+        )
+        .unwrap();
+        let store = PermissionStore::open(directory.path()).unwrap();
+
+        let mut view = store.identity_permissions(LOCAL_IDENTITY_ID).unwrap();
+        assert!(
+            view.permissions
+                .iter()
+                .all(|entry| entry.mode != PermissionMode::Approval)
+        );
+        let start = view
+            .permissions
+            .iter()
+            .find(|entry| entry.action_id == "POST /api/proxy/start")
+            .unwrap();
+        assert_eq!(start.mode, PermissionMode::Deny);
+
+        view.permissions[0].mode = PermissionMode::Approval;
+        let error = store
+            .replace_permissions(LOCAL_IDENTITY_ID, view.permissions)
+            .unwrap_err();
+        assert_eq!(error.code, "bad_request");
+    }
+
+    #[test]
+    fn new_cli_api_keys_default_approval_actions_to_deny() {
+        let directory = tempdir().unwrap();
+        let store = PermissionStore::open(directory.path()).unwrap();
+        let created = store.create_api_key("browser test".into()).unwrap();
+        let view = store.identity_permissions(&created.identity.id).unwrap();
+
+        assert!(
+            view.permissions
+                .iter()
+                .all(|entry| entry.mode != PermissionMode::Approval)
+        );
+        for action in api_actions() {
+            let entry = view
+                .permissions
+                .iter()
+                .find(|entry| entry.action_id == action.id)
+                .unwrap();
+            let expected = match action.default_mode {
+                PermissionMode::Approval => PermissionMode::Deny,
+                mode => mode,
+            };
+            assert_eq!(entry.mode, expected);
+        }
     }
 }

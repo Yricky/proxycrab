@@ -21,6 +21,7 @@ import type {
   InterceptorLibraryList,
   InterceptorUpdateRequest,
   HttpServiceStatus,
+  HttpApiChange,
   IdentityPermissions,
   LogDetail,
   LogIdsPayload,
@@ -49,6 +50,21 @@ import type {
   TemporaryExecutionResult,
   WorkspacePaths,
 } from "./types";
+import type { BodySide, BodyTarget, LoadedBody } from "./body";
+
+export interface BackendCapabilities {
+  target: "tauri" | "cli";
+  approvals: boolean;
+  permissionModes: Array<"allow" | "approval" | "deny">;
+  workspaceSwitch: boolean;
+}
+
+export type Unsubscribe = () => void;
+
+export interface SkillInstaller {
+  getInfo(parent: string): Promise<SkillInstallInfo>;
+  install(parent: string, overwrite: boolean): Promise<SkillInstallInfo>;
+}
 
 /**
  * Backend abstraction: every capability the UI needs from the host process.
@@ -57,6 +73,18 @@ import type {
  * can be dropped in without touching any component.
  */
 export interface Backend {
+  readonly capabilities: BackendCapabilities;
+  readonly skillInstaller?: SkillInstaller;
+
+  fetchBody(
+    target: BodyTarget,
+    side: BodySide,
+    maxSize?: number,
+  ): Promise<LoadedBody>;
+  subscribeChanges(handler: (change: HttpApiChange) => void): Promise<Unsubscribe>;
+  subscribeApprovalChanges(handler: (count: number) => void): Promise<Unsubscribe>;
+  openExternal(url: string): Promise<void>;
+
   // workspace & config
   getWorkspace(): Promise<WorkspacePaths>;
   setWorkspaceForNextStart(path: string): Promise<WorkspacePaths>;
@@ -180,7 +208,4 @@ export interface Backend {
   listHttpApprovals(): Promise<PendingApproval[]>;
   resolveHttpApproval(id: number, request: ResolveApprovalRequest): Promise<void>;
 
-  // bundled Agent skill
-  getProxyCrabSkillInstallInfo(parent: string): Promise<SkillInstallInfo>;
-  installProxyCrabSkill(parent: string, overwrite: boolean): Promise<SkillInstallInfo>;
 }

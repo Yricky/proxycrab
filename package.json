@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "pnpm build:tauri",
+    "build:tauri": "vue-tsc --noEmit && vite build --mode tauri",
+    "build:cli": "vue-tsc --noEmit && vite build --mode cli",
     "test:unit": "node --experimental-strip-types --test src/utils/*.test.mts",
     "test:column-groups": "node --experimental-strip-types --test src/utils/column-groups.test.mts",
     "preview": "vite preview",

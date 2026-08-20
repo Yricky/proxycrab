@@ -18,20 +18,28 @@ const props = defineProps<{
   modelValue: Record<string, PermissionMode>;
   disabled?: boolean;
   dimension?: PermissionGroupDimension;
+  allowedModes?: PermissionMode[];
 }>();
 const emit = defineEmits<{
   "update:modelValue": [value: Record<string, PermissionMode>];
 }>();
 
-const modeOptions: CustomSelectOption[] = [
+const allModeOptions: CustomSelectOption[] = [
   { value: "allow", label: "允许", description: "直接执行" },
   { value: "approval", label: "审批", description: "桌面确认后执行" },
   { value: "deny", label: "阻止", description: "直接拒绝" },
 ];
-const groupOptions: CustomSelectOption[] = [
+const modeOptions = computed(() =>
+  allModeOptions.filter((option) =>
+    (props.allowedModes ?? ["allow", "approval", "deny"]).includes(
+      option.value as PermissionMode,
+    ),
+  ),
+);
+const groupOptions = computed<CustomSelectOption[]>(() => [
   { value: MIXED, label: "混合", disabled: true },
-  ...modeOptions,
-];
+  ...modeOptions.value,
+]);
 
 interface ActionGroup {
   key: string;

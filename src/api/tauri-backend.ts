@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Backend } from "./backend";
+import { BackendError } from "./backend-error";
+import { fetchBodyFromHttp } from "./body";
 import type {
   ActiveSession,
   ApiActionView,
@@ -35,17 +39,6 @@ import type {
   UpdateSessionRequest,
 } from "./types";
 
-/** Error thrown by every Backend call; carries the backend's stable code. */
-export class BackendError extends Error {
-  readonly code: string;
-
-  constructor(error: ManagerError) {
-    super(error.message);
-    this.name = "BackendError";
-    this.code = error.code;
-  }
-}
-
 function isManagerError(value: unknown): value is ManagerError {
   return (
     typeof value === "object" &&
@@ -75,6 +68,34 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
  */
 export function createTauriBackend(): Backend {
   return {
+    capabilities: {
+      target: "tauri",
+      approvals: true,
+      permissionModes: ["allow", "approval", "deny"],
+      workspaceSwitch: true,
+    },
+    skillInstaller: {
+      getInfo: (parent: string) =>
+        call("get_proxycrab_skill_install_info", { parent }),
+      install: (parent: string, overwrite: boolean) =>
+        call("install_proxycrab_skill", { parent, overwrite }),
+    },
+    fetchBody: async (target, side, maxSize) =>
+      fetchBodyFromHttp(await call("get_config"), target, side, maxSize),
+    subscribeChanges: async (handler) => {
+      const unlisten = await listen("proxycrab://http-api-change", (event) =>
+        handler(event.payload as import("./types").HttpApiChange),
+      );
+      return unlisten;
+    },
+    subscribeApprovalChanges: async (handler) => {
+      const unlisten = await listen<number>("proxycrab://approval-change", (event) =>
+        handler(event.payload),
+      );
+      return unlisten;
+    },
+    openExternal: (url) => openUrl(url),
+
     getWorkspace: () => call("get_workspace"),
     setWorkspaceForNextStart: (path) => call("set_workspace_for_next_start", { path }),
     getConfig: () => call("get_config"),
@@ -194,9 +215,5 @@ export function createTauriBackend(): Backend {
     resolveHttpApproval: (id: number, request: ResolveApprovalRequest) =>
       call("resolve_http_approval", { id, request }),
 
-    getProxyCrabSkillInstallInfo: (parent: string) =>
-      call("get_proxycrab_skill_install_info", { parent }),
-    installProxyCrabSkill: (parent: string, overwrite: boolean) =>
-      call("install_proxycrab_skill", { parent, overwrite }),
   };
 }

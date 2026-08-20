@@ -1,5 +1,5 @@
 import { reactive, watch } from "vue";
-import { createTauriBackend } from "../api/tauri-backend";
+import { runtimeBackend as backend } from "../api/runtime-backend";
 import type {
   Column,
   LogViewRow,
@@ -10,8 +10,6 @@ import { reportError } from "./app";
 import { proxyStore } from "./proxy";
 import { sessionsStore } from "./sessions";
 import { isStaleInProgress } from "../utils/capture-outcome";
-
-const backend = createTauriBackend();
 
 const VIEW_BATCH_SIZE = 200;
 const ID_PAGE_SIZE = 10_000;

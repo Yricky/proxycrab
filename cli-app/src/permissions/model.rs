@@ -49,3 +49,29 @@ pub struct PermissionIdentitySummary {
     pub created_at: Option<u64>,
     pub last_used_at: Option<u64>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PermissionEntry {
+    pub action_id: String,
+    pub mode: PermissionMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IdentityPermissions {
+    pub identity: PermissionIdentitySummary,
+    pub permissions: Vec<PermissionEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApiActionView {
+    pub id: String,
+    pub method: String,
+    pub route_template: String,
+    pub default_mode: PermissionMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreatedApiKey {
+    pub identity: PermissionIdentitySummary,
+    pub api_key: String,
+}

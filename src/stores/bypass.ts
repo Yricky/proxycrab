@@ -1,9 +1,8 @@
 import { reactive } from "vue";
-import { createTauriBackend } from "../api/tauri-backend";
+import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { BypassEntry } from "../api/types";
 import { reportError } from "./app";
 
-const backend = createTauriBackend();
 const PAGE_SIZE = 200;
 
 export const bypassStore = reactive({

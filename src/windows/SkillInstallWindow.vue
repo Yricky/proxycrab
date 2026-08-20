@@ -6,6 +6,7 @@ import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 
 const backend = useBackend();
+const installer = backend.skillInstaller;
 
 const parentPath = ref("~/.agents/skills");
 const installing = ref(false);
@@ -19,9 +20,13 @@ const targetPreview = computed(() => {
 async function install(): Promise<void> {
   const parent = parentPath.value.trim();
   if (!parent || installing.value) return;
+  if (!installer) {
+    reportError("当前运行目标不支持安装 Skill");
+    return;
+  }
   installing.value = true;
   try {
-    const info = await backend.getProxyCrabSkillInstallInfo(parent);
+    const info = await installer.getInfo(parent);
     if (info.exists) {
       const confirmed = await confirmDialog({
         title: "覆盖 ProxyCrab Skill",
@@ -31,7 +36,7 @@ async function install(): Promise<void> {
       });
       if (!confirmed) return;
     }
-    const result = await backend.installProxyCrabSkill(parent, info.exists);
+    const result = await installer.install(parent, info.exists);
     installedPath.value = result.target_path;
     appStore.toast("ProxyCrab Skill 已安装", "success");
   } catch (error) {

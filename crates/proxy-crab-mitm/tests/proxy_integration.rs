@@ -76,6 +76,23 @@ async fn fixed_http_upstream() -> (u16, tokio::task::JoinHandle<()>) {
     (port, task)
 }
 
+async fn empty_http_upstream() -> (u16, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        let _ = stream.read(&mut request).await;
+        stream
+            .write_all(
+                b"HTTP/1.1 204 No Content\r\nContent-Type: text/plain\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+    });
+    (port, task)
+}
+
 async fn keepalive_counting_upstream() -> (u16, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -607,6 +624,71 @@ async fn streams_plain_http_bypass_before_the_upstream_response_finishes() {
     })
     .await
     .unwrap();
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn empty_session_bodies_do_not_create_original_body_files() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, upstream) = empty_http_upstream().await;
+    runtime
+        .create_script(
+            ScriptKind::ResponseInterceptor,
+            Script {
+                name: "read-empty-body".into(),
+                content: "assert(resp.body:as_string() == '')".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: Vec::new(),
+                response: vec![SessionInterceptor {
+                    name: "read-empty-body".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+
+    let response = proxy_get(
+        proxy_port,
+        &format!("http://127.0.0.1:{upstream_port}/empty"),
+        &format!("127.0.0.1:{upstream_port}"),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 204"), "{response}");
+    upstream.await.unwrap();
+
+    let capture = timeout(Duration::from_secs(1), async {
+        loop {
+            let capture = runtime.list_captures(session.id, 1, None).unwrap()[0].clone();
+            if capture.outcome == CaptureOutcome::Success {
+                break capture;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let detail = runtime.capture(session.id, capture.id).unwrap().unwrap();
+    assert!(matches!(detail.request_body, BodyPayload::Empty));
+    assert!(matches!(detail.response_body, BodyPayload::Empty));
+    for side in [BodySide::Request, BodySide::Response] {
+        let source = runtime
+            .capture_body_source(session.id, capture.id, side)
+            .unwrap()
+            .unwrap();
+        assert_eq!(source.path, None);
+        assert_eq!(source.stored_size, 0);
+        assert!(matches!(source.data, BodySourceData::Bytes(bytes) if bytes.is_empty()));
+    }
+    let blob = runtime.workspace().session_dir(session.id).join("blob");
+    assert!(!blob.join(format!("{}-request.body", capture.id)).exists());
+    assert!(!blob.join(format!("{}-response.body", capture.id)).exists());
     runtime.stop_proxy().await.unwrap();
 }
 

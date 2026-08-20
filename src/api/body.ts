@@ -34,11 +34,22 @@ function apiBase(config: AppConfig): string {
   return `http://${host}:${config.api_port}`;
 }
 
-export async function fetchBody(
+export async function fetchBodyFromHttp(
   config: AppConfig,
   target: BodyTarget,
   side: BodySide,
   maxSize = DEFAULT_BODY_MAX_SIZE,
+  authorization?: string,
+): Promise<LoadedBody> {
+  return fetchBodyFromBase(apiBase(config), target, side, maxSize, authorization);
+}
+
+export async function fetchBodyFromBase(
+  base: string,
+  target: BodyTarget,
+  side: BodySide,
+  maxSize = DEFAULT_BODY_MAX_SIZE,
+  authorization?: string,
 ): Promise<LoadedBody> {
   if (!Number.isSafeInteger(maxSize) || maxSize <= 0 || maxSize > UI_BODY_MAX_SIZE) {
     throw new BodyFetchError({ code: "bad_request", message: "无效的 Body 大小限制" });
@@ -47,13 +58,15 @@ export async function fetchBody(
     target.kind === "log"
       ? `/api/logs/${target.id}/body`
       : `/api/breakpoints/${target.id}/body`;
-  const url = new URL(path, apiBase(config));
+  const url = new URL(path, base);
   url.searchParams.set("side", side);
   url.searchParams.set("decompress", "false");
   url.searchParams.set("max_size", String(maxSize));
   if (target.kind === "log") url.searchParams.set("session_id", String(target.sessionId));
 
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: authorization ? { Authorization: authorization } : undefined,
+  });
   if (!response.ok) {
     let error: ManagerError = {
       code: `http_${response.status}`,

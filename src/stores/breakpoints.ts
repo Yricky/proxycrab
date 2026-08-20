@@ -1,10 +1,9 @@
 import { reactive } from "vue";
-import { createTauriBackend } from "../api/tauri-backend";
+import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { BreakpointSummary, InterceptorKind } from "../api/types";
 import { logsStore } from "./logs";
 import { sessionsStore } from "./sessions";
 
-const backend = createTauriBackend();
 const POLL_INTERVAL = 500;
 let timer: number | undefined;
 let inFlight = false;

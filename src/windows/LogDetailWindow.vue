@@ -8,7 +8,7 @@ import type {
   LogDetail,
   Modification,
 } from "../api/types";
-import { BackendError } from "../api/tauri-backend";
+import { BackendError } from "../api/backend-error";
 import { appStore, reportError } from "../stores/app";
 import { proxyStore } from "../stores/proxy";
 import { isStaleInProgress } from "../utils/capture-outcome";
