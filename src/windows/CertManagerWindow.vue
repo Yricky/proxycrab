@@ -8,6 +8,7 @@ import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { proxyStore } from "../stores/proxy";
+import { copyText as writeClipboardText } from "../utils/clipboard";
 
 const backend = useBackend();
 const CERT_DOWNLOAD_URL = "http://proxy.crab/ca.crt";
@@ -35,7 +36,7 @@ function onHttpApiChange(event: Event): void {
 async function copyPem(): Promise<void> {
   if (!pem.value) return;
   try {
-    await navigator.clipboard.writeText(pem.value);
+    await writeClipboardText(pem.value);
     appStore.toast("证书 PEM 已复制到剪贴板", "success");
   } catch (error) {
     reportError(error, "复制失败");
@@ -44,7 +45,7 @@ async function copyPem(): Promise<void> {
 
 async function copyDownloadUrl(): Promise<void> {
   try {
-    await navigator.clipboard.writeText(CERT_DOWNLOAD_URL);
+    await writeClipboardText(CERT_DOWNLOAD_URL);
     appStore.toast("证书下载地址已复制", "success");
   } catch (error) {
     reportError(error, "复制失败");

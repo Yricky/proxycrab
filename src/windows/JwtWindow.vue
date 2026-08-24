@@ -11,6 +11,7 @@ import {
 } from "vue-icons-plus/io5";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import { appStore } from "../stores/app";
+import { copyText as writeClipboardText } from "../utils/clipboard";
 import {
   JWT_ALGORITHMS,
   JWT_ALGORITHM_OPTIONS,
@@ -292,7 +293,7 @@ let copiedTimer: number | undefined;
 async function copy(key: string, value: string): Promise<void> {
   if (!value) return;
   try {
-    await navigator.clipboard.writeText(value);
+    await writeClipboardText(value);
     copiedKey = key;
     if (copiedTimer !== undefined) window.clearTimeout(copiedTimer);
     copiedTimer = window.setTimeout(() => (copiedKey = null), 1200);

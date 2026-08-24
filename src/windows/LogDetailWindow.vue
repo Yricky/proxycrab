@@ -18,6 +18,7 @@ import { Io5Checkmark, Io5ChevronDown, Io5Copy, Io5Warning } from "vue-icons-plu
 import { openModificationValue, openScriptSnapshot } from "./launcher";
 import { openDropdownMenu } from "../stores/dialog";
 import { fullCurl } from "../utils/curl";
+import { copyText as writeClipboardText } from "../utils/clipboard";
 import type { BodyTarget } from "../api/body";
 
 const props = defineProps<{
@@ -391,7 +392,7 @@ let copiedTimer: number | undefined;
 
 async function copyText(key: string, text: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(text);
+    await writeClipboardText(text);
     copiedKey.value = key;
     if (copiedTimer !== undefined) window.clearTimeout(copiedTimer);
     copiedTimer = window.setTimeout(() => (copiedKey.value = null), 1200);
