@@ -4,6 +4,7 @@ import { Io5Checkmark, Io5Copy, Io5Key, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import type { CreatedApiKey, PermissionIdentitySummary } from "../api/types";
 import { appStore, reportError } from "../stores/app";
+import { copyText as writeClipboardText } from "../utils/clipboard";
 
 const props = defineProps<{ identities: PermissionIdentitySummary[] }>();
 const emit = defineEmits<{ close: [createdId?: string] }>();
@@ -42,7 +43,7 @@ async function create(): Promise<void> {
 async function copy(): Promise<void> {
   if (!created.value) return;
   try {
-    await navigator.clipboard.writeText(created.value.api_key);
+    await writeClipboardText(created.value.api_key);
     appStore.toast("API Key 已复制", "success");
   } catch (error) {
     reportError(error, "复制 API Key 失败");

@@ -13,6 +13,7 @@ import {
 import type { BodyPayload, HeaderItem } from "../api/types";
 import { appStore } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
+import { copyText as writeClipboardText } from "../utils/clipboard";
 import { formatBytes } from "../utils/format";
 import { inspectGrpc, inspectProtobuf } from "../utils/protobuf";
 import MonacoEditor from "./MonacoEditor.vue";
@@ -191,7 +192,7 @@ async function confirmFullLoad(): Promise<void> {
 
 async function copy(key: string, value: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(value);
+    await writeClipboardText(value);
     copied.value = key;
     if (copiedTimer !== undefined) window.clearTimeout(copiedTimer);
     copiedTimer = window.setTimeout(() => (copied.value = null), 1200);

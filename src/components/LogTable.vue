@@ -9,6 +9,7 @@ import { openContextMenu, openDropdownMenu, type MenuItem } from "../stores/dial
 import { openLogDetail } from "../windows/launcher";
 import type { Column, LogViewRow, Script } from "../api/types";
 import { isStaleInProgress } from "../utils/capture-outcome";
+import { copyText as writeClipboardText } from "../utils/clipboard";
 import {
   Io5Add,
   Io5ArrowDown,
@@ -123,7 +124,7 @@ function openRow(id: number): void {
 
 async function copyCell(value: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(value);
+    await writeClipboardText(value);
     appStore.toast("单元格内容已复制", "success");
   } catch (error) {
     reportError(error, "复制单元格失败");
