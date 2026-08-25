@@ -324,6 +324,7 @@ export const logsStore = reactive({
       const payload = await backend.getLogIds({
         session_id: sessionId,
         filter: cloneSessionFilter(filter),
+        persist_filter: !backend.capabilities.readonly,
       });
       if (sessionsStore.viewingSessionId !== sessionId) return false;
       this.appliedFilter = cloneSessionFilter(payload.filter);

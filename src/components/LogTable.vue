@@ -21,6 +21,7 @@ import {
 } from "vue-icons-plus/io5";
 
 const backend = useBackend();
+const readonly = backend.capabilities.readonly;
 
 const ROW_HEIGHT = 26;
 const BUFFER = 8;
@@ -59,14 +60,14 @@ const gridTemplate = computed(
     [
       `${ID_COLUMN_WIDTH}px`,
       ...columns.value.map((_, i) => `${columnWidth(i)}px`),
-      `${ADD_COLUMN_WIDTH}px`,
+      ...(readonly ? [] : [`${ADD_COLUMN_WIDTH}px`]),
     ].join(" "),
 );
 
 const totalWidth = computed(() =>
   columns.value.reduce(
     (sum, _, i) => sum + columnWidth(i),
-    ID_COLUMN_WIDTH + ADD_COLUMN_WIDTH,
+    ID_COLUMN_WIDTH + (readonly ? 0 : ADD_COLUMN_WIDTH),
   ),
 );
 
@@ -353,13 +354,14 @@ function outcomeDotClass(row: LogViewRow): string {
           :key="column.key + i"
           class="lt-cell lt-header-cell"
         >
-          <button class="lt-header-menu" @click="showColumnMenu(i, $event)">
+          <button v-if="!readonly" class="lt-header-menu" @click="showColumnMenu(i, $event)">
             <span class="lt-header-name">{{ column.name }}</span>
             <Io5ChevronDown :size="11" class="lt-header-chevron" />
           </button>
-          <span class="lt-resize" @pointerdown="startResize(i, $event)" @click.stop />
+          <span v-else class="lt-header-name">{{ column.name }}</span>
+          <span v-if="!readonly" class="lt-resize" @pointerdown="startResize(i, $event)" @click.stop />
         </div>
-        <div class="lt-cell lt-header-cell lt-add-cell">
+        <div v-if="!readonly" class="lt-cell lt-header-cell lt-add-cell">
           <button
             class="lt-header-menu"
             :disabled="sessionsStore.viewingSessionId === null"
@@ -409,7 +411,7 @@ function outcomeDotClass(row: LogViewRow): string {
             >
               {{ cell }}
             </div>
-            <div class="lt-cell lt-spacer-cell" aria-hidden="true" />
+            <div v-if="!readonly" class="lt-cell lt-spacer-cell" aria-hidden="true" />
           </div>
         </div>
       </div>

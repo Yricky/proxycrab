@@ -54,6 +54,7 @@ pub(crate) struct PumpResult {
 struct ChannelBody {
     receiver: mpsc::Receiver<Result<Frame<Bytes>, BoxError>>,
     size_hint: hyper::body::SizeHint,
+    end_stream: bool,
 }
 
 enum DeferredCommand {
@@ -99,6 +100,7 @@ pub(crate) struct DeferredBody {
     sender: mpsc::UnboundedSender<DeferredCommand>,
     receiver: Mutex<Option<mpsc::Receiver<Result<Frame<Bytes>, BoxError>>>>,
     size_hint: hyper::body::SizeHint,
+    end_stream: bool,
     done: Option<oneshot::Receiver<PumpResult>>,
 }
 
@@ -109,6 +111,7 @@ impl DeferredBody {
         B::Error: Into<BoxError> + Send + Sync + 'static,
     {
         let size_hint = body.size_hint();
+        let end_stream = body.is_end_stream();
         let path = writer.path().to_path_buf();
         let (command_sender, command_receiver) = mpsc::unbounded_channel();
         let (frame_sender, frame_receiver) = mpsc::channel(4);
@@ -128,6 +131,7 @@ impl DeferredBody {
             sender: command_sender,
             receiver: Mutex::new(Some(frame_receiver)),
             size_hint,
+            end_stream,
             done: Some(done_receiver),
         }
     }
@@ -156,6 +160,7 @@ impl DeferredBody {
                     .take()
                     .expect("deferred body can only be finished once"),
                 size_hint: self.size_hint,
+                end_stream: self.end_stream,
             }
             .boxed_unsync()
         });
@@ -414,6 +419,10 @@ impl Body for ChannelBody {
     fn size_hint(&self) -> hyper::body::SizeHint {
         self.size_hint
     }
+
+    fn is_end_stream(&self) -> bool {
+        self.end_stream
+    }
 }
 
 pub(super) fn pump_body<B>(
@@ -429,6 +438,7 @@ where
     B::Error: Into<BoxError> + Send + Sync + 'static,
 {
     let size_hint = body.size_hint();
+    let end_stream = body.is_end_stream();
     let (frame_sender, frame_receiver) = mpsc::channel::<Result<Frame<Bytes>, BoxError>>(4);
     let (done_sender, done_receiver) = oneshot::channel();
     tracker.spawn(async move {
@@ -502,6 +512,7 @@ where
         ChannelBody {
             receiver: frame_receiver,
             size_hint,
+            end_stream,
         }
         .boxed_unsync()
     });
@@ -826,7 +837,9 @@ mod tests {
         assert!(matches!(body, DeferredBodyRead::Empty));
 
         let (replayed, done) = deferred.finish(true, None, None);
-        let collected = replayed.unwrap().collect().await.unwrap();
+        let replayed = replayed.unwrap();
+        assert!(replayed.is_end_stream());
+        let collected = replayed.collect().await.unwrap();
         assert!(collected.to_bytes().is_empty());
         assert_eq!(done.await.unwrap().outcome, PumpOutcome::Complete);
         assert!(!path.exists());

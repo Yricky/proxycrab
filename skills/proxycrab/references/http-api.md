@@ -29,7 +29,8 @@ Default base URL:
 http://127.0.0.1:18089
 ```
 
-The desktop app or CLI starts the management service on loopback by default. Local requests with no
+The desktop app or CLI binds the management service to every IPv4 interface. Agents running on the
+same machine should still use the loopback base URL above. Local requests with no
 `Authorization` header use the independently configurable `本机无 API Key` identity. API-key requests must send
 exactly one `Authorization: Bearer <key>` header; query credentials and `X-API-Key` are unsupported.
 Bundled scripts read the key from `PROXYCRAB_API_KEY`, never a command argument.
@@ -46,7 +47,11 @@ The CLI also prints a per-run `pcrab_ui_…` token for its browser landing page.
 UI routes and trusted UI calls, is not an Agent API key, and must never be copied into
 `PROXYCRAB_API_KEY`. The browser backend exposes no Skill-install method or HTTP route.
 
-The CLI may bind to a non-loopback address for its browser UI. Public UI assets can load remotely,
+Session sharing uses separate `pcrab_share_…` tokens and `/share-api/*` browser routes. Those tokens
+are scoped to one read-only Session, expire in memory, are not accepted by the Agent API, and must
+never be copied into `PROXYCRAB_API_KEY`, Agent commands, logs, or reports.
+
+The service binds to every IPv4 interface. Public CLI UI and Session-share assets can load remotely,
 but a remote Host or Origin on `/api/*` requires Bearer authorization. Remote CORS preflight is
 accepted only when it requests `Authorization`; the subsequent request still passes normal token
 authentication and route permissions. Bundled Agent scripts accept a remote `--base-url` or
@@ -137,7 +142,6 @@ Preset CRUD and selection are management-UI operations, not public Agent HTTP en
 {
   "proxy_host": "0.0.0.0",
   "proxy_port": 8089,
-  "api_host": "127.0.0.1",
   "api_port": 18089,
   "routing_script_name": "route-by-host",
   "active_session_id": 3
@@ -145,8 +149,7 @@ Preset CRUD and selection are management-UI operations, not public Agent HTTP en
 ```
 
 `routing_script_name` and `active_session_id` can be `null`. A non-null active Session ID must
-exist. The management API host must remain `127.0.0.1` or `::1`. Changing an API address affects a
-later service start, not the already-bound listener.
+exist. The management API listener is fixed to `0.0.0.0`; only `api_port` is configurable.
 
 ### SessionMetadata
 

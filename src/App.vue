@@ -19,6 +19,7 @@ import { approvalsStore } from "./stores/approvals";
 import { useBackend } from "./api";
 
 const backend = useBackend();
+const readonly = backend.capabilities.readonly;
 
 // 日志与断点轮询仅在代理运行且存在活跃、正在查看的 Session 时才有意义：
 // 代理停止后不会有新抓包或断点进展；无活跃 Session 时流量被直接放行（no_active_session），
@@ -30,7 +31,7 @@ function syncCapturePolling(): void {
     sessionsStore.viewingSessionId !== null;
   if (canPoll) {
     logsStore.startPolling();
-    breakpointsStore.startPolling();
+    if (!readonly) breakpointsStore.startPolling();
   } else {
     logsStore.stopPolling();
     breakpointsStore.stopPolling();
@@ -69,13 +70,13 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app-shell">
-    <AppToolbar />
+    <AppToolbar v-if="!readonly" />
     <div class="app-main">
-      <SessionSidebar />
+      <SessionSidebar v-if="!readonly" />
       <section class="app-content">
         <div class="traffic-controls">
           <FilterBar />
-          <InterceptorPipeline />
+          <InterceptorPipeline v-if="!readonly" />
         </div>
         <LogTable />
       </section>

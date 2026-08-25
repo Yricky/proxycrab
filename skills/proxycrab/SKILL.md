@@ -11,7 +11,8 @@ debugging environment. Prefer the bundled scripts for high-frequency operations 
 arguments, unwrap the API envelope, emit machine-readable JSON, and return non-zero exit codes on
 failure.
 
-The default management API is `http://127.0.0.1:18089`. Every script also accepts
+The service listens on every IPv4 interface by default; local Agent scripts still use
+`http://127.0.0.1:18089`. Every script also accepts
 `--base-url <url>` and honors `PROXYCRAB_API_URL`. If the selected management identity requires an
 API key, set it through `PROXYCRAB_API_KEY`; bundled scripts send it as `Authorization: Bearer ...`.
 Never put an API key in command arguments, URLs, output, or logs.
@@ -47,6 +48,8 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
   action, and `invalid_api_key` means the environment key is missing, malformed, unknown, or deleted.
 - Never use the per-run `pcrab_ui_…` browser token as an Agent API key. It is a trusted UI credential
   printed for a human; do not copy it into `PROXYCRAB_API_KEY` or any Agent command.
+- Never use or expose a `pcrab_share_…` Session link token. It is scoped to the read-only browser
+  page, is not an Agent API key, and must not appear in Agent arguments, URLs, logs, or reports.
 - Bundled Agent scripts allow a remote base URL only when `PROXYCRAB_API_KEY` is set. The remote
   service must be deliberately bound to a reachable address, and that API-key identity must allow
   the requested route. Prefer authenticated TLS or an SSH local port forward; plain HTTP exposes

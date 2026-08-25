@@ -40,7 +40,6 @@ export interface SessionFilter {
 export interface AppConfig {
   proxy_host: string;
   proxy_port: number;
-  api_host: string;
   api_port: number;
   routing_script_name: string | null;
   active_session_id: number | null;
@@ -198,6 +197,12 @@ export interface UpdateSessionRequest {
 
 export interface ActiveSession {
   session_id: number | null;
+}
+
+export interface CreatedSessionShare {
+  token: string;
+  session_id: number;
+  expires_at: number;
 }
 
 export interface LogIdsRequest {

@@ -7,11 +7,13 @@ import { formatRelativeTime } from "../utils/format";
 import { appStore } from "../stores/app";
 import { openArchivedSessions, openBypass, openRoutingManager } from "../windows/launcher";
 import type { SessionMetadata } from "../api/types";
+import SessionShareDialog from "./SessionShareDialog.vue";
 import {
   Io5Add,
   Io5Archive,
   Io5Create,
   Io5Eye,
+  Io5Link,
   Io5RadioButtonOn,
 } from "vue-icons-plus/io5";
 import { IoArrowForwardCircle } from "vue-icons-plus/io";
@@ -20,6 +22,7 @@ const creating = ref(false);
 const editingId = ref<number | null>(null);
 const editName = ref("");
 const editDesc = ref("");
+const sharingSession = ref<SessionMetadata | null>(null);
 
 /* ---- 侧边栏宽度拖拽调整 ---- */
 const SIDEBAR_MIN = 160;
@@ -119,6 +122,7 @@ async function toggleActive(session: SessionMetadata): Promise<void> {
 function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
   openContextMenu(event, [
     { label: "查看", icon: Io5Eye, action: () => sessionsStore.view(session.id) },
+    { label: "链接分享", icon: Io5Link, action: () => { sharingSession.value = session; } },
     { label: "编辑会话", icon: Io5Create, action: () => startEdit(session) },
     {
       label: sessionsStore.activeSessionId === session.id ? "取消活跃" : "设为活跃",
@@ -250,6 +254,7 @@ onMounted(() => {
       <Io5Archive :size="14" />
       <span>已归档 Session</span>
     </button>
+    <SessionShareDialog :session="sharingSession" @close="sharingSession = null" />
   </aside>
 </template>
 

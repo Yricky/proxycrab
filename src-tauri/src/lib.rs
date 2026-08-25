@@ -1,4 +1,5 @@
 mod http_permissions;
+mod share_ui;
 
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -16,7 +17,8 @@ use proxy_crab_mgr::{
         SessionViewPayload, SystemLogsQuery, UpdateAgentsPresetRequest, UpdateScriptRequest,
         UpdateSessionRequest,
     },
-    http::{HttpServerHandle, start_http_server},
+    http::{HttpServerHandle, start_http_server_with_routes},
+    session_share::{CreateSessionShareRequest, CreatedSessionShare, SessionShareService},
     skill_install::{self, SkillInstallInfo},
 };
 use proxy_crab_mitm::{
@@ -44,6 +46,15 @@ struct BackendState {
     permission_error: Option<String>,
     http: Mutex<Option<HttpServerHandle>>,
     http_error: RwLock<Option<String>>,
+    shares: Arc<SessionShareService>,
+}
+
+#[tauri::command]
+async fn create_session_share(
+    state: State<'_, BackendState>,
+    request: CreateSessionShareRequest,
+) -> Result<CreatedSessionShare, ManagerError> {
+    state.shares.create(&state.manager(), request).await
 }
 
 impl BackendState {
@@ -650,7 +661,7 @@ async fn get_http_service_status(
     }
     Ok(HttpServiceStatus {
         running,
-        host: config.api_host,
+        host: std::net::Ipv4Addr::UNSPECIFIED.to_string(),
         port: config.api_port,
         error,
     })
@@ -790,6 +801,7 @@ pub fn run() {
             let runtime = ProxyCrab::open(app_data_dir, log_buffer)?;
             let workspace = runtime.workspace_paths().current_path;
             let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
+            let shares = SessionShareService::new();
             let approval_handle = app.handle().clone();
             let permissions = HttpPermissionService::open(
                 std::path::Path::new(&workspace),
@@ -802,9 +814,17 @@ pub fn run() {
             let permission_error = permissions.as_ref().err().map(ToString::to_string);
             let permissions = permissions.ok();
             let (http, http_error) = if let Some(permissions) = permissions.as_ref() {
-                match tauri::async_runtime::block_on(start_http_server(
+                let share_manager = manager.clone();
+                let share_service = shares.clone();
+                match tauri::async_runtime::block_on(start_http_server_with_routes(
                     manager.clone(),
                     permissions.clone(),
+                    move |_| {
+                        share_ui::router().merge(proxy_crab_mgr::session_share::router(
+                            share_manager,
+                            share_service,
+                        ))
+                    },
                 )) {
                     Ok(handle) => (Some(handle), None),
                     Err(error) => {
@@ -844,6 +864,7 @@ pub fn run() {
                 permission_error,
                 http: Mutex::new(http),
                 http_error: RwLock::new(http_error),
+                shares,
             });
             Ok(())
         })
@@ -924,6 +945,7 @@ pub fn run() {
             clear_bypass_entries,
             get_http_service_error,
             get_http_service_status,
+            create_session_share,
             get_http_permission_catalog,
             list_http_permission_identities,
             get_http_identity_permissions,

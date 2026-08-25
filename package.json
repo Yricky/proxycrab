@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "pnpm build:tauri",
-    "build:tauri": "vue-tsc --noEmit && vite build --mode tauri",
+    "build:tauri": "vue-tsc --noEmit && vite build --mode tauri && vite build --mode cli",
     "build:cli": "vue-tsc --noEmit && vite build --mode cli",
     "test:unit": "node --experimental-strip-types --test src/utils/*.test.mts",
     "test:column-groups": "node --experimental-strip-types --test src/utils/column-groups.test.mts",

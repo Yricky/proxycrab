@@ -19,6 +19,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 async-trait.workspace = true
+axum.workspace = true
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-opener = "2"
 proxy-crab-mgr = { path = "../crates/proxy-crab-mgr" }
