@@ -1,5 +1,6 @@
 mod http_permissions;
 mod share_ui;
+mod workspace_selection;
 
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -26,7 +27,7 @@ use proxy_crab_mitm::{
     log_buffer::{BufferLayer, LogBuffer},
     model::{
         AppConfig, BreakpointSummary, InterceptorKind, ProxyStatus, Script, SessionMetadata,
-        SystemLogEntry, TemporaryExecutionResult, WorkspacePaths,
+        SystemLogEntry, TemporaryExecutionResult,
     },
 };
 use tauri::{
@@ -39,6 +40,7 @@ use crate::http_permissions::{
     ApiActionView, CreatedApiKey, HttpPermissionService, IdentityPermissions, PendingApproval,
     PermissionEntry, PermissionIdentitySummary, ResolveApprovalRequest,
 };
+use crate::workspace_selection::{WorkspacePaths, WorkspaceSelection};
 
 struct BackendState {
     manager: Arc<dyn ProxyCrabManager>,
@@ -47,6 +49,7 @@ struct BackendState {
     http: Mutex<Option<HttpServerHandle>>,
     http_error: RwLock<Option<String>>,
     shares: Arc<SessionShareService>,
+    workspace: WorkspaceSelection,
 }
 
 #[tauri::command]
@@ -75,7 +78,7 @@ impl BackendState {
 
 #[tauri::command]
 async fn get_workspace(state: State<'_, BackendState>) -> Result<WorkspacePaths, ManagerError> {
-    state.manager().workspace().await
+    state.workspace.paths()
 }
 
 #[tauri::command]
@@ -83,7 +86,7 @@ async fn set_workspace_for_next_start(
     state: State<'_, BackendState>,
     path: String,
 ) -> Result<WorkspacePaths, ManagerError> {
-    state.manager().set_workspace_for_next_start(path).await
+    state.workspace.set_for_next_start(&path)
 }
 
 #[tauri::command]
@@ -789,6 +792,7 @@ pub fn run() {
         .setup(|app| {
             setup_global_menu(app)?;
             let app_data_dir = app.path().app_data_dir()?;
+            let workspace = WorkspaceSelection::open(app_data_dir)?;
             let log_buffer = Arc::new(LogBuffer::default());
             let _ = tracing_subscriber::registry()
                 .with(
@@ -798,13 +802,13 @@ pub fn run() {
                 .with(tracing_subscriber::fmt::layer())
                 .with(BufferLayer::new(log_buffer.clone()))
                 .try_init();
-            let runtime = ProxyCrab::open(app_data_dir, log_buffer)?;
-            let workspace = runtime.workspace_paths().current_path;
+            let runtime = ProxyCrab::open(workspace.current_path(), log_buffer)?;
+            let workspace_path = workspace.current_path().to_path_buf();
             let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
             let shares = SessionShareService::new();
             let approval_handle = app.handle().clone();
             let permissions = HttpPermissionService::open(
-                std::path::Path::new(&workspace),
+                &workspace_path,
                 Arc::new(move |count| {
                     if let Err(error) = approval_handle.emit("proxycrab://approval-change", count) {
                         tracing::warn!("failed to emit approval change: {error}");
@@ -866,6 +870,7 @@ pub fn run() {
                 http: Mutex::new(http),
                 http_error: RwLock::new(http_error),
                 shares,
+                workspace,
             });
             Ok(())
         })

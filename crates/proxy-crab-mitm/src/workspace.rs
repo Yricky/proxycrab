@@ -8,95 +8,21 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use fs2::FileExt;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 
 use crate::model::{
     AppConfig, Script, ScriptKind, SessionInterceptors, SessionMetadata, SessionView,
-    WorkspacePaths,
 };
 
-const POINTER_FILE: &str = "config.json";
 const WORKSPACE_CONFIG_FILE: &str = "app_config.json";
 const SESSIONS_DIRECTORY: &str = "sessions";
 const ARCHIVED_SESSIONS_DIRECTORY: &str = "sessions_archived";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct WorkspacePointer {
-    workspace_path: PathBuf,
-}
 
 pub fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
-}
-
-pub fn resolve_workspace(app_data_dir: &Path) -> Result<WorkspacePaths> {
-    fs::create_dir_all(app_data_dir)?;
-    let default_path = app_data_dir.join("workspace");
-    fs::create_dir_all(&default_path)?;
-    let pointer_path = app_data_dir.join(POINTER_FILE);
-    let configured = read_json::<WorkspacePointer>(&pointer_path)
-        .ok()
-        .map(|pointer| pointer.workspace_path)
-        .unwrap_or_else(|| default_path.clone());
-
-    let current = if valid_existing_workspace(&configured) {
-        configured.clone()
-    } else {
-        write_json_atomic(
-            &pointer_path,
-            &WorkspacePointer {
-                workspace_path: default_path.clone(),
-            },
-        )?;
-        default_path.clone()
-    };
-
-    if !pointer_path.exists() {
-        write_json_atomic(
-            &pointer_path,
-            &WorkspacePointer {
-                workspace_path: current.clone(),
-            },
-        )?;
-    }
-
-    Ok(WorkspacePaths {
-        current_path: current.to_string_lossy().into_owned(),
-        configured_path: current.to_string_lossy().into_owned(),
-    })
-}
-
-pub fn configure_workspace_for_next_start(app_data_dir: &Path, path: &Path) -> Result<()> {
-    if !path.is_absolute() {
-        bail!("workspace path must be absolute");
-    }
-    fs::create_dir_all(app_data_dir)?;
-    write_json_atomic(
-        &app_data_dir.join(POINTER_FILE),
-        &WorkspacePointer {
-            workspace_path: path.to_path_buf(),
-        },
-    )
-}
-
-pub fn configured_workspace(app_data_dir: &Path) -> Result<PathBuf> {
-    Ok(read_json::<WorkspacePointer>(&app_data_dir.join(POINTER_FILE))?.workspace_path)
-}
-
-fn valid_existing_workspace(path: &Path) -> bool {
-    if !path.is_absolute() || !path.is_dir() {
-        return false;
-    }
-    let probe = path.join(".proxycrab-write-probe");
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&probe)
-        .and_then(|_| fs::remove_file(probe))
-        .is_ok()
 }
 
 pub struct Workspace {
@@ -582,22 +508,7 @@ mod tests {
         SessionView,
     };
 
-    use super::{Workspace, configure_workspace_for_next_start, resolve_workspace};
-
-    #[test]
-    fn invalid_pointer_falls_back_to_default() {
-        let app_data = tempdir().unwrap();
-        let missing = app_data.path().join("missing");
-        configure_workspace_for_next_start(app_data.path(), &missing).unwrap();
-
-        let paths = resolve_workspace(app_data.path()).unwrap();
-
-        assert_eq!(
-            paths.current_path,
-            app_data.path().join("workspace").to_string_lossy()
-        );
-        assert_eq!(paths.current_path, paths.configured_path);
-    }
+    use super::Workspace;
 
     #[test]
     fn active_session_cannot_be_archived_and_archive_can_be_restored_or_deleted() {

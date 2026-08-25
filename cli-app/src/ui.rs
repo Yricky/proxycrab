@@ -80,6 +80,7 @@ impl ChangeLog {
 #[derive(Clone)]
 struct UiState {
     manager: Arc<dyn ProxyCrabManager>,
+    workspace: String,
     permissions: Arc<CliPermissionService>,
     access: Arc<UiAccess>,
     changes: Arc<ChangeLog>,
@@ -114,12 +115,14 @@ struct ChangePayload {
 
 pub fn router(
     manager: Arc<dyn ProxyCrabManager>,
+    workspace: String,
     permissions: Arc<CliPermissionService>,
     access: Arc<UiAccess>,
     changes: broadcast::Sender<HttpApiChange>,
 ) -> Router {
     let state = Arc::new(UiState {
         manager,
+        workspace,
         permissions,
         access,
         changes: ChangeLog::new(changes.subscribe()),
@@ -182,6 +185,10 @@ async fn bootstrap(State(state): State<Arc<UiState>>) -> Response {
     match state.manager.config().await {
         Ok(config) => success(json!({
             "target": "cli",
+            "workspace": {
+                "current_path": state.workspace.clone(),
+                "configured_path": state.workspace.clone(),
+            },
             "http_service": {
                 "running": true,
                 "host": std::net::Ipv4Addr::UNSPECIFIED.to_string(),

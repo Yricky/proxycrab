@@ -35,6 +35,7 @@ import type {
   UpdateAgentsPresetRequest,
   UpdateScriptRequest,
   UpdateSessionRequest,
+  WorkspacePaths,
 } from "./types";
 
 interface ApiEnvelope<T> {
@@ -45,6 +46,7 @@ interface ApiEnvelope<T> {
 
 export interface CliBootstrap {
   target: "cli";
+  workspace: WorkspacePaths;
   http_service: HttpServiceStatus;
 }
 
@@ -153,7 +155,7 @@ export function createHttpBackend(
       link.click();
     },
 
-    getWorkspace: () => call("/api/workspace"),
+    getWorkspace: async () => bootstrap.workspace,
     getConfig: () => call("/api/config"),
     getAgentsPresets: () => call("/ui-api/agents-presets"),
     createAgentsPreset: (requestValue: CreateAgentsPresetRequest) =>

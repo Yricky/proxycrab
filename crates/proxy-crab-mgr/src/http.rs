@@ -215,7 +215,6 @@ fn router_with_changes_and_extra(
 ) -> Router {
     Router::new()
         .route("/api/agents.md", get(agents_markdown))
-        .route("/api/workspace", get(get_workspace))
         .route("/api/assets/{*asset_id}", get(asset).post(upload_asset))
         .route("/api/config", get(get_config))
         .route("/api/proxy/status", get(proxy_status))
@@ -233,10 +232,7 @@ fn router_with_changes_and_extra(
             "/api/active-session",
             get(active_session).put(replace_active_session),
         )
-        .route(
-            "/api/sessions/{id}",
-            put(update_session).fallback(|| async { StatusCode::NOT_FOUND }),
-        )
+        .route("/api/sessions/{id}", put(update_session))
         .route("/api/session-shares", post(create_session_share))
         .route("/api/logs/export", post(export_logs))
         .route("/api/logs/ids", post(log_ids))
@@ -622,10 +618,6 @@ fn session_id_from_query(query: Option<&str>) -> Option<u64> {
         .split('&')
         .filter_map(|part| part.split_once('='))
         .find_map(|(key, value)| (key == "session_id").then(|| value.parse().ok()).flatten())
-}
-
-async fn get_workspace(State(manager): State<ManagerState>) -> ApiResult {
-    success(manager.workspace().await?)
 }
 
 async fn get_config(State(manager): State<ManagerState>) -> ApiResult {
@@ -1991,7 +1983,9 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
-        let session_dir = std::path::Path::new(&runtime.workspace_paths().current_path)
+        let session_dir = runtime
+            .workspace()
+            .root()
             .join("sessions")
             .join(session.id.to_string());
         let store = CaptureStore::open(session.id, &session_dir).unwrap();
@@ -2016,7 +2010,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/api/logs/{id}/body?session_id={}&side=request&decompress=true&max_size=64",
+                        "/api/logs/{id}/body?session_id={}&side=request&max_size=64",
                         session.id
                     ))
                     .body(Body::empty())
@@ -2240,7 +2234,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_archive_routes_replace_direct_session_deletion() {
+    async fn session_archive_routes_archive_restore_and_delete() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let active = runtime.create_session(Some("active".into()), None).unwrap();
@@ -2248,19 +2242,6 @@ mod tests {
             .create_session(Some("archive-me".into()), Some("kept".into()))
             .unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::DELETE)
-                    .uri(format!("/api/sessions/{}", archived.id))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
 
         let response = app
             .clone()
@@ -2613,6 +2594,7 @@ mod tests {
             ("POST", "/api/sessions/1/activate"),
             ("POST", "/api/interceptors/request/example/enable"),
             ("POST", "/api/interceptors/request/example/disable"),
+            ("GET", "/api/workspace"),
             ("PUT", "/api/workspace"),
             ("PUT", "/api/config"),
             ("POST", "/api/ca"),
@@ -2672,7 +2654,9 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
-        let session_dir = std::path::Path::new(&runtime.workspace_paths().current_path)
+        let session_dir = runtime
+            .workspace()
+            .root()
             .join("sessions")
             .join(session.id.to_string());
         let store = CaptureStore::open(session.id, &session_dir).unwrap();

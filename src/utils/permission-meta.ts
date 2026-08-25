@@ -10,7 +10,6 @@ import type { ApiActionView } from "../api/types";
 /** 动作 id（`METHOD /route/template`）→ 中文文案。 */
 export const ACTION_LABELS: Record<string, string> = {
   "GET /api/agents.md": "读取 Agent 指令",
-  "GET /api/workspace": "读取工作区",
   "GET /api/assets/{*asset_id}": "读取资源",
   "POST /api/assets/{*asset_id}": "上传资源",
   "GET /api/config": "读取全局配置",
@@ -82,7 +81,7 @@ export interface FunctionGroupDef {
 }
 
 export const FUNCTION_GROUPS: FunctionGroupDef[] = [
-  { key: "general", label: "基础与工作区", prefixes: ["/api/agents.md", "/api/workspace", "/api/config", "/api/assets"] },
+  { key: "general", label: "基础配置", prefixes: ["/api/agents.md", "/api/config", "/api/assets"] },
   { key: "proxy", label: "代理服务", prefixes: ["/api/proxy/"] },
   { key: "sessions", label: "Session", prefixes: ["/api/sessions", "/api/session-shares", "/api/archived-sessions", "/api/active-session"] },
   { key: "logs", label: "抓包日志", prefixes: ["/api/logs/"] },

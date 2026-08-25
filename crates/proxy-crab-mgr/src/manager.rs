@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeSet, HashMap},
-    path::Path,
     sync::Arc,
 };
 
@@ -13,7 +12,7 @@ use proxy_crab_mitm::{
         AppConfig, BreakpointListFilter, BreakpointSummary, CaptureDetail, CaptureOutcome,
         CaptureSummary, Column, FilterColumn, FilterOption, HeaderValues, InterceptorKind,
         ProxyStatus, Script, ScriptKind, SessionFilter, SessionInterceptor, SessionInterceptors,
-        SessionMetadata, SessionView, SystemLogEntry, TemporaryExecutionResult, WorkspacePaths,
+        SessionMetadata, SessionView, SystemLogEntry, TemporaryExecutionResult,
     },
     storage::{BodySide, BodySource},
 };
@@ -41,8 +40,6 @@ const MAX_BLOCKING_MANAGEMENT_TASKS: usize = 8;
 
 #[async_trait]
 pub trait ProxyCrabManager: Send + Sync {
-    async fn workspace(&self) -> ManagerResult<WorkspacePaths>;
-    async fn set_workspace_for_next_start(&self, path: String) -> ManagerResult<WorkspacePaths>;
     async fn asset(&self, id: String) -> ManagerResult<Asset>;
     async fn begin_asset_upload(
         &self,
@@ -212,8 +209,7 @@ struct PreparedFilterScript {
 
 impl MitmManager {
     pub fn new(runtime: Arc<ProxyCrab>) -> Arc<Self> {
-        let workspace = runtime.workspace_paths();
-        let agents = Arc::new(AgentsStore::new(Path::new(&workspace.current_path)));
+        let agents = Arc::new(AgentsStore::new(runtime.workspace().root()));
         if let Err(error) = agents.initialize() {
             tracing::error!("failed to initialize AGENTS.md presets: {error}");
         }
@@ -363,16 +359,6 @@ impl MitmManager {
 
 #[async_trait]
 impl ProxyCrabManager for MitmManager {
-    async fn workspace(&self) -> ManagerResult<WorkspacePaths> {
-        Ok(self.runtime.workspace_paths())
-    }
-
-    async fn set_workspace_for_next_start(&self, path: String) -> ManagerResult<WorkspacePaths> {
-        self.runtime
-            .set_workspace_for_next_start(Path::new(&path))
-            .map_err(map_error)
-    }
-
     async fn asset(&self, id: String) -> ManagerResult<Asset> {
         self.runtime
             .asset(&id)
@@ -2115,7 +2101,9 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
-        let session_dir = std::path::Path::new(&runtime.workspace_paths().current_path)
+        let session_dir = runtime
+            .workspace()
+            .root()
             .join("sessions")
             .join(session.id.to_string());
         let store = CaptureStore::open(session.id, &session_dir).unwrap();

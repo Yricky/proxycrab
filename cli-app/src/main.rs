@@ -112,7 +112,7 @@ async fn run(args: RunArgs) -> Result<()> {
     let workspace = workspace_arg
         .canonicalize()
         .with_context(|| format!("resolve workspace {}", workspace_arg.display()))?;
-    let runtime = ProxyCrab::open_workspace(&workspace, log_buffer)
+    let runtime = ProxyCrab::open(&workspace, log_buffer)
         .with_context(|| format!("open workspace {}", workspace.display()))?;
 
     // Command-line flags and environment variables override the workspace
@@ -144,6 +144,7 @@ async fn run(args: RunArgs) -> Result<()> {
         let permissions = CliPermissionService::open(&workspace, Some(access.clone()))
             .context("open management API permission store")?;
         let ui_manager = manager.clone();
+        let ui_workspace = workspace.to_string_lossy().into_owned();
         let ui_permissions = permissions.clone();
         let shares = SessionShareService::new();
         let share_manager = manager.clone();
@@ -153,7 +154,7 @@ async fn run(args: RunArgs) -> Result<()> {
             permissions,
             shares.clone(),
             move |changes| {
-                ui::router(ui_manager, ui_permissions, access, changes).merge(
+                ui::router(ui_manager, ui_workspace, ui_permissions, access, changes).merge(
                     proxy_crab_mgr::session_share::router(share_manager, share_service),
                 )
             },

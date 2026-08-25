@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs::File,
     io::Read,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, Mutex, RwLock},
 };
 
@@ -19,15 +19,13 @@ use crate::{
         InterceptorLibraryItem, MAX_SESSION_INTERCEPTORS_PER_KIND, ProxyStatus,
         ResolvedSessionInterceptor, ResolvedSessionInterceptors, Script, ScriptKind, SessionFilter,
         SessionInterceptors, SessionMetadata, SessionView, SystemLogEntry,
-        TemporaryExecutionResult, WorkspacePaths,
+        TemporaryExecutionResult,
     },
     proxy::{ProxyController, UpstreamClient},
     storage::{
         BODY_DETAIL_LIMIT, BodySide, BodySource, BodySourceData, CaptureStore, body_payload,
     },
-    workspace::{
-        Workspace, configure_workspace_for_next_start, configured_workspace, resolve_workspace,
-    },
+    workspace::Workspace,
 };
 use anyhow::{Result, bail};
 
@@ -63,8 +61,6 @@ fn body_replacement_payload(
 }
 
 pub struct ProxyCrab {
-    app_data_dir: PathBuf,
-    workspace_paths: RwLock<WorkspacePaths>,
     workspace: Arc<Workspace>,
     assets: AssetStore,
     authority: RwLock<Arc<CertificateAuthority>>,
@@ -78,41 +74,17 @@ pub struct ProxyCrab {
 }
 
 impl ProxyCrab {
-    pub fn open(app_data_dir: impl Into<PathBuf>, log_buffer: Arc<LogBuffer>) -> Result<Arc<Self>> {
-        let app_data_dir = app_data_dir.into();
-        let workspace_paths = resolve_workspace(&app_data_dir)?;
-        Self::build(app_data_dir, workspace_paths, log_buffer)
-    }
-
-    /// Opens a runtime rooted directly at `workspace_root`, bypassing the
-    /// app-data-dir/pointer mechanism used by the desktop app. Used by the
-    /// headless CLI, which takes the workspace directory explicitly.
-    pub fn open_workspace(
+    pub fn open(
         workspace_root: impl Into<PathBuf>,
         log_buffer: Arc<LogBuffer>,
     ) -> Result<Arc<Self>> {
         let workspace_root = workspace_root.into();
         std::fs::create_dir_all(&workspace_root)?;
-        let path = workspace_root.to_string_lossy().into_owned();
-        let workspace_paths = WorkspacePaths {
-            current_path: path.clone(),
-            configured_path: path,
-        };
-        Self::build(workspace_root, workspace_paths, log_buffer)
-    }
-
-    fn build(
-        app_data_dir: PathBuf,
-        workspace_paths: WorkspacePaths,
-        log_buffer: Arc<LogBuffer>,
-    ) -> Result<Arc<Self>> {
-        let workspace = Workspace::open(PathBuf::from(&workspace_paths.current_path))?;
+        let workspace = Workspace::open(workspace_root)?;
         let assets = AssetStore::open(workspace.root())?;
         let authority = Arc::new(CertificateAuthority::load_or_generate(workspace.root())?);
         let bypass = BypassStore::open(workspace.root())?;
         Ok(Arc::new(Self {
-            app_data_dir,
-            workspace_paths: RwLock::new(workspace_paths),
             workspace,
             assets,
             authority: RwLock::new(authority),
@@ -144,24 +116,6 @@ impl ProxyCrab {
         content_type: String,
     ) -> Result<AssetUpload, AssetError> {
         self.assets.begin_upload(id, content_type).await
-    }
-
-    pub fn workspace_paths(&self) -> WorkspacePaths {
-        self.workspace_paths
-            .read()
-            .expect("workspace paths lock poisoned")
-            .clone()
-    }
-
-    pub fn set_workspace_for_next_start(&self, path: &Path) -> Result<WorkspacePaths> {
-        configure_workspace_for_next_start(&self.app_data_dir, path)?;
-        let configured_path = configured_workspace(&self.app_data_dir)?;
-        let mut paths = self
-            .workspace_paths
-            .write()
-            .expect("workspace paths lock poisoned");
-        paths.configured_path = configured_path.to_string_lossy().into_owned();
-        Ok(paths.clone())
     }
 
     pub fn config(&self) -> AppConfig {

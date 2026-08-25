@@ -2,8 +2,9 @@
 
 ## Shared management contract
 
-HTTP handlers and Tauri commands call the same `ProxyCrabManager` trait and use the same
-request/response DTOs. Except for raw `GET /api/agents.md`, body reads, and raw Asset downloads,
+HTTP handlers and ordinary proxy Tauri commands call the same `ProxyCrabManager` trait and use the
+same request/response DTOs. Trusted host commands such as workspace selection remain Tauri-local.
+Except for raw `GET /api/agents.md`, body reads, and raw Asset downloads,
 HTTP successes use:
 
 ```json
@@ -30,8 +31,8 @@ permission-manager implementation.
 The exposed operations are split into four boundaries: trusted host operations (Tauri commands or
 explicit local CLI actions), permission-controlled `/api/*` proxy operations, token-scoped read-only
 `/share-api/*` operations, and target-private `/ui-api/*` browser operations. Host operations include
-workspace switching, full config replacement, CA regeneration, and Skill installation; only their
-read counterparts remain on `/api/*`.
+workspace switching, full config replacement, CA regeneration, and Skill installation. Workspace
+selection has no management HTTP resource; read-only config and CA resources remain on `/api/*`.
 
 ## Management HTTP authentication and permissions
 
@@ -146,7 +147,6 @@ browser UI.
 | Resource | Operations |
 | --- | --- |
 | `/api/agents.md` | `GET` active workspace Agent instructions as raw `text/plain` |
-| `/api/workspace` | `GET` current/configured paths |
 | `/api/config` | `GET` |
 | `/api/proxy/status` | `GET` |
 | `/api/proxy/start`, `/api/proxy/stop` | `POST` |
@@ -435,9 +435,8 @@ An empty original request or response has no blob file. An explicitly modified e
 persists its zero-byte `.modified` blob. Raw body endpoints continue to return a successful
 zero-byte stream for empty originals.
 The default stored-file limit is 16 MiB and there is no server maximum. Transcoded and identity
-responses omit decoded `Content-Length`; original responses retain the stored length. The removed
-`decompress` query parameter is ignored when supplied by an older client. Active breakpoints expose
-the same contract at
+responses omit decoded `Content-Length`; original responses retain the stored length. Active
+breakpoints expose the same contract at
 `GET /api/breakpoints/{id}/body` and include current replacements for the paused phase.
 
 ## Session table views
@@ -483,8 +482,8 @@ Inactive Sessions can be archived while the proxy runs with
 Sessions disappear from all existing Session, log, view, interceptor, and export APIs. The active
 Session and Sessions with pinned requests return `409 conflict`. `GET /api/archived-sessions`
 lists metadata only, `POST /api/archived-sessions/{id}/restore` moves it back without activating
-it, and `DELETE /api/archived-sessions/{id}` permanently removes it. There is no direct deletion
-operation for an unarchived Session.
+it, and `DELETE /api/archived-sessions/{id}` permanently removes it. Permanent deletion therefore
+requires archiving the Session first.
 
 ## Global filter scripts
 

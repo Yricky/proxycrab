@@ -405,12 +405,6 @@ pub struct SystemLogEntry {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WorkspacePaths {
-    pub current_path: String,
-    pub configured_path: String,
-}
-
 #[cfg(test)]
 mod tests {
     use super::{AppConfig, FilterColumn, FilterOption};
