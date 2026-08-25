@@ -5,7 +5,7 @@ use proxy_crab_mitm::{
     model::{
         AppConfig, BodyPayload, BreakpointSummary, CaptureError, Column, InterceptorExecution,
         InterceptorKind, InterceptorLibraryItem, ProxyStatus, Script, SessionFilter,
-        SessionMetadata, SystemLogEntry, WorkspacePaths,
+        SessionMetadata, SystemLogEntry,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -441,10 +441,9 @@ pub struct HttpApiChange {
 
 pub use proxy_crab_mitm::model::{
     AppConfig as Config, Column as NetLogColumn, InterceptorKind as Kind,
-    ProxyStatus as MitmStatus, SessionMetadata as Session, WorkspacePaths as Workspace,
+    ProxyStatus as MitmStatus, SessionMetadata as Session,
 };
 
-pub type WorkspaceResponse = WorkspacePaths;
 pub type AgentsPresetsResponse = AgentsPresetState;
 pub type ConfigResponse = AppConfig;
 pub type ProxyStatusResponse = ProxyStatus;

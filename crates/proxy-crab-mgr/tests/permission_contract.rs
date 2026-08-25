@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 63);
+    assert_eq!(actions.len(), 62);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -63,7 +63,6 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "GET /api/session-view",
         "GET /api/sessions",
         "GET /api/system-logs",
-        "GET /api/workspace",
         "POST /api/filter-scripts/{name}/debug",
         "POST /api/logs/export",
         "POST /api/logs/ids",
@@ -133,6 +132,7 @@ fn permission_lookup_uses_both_method_and_route_template() {
     assert!(find_api_action("POST", "/api/ca").is_none());
     assert!(find_api_action("PUT", "/api/config").is_none());
     assert!(find_api_action("PUT", "/api/workspace").is_none());
+    assert!(find_api_action("GET", "/api/workspace").is_none());
     assert_eq!(
         find_api_action("POST", "/api/session-shares")
             .unwrap()

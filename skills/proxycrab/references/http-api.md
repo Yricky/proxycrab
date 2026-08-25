@@ -7,7 +7,7 @@ This reference documents the complete local HTTP surface used by ProxyCrab agent
 1. [Connection, authentication, and envelopes](#connection-authentication-and-envelopes)
 2. [Agent instructions](#agent-instructions)
 3. [Shared data types](#shared-data-types)
-4. [Workspace and configuration](#workspace-and-configuration)
+4. [Configuration](#configuration)
 5. [Proxy lifecycle](#proxy-lifecycle)
 6. [Sessions](#sessions)
 7. [Capture logs](#capture-logs)
@@ -132,15 +132,6 @@ Newly initialized workspaces contain `充分使用能力` and `静默排查`, wi
 Preset CRUD and selection are management-UI operations, not public Agent HTTP endpoints.
 
 ## Shared data types
-
-### WorkspacePaths
-
-```json
-{
-  "current_path": "/absolute/current/workspace",
-  "configured_path": "/absolute/next-start/workspace"
-}
-```
 
 ### AppConfig
 
@@ -281,11 +272,7 @@ The raw body endpoint still returns a successful zero-byte stream for an empty o
 `response_body`. `kind` is stable enough for programmatic classification; `message` is diagnostic
 text.
 
-## Workspace and configuration
-
-### `GET /api/workspace`
-
-Returns `WorkspacePaths`.
+## Configuration
 
 ### `GET /api/config`
 
@@ -374,8 +361,7 @@ Restore does not make the Session active.
 
 ### `DELETE /api/archived-sessions/{id}`
 
-Permanently deletes an archived Session and returns `{}`. This is the only Session deletion API;
-`DELETE /api/sessions/{id}` does not exist.
+Permanently deletes an archived Session and returns `{}`.
 
 ### `GET /api/active-session`
 
@@ -653,9 +639,8 @@ identity. If no output is allowed, the endpoint returns `406 not_acceptable_enco
 
 Transcoded and identity responses omit `Content-Length`; gzip and deflate responses set their
 selected `Content-Encoding`. Every response includes `Vary: Accept-Encoding`, and
-`X-ProxyCrab-Body-Size` always reports the original stored byte count. The removed `decompress`
-query parameter is ignored for compatibility with older clients. A malformed encoded stream can
-terminate after HTTP 200 has begun. Empty body files return 200 with zero bytes.
+`X-ProxyCrab-Body-Size` always reports the original stored byte count. A malformed encoded stream
+can terminate after HTTP 200 has begun. Empty body files return 200 with zero bytes.
 Missing/not-yet-produced bodies return `body_not_found`; unreadable files return
 `body_read_failed`; an original encoding that cannot be decoded for fallback returns
 `body_decode_failed`.

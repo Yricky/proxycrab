@@ -98,7 +98,7 @@
     {
       "id": 16,
       "prompt": "Archive an inactive ProxyCrab Session named old-debug, verify it no longer appears in the normal Session list, then restore it. Do not permanently delete any Session or change the active Session.",
-      "expected_output": "The agent reads active workspace instructions, resolves an inactive Session, uses POST /api/sessions/{id}/archive, verifies it through GET /api/archived-sessions and absence from GET /api/sessions, restores it through POST /api/archived-sessions/{id}/restore, and does not call either Session deletion endpoint or alter the active Session.",
+      "expected_output": "The agent reads active workspace instructions, resolves an inactive Session, uses POST /api/sessions/{id}/archive, verifies it through GET /api/archived-sessions and absence from GET /api/sessions, restores it through POST /api/archived-sessions/{id}/restore, and does not call DELETE /api/archived-sessions/{id} or alter the active Session.",
       "files": []
     },
     {
@@ -134,7 +134,7 @@
     {
       "id": 22,
       "prompt": "Save the complete response body for log 42 with a 32 MiB safety limit. The capture is Brotli encoded but this HTTP client accepts only gzip and deflate.",
-      "expected_output": "The agent uses body-get.mjs with max-size 33554432 and an output path, relies on server Accept-Encoding negotiation rather than a decompress option, and explains that max-size checks the original stored capture file while the client receives the negotiated decoded body without exposing its bytes.",
+      "expected_output": "The agent uses body-get.mjs with max-size 33554432 and an output path, relies on server Accept-Encoding negotiation, and explains that max-size checks the original stored capture file while the client receives the negotiated decoded body without exposing its bytes.",
       "files": []
     },
     {
@@ -147,6 +147,12 @@
       "id": 24,
       "prompt": "Create a 24-hour read-only ProxyCrab share for Session 3 using the normal management API, but do not expose the resulting token in the report.",
       "expected_output": "The agent calls permission-controlled POST /api/session-shares with the Agent Bearer credential and {session_id:3,hours:24}, handles approval or denial normally, never sends the returned pcrab_share_ token as Authorization, and reports only that the browser link was created without printing the token.",
+      "files": []
+    },
+    {
+      "id": 25,
+      "prompt": "Use the ProxyCrab management HTTP API to report the current workspace and switch the next-start workspace to /tmp/proxycrab-next.",
+      "expected_output": "The agent explains that /api/workspace does not exist and makes no HTTP attempt. It directs desktop users to the trusted Tauri settings operation and CLI users to select the workspace explicitly with --workspace at process startup.",
       "files": []
     }
   ]

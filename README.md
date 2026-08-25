@@ -6,7 +6,7 @@ ProxyCrab is a macOS-first HTTP/HTTPS MITM capture application. The same Vue man
 
 - `crates/proxy-crab-mitm`: proxy lifecycle, CA/TLS, sessions, SQLite captures, request/response bodies, Lua scripts, diagnostic failures, and the in-memory system-log ring.
 - `crates/proxy-crab-mgr`: the object-safe `ProxyCrabManager` trait, its MITM adapter, typed DTOs, stable errors, the local management HTTP server, and a route-level permission contract.
-- `src-tauri`: Tauri initialization, application lifecycle, and thin commands that call the same management trait as HTTP handlers.
+- `src-tauri`: Tauri initialization, application lifecycle, trusted host commands, and workspace-pointer ownership; ordinary proxy commands call the same management trait as HTTP handlers.
 - `cli-app`: headless proxy runner, embedded browser UI, per-run UI authentication, and CLI-specific allow/deny permission management.
 
 Neither reusable crate depends on Tauri.
@@ -32,10 +32,11 @@ evaluates any persisted `approval` value as `deny`. API keys and permissions are
 Settings > 管理接口 through target-private operations, not the public agent API. Direct Tauri
 commands remain trusted and bypass HTTP authentication.
 
-Host/workspace mutations such as changing the next-start workspace, replacing global configuration
+Host mutations such as changing the next-start workspace, replacing global configuration
 (including the proxy port), regenerating the CA, and installing the bundled Skill are not management
 HTTP resources. They are available only through trusted Tauri commands or explicit local CLI options
-and subcommands; the HTTP API keeps the corresponding workspace, config, and CA reads.
+and subcommands. Workspace selection is not exposed through HTTP; the API retains read-only config
+and CA resources.
 
 Permission state is stored in the active workspace's `http_api_permissions.json`; a corrupt file
 stops only the management HTTP service rather than widening access. Full API keys are displayed once

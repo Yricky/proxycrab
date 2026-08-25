@@ -96,7 +96,6 @@ macro_rules! action {
 
 pub static API_ACTIONS: &[ApiAction] = &[
     action!("GET", "/api/agents.md", Allow),
-    action!("GET", "/api/workspace", Allow),
     action!("GET", "/api/assets/{*asset_id}", Allow),
     action!("POST", "/api/assets/{*asset_id}", Approval),
     action!("GET", "/api/config", Allow),
@@ -160,8 +159,12 @@ pub static API_ACTIONS: &[ApiAction] = &[
     action!("DELETE", "/api/system-logs", Deny),
 ];
 
-pub const OBSOLETE_API_ACTION_IDS: &[&str] =
-    &["PUT /api/workspace", "PUT /api/config", "POST /api/ca"];
+pub const OBSOLETE_API_ACTION_IDS: &[&str] = &[
+    "GET /api/workspace",
+    "PUT /api/workspace",
+    "PUT /api/config",
+    "POST /api/ca",
+];
 
 pub fn api_actions() -> &'static [ApiAction] {
     API_ACTIONS

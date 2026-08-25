@@ -204,7 +204,7 @@ mod tests {
         let service = CliPermissionService::open(directory.path(), None).unwrap();
         assert!(
             service
-                .check_permission(action("GET", "/api/workspace"))
+                .check_permission(action("GET", "/api/config"))
                 .await
                 .is_none()
         );
