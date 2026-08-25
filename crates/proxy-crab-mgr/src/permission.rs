@@ -21,7 +21,7 @@ pub struct ApiAction {
 
 pub struct PermissionAction {
     pub action: &'static ApiAction,
-    pub authorization: Option<String>,
+    pub credential: ManagementCredential,
     pub actual_path: String,
     pub query: Option<String>,
     pub source: Option<SocketAddr>,
@@ -29,6 +29,12 @@ pub struct PermissionAction {
     pub content_length: Option<u64>,
     pub body_preview: Option<String>,
     pub body_preview_truncated: bool,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub enum ManagementCredential {
+    LocalLoopback,
+    Bearer(String),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -91,11 +97,9 @@ macro_rules! action {
 pub static API_ACTIONS: &[ApiAction] = &[
     action!("GET", "/api/agents.md", Allow),
     action!("GET", "/api/workspace", Allow),
-    action!("PUT", "/api/workspace", Approval),
     action!("GET", "/api/assets/{*asset_id}", Allow),
     action!("POST", "/api/assets/{*asset_id}", Approval),
     action!("GET", "/api/config", Allow),
-    action!("PUT", "/api/config", Approval),
     action!("GET", "/api/proxy/status", Allow),
     action!("POST", "/api/proxy/start", Approval),
     action!("POST", "/api/proxy/stop", Approval),
@@ -108,6 +112,7 @@ pub static API_ACTIONS: &[ApiAction] = &[
     action!("GET", "/api/active-session", Allow),
     action!("PUT", "/api/active-session", Approval),
     action!("PUT", "/api/sessions/{id}", Approval),
+    action!("POST", "/api/session-shares", Approval),
     action!("POST", "/api/logs/export", Allow),
     action!("POST", "/api/logs/ids", Allow),
     action!("POST", "/api/logs/views", Allow),
@@ -151,10 +156,12 @@ pub static API_ACTIONS: &[ApiAction] = &[
     action!("POST", "/api/bypass/delete", Deny),
     action!("DELETE", "/api/bypass/{id}", Deny),
     action!("GET", "/api/ca", Deny),
-    action!("POST", "/api/ca", Deny),
     action!("GET", "/api/system-logs", Allow),
     action!("DELETE", "/api/system-logs", Deny),
 ];
+
+pub const OBSOLETE_API_ACTION_IDS: &[&str] =
+    &["PUT /api/workspace", "PUT /api/config", "POST /api/ca"];
 
 pub fn api_actions() -> &'static [ApiAction] {
     API_ACTIONS

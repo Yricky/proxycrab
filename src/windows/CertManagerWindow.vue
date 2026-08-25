@@ -72,6 +72,8 @@ function downloadPem(): void {
 }
 
 async function regenerate(): Promise<void> {
+  const host = backend.host;
+  if (!host) return;
   const ok = await confirmDialog({
     title: "重新生成 CA 证书",
     message: "重新生成后，旧证书签发的所有站点证书将失效，需要重新安装并信任新证书。确定继续吗？",
@@ -81,7 +83,7 @@ async function regenerate(): Promise<void> {
   if (!ok) return;
   loading.value = true;
   try {
-    const cert = await backend.regenerateCertificate();
+    const cert = await host.regenerateCertificate();
     pem.value = cert.pem;
     appStore.toast("证书已重新生成", "success");
   } catch (error) {
@@ -159,6 +161,7 @@ onBeforeUnmount(() => {
       </button>
       <span class="cert-spacer" />
       <button
+        v-if="backend.host"
         class="btn danger"
         :disabled="proxyStore.running || loading"
         :title="proxyStore.running ? '需先停止代理' : '重新生成 CA 证书'"

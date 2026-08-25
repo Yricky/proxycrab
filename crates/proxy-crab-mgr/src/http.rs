@@ -1,3 +1,5 @@
+mod auth;
+
 use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 
 use async_compression::tokio::bufread::{
@@ -12,9 +14,7 @@ use axum::{
     http::{
         HeaderMap, HeaderValue, Method, StatusCode,
         header::{
-            ACCEPT_ENCODING, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
-            ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_REQUEST_HEADERS, AUTHORIZATION,
-            CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HOST, ORIGIN,
+            ACCEPT_ENCODING, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
             VARY,
         },
         request::Parts,
@@ -25,7 +25,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::{StreamExt, stream};
-use proxy_crab_mitm::model::{AppConfig, InterceptorKind};
+use proxy_crab_mitm::model::InterceptorKind;
 use proxy_crab_mitm::storage::{BodySide, BodySource, BodySourceData};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -43,19 +43,24 @@ use crate::{
         ExportLogsRequest, ExtendBreakpointRequest, HttpApiChange, HttpApiResource,
         InterceptorCreateRequest, InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest,
         ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest,
-        RoutingSelection, ScriptRequest, SessionQuery, SetWorkspaceRequest, SystemLogsQuery,
-        UpdateScriptRequest, UpdateSessionRequest, default_body_max_size,
+        RoutingSelection, ScriptRequest, SessionQuery, SystemLogsQuery, UpdateScriptRequest,
+        UpdateSessionRequest, default_body_max_size,
     },
     manager::ProxyCrabManager,
     permission::{
-        PermissionAction, PermissionDenied, PermissionDeniedStatus, PermissionManager, api_actions,
-        api_actions_for_path, find_api_action,
+        ManagementCredential, PermissionAction, PermissionDenied, PermissionDeniedStatus,
+        PermissionManager, api_actions, find_api_action,
     },
+    session_share::{CreateSessionShareRequest, SessionShareService},
 };
 
 type ManagerState = Arc<dyn ProxyCrabManager>;
 type ChangeSender = broadcast::Sender<HttpApiChange>;
 type ApiResult = Result<Json<Value>, ApiError>;
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct InProcessLocalRequest;
 
 struct ApiJson<T>(T);
 struct ApiPath<T>(T);
@@ -133,12 +138,16 @@ pub async fn start_http_server(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
 ) -> Result<HttpServerHandle, ManagerError> {
-    start_http_server_with_routes(manager, permissions, |_| Router::new()).await
+    start_http_server_with_routes(manager, permissions, SessionShareService::new(), |_| {
+        Router::new()
+    })
+    .await
 }
 
 pub async fn start_http_server_with_routes<F>(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
+    shares: Arc<SessionShareService>,
     extra_routes: F,
 ) -> Result<HttpServerHandle, ManagerError>
 where
@@ -153,7 +162,8 @@ where
     let shutdown = cancellation.clone();
     let (changes, _) = broadcast::channel(128);
     let extra = extra_routes(changes.clone());
-    let app = secured_router_with_changes_and_extra(manager, permissions, changes.clone(), extra);
+    let app =
+        secured_router_with_changes_and_extra(manager, permissions, shares, changes.clone(), extra);
     let task = tokio::spawn(async move {
         if let Err(error) = axum::serve(
             listener,
@@ -174,30 +184,40 @@ where
     })
 }
 
-pub fn router(manager: ManagerState, permissions: Arc<dyn PermissionManager>) -> Router {
+#[cfg(test)]
+fn router(manager: ManagerState, permissions: Arc<dyn PermissionManager>) -> Router {
     let (changes, _) = broadcast::channel(128);
     router_with_changes(manager, permissions, changes)
 }
 
+#[cfg(test)]
 fn router_with_changes(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
     changes: ChangeSender,
 ) -> Router {
-    router_with_changes_and_extra(manager, permissions, changes, Router::new())
+    router_with_changes_and_extra(
+        manager,
+        permissions,
+        SessionShareService::new(),
+        changes,
+        Router::new(),
+    )
+    .layer(Extension(InProcessLocalRequest))
 }
 
 fn router_with_changes_and_extra(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
+    shares: Arc<SessionShareService>,
     changes: ChangeSender,
     extra: Router,
 ) -> Router {
     Router::new()
         .route("/api/agents.md", get(agents_markdown))
-        .route("/api/workspace", get(get_workspace).put(set_workspace))
+        .route("/api/workspace", get(get_workspace))
         .route("/api/assets/{*asset_id}", get(asset).post(upload_asset))
-        .route("/api/config", get(get_config).put(replace_config))
+        .route("/api/config", get(get_config))
         .route("/api/proxy/status", get(proxy_status))
         .route("/api/proxy/start", post(start_proxy))
         .route("/api/proxy/stop", post(stop_proxy))
@@ -217,6 +237,7 @@ fn router_with_changes_and_extra(
             "/api/sessions/{id}",
             put(update_session).fallback(|| async { StatusCode::NOT_FOUND }),
         )
+        .route("/api/session-shares", post(create_session_share))
         .route("/api/logs/export", post(export_logs))
         .route("/api/logs/ids", post(log_ids))
         .route("/api/logs/views", post(log_views))
@@ -287,7 +308,7 @@ fn router_with_changes_and_extra(
                 .put(update_interceptor)
                 .delete(delete_interceptor),
         )
-        .route("/api/ca", get(certificate).post(regenerate_certificate))
+        .route("/api/ca", get(certificate))
         .route(
             "/api/system-logs",
             get(system_logs).delete(clear_system_logs),
@@ -306,6 +327,7 @@ fn router_with_changes_and_extra(
             authorize_request,
         ))
         .with_state(manager)
+        .layer(Extension(shares))
         .layer(Extension(changes.clone()))
         .layer(middleware::from_fn_with_state(
             changes,
@@ -327,17 +349,24 @@ fn secured_router_with_changes(
     permissions: Arc<dyn PermissionManager>,
     changes: ChangeSender,
 ) -> Router {
-    secured_router_with_changes_and_extra(manager, permissions, changes, Router::new())
+    secured_router_with_changes_and_extra(
+        manager,
+        permissions,
+        SessionShareService::new(),
+        changes,
+        Router::new(),
+    )
 }
 
 fn secured_router_with_changes_and_extra(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
+    shares: Arc<SessionShareService>,
     changes: ChangeSender,
     extra: Router,
 ) -> Router {
-    router_with_changes_and_extra(manager, permissions, changes, extra)
-        .layer(middleware::from_fn(validate_local_browser_request))
+    router_with_changes_and_extra(manager, permissions, shares, changes, extra)
+        .layer(middleware::from_fn(auth::prepare_management_request))
 }
 
 const BODY_PREVIEW_LIMIT: usize = 16 * 1024;
@@ -367,29 +396,21 @@ async fn authorize_request(
         ));
     };
 
-    let authorization = match request
-        .headers()
-        .get_all(AUTHORIZATION)
-        .iter()
-        .collect::<Vec<_>>()
-        .as_slice()
-    {
-        [] => None,
-        [value] => match value.to_str() {
-            Ok(value) => Some(value.to_owned()),
-            Err(_) => {
-                return permission_denied_response(PermissionDenied::unauthorized(
-                    "invalid_api_key",
-                    "Authorization must contain one valid Bearer API key",
-                ));
+    let credential = match request.extensions().get::<ManagementCredential>().cloned() {
+        Some(credential) => Ok(credential),
+        None => match auth::resolve_management_credential(&request) {
+            Err(error)
+                if error.code == "remote_auth_required"
+                    && accepts_in_process_local_request(&request) =>
+            {
+                Ok(ManagementCredential::LocalLoopback)
             }
+            result => result,
         },
-        _ => {
-            return permission_denied_response(PermissionDenied::unauthorized(
-                "invalid_api_key",
-                "Authorization must contain exactly one Bearer API key",
-            ));
-        }
+    };
+    let credential = match credential {
+        Ok(credential) => credential,
+        Err(error) => return permission_denied_response(error),
     };
     let source = request
         .extensions()
@@ -412,7 +433,7 @@ async fn authorize_request(
 
     let permission = PermissionAction {
         action,
-        authorization,
+        credential,
         actual_path,
         query,
         source,
@@ -426,6 +447,21 @@ async fn authorize_request(
         return permission_denied_response(denied);
     }
     next.run(request).await
+}
+
+fn accepts_in_process_local_request(request: &Request) -> bool {
+    #[cfg(test)]
+    {
+        request
+            .extensions()
+            .get::<InProcessLocalRequest>()
+            .is_some()
+    }
+    #[cfg(not(test))]
+    {
+        let _ = request;
+        false
+    }
 }
 
 async fn preview_request_body(
@@ -509,14 +545,6 @@ async fn publish_successful_http_changes(
 
 fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Option<HttpApiChange> {
     let resources = match (method, path) {
-        (&Method::PUT, "/api/workspace") => vec![HttpApiResource::Workspace],
-        (&Method::PUT, "/api/config") => {
-            vec![
-                HttpApiResource::Config,
-                HttpApiResource::RoutingSelection,
-                HttpApiResource::ActiveSession,
-            ]
-        }
         (&Method::POST, "/api/proxy/start" | "/api/proxy/stop") => {
             vec![HttpApiResource::Proxy]
         }
@@ -574,7 +602,6 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
         (&Method::PUT, "/api/session-interceptors") => {
             vec![HttpApiResource::SessionInterceptors]
         }
-        (&Method::POST, "/api/ca") => vec![HttpApiResource::Certificate],
         (&Method::DELETE, "/api/system-logs") => vec![HttpApiResource::SystemLogs],
         (&Method::DELETE, "/api/bypass") | (&Method::POST, "/api/bypass/delete") => {
             vec![HttpApiResource::Bypass]
@@ -597,126 +624,12 @@ fn session_id_from_query(query: Option<&str>) -> Option<u64> {
         .find_map(|(key, value)| (key == "session_id").then(|| value.parse().ok()).flatten())
 }
 
-async fn validate_local_browser_request(request: Request, next: Next) -> Response {
-    let path = request.uri().path().to_owned();
-    if !path.starts_with("/api/") {
-        return next.run(request).await;
-    }
-    let local_authority = request
-        .headers()
-        .get(HOST)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<axum::http::uri::Authority>().ok())
-        .is_some_and(|authority| is_local_host(authority.host()));
-    let allowed_origin = request.headers().get(ORIGIN).cloned();
-    let local_origin = allowed_origin.as_ref().is_none_or(|origin| {
-        origin
-            .to_str()
-            .ok()
-            .and_then(|value| value.parse::<axum::http::Uri>().ok())
-            .is_some_and(|origin| {
-                matches!(origin.scheme_str(), Some("http" | "https" | "tauri"))
-                    && origin.host().is_some_and(is_local_host)
-            })
-    });
-    let is_preflight = request.method() == Method::OPTIONS;
-    if (!local_authority || !local_origin)
-        && !request_has_remote_authorization(&request, is_preflight)
-    {
-        return permission_denied_response(PermissionDenied::unauthorized(
-            "remote_auth_required",
-            "remote management API requests require Authorization",
-        ));
-    }
-    let mut response = if is_preflight {
-        let methods = api_actions_for_path(&path)
-            .map(|action| action.method)
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>()
-            .join(", ");
-        if methods.is_empty() {
-            ApiError(ManagerError::not_found("api endpoint not found")).into_response()
-        } else {
-            StatusCode::NO_CONTENT.into_response()
-        }
-    } else {
-        next.run(request).await
-    };
-    if let Some(origin) = allowed_origin {
-        response
-            .headers_mut()
-            .insert(ACCESS_CONTROL_ALLOW_ORIGIN, origin);
-        response
-            .headers_mut()
-            .append(VARY, HeaderValue::from_static("Origin"));
-    }
-    if is_preflight && response.status().is_success() {
-        let methods = api_actions_for_path(&path)
-            .map(|action| action.method)
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>()
-            .join(", ");
-        if let Ok(value) = HeaderValue::from_str(&methods) {
-            response
-                .headers_mut()
-                .insert(ACCESS_CONTROL_ALLOW_METHODS, value);
-        }
-        response.headers_mut().insert(
-            ACCESS_CONTROL_ALLOW_HEADERS,
-            HeaderValue::from_static("Authorization, Content-Type"),
-        );
-    }
-    response
-}
-
-fn request_has_remote_authorization(request: &Request, is_preflight: bool) -> bool {
-    if !is_preflight {
-        return request.headers().contains_key(AUTHORIZATION);
-    }
-    request
-        .headers()
-        .get_all(ACCESS_CONTROL_REQUEST_HEADERS)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .any(|name| name.trim().eq_ignore_ascii_case("authorization"))
-}
-
-fn is_local_host(host: &str) -> bool {
-    let host = host
-        .strip_prefix('[')
-        .and_then(|host| host.strip_suffix(']'))
-        .unwrap_or(host)
-        .trim_end_matches('.');
-    host.eq_ignore_ascii_case("localhost")
-        || host.eq_ignore_ascii_case("tauri.localhost")
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|address| address.is_loopback())
-}
-
 async fn get_workspace(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.workspace().await?)
 }
 
-async fn set_workspace(
-    State(manager): State<ManagerState>,
-    ApiJson(request): ApiJson<SetWorkspaceRequest>,
-) -> ApiResult {
-    success(manager.set_workspace_for_next_start(request.path).await?)
-}
-
 async fn get_config(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.config().await?)
-}
-
-async fn replace_config(
-    State(manager): State<ManagerState>,
-    ApiJson(config): ApiJson<AppConfig>,
-) -> ApiResult {
-    success(manager.replace_config(config).await?)
 }
 
 async fn agents_markdown(State(manager): State<ManagerState>) -> Result<Response, ApiError> {
@@ -768,6 +681,14 @@ async fn update_session(
     ApiJson(request): ApiJson<UpdateSessionRequest>,
 ) -> ApiResult {
     success(manager.update_session(id, request).await?)
+}
+
+async fn create_session_share(
+    State(manager): State<ManagerState>,
+    Extension(shares): Extension<Arc<SessionShareService>>,
+    ApiJson(request): ApiJson<CreateSessionShareRequest>,
+) -> ApiResult {
+    success(shares.create(&manager, request).await?)
 }
 
 async fn archive_session(
@@ -1242,10 +1163,6 @@ async fn certificate(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.certificate().await?)
 }
 
-async fn regenerate_certificate(State(manager): State<ManagerState>) -> ApiResult {
-    success(manager.regenerate_certificate().await?)
-}
-
 async fn system_logs(
     State(manager): State<ManagerState>,
     ApiQuery(query): ApiQuery<SystemLogsQuery>,
@@ -1619,12 +1536,14 @@ impl IntoResponse for ApiError {
 mod tests {
     use std::{
         io::{Read, Write},
+        net::SocketAddr,
         sync::{Arc, Mutex},
     };
 
     use async_trait::async_trait;
     use axum::{
         body::{Body, to_bytes},
+        extract::ConnectInfo,
         http::{
             HeaderMap, Method, Request, StatusCode,
             header::{
@@ -1655,7 +1574,7 @@ mod tests {
             secured_router,
         },
         manager::{MitmManager, ProxyCrabManager},
-        permission::{PermissionAction, PermissionDenied, PermissionManager},
+        permission::{ManagementCredential, PermissionAction, PermissionDenied, PermissionManager},
     };
 
     struct AllowAll;
@@ -1674,7 +1593,7 @@ mod tests {
     #[derive(Debug, PartialEq, Eq)]
     struct RecordedPermission {
         id: &'static str,
-        authorization: Option<String>,
+        bearer: Option<String>,
         actual_path: String,
         query: Option<String>,
         body_preview: Option<String>,
@@ -1689,9 +1608,13 @@ mod tests {
     #[async_trait]
     impl PermissionManager for RecordingPermissions {
         async fn check_permission(&self, action: PermissionAction) -> Option<PermissionDenied> {
+            let bearer = match action.credential {
+                ManagementCredential::LocalLoopback => None,
+                ManagementCredential::Bearer(token) => Some(token),
+            };
             self.items.lock().unwrap().push(RecordedPermission {
                 id: action.action.id,
-                authorization: action.authorization,
+                bearer,
                 actual_path: action.actual_path,
                 query: action.query,
                 body_preview: action.body_preview,
@@ -1744,7 +1667,7 @@ mod tests {
             *recorded.lock().unwrap(),
             vec![RecordedPermission {
                 id: "POST /api/sessions",
-                authorization: Some("Bearer pcrab_example".into()),
+                bearer: Some("pcrab_example".into()),
                 actual_path: "/api/sessions".into(),
                 query: Some("source=test".into()),
                 body_preview: Some(body.into()),
@@ -2112,24 +2035,6 @@ mod tests {
         let cases = [
             (
                 "PUT",
-                "/api/workspace",
-                None,
-                vec![HttpApiResource::Workspace],
-                None,
-            ),
-            (
-                "PUT",
-                "/api/config",
-                None,
-                vec![
-                    HttpApiResource::Config,
-                    HttpApiResource::RoutingSelection,
-                    HttpApiResource::ActiveSession,
-                ],
-                None,
-            ),
-            (
-                "PUT",
                 "/api/active-session",
                 None,
                 vec![HttpApiResource::ActiveSession, HttpApiResource::Config],
@@ -2207,13 +2112,6 @@ mod tests {
                 Some("session_id=42"),
                 vec![HttpApiResource::SessionInterceptors],
                 Some(42),
-            ),
-            (
-                "POST",
-                "/api/ca",
-                None,
-                vec![HttpApiResource::Certificate],
-                None,
             ),
             (
                 "POST",
@@ -2633,7 +2531,7 @@ mod tests {
     async fn exposes_only_the_new_log_and_session_view_routes() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
 
         for (method, uri, body) in [
@@ -2688,6 +2586,23 @@ mod tests {
             assert_eq!(response.status(), axum::http::StatusCode::OK, "{uri}");
         }
 
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/session-shares")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"session_id":{},"hours":24}}"#,
+                        session.id
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
         for (method, uri) in [
             ("GET", "/api/logs"),
             ("POST", "/api/logs/filter"),
@@ -2698,6 +2613,9 @@ mod tests {
             ("POST", "/api/sessions/1/activate"),
             ("POST", "/api/interceptors/request/example/enable"),
             ("POST", "/api/interceptors/request/example/disable"),
+            ("PUT", "/api/workspace"),
+            ("PUT", "/api/config"),
+            ("POST", "/api/ca"),
         ] {
             let response = app
                 .clone()
@@ -2961,8 +2879,8 @@ mod tests {
             "https://proxy.example"
         );
         assert_eq!(
-            recorded.lock().unwrap()[0].authorization,
-            Some("Bearer pcrab_ui_test".into())
+            recorded.lock().unwrap()[0].bearer,
+            Some("pcrab_ui_test".into())
         );
     }
 
@@ -3014,17 +2932,19 @@ mod tests {
         let manager = MitmManager::new(runtime);
         let app = secured_router(manager, allow_all());
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/proxy/status")
-                    .header("host", "127.0.0.1:18089")
-                    .header("origin", "tauri://localhost")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
+        let mut request = Request::builder()
+            .uri("/api/proxy/status")
+            .header("host", "127.0.0.1:18089")
+            .header("origin", "tauri://localhost")
+            .body(Body::empty())
             .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from((
+                std::net::Ipv4Addr::LOCALHOST,
+                40000,
+            ))));
+        let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         assert_eq!(
             response.headers()["access-control-allow-origin"],

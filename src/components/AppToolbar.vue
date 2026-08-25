@@ -146,7 +146,7 @@ onBeforeUnmount(() => {
           <input
             class="proxy-port-input"
             :value="proxyStore.portText"
-            :disabled="proxyStore.running || proxyStore.busy"
+            :disabled="proxyStore.running || proxyStore.busy || !backend.host"
             maxlength="5"
             spellcheck="false"
             autocomplete="off"
@@ -201,7 +201,7 @@ onBeforeUnmount(() => {
             <span>AGENTS.md 预设…</span>
           </button>
           <button
-            v-if="backend.skillInstaller"
+            v-if="backend.host?.skillInstaller"
             class="tb-menu-item"
             @click="runMenuAction(openSkillInstall)"
           >

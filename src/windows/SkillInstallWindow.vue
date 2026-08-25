@@ -6,7 +6,7 @@ import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 
 const backend = useBackend();
-const installer = backend.skillInstaller;
+const installer = backend.host?.skillInstaller;
 
 const parentPath = ref("~/.agents/skills");
 const installing = ref(false);

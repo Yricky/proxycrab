@@ -57,7 +57,7 @@ const identityOptions = computed<CustomSelectOption[]>(() =>
   })),
 );
 const managementDisabled = computed(() => permissionConfigError.value !== null);
-const canSwitchWorkspace = backend.capabilities.workspaceSwitch;
+const canSwitchWorkspace = Boolean(backend.host);
 const serviceUrl = computed(() => {
   const status = serviceStatus.value;
   return status ? `http://${status.host}:${status.port}` : "—";
@@ -165,13 +165,15 @@ async function selectIdentity(id: string): Promise<void> {
 }
 
 async function saveWorkspace(): Promise<void> {
+  const host = backend.host;
+  if (!host) return;
   const path = configuredPath.value.trim();
   if (!path) {
     reportError("工作区路径不能为空");
     return;
   }
   try {
-    const workspace = await backend.setWorkspaceForNextStart(path);
+    const workspace = await host.setWorkspaceForNextStart(path);
     configuredPath.value = workspace.configured_path;
     loadedConfiguredPath.value = workspace.configured_path;
     externalChanged.value = false;

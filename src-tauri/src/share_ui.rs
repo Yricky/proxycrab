@@ -4,7 +4,7 @@ use axum::{
     extract::Path,
     http::{
         HeaderValue, StatusCode,
-        header::{CACHE_CONTROL, CONTENT_TYPE},
+        header::{CACHE_CONTROL, CONTENT_TYPE, REFERRER_POLICY},
     },
     response::{IntoResponse, Response},
     routing::get,
@@ -53,5 +53,10 @@ fn static_asset(path: &str) -> Response {
             "public, max-age=31536000, immutable"
         }),
     );
+    if path == "index.html" {
+        response
+            .headers_mut()
+            .insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    }
     response
 }

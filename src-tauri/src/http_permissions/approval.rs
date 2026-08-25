@@ -279,7 +279,7 @@ fn lock_error<T>(_: std::sync::PoisonError<T>) -> ManagerError {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use proxy_crab_mgr::permission::{api_actions, find_api_action};
+    use proxy_crab_mgr::permission::{ManagementCredential, api_actions, find_api_action};
 
     use super::*;
     use crate::http_permissions::model::{PermissionIdentityKind, PermissionIdentitySummary};
@@ -298,7 +298,7 @@ mod tests {
     fn action() -> PermissionAction {
         PermissionAction {
             action: find_api_action("POST", "/api/proxy/start").unwrap(),
-            authorization: None,
+            credential: ManagementCredential::LocalLoopback,
             actual_path: "/api/proxy/start".into(),
             query: None,
             source: None,
@@ -393,7 +393,7 @@ mod tests {
                 .unwrap(),
             Some(ApprovalOutcome::Deny)
         );
-        assert_eq!(api_actions().len(), 65);
+        assert_eq!(api_actions().len(), 63);
     }
 
     #[tokio::test(start_paused = true)]

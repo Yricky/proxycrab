@@ -130,6 +130,7 @@ export const proxyStore = reactive({
 
   /** Update the toolbar port; persist to AppConfig once the edit settles. */
   setPortText(text: string): void {
+    if (!backend.host) return;
     this.portText = text;
     cancelPortPersist();
     if (this.running) return;
@@ -142,11 +143,13 @@ export const proxyStore = reactive({
 
   /** Write `port` into AppConfig unless it is already stored. Returns success. */
   async persistPort(port: number): Promise<boolean> {
+    const host = backend.host;
+    if (!host) return port === this.persistedPort;
     if (port === this.persistedPort) return true;
     try {
       const latest = await backend.getConfig();
       const next: AppConfig = { ...latest, proxy_port: port };
-      await backend.replaceConfig(next);
+      await host.replaceConfig(next);
       this.persistedPort = port;
       return true;
     } catch (error) {
@@ -165,7 +168,7 @@ export const proxyStore = reactive({
         const port = this.portNumber;
         if (port === null) return;
         // Write the current port through so start binds exactly what is shown.
-        if (!(await this.persistPort(port))) return;
+        if (backend.host && !(await this.persistPort(port))) return;
         this.status = await backend.startProxy();
       }
     } catch (error) {

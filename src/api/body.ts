@@ -50,6 +50,7 @@ export async function fetchBodyFromBase(
   maxSize = DEFAULT_BODY_MAX_SIZE,
   authorization?: string,
   apiPrefix = "/api",
+  queryToken?: string,
 ): Promise<LoadedBody> {
   if (!Number.isSafeInteger(maxSize) || maxSize <= 0 || maxSize > UI_BODY_MAX_SIZE) {
     throw new BodyFetchError({ code: "bad_request", message: "无效的 Body 大小限制" });
@@ -62,9 +63,11 @@ export async function fetchBodyFromBase(
   url.searchParams.set("side", side);
   url.searchParams.set("max_size", String(maxSize));
   if (target.kind === "log") url.searchParams.set("session_id", String(target.sessionId));
+  if (queryToken !== undefined) url.searchParams.append("token", queryToken);
 
   const response = await fetch(url, {
     headers: authorization ? { Authorization: authorization } : undefined,
+    referrerPolicy: queryToken === undefined ? undefined : "no-referrer",
   });
   if (!response.ok) {
     let error: ManagerError = {

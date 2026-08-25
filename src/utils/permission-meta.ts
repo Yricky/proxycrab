@@ -11,11 +11,9 @@ import type { ApiActionView } from "../api/types";
 export const ACTION_LABELS: Record<string, string> = {
   "GET /api/agents.md": "读取 Agent 指令",
   "GET /api/workspace": "读取工作区",
-  "PUT /api/workspace": "设置下次启动工作区",
   "GET /api/assets/{*asset_id}": "读取资源",
   "POST /api/assets/{*asset_id}": "上传资源",
   "GET /api/config": "读取全局配置",
-  "PUT /api/config": "替换全局配置",
   "GET /api/proxy/status": "读取代理状态",
   "POST /api/proxy/start": "启动代理",
   "POST /api/proxy/stop": "停止代理",
@@ -28,6 +26,7 @@ export const ACTION_LABELS: Record<string, string> = {
   "GET /api/active-session": "读取活动 Session",
   "PUT /api/active-session": "切换活动 Session",
   "PUT /api/sessions/{id}": "更新 Session",
+  "POST /api/session-shares": "创建 Session 分享链接",
   "POST /api/logs/export": "导出抓包日志",
   "POST /api/logs/ids": "查询日志 ID",
   "POST /api/logs/views": "批量渲染日志",
@@ -71,7 +70,6 @@ export const ACTION_LABELS: Record<string, string> = {
   "POST /api/bypass/delete": "批量删除 Bypass 流量",
   "DELETE /api/bypass/{id}": "删除 Bypass 流量",
   "GET /api/ca": "读取 CA 证书",
-  "POST /api/ca": "重新生成 CA 证书",
   "GET /api/system-logs": "读取系统日志",
   "DELETE /api/system-logs": "清空系统日志",
 };
@@ -86,7 +84,7 @@ export interface FunctionGroupDef {
 export const FUNCTION_GROUPS: FunctionGroupDef[] = [
   { key: "general", label: "基础与工作区", prefixes: ["/api/agents.md", "/api/workspace", "/api/config", "/api/assets"] },
   { key: "proxy", label: "代理服务", prefixes: ["/api/proxy/"] },
-  { key: "sessions", label: "Session", prefixes: ["/api/sessions", "/api/archived-sessions", "/api/active-session"] },
+  { key: "sessions", label: "Session", prefixes: ["/api/sessions", "/api/session-shares", "/api/archived-sessions", "/api/active-session"] },
   { key: "logs", label: "抓包日志", prefixes: ["/api/logs/"] },
   { key: "views", label: "Session 视图", prefixes: ["/api/session-view", "/api/session-interceptors"] },
   { key: "scripts", label: "脚本与拦截器", prefixes: ["/api/column-scripts", "/api/filter-scripts", "/api/routing-scripts", "/api/routing-script-selection", "/api/interceptors"] },
@@ -120,7 +118,7 @@ export const IMPACT_GROUPS: ReadonlyArray<{ key: ImpactGroupKey; label: string }
  * 影响分类（基于动作默认值静态判定，不随用户配置漂移）：
  * - 默认 Deny 的动作即「危险操作」；
  * - 其余 GET 为「仅读取」；
- * - 其余非 GET（POST/PUT）为「有写操作」。
+ * - 其余非 GET（POST/PUT/DELETE）为「有写操作」。
  */
 export function impactGroupOf(action: ApiActionView): ImpactGroupKey {
   if (action.default_mode === "deny") return "danger";

@@ -50,6 +50,8 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
   printed for a human; do not copy it into `PROXYCRAB_API_KEY` or any Agent command.
 - Never use or expose a `pcrab_share_…` Session link token. It is scoped to the read-only browser
   page, is not an Agent API key, and must not appear in Agent arguments, URLs, logs, or reports.
+- Treat `POST /api/session-shares` as a normal permission-controlled Agent action. The returned
+  token is browser-only and must not be reused in `Authorization`.
 - Bundled Agent scripts allow a remote base URL only when `PROXYCRAB_API_KEY` is set. The remote
   service must be deliberately bound to a reachable address, and that API-key identity must allow
   the requested route. Prefer authenticated TLS or an SSH local port forward; plain HTTP exposes
@@ -257,8 +259,9 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
   to the no-key identity, changing credentials, or repeatedly retrying. Ask the user to adjust the
   selected identity in Settings > 管理接口 when authorization is required.
 - Do not archive or restore Sessions, permanently delete archived Sessions, delete scripts, start
-  or stop the proxy, clear logs or records, regenerate the CA, replace application configuration,
-  or change workspace paths unless the user explicitly requests that action. An active Session
+  or stop the proxy, or clear logs or records unless the user explicitly requests that action.
+  CA regeneration, full application-config replacement, and workspace changes are host operations
+  and are intentionally unavailable through this Agent HTTP API. An active Session
   cannot be archived; make it inactive only when the user authorizes that separate mutation.
 - Do not replay requests or configure another process's proxy environment automatically.
 - Keep local raw capture output intact for debugging. It can include authorization headers, cookies,
