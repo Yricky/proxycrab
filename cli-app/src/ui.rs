@@ -22,6 +22,7 @@ use axum::{
 use proxy_crab_mgr::{
     ProxyCrabManager,
     dto::{CreateAgentsPresetRequest, HttpApiChange, ManagerError, UpdateAgentsPresetRequest},
+    session_share::{CreateSessionShareRequest, SessionShareService},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -83,6 +84,7 @@ struct UiState {
     permissions: Arc<CliPermissionService>,
     access: Arc<UiAccess>,
     changes: Arc<ChangeLog>,
+    shares: Arc<SessionShareService>,
 }
 
 #[derive(Deserialize)]
@@ -116,6 +118,7 @@ pub fn router(
     manager: Arc<dyn ProxyCrabManager>,
     permissions: Arc<CliPermissionService>,
     access: Arc<UiAccess>,
+    shares: Arc<SessionShareService>,
     changes: broadcast::Sender<HttpApiChange>,
 ) -> Router {
     let state = Arc::new(UiState {
@@ -123,6 +126,7 @@ pub fn router(
         permissions,
         access,
         changes: ChangeLog::new(changes.subscribe()),
+        shares,
     });
     let protected = Router::new()
         .route("/ui-api/bootstrap", get(bootstrap))
@@ -153,6 +157,7 @@ pub fn router(
         )
         .route("/ui-api/api-keys", post(create_api_key))
         .route("/ui-api/api-keys/{id}", delete(delete_api_key))
+        .route("/ui-api/session-shares", post(create_session_share))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize_ui))
         .with_state(state);
     protected.merge(
@@ -184,7 +189,7 @@ async fn bootstrap(State(state): State<Arc<UiState>>) -> Response {
             "target": "cli",
             "http_service": {
                 "running": true,
-                "host": config.api_host,
+                "host": std::net::Ipv4Addr::UNSPECIFIED.to_string(),
                 "port": config.api_port,
                 "error": null,
             }
@@ -308,12 +313,24 @@ async fn delete_api_key(State(state): State<Arc<UiState>>, Path(id): Path<String
     result(state.permissions.delete_api_key(&id))
 }
 
+async fn create_session_share(
+    State(state): State<Arc<UiState>>,
+    Json(request): Json<CreateSessionShareRequest>,
+) -> Response {
+    result(state.shares.create(&state.manager, request).await)
+}
+
 async fn index() -> Response {
     static_asset("index.html")
 }
 
 async fn asset(Path(path): Path<String>) -> Response {
-    static_asset(&path)
+    let response = static_asset(&path);
+    if response.status() == StatusCode::NOT_FOUND && !path.contains('.') {
+        static_asset("index.html")
+    } else {
+        response
+    }
 }
 
 fn static_asset(path: &str) -> Response {

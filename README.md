@@ -1,6 +1,6 @@
 # ProxyCrab
 
-ProxyCrab is a macOS-first HTTP/HTTPS MITM capture application. The same Vue management UI runs in the Tauri desktop application and from the headless CLI's loopback HTTP server through target-specific backends.
+ProxyCrab is a macOS-first HTTP/HTTPS MITM capture application. The same Vue management UI runs in the Tauri desktop application and from the headless CLI's HTTP server through target-specific backends.
 
 ## Rust workspace
 
@@ -14,7 +14,7 @@ Neither reusable crate depends on Tauri.
 ## Runtime defaults
 
 - MITM proxy: `0.0.0.0:8089`, stopped when the app launches.
-- Management API: `127.0.0.1:18089`, started with the app.
+- Management API: `0.0.0.0:18089`, started with the app. Remote management calls still require Bearer authentication.
 - CA download through the proxy: `http://proxy.crab/ca.crt`.
 - System log buffer: the newest 10,000 entries in memory.
 - Captured request/response bodies stream directly to disk without an application-level size limit; at most 256 client connections are accepted.
@@ -22,7 +22,7 @@ Neither reusable crate depends on Tauri.
 
 The Tauri application data directory contains `config.json`, which points at the workspace. When the pointer is absent or invalid, `app_data_dir/workspace` is used and persisted. A changed pointer takes effect only on the next application launch.
 
-The management API defaults to loopback and supports workspace-scoped API keys through exactly one
+The management API listens on every IPv4 interface and supports workspace-scoped API keys through exactly one
 `Authorization: Bearer <key>` header. Every API key and the local no-key identity have independent
 per-route permissions. The desktop target supports `allow`, `approval`, and `deny`; approval waits
 for a desktop decision for up to 30 seconds. The CLI target exposes only `allow` and `deny`, and
@@ -53,6 +53,24 @@ other management calls. A supplied log filter can be kept stateless with
 
 The Tauri command surface also reports the management HTTP service's `running`, `host`, `port`, and startup error state through `get_http_service_status`.
 
+## Read-only Session links
+
+The desktop and CLI management UIs can create a link from a Session's context menu. Each action
+creates a new 256-bit `pcrab_share_…` token scoped to that one active Session, stores only its
+SHA-256 digest in process memory, and accepts an integer lifetime from 1 through 720 hours (24 by
+default). Restarting ProxyCrab, expiry, or archiving the Session invalidates the link.
+
+The `/session?token=…` page renders only the main traffic content. It follows new/finished captures
+and owner column changes, starts with the Session's current filter, and keeps every viewer's later
+filter stateless. Sorting, copying, log details, complete bodies, historical interceptor results,
+and script snapshots remain readable. Toolbar/sidebar management, column editing, interceptors,
+breakpoints, exports, and every other write surface are absent. Its token is accepted only by the
+dedicated Session-scoped `/share-api/*` routes and is never an Agent API key.
+
+The UI generates one URL for every non-loopback local IPv4 address. These links use plain HTTP by
+default, so the token and captured data must be shared only on a trusted network or protected by a
+TLS reverse proxy.
+
 ## CLI browser UI
 
 Build the CLI frontend before compiling the binary so Cargo can embed the generated assets:
@@ -73,10 +91,9 @@ the URL and enter that token on the landing page. The cleartext token is not per
 keeps only its SHA-256 digest. It authorizes the browser UI's internal `/ui-api/*` operations and
 trusted calls to the shared `/api/*` management resources for that process lifetime.
 
-For access from another machine, the safer setup is to keep the default loopback listener and use
-an SSH local port forward. The browser still opens `http://127.0.0.1:18089` on the client. If the
-CLI is deliberately started with `--api-host 0.0.0.0` or another non-loopback address, open the
-server's reachable IP or hostname instead. Remote `/api/*` requests require the Bearer token, and
+For access from another machine, the safer setup is an SSH local port forward or authenticated TLS.
+The browser can then open `http://127.0.0.1:18089` on the client. Direct access uses one of the
+server's reachable IP addresses. Remote `/api/*` requests require the Bearer token, and
 the token travels in cleartext over plain HTTP, so direct exposure should be limited to a trusted
 network or placed behind authenticated TLS.
 

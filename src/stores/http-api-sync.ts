@@ -89,7 +89,11 @@ async function flush(): Promise<void> {
     viewingSessionId !== null &&
     affectsSession(batch, "session_view", viewingSessionId)
   ) {
-    await logsStore.loadSession();
+    if (backend.capabilities.readonly) {
+      await logsStore.applyFilter(logsStore.appliedFilter);
+    } else {
+      await logsStore.loadSession();
+    }
   }
   if (
     viewingSessionId !== null &&

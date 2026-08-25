@@ -169,27 +169,21 @@ impl PermissionStore {
             });
         };
         let api_key = parse_bearer(authorization)?;
-        let prefix = api_key
-            .strip_prefix("pcrab_")
-            .and_then(|value| value.split_once('_'))
-            .map(|(prefix, _)| prefix)
-            .ok_or_else(invalid_api_key)?;
         let mut state = self.state.lock().map_err(lock_error)?;
-        let record = state
+        let record_index = state
             .api_keys
-            .iter_mut()
-            .find(|record| record.prefix == prefix)
+            .iter()
+            .enumerate()
+            .find_map(
+                |(index, record)| match api_key_matches_record(record, api_key) {
+                    Ok(Some(())) => Some(Ok(index)),
+                    Ok(None) => None,
+                    Err(error) => Some(Err(error)),
+                },
+            )
+            .transpose()?
             .ok_or_else(invalid_api_key)?;
-        let salt = URL_SAFE_NO_PAD
-            .decode(&record.salt)
-            .map_err(|_| ManagerError::internal("stored API key salt is invalid"))?;
-        let expected = URL_SAFE_NO_PAD
-            .decode(&record.hash)
-            .map_err(|_| ManagerError::internal("stored API key hash is invalid"))?;
-        let actual = key_hash(&salt, api_key);
-        if expected.len() != actual.len() || expected.ct_eq(actual.as_slice()).unwrap_u8() != 1 {
-            return Err(invalid_api_key());
-        }
+        let record = &mut state.api_keys[record_index];
         let now = now_millis();
         let should_save = record
             .last_used_at
@@ -221,6 +215,27 @@ impl PermissionStore {
     fn save_locked(&self, state: &PermissionFile) -> Result<(), ManagerError> {
         write_permission_file(&self.path, state)
     }
+}
+
+fn api_key_matches_record(
+    record: &ApiKeyRecord,
+    api_key: &str,
+) -> Result<Option<()>, ManagerError> {
+    let prefix = format!("pcrab_{}_", record.prefix);
+    if !api_key.starts_with(&prefix) {
+        return Ok(None);
+    }
+    let salt = URL_SAFE_NO_PAD
+        .decode(&record.salt)
+        .map_err(|_| ManagerError::internal("stored API key salt is invalid"))?;
+    let expected = URL_SAFE_NO_PAD
+        .decode(&record.hash)
+        .map_err(|_| ManagerError::internal("stored API key hash is invalid"))?;
+    let actual = key_hash(&salt, api_key);
+    if expected.len() != actual.len() || expected.ct_eq(actual.as_slice()).unwrap_u8() != 1 {
+        return Ok(None);
+    }
+    Ok(Some(()))
 }
 
 impl Default for PermissionFile {
@@ -573,6 +588,31 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(error.code, "invalid_api_key");
+    }
+
+    #[test]
+    fn api_key_prefix_may_contain_url_safe_underscore() {
+        let directory = tempdir().unwrap();
+        let store = PermissionStore::open(directory.path()).unwrap();
+        let created = store.create_api_key("agent".into()).unwrap();
+        let api_key = "pcrab_under_score_secret";
+        {
+            let mut state = store.state.lock().unwrap();
+            let record = state
+                .api_keys
+                .iter_mut()
+                .find(|record| record.id == created.identity.id)
+                .unwrap();
+            let salt = vec![7_u8; 16];
+            record.prefix = "under_score".into();
+            record.salt = URL_SAFE_NO_PAD.encode(&salt);
+            record.hash = URL_SAFE_NO_PAD.encode(key_hash(&salt, api_key));
+        }
+
+        let identity = store
+            .authenticate(Some(&format!("Bearer {api_key}")))
+            .unwrap();
+        assert_eq!(identity.summary.id, created.identity.id);
     }
 
     #[test]

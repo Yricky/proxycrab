@@ -183,10 +183,7 @@ impl Workspace {
     /// Mutates the in-memory config without persisting it. Used by the
     /// headless CLI to apply command-line overrides for the current run only.
     pub fn override_config_in_memory(&self, update: impl FnOnce(&mut AppConfig)) -> AppConfig {
-        let mut config = self
-            .config
-            .write()
-            .expect("workspace config lock poisoned");
+        let mut config = self.config.write().expect("workspace config lock poisoned");
         update(&mut config);
         config.clone()
     }

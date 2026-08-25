@@ -13,8 +13,6 @@ pub struct AppConfig {
     pub proxy_host: String,
     #[serde(default = "default_proxy_port")]
     pub proxy_port: u16,
-    #[serde(default = "default_api_host")]
-    pub api_host: String,
     #[serde(default = "default_api_port")]
     pub api_port: u16,
     #[serde(default)]
@@ -28,7 +26,6 @@ impl Default for AppConfig {
         Self {
             proxy_host: default_proxy_host(),
             proxy_port: default_proxy_port(),
-            api_host: default_api_host(),
             api_port: default_api_port(),
             routing_script_name: None,
             active_session_id: None,
@@ -42,10 +39,6 @@ fn default_proxy_host() -> String {
 
 const fn default_proxy_port() -> u16 {
     8089
-}
-
-fn default_api_host() -> String {
-    "127.0.0.1".into()
 }
 
 const fn default_api_port() -> u16 {
@@ -420,7 +413,18 @@ pub struct WorkspacePaths {
 
 #[cfg(test)]
 mod tests {
-    use super::{FilterColumn, FilterOption};
+    use super::{AppConfig, FilterColumn, FilterOption};
+
+    #[test]
+    fn legacy_api_host_is_ignored_and_not_serialized() {
+        let config: AppConfig = serde_json::from_str(
+            r#"{"proxy_host":"0.0.0.0","proxy_port":8089,"api_host":"127.0.0.1","api_port":18089,"routing_script_name":null,"active_session_id":null}"#,
+        )
+        .unwrap();
+        let value = serde_json::to_value(config).unwrap();
+        assert_eq!(value["api_port"], 18089);
+        assert!(value.get("api_host").is_none());
+    }
 
     #[test]
     fn obsolete_case_sensitive_field_is_ignored() {

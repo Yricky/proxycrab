@@ -6,12 +6,13 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use clap::{Parser, Subcommand};
 use include_dir::{Dir, include_dir};
 use proxy_crab_mgr::{
-    MitmManager, ProxyCrabManager, http::start_http_server_with_routes, skill_install,
+    MitmManager, ProxyCrabManager, http::start_http_server_with_routes,
+    session_share::SessionShareService, skill_install,
 };
 use proxy_crab_mitm::{
     ProxyCrab,
@@ -60,13 +61,7 @@ struct RunArgs {
     #[arg(long, env = "PROXYCRAB_PROXY_PORT")]
     proxy_port: Option<u16>,
 
-    /// Override the management API listen host for this run only. Falls back
-    /// to PROXYCRAB_API_URL when neither this flag nor its env var is set.
-    #[arg(long, env = "PROXYCRAB_API_HOST")]
-    api_host: Option<String>,
-
-    /// Override the management API listen port for this run only. Falls back
-    /// to PROXYCRAB_API_URL when neither this flag nor its env var is set.
+    /// Override the management API listen port for this run only.
     #[arg(long, env = "PROXYCRAB_API_PORT")]
     api_port: Option<u16>,
 
@@ -97,8 +92,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn run(mut args: RunArgs) -> Result<()> {
-    apply_api_url_env(&mut args)?;
+async fn run(args: RunArgs) -> Result<()> {
     let workspace_arg = args
         .workspace
         .ok_or_else(|| anyhow::anyhow!("--workspace is required (or set PROXYCRAB_WORKSPACE)"))?;
@@ -123,10 +117,8 @@ async fn run(mut args: RunArgs) -> Result<()> {
 
     // Command-line flags and environment variables override the workspace
     // config in memory only; the config file on disk is left untouched.
-    let has_overrides = args.proxy_host.is_some()
-        || args.proxy_port.is_some()
-        || args.api_host.is_some()
-        || args.api_port.is_some();
+    let has_overrides =
+        args.proxy_host.is_some() || args.proxy_port.is_some() || args.api_port.is_some();
     if has_overrides {
         runtime.workspace().override_config_in_memory(|config| {
             if let Some(host) = &args.proxy_host {
@@ -134,9 +126,6 @@ async fn run(mut args: RunArgs) -> Result<()> {
             }
             if let Some(port) = args.proxy_port {
                 config.proxy_port = port;
-            }
-            if let Some(host) = &args.api_host {
-                config.api_host = host.clone();
             }
             if let Some(port) = args.api_port {
                 config.api_port = port;
@@ -156,8 +145,13 @@ async fn run(mut args: RunArgs) -> Result<()> {
             .context("open management API permission store")?;
         let ui_manager = manager.clone();
         let ui_permissions = permissions.clone();
+        let shares = SessionShareService::new();
+        let share_manager = manager.clone();
+        let share_service = shares.clone();
         let handle = start_http_server_with_routes(manager.clone(), permissions, move |changes| {
-            ui::router(ui_manager, ui_permissions, access, changes)
+            ui::router(ui_manager, ui_permissions, access, shares, changes).merge(
+                proxy_crab_mgr::session_share::router(share_manager, share_service),
+            )
         })
         .await
         .context("start management HTTP API")?;
@@ -181,16 +175,11 @@ async fn run(mut args: RunArgs) -> Result<()> {
     );
     if let Some(http) = &http {
         tracing::info!(
-            host = config.api_host,
+            host = %std::net::Ipv4Addr::UNSPECIFIED,
             port = config.api_port,
             "management API listening"
         );
-        let host = if http.host.contains(':') {
-            format!("[{}]", http.host)
-        } else {
-            http.host.clone()
-        };
-        println!("ProxyCrab UI: http://{host}:{}/", http.port);
+        println!("ProxyCrab UI: http://127.0.0.1:{}/", http.port);
         println!(
             "Access token: {}",
             ui_token.as_deref().expect("UI token exists")
@@ -213,35 +202,6 @@ fn generate_ui_token() -> Result<String> {
     getrandom::fill(&mut bytes)
         .map_err(|error| anyhow::anyhow!("read secure random bytes: {error}"))?;
     Ok(format!("pcrab_ui_{}", URL_SAFE_NO_PAD.encode(bytes)))
-}
-
-/// PROXYCRAB_API_URL (aligned with the agent skill's bundled scripts) fills in
-/// the management API host/port when they were not given via flags or the
-/// dedicated env vars.
-fn apply_api_url_env(args: &mut RunArgs) -> Result<()> {
-    if args.api_host.is_some() && args.api_port.is_some() {
-        return Ok(());
-    }
-    let Ok(raw) = std::env::var("PROXYCRAB_API_URL") else {
-        return Ok(());
-    };
-    if raw.trim().is_empty() {
-        return Ok(());
-    }
-    let url = url::Url::parse(&raw).with_context(|| format!("invalid PROXYCRAB_API_URL: {raw}"))?;
-    if !matches!(url.scheme(), "http" | "https") {
-        bail!("PROXYCRAB_API_URL must use http or https: {raw}");
-    }
-    let host = url
-        .host_str()
-        .ok_or_else(|| anyhow::anyhow!("PROXYCRAB_API_URL has no host: {raw}"))?;
-    if args.api_host.is_none() {
-        args.api_host = Some(host.to_owned());
-    }
-    if args.api_port.is_none() {
-        args.api_port = url.port_or_known_default();
-    }
-    Ok(())
 }
 
 fn install_skill(args: &InstallSkillArgs) -> Result<()> {
@@ -306,25 +266,6 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn api_url_env_fills_missing_host_and_port() {
-        let mut args = RunArgs {
-            workspace: None,
-            proxy_host: None,
-            proxy_port: None,
-            api_host: None,
-            api_port: None,
-            no_api: false,
-        };
-        // SAFETY: test process env mutation; tests using it must not run
-        // concurrently with other env-dependent code.
-        unsafe { std::env::set_var("PROXYCRAB_API_URL", "http://127.0.0.1:19001") };
-        apply_api_url_env(&mut args).unwrap();
-        unsafe { std::env::remove_var("PROXYCRAB_API_URL") };
-        assert_eq!(args.api_host.as_deref(), Some("127.0.0.1"));
-        assert_eq!(args.api_port, Some(19001));
-    }
 
     #[test]
     fn embedded_skill_contains_entrypoints_but_no_evals() {

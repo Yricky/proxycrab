@@ -8,6 +8,7 @@ import type {
   ActiveSession,
   ApiActionView,
   AppConfig,
+  CreatedSessionShare,
   CreatedApiKey,
   CreateAgentsPresetRequest,
   BreakpointQuery,
@@ -73,6 +74,7 @@ export function createTauriBackend(): Backend {
       approvals: true,
       permissionModes: ["allow", "approval", "deny"],
       workspaceSwitch: true,
+      readonly: false,
     },
     skillInstaller: {
       getInfo: (parent: string) =>
@@ -125,6 +127,10 @@ export function createTauriBackend(): Backend {
     getActiveSession: () => call("get_active_session"),
     replaceActiveSession: (active: ActiveSession) =>
       call("replace_active_session", { active }),
+    createSessionShare: (sessionId: number, hours: number) =>
+      call<CreatedSessionShare>("create_session_share", {
+        request: { session_id: sessionId, hours },
+      }),
 
     getLogIds: (request: LogIdsRequest) => call("get_log_ids", { request }),
     getLogViews: (request: LogViewsRequest) => call("get_log_views", { request }),

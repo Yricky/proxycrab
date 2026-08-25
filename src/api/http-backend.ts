@@ -9,6 +9,7 @@ import type {
   BypassQuery,
   CreatedApiKey,
   CreateAgentsPresetRequest,
+  CreatedSessionShare,
   CreateSessionRequest,
   DebugFilterScriptRequest,
   ExecuteTemporaryScriptRequest,
@@ -122,6 +123,7 @@ export function createHttpBackend(
       approvals: false,
       permissionModes: ["allow", "deny"],
       workspaceSwitch: false,
+      readonly: false,
     },
     fetchBody: (target, side, maxSize) =>
       fetchBodyFromBase(baseUrl, target, side, maxSize, authorization(token)),
@@ -188,6 +190,11 @@ export function createHttpBackend(
     getActiveSession: () => call("/api/active-session"),
     replaceActiveSession: (active: ActiveSession) =>
       call("/api/active-session", json("PUT", active)),
+    createSessionShare: (sessionId: number, hours: number) =>
+      call<CreatedSessionShare>(
+        "/ui-api/session-shares",
+        json("POST", { session_id: sessionId, hours }),
+      ),
 
     getLogIds: (requestValue: LogIdsRequest) =>
       call("/api/logs/ids", json("POST", requestValue)),

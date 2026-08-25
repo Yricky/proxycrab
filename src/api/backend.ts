@@ -9,6 +9,7 @@ import type {
   BypassPage,
   BypassQuery,
   CertificateResponse,
+  CreatedSessionShare,
   CreatedApiKey,
   CreateAgentsPresetRequest,
   CreateSessionRequest,
@@ -53,10 +54,11 @@ import type {
 import type { BodySide, BodyTarget, LoadedBody } from "./body";
 
 export interface BackendCapabilities {
-  target: "tauri" | "cli";
+  target: "tauri" | "cli" | "share";
   approvals: boolean;
   permissionModes: Array<"allow" | "approval" | "deny">;
   workspaceSwitch: boolean;
+  readonly: boolean;
 }
 
 export type Unsubscribe = () => void;
@@ -116,6 +118,7 @@ export interface Backend {
   deleteArchivedSession(id: number): Promise<void>;
   getActiveSession(): Promise<ActiveSession>;
   replaceActiveSession(active: ActiveSession): Promise<ActiveSession>;
+  createSessionShare(sessionId: number, hours: number): Promise<CreatedSessionShare>;
 
   // capture logs
   getLogIds(request: LogIdsRequest): Promise<LogIdsPayload>;

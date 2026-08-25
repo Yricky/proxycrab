@@ -3,6 +3,9 @@ import { ref } from "vue";
 import App from "../App.vue";
 import { createHttpBackend, verifyCliAccess } from "../api/http-backend";
 import { installBackend } from "../api/runtime-backend";
+import ShareLanding from "./ShareLanding.vue";
+
+const sharePage = window.location.pathname === "/session";
 
 const token = ref("");
 const error = ref("");
@@ -28,7 +31,8 @@ async function connect(): Promise<void> {
 </script>
 
 <template>
-  <App v-if="ready" />
+  <ShareLanding v-if="sharePage" />
+  <App v-else-if="ready" />
   <main v-else class="cli-landing">
     <form class="login-card" @submit.prevent="connect">
       <div class="brand">ProxyCrab</div>

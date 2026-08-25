@@ -30,8 +30,7 @@ export class BodyFetchError extends Error {
 }
 
 function apiBase(config: AppConfig): string {
-  const host = config.api_host.includes(":") ? `[${config.api_host}]` : config.api_host;
-  return `http://${host}:${config.api_port}`;
+  return `http://127.0.0.1:${config.api_port}`;
 }
 
 export async function fetchBodyFromHttp(
@@ -50,14 +49,15 @@ export async function fetchBodyFromBase(
   side: BodySide,
   maxSize = DEFAULT_BODY_MAX_SIZE,
   authorization?: string,
+  apiPrefix = "/api",
 ): Promise<LoadedBody> {
   if (!Number.isSafeInteger(maxSize) || maxSize <= 0 || maxSize > UI_BODY_MAX_SIZE) {
     throw new BodyFetchError({ code: "bad_request", message: "无效的 Body 大小限制" });
   }
   const path =
     target.kind === "log"
-      ? `/api/logs/${target.id}/body`
-      : `/api/breakpoints/${target.id}/body`;
+      ? `${apiPrefix}/logs/${target.id}/body`
+      : `${apiPrefix}/breakpoints/${target.id}/body`;
   const url = new URL(path, base);
   url.searchParams.set("side", side);
   url.searchParams.set("max_size", String(maxSize));

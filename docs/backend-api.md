@@ -29,7 +29,7 @@ permission-manager implementation.
 
 ## Management HTTP authentication and permissions
 
-The management server defaults to `http://127.0.0.1:18089`. Requests received through a loopback
+The management server binds `0.0.0.0:18089`. Requests received through a loopback
 Host and local browser Origin may omit `Authorization` and use the workspace's independently
 configurable `本机无 API Key` identity.
 An API key is accepted only through exactly one `Authorization: Bearer <key>` header. `X-API-Key`,
@@ -53,8 +53,8 @@ and is owner-only on Unix. A corrupt or unreadable permissions file prevents the
 starting and never falls back to allow-all. Existing requests already waiting for approval are not
 recomputed when permissions change or a key is deleted.
 
-The CLI may bind the management server to a non-loopback address. Public CLI UI assets can load
-through that address, but every remote `/api/*` request must include `Authorization`. Remote CORS
+Public CLI UI and read-only Session assets can load through a non-loopback address, but every remote
+`/api/*` request must include `Authorization`. Remote CORS
 preflight is accepted only when it requests the `Authorization` header; the authenticated request
 is then evaluated by the normal UI-token or API-key permission path. This preserves anonymous local
 access without exposing anonymous management access remotely.
@@ -80,6 +80,21 @@ at process startup.
 The CLI Backend intentionally does not define a Skill installer, and the CLI HTTP router has no
 Skill-install endpoint. Skill installation is a local, explicit CLI subcommand or a trusted Tauri
 operation; it cannot be initiated by the browser bundle, which may be hosted remotely.
+
+### Read-only Session sharing
+
+Both trusted targets can create an in-memory Session share. Tauri uses `create_session_share`; the
+CLI browser uses its `pcrab_ui_…`-protected `POST /ui-api/session-shares`. Creation accepts a
+`session_id` and an integer `hours` from 1 through 720. Every creation returns a new cleartext
+`pcrab_share_…` token once; only its SHA-256 digest, Session ID, monotonic deadline, and wall-clock
+expiry are retained in memory.
+
+The browser bundle serves `/session?token=…`. The token is valid only for `/share-api/*`, where the
+server derives the Session scope on every request and overwrites any client Session ID. The surface
+contains bootstrap, proxy status, Session view, stateless log-ID queries, rendered log rows, detail,
+body, name-only column/filter lists, and regex validation. It has no write, export, interceptor,
+breakpoint, config, permission, routing, CA, bypass, or system-log route. Expiry, process restart, or
+Session archive invalidates it. It is not accepted by `/api/*` and is not an Agent credential.
 
 ## HTTP changes and desktop UI synchronization
 
@@ -115,7 +130,7 @@ instead of overwriting local edits.
 
 ## HTTP resources
 
-The server listens on loopback by default at `http://127.0.0.1:18089` and applies the authentication
+The server listens on every IPv4 interface at `0.0.0.0:18089` and applies the authentication
 and permission policy above. Local requests accept loopback/`localhost` Host values and local
 browser origins, including `tauri://localhost`. A non-local Host or Origin requires Bearer
 authorization, preventing anonymous DNS-rebinding and CSRF access while supporting the remote CLI

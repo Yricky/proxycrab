@@ -114,7 +114,10 @@ export const proxyStore = reactive({
     } catch (error) {
       reportError(error, "获取代理配置失败");
     }
-    await this.refreshLocalIps();
+    // The readonly share page reuses proxy status for live log polling, but
+    // its proxy toolbar is hidden and local interfaces are outside the share
+    // API's deliberately narrow read surface.
+    if (!backend.capabilities.readonly) await this.refreshLocalIps();
   },
 
   async refreshLocalIps(): Promise<void> {

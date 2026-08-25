@@ -145,11 +145,7 @@ where
     F: FnOnce(broadcast::Sender<HttpApiChange>) -> Router,
 {
     let config = manager.config().await?;
-    let ip = config
-        .api_host
-        .parse::<std::net::IpAddr>()
-        .map_err(|_| ManagerError::bad_request("management API host must be an IP address"))?;
-    let address = std::net::SocketAddr::new(ip, config.api_port);
+    let address = std::net::SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, config.api_port));
     let listener = tokio::net::TcpListener::bind(&address)
         .await
         .map_err(|error| ManagerError::internal(format!("failed to bind {address}: {error}")))?;
@@ -170,7 +166,7 @@ where
         }
     });
     Ok(HttpServerHandle {
-        host: config.api_host,
+        host: std::net::Ipv4Addr::UNSPECIFIED.to_string(),
         port: config.api_port,
         cancellation,
         task,
@@ -1505,7 +1501,7 @@ pub(crate) async fn body_reader(
     Ok(reader)
 }
 
-async fn body_response(
+pub(crate) async fn body_response(
     source: BodySource,
     request_headers: &HeaderMap,
     max_size: Option<u64>,
