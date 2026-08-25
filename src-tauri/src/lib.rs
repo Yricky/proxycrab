@@ -806,6 +806,7 @@ pub fn run() {
             let workspace_path = workspace.current_path().to_path_buf();
             let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
             let shares = SessionShareService::new();
+            let share_assets = app.asset_resolver();
             let approval_handle = app.handle().clone();
             let permissions = HttpPermissionService::open(
                 &workspace_path,
@@ -825,7 +826,7 @@ pub fn run() {
                     permissions.clone(),
                     shares.clone(),
                     move |_| {
-                        share_ui::router().merge(proxy_crab_mgr::session_share::router(
+                        share_ui::router(share_assets).merge(proxy_crab_mgr::session_share::router(
                             share_manager,
                             share_service,
                         ))

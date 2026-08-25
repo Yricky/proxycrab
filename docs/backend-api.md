@@ -98,10 +98,15 @@ clients, including the CLI browser, use permission-controlled `POST /api/session
 `pcrab_share_…` token once; only its SHA-256 digest, Session ID, monotonic deadline, and wall-clock
 expiry are retained in memory.
 
-The browser bundle serves `/session?token=…`. Every `/share-api/*` request must carry exactly one
-non-empty `token` query parameter; `Authorization` is ignored. Responses set `Cache-Control:
-no-store`, and the page uses `Referrer-Policy: no-referrer`. The server derives the Session scope on
-every request and overwrites any client Session ID. The surface
+The browser bundle serves `/session?token=…`. The shared frontend output uses `index.html` as the
+application entry and `session.html` as the dedicated read-only sharing entry; both reuse the same
+emitted chunks. Tauri and CLI consume this same output, while the application entry selects its
+Landing from the runtime host. In Tauri, the Session entry and assets
+come from the same embedded `frontendDist` as the desktop WebView through Tauri's asset resolver;
+the desktop binary does not embed a second CLI bundle. Every `/share-api/*` request must carry
+exactly one non-empty `token` query parameter; `Authorization` is ignored. Responses set
+`Cache-Control: no-store`, and the page uses `Referrer-Policy: no-referrer`. The server derives the
+Session scope on every request and overwrites any client Session ID. The surface
 contains bootstrap, proxy status, Session view, stateless log-ID queries, rendered log rows, detail,
 body, name-only column/filter lists, and regex validation. It has no write, export, interceptor,
 breakpoint, config, permission, routing, CA, bypass, or system-log route. Expiry, process restart, or

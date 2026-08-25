@@ -77,6 +77,11 @@ dedicated Session-scoped `/share-api/*` routes as exactly one `token` query para
 Agent API key. These routes ignore `Authorization` and return `Cache-Control: no-store`; the share UI
 uses a no-referrer policy.
 
+One frontend build produces `index.html` for the application and `session.html` for this HTTP page
+from source files under `src/`. Tauri and CLI reuse the same `dist` output, and the application entry
+selects its Landing from the runtime host. The desktop HTTP server reads the Session page through
+Tauri's embedded asset resolver instead of embedding another copy of the frontend bundle.
+
 The UI generates one URL for every non-loopback local IPv4 address. These links use plain HTTP by
 default, so the token and captured data must be shared only on a trusted network or protected by a
 TLS reverse proxy.
@@ -86,7 +91,7 @@ TLS reverse proxy.
 Build the CLI frontend before compiling the binary so Cargo can embed the generated assets:
 
 ```bash
-pnpm build:cli
+pnpm build
 cargo build -p proxycrab-cli
 ```
 
@@ -114,12 +119,15 @@ want to install the bundled Skill must explicitly run the local
 
 ## Development
 
+`pnpm build` creates one two-entry frontend bundle in `dist`. Both Tauri and CLI consume this same
+directory. It contains distinct application and Session-share HTML files backed by shared chunks;
+the application entry loads the Tauri or CLI Landing according to its runtime host.
+
 ```bash
 cargo check --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-pnpm build:tauri
-pnpm build:cli
+pnpm build
 ```
 
 See [backend API](docs/backend-api.md) and [Lua API](docs/lua-api.md).

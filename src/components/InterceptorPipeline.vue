@@ -364,7 +364,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .pipeline-shell {
-  height: 34px;
+  height: 32px;
   flex: none;
   display: flex;
   align-items: stretch;

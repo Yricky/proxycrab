@@ -24,15 +24,13 @@ fn collect(root: &Path, directory: &Path, files: &mut Vec<(String, PathBuf)>) {
 
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let root = manifest.join("..").join("dist").join("cli");
+    let root = manifest.join("..").join("dist");
     println!("cargo:rerun-if-changed={}", root.display());
     let mut files = Vec::new();
     collect(&root, &root, &mut files);
     files.sort_by(|left, right| left.0.cmp(&right.0));
     if files.is_empty() {
-        println!(
-            "cargo:warning=CLI UI assets are absent; run `pnpm build:cli` before a release build"
-        );
+        println!("cargo:warning=CLI UI assets are absent; run `pnpm build` before a release build");
     }
     let entries = files
         .into_iter()

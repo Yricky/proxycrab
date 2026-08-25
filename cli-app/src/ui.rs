@@ -161,6 +161,7 @@ pub fn router(
     protected.merge(
         Router::new()
             .route("/", get(index))
+            .route("/session", get(session))
             .route("/{*path}", get(asset)),
     )
 }
@@ -319,6 +320,10 @@ async fn index() -> Response {
     static_asset("index.html")
 }
 
+async fn session() -> Response {
+    static_asset("session.html")
+}
+
 async fn asset(Path(path): Path<String>) -> Response {
     let response = static_asset(&path);
     if response.status() == StatusCode::NOT_FOUND && !path.contains('.') {
@@ -348,15 +353,16 @@ fn static_asset(path: &str) -> Response {
     response
         .headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+    let is_html = path.ends_with(".html");
     response.headers_mut().insert(
         CACHE_CONTROL,
-        HeaderValue::from_static(if path == "index.html" {
+        HeaderValue::from_static(if is_html {
             "no-store"
         } else {
             "public, max-age=31536000, immutable"
         }),
     );
-    if path == "index.html" {
+    if is_html {
         response
             .headers_mut()
             .insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
