@@ -27,14 +27,22 @@ Direct Tauri calls are trusted desktop operations and do not pass through HTTP a
 `ProxyCrabManager` remains unaware of credentials; the HTTP Router accepts a separate mandatory
 permission-manager implementation.
 
+The exposed operations are split into four boundaries: trusted host operations (Tauri commands or
+explicit local CLI actions), permission-controlled `/api/*` proxy operations, token-scoped read-only
+`/share-api/*` operations, and target-private `/ui-api/*` browser operations. Host operations include
+workspace switching, full config replacement, CA regeneration, and Skill installation; only their
+read counterparts remain on `/api/*`.
+
 ## Management HTTP authentication and permissions
 
-The management server binds `0.0.0.0:18089`. Requests received through a loopback
-Host and local browser Origin may omit `Authorization` and use the workspace's independently
-configurable `本机无 API Key` identity.
+The management server binds `0.0.0.0:18089`. A request may omit `Authorization` only when its TCP
+peer is loopback, its Host is local, and its Origin is absent or local; it then uses the workspace's
+independently configurable `本机无 API Key` (`LocalLoopback`) identity. Missing connection metadata
+fails closed.
 An API key is accepted only through exactly one `Authorization: Bearer <key>` header. `X-API-Key`,
 query-string credentials, duplicate Authorization headers, malformed schemes, and unknown or
-deleted keys are rejected. API-key management itself is desktop-only and is not exposed over HTTP.
+deleted keys are rejected. A valid Bearer header always selects the Bearer identity, even on
+loopback. API-key management itself is target-private and is not exposed through `/api/*`.
 
 Each identity has one persisted permission for every HTTP method and route template:
 
@@ -83,14 +91,16 @@ operation; it cannot be initiated by the browser bundle, which may be hosted rem
 
 ### Read-only Session sharing
 
-Both trusted targets can create an in-memory Session share. Tauri uses `create_session_share`; the
-CLI browser uses its `pcrab_ui_…`-protected `POST /ui-api/session-shares`. Creation accepts a
+Both trusted targets can create an in-memory Session share. Tauri uses `create_session_share`; HTTP
+clients, including the CLI browser, use permission-controlled `POST /api/session-shares`. Creation accepts a
 `session_id` and an integer `hours` from 1 through 720. Every creation returns a new cleartext
 `pcrab_share_…` token once; only its SHA-256 digest, Session ID, monotonic deadline, and wall-clock
 expiry are retained in memory.
 
-The browser bundle serves `/session?token=…`. The token is valid only for `/share-api/*`, where the
-server derives the Session scope on every request and overwrites any client Session ID. The surface
+The browser bundle serves `/session?token=…`. Every `/share-api/*` request must carry exactly one
+non-empty `token` query parameter; `Authorization` is ignored. Responses set `Cache-Control:
+no-store`, and the page uses `Referrer-Policy: no-referrer`. The server derives the Session scope on
+every request and overwrites any client Session ID. The surface
 contains bootstrap, proxy status, Session view, stateless log-ID queries, rendered log rows, detail,
 body, name-only column/filter lists, and regex validation. It has no write, export, interceptor,
 breakpoint, config, permission, routing, CA, bypass, or system-log route. Expiry, process restart, or
@@ -105,8 +115,6 @@ normal Agent/API activity silent.
 
 | HTTP operation | UI resources affected | Desktop behavior |
 | --- | --- | --- |
-| `PUT /api/workspace` | Workspace settings | Refreshes an open clean settings window |
-| `PUT /api/config` | Settings, routing selection, and active Session | Refreshes global config state |
 | `POST /api/proxy/start`, `POST /api/proxy/stop` | Proxy status | Refreshes the toolbar state |
 | Session create/update/archive/restore | Active and archived Session lists | Archiving the viewed Session selects the first remaining Session |
 | Archived Session delete | Archived Session list | Refreshes the archived Session window |
@@ -119,7 +127,6 @@ normal Agent/API activity silent.
 | Filter-script create/update/delete | Filter choices and filtered results | Refreshes script lists and the current table view |
 | Interceptor create/update/delete | Global interceptor library and Session chains | Refreshes the library and current pipeline |
 | `PUT /api/session-interceptors` | Target Session pipeline | Refreshes the pipeline only when that Session is being viewed |
-| `POST /api/ca` | CA manager | Reloads an open CA window |
 | `DELETE /api/system-logs` | System-log viewer | Clears and reloads an open log window |
 
 If HTTP archives the viewed Session, the frontend selects the first remaining Session.
@@ -139,8 +146,8 @@ browser UI.
 | Resource | Operations |
 | --- | --- |
 | `/api/agents.md` | `GET` active workspace Agent instructions as raw `text/plain` |
-| `/api/workspace` | `GET` current/configured paths; `PUT` next-start path |
-| `/api/config` | `GET`, `PUT` |
+| `/api/workspace` | `GET` current/configured paths |
+| `/api/config` | `GET` |
 | `/api/proxy/status` | `GET` |
 | `/api/proxy/start`, `/api/proxy/stop` | `POST` |
 | `/api/sessions` | `GET`, `POST` |
@@ -150,6 +157,7 @@ browser UI.
 | `/api/archived-sessions/{id}/restore` | `POST` restore |
 | `/api/archived-sessions/{id}` | `DELETE` permanent archived-only deletion |
 | `/api/active-session` | `GET`, `PUT` nullable active Session |
+| `/api/session-shares` | `POST` create a scoped read-only link (default permission: `approval`) |
 | `/api/assets/{id}` | `POST` immutable raw upload; `GET` metadata or raw bytes with `format=raw` |
 | `/api/logs/ids` | `POST` bounded/filterable log ID query |
 | `/api/logs/views` | `POST` batch incremental table-view rendering |
@@ -168,7 +176,7 @@ browser UI.
 | `/api/routing-script-selection` | `GET`, `PUT` nullable current selection |
 | `/api/interceptors`, `/api/interceptors/{kind}/{name}` | global interceptor script CRUD |
 | `/api/bypass`, `/api/bypass/{id}`, `/api/bypass/delete` | query/delete transparent forwarding metadata |
-| `/api/ca` | `GET`, `POST` to regenerate while the proxy is stopped |
+| `/api/ca` | `GET` |
 | `/api/system-logs` | `GET`, `DELETE` |
 
 System logs accept `after_seq` and are capped at 10,000 entries.
@@ -507,7 +515,8 @@ active Session captures all traffic; with no active Session, traffic bypasses.
 
 `GET /api/active-session` returns `{"session_id":1}` or `{"session_id":null}`. `PUT` accepts the
 same shape, validates non-null IDs, and is allowed while the proxy runs. `AppConfig.active_session_id`
-uses the same validation through `PUT /api/config`. An actual active-Session change closes every
+is read through `GET /api/config`; changing it over HTTP uses `PUT /api/active-session`. An actual
+active-Session change closes every
 established HTTP connection, CONNECT/MITM tunnel, Upgrade/WebSocket, transparent tunnel, and
 upstream pool before the call returns while leaving the listener running. Changing routing
 selection, changing selected routing content, or deleting the selected rule uses the same reset;

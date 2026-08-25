@@ -13,7 +13,7 @@ use axum::{
     extract::{Path, Query, Request, State},
     http::{
         HeaderValue, StatusCode,
-        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE},
+        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, REFERRER_POLICY},
     },
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -22,7 +22,6 @@ use axum::{
 use proxy_crab_mgr::{
     ProxyCrabManager,
     dto::{CreateAgentsPresetRequest, HttpApiChange, ManagerError, UpdateAgentsPresetRequest},
-    session_share::{CreateSessionShareRequest, SessionShareService},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -84,7 +83,6 @@ struct UiState {
     permissions: Arc<CliPermissionService>,
     access: Arc<UiAccess>,
     changes: Arc<ChangeLog>,
-    shares: Arc<SessionShareService>,
 }
 
 #[derive(Deserialize)]
@@ -118,7 +116,6 @@ pub fn router(
     manager: Arc<dyn ProxyCrabManager>,
     permissions: Arc<CliPermissionService>,
     access: Arc<UiAccess>,
-    shares: Arc<SessionShareService>,
     changes: broadcast::Sender<HttpApiChange>,
 ) -> Router {
     let state = Arc::new(UiState {
@@ -126,7 +123,6 @@ pub fn router(
         permissions,
         access,
         changes: ChangeLog::new(changes.subscribe()),
-        shares,
     });
     let protected = Router::new()
         .route("/ui-api/bootstrap", get(bootstrap))
@@ -157,7 +153,6 @@ pub fn router(
         )
         .route("/ui-api/api-keys", post(create_api_key))
         .route("/ui-api/api-keys/{id}", delete(delete_api_key))
-        .route("/ui-api/session-shares", post(create_session_share))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize_ui))
         .with_state(state);
     protected.merge(
@@ -172,7 +167,7 @@ async fn authorize_ui(State(state): State<Arc<UiState>>, request: Request, next:
         .headers()
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| state.access.allows(Some(value)));
+        .is_some_and(|value| state.access.allows_authorization(Some(value)));
     if allowed {
         next.run(request).await
     } else {
@@ -313,13 +308,6 @@ async fn delete_api_key(State(state): State<Arc<UiState>>, Path(id): Path<String
     result(state.permissions.delete_api_key(&id))
 }
 
-async fn create_session_share(
-    State(state): State<Arc<UiState>>,
-    Json(request): Json<CreateSessionShareRequest>,
-) -> Response {
-    result(state.shares.create(&state.manager, request).await)
-}
-
 async fn index() -> Response {
     static_asset("index.html")
 }
@@ -361,6 +349,11 @@ fn static_asset(path: &str) -> Response {
             "public, max-age=31536000, immutable"
         }),
     );
+    if path == "index.html" {
+        response
+            .headers_mut()
+            .insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    }
     response
 }
 

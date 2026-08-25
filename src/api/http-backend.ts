@@ -4,7 +4,6 @@ import { fetchBodyFromBase } from "./body";
 import type {
   ActiveSession,
   ApiActionView,
-  AppConfig,
   BreakpointQuery,
   BypassQuery,
   CreatedApiKey,
@@ -122,7 +121,6 @@ export function createHttpBackend(
       target: "cli",
       approvals: false,
       permissionModes: ["allow", "deny"],
-      workspaceSwitch: false,
       readonly: false,
     },
     fetchBody: (target, side, maxSize) =>
@@ -156,9 +154,7 @@ export function createHttpBackend(
     },
 
     getWorkspace: () => call("/api/workspace"),
-    setWorkspaceForNextStart: (path) => call("/api/workspace", json("PUT", { path })),
     getConfig: () => call("/api/config"),
-    replaceConfig: (config: AppConfig) => call("/api/config", json("PUT", config)),
     getAgentsPresets: () => call("/ui-api/agents-presets"),
     createAgentsPreset: (requestValue: CreateAgentsPresetRequest) =>
       call("/ui-api/agents-presets", json("POST", requestValue)),
@@ -192,7 +188,7 @@ export function createHttpBackend(
       call("/api/active-session", json("PUT", active)),
     createSessionShare: (sessionId: number, hours: number) =>
       call<CreatedSessionShare>(
-        "/ui-api/session-shares",
+        "/api/session-shares",
         json("POST", { session_id: sessionId, hours }),
       ),
 
@@ -274,7 +270,6 @@ export function createHttpBackend(
     ),
 
     getCertificate: () => call("/api/ca"),
-    regenerateCertificate: () => call("/api/ca", json("POST")),
     getSystemLogs: (requestValue: SystemLogsQuery) =>
       call(query("/api/system-logs", requestValue as unknown as Record<string, unknown>)),
     clearSystemLogs: () => call("/api/system-logs", json("DELETE")),

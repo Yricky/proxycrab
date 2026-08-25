@@ -57,7 +57,6 @@ export interface BackendCapabilities {
   target: "tauri" | "cli" | "share";
   approvals: boolean;
   permissionModes: Array<"allow" | "approval" | "deny">;
-  workspaceSwitch: boolean;
   readonly: boolean;
 }
 
@@ -68,6 +67,13 @@ export interface SkillInstaller {
   install(parent: string, overwrite: boolean): Promise<SkillInstallInfo>;
 }
 
+export interface HostOperations {
+  readonly skillInstaller: SkillInstaller;
+  setWorkspaceForNextStart(path: string): Promise<WorkspacePaths>;
+  replaceConfig(config: AppConfig): Promise<AppConfig>;
+  regenerateCertificate(): Promise<CertificateResponse>;
+}
+
 /**
  * Backend abstraction: every capability the UI needs from the host process.
  * The Tauri implementation (tauri-backend.ts) maps these onto `invoke` calls;
@@ -76,7 +82,7 @@ export interface SkillInstaller {
  */
 export interface Backend {
   readonly capabilities: BackendCapabilities;
-  readonly skillInstaller?: SkillInstaller;
+  readonly host?: HostOperations;
 
   fetchBody(
     target: BodyTarget,
@@ -89,9 +95,7 @@ export interface Backend {
 
   // workspace & config
   getWorkspace(): Promise<WorkspacePaths>;
-  setWorkspaceForNextStart(path: string): Promise<WorkspacePaths>;
   getConfig(): Promise<AppConfig>;
-  replaceConfig(config: AppConfig): Promise<AppConfig>;
   getAgentsPresets(): Promise<AgentsPresetState>;
   createAgentsPreset(request: CreateAgentsPresetRequest): Promise<AgentsPresetState>;
   updateAgentsPreset(
@@ -184,7 +188,6 @@ export interface Backend {
 
   // certificate
   getCertificate(): Promise<CertificateResponse>;
-  regenerateCertificate(): Promise<CertificateResponse>;
 
   // system logs
   getSystemLogs(query: SystemLogsQuery): Promise<SystemLogEntry[]>;

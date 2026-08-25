@@ -30,9 +30,11 @@ http://127.0.0.1:18089
 ```
 
 The desktop app or CLI binds the management service to every IPv4 interface. Agents running on the
-same machine should still use the loopback base URL above. Local requests with no
-`Authorization` header use the independently configurable `本机无 API Key` identity. API-key requests must send
+same machine should still use the loopback base URL above. Requests with no `Authorization` use
+the independently configurable `本机无 API Key` identity only when the TCP peer, Host, and optional
+Origin are all local. API-key requests must send
 exactly one `Authorization: Bearer <key>` header; query credentials and `X-API-Key` are unsupported.
+Bearer authentication always wins on loopback, and missing peer metadata fails closed.
 Bundled scripts read the key from `PROXYCRAB_API_KEY`, never a command argument.
 
 Every method and route template has a permission for each identity. The desktop target supports
@@ -50,6 +52,10 @@ UI routes and trusted UI calls, is not an Agent API key, and must never be copie
 Session sharing uses separate `pcrab_share_…` tokens and `/share-api/*` browser routes. Those tokens
 are scoped to one read-only Session, expire in memory, are not accepted by the Agent API, and must
 never be copied into `PROXYCRAB_API_KEY`, Agent commands, logs, or reports.
+
+Workspace switching, full config replacement (including proxy-port changes), CA regeneration, and
+Skill installation are host operations, not Agent HTTP resources. Their reads remain available, but
+mutations require a trusted Tauri command or an explicit local CLI option/subcommand.
 
 The service binds to every IPv4 interface. Public CLI UI and Session-share assets can load remotely,
 but a remote Host or Origin on `/api/*` requires Bearer authorization. Remote CORS preflight is
@@ -281,26 +287,9 @@ text.
 
 Returns `WorkspacePaths`.
 
-### `PUT /api/workspace`
-
-Sets the workspace used after the next application launch.
-
-```json
-{ "path": "/absolute/writable/workspace" }
-```
-
-The path must be absolute. The returned value is `WorkspacePaths`; `current_path` does not change in
-the current process.
-
 ### `GET /api/config`
 
 Returns `AppConfig`.
-
-### `PUT /api/config`
-
-Replaces the complete `AppConfig` and returns the stored value. Read the current config first and
-preserve fields that should not change. A non-existent `routing_script_name` or
-`active_session_id` returns `not_found`.
 
 ## Proxy lifecycle
 
@@ -340,6 +329,20 @@ Both fields are optional or `null`. ProxyCrab generates a name when omitted. Ret
 `SessionMetadata`. New Sessions use the default table columns, empty filter, and empty interceptor
 chains. The first Session created in an empty workspace becomes active; later Session creation does
 not change the active Session.
+
+### `POST /api/session-shares`
+
+Creates a read-only browser link for one active Session. This is an ordinary permission-controlled
+Agent API action whose default mode is `approval` on desktop and therefore `deny` on CLI unless the
+permission is changed.
+
+```json
+{ "session_id": 3, "hours": 24 }
+```
+
+`hours` must be an integer from 1 through 720. The response contains the one-time cleartext
+`pcrab_share_…` token, Session ID, and expiry. Never use the token as a Bearer credential: the share
+browser sends it only as exactly one `token` query parameter to the read-only `/share-api/*` surface.
 
 ### `PUT /api/sessions/{id}`
 
@@ -971,11 +974,6 @@ Returns:
 
 The same CA is available through the proxy at `http://proxy.crab/ca.crt`. This local URL bypasses
 routing, Session capture, and bypass persistence.
-
-### `POST /api/ca`
-
-Regenerates the workspace CA and returns the new PEM. Regeneration is rejected while the proxy is
-running. This is disruptive because clients must trust the new CA.
 
 ## System logs
 

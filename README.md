@@ -22,13 +22,20 @@ Neither reusable crate depends on Tauri.
 
 The Tauri application data directory contains `config.json`, which points at the workspace. When the pointer is absent or invalid, `app_data_dir/workspace` is used and persisted. A changed pointer takes effect only on the next application launch.
 
-The management API listens on every IPv4 interface and supports workspace-scoped API keys through exactly one
-`Authorization: Bearer <key>` header. Every API key and the local no-key identity have independent
+The management API listens on every IPv4 interface and explicitly authenticates each `/api/*`
+request as either `LocalLoopback` or `Bearer`. `LocalLoopback` requires a loopback TCP peer, a local
+Host, and no Origin or a local Origin. Exactly one `Authorization: Bearer <key>` header always selects
+the Bearer identity, including on loopback. Every API key and the local no-key identity have independent
 per-route permissions. The desktop target supports `allow`, `approval`, and `deny`; approval waits
 for a desktop decision for up to 30 seconds. The CLI target exposes only `allow` and `deny`, and
 evaluates any persisted `approval` value as `deny`. API keys and permissions are managed under
 Settings > 管理接口 through target-private operations, not the public agent API. Direct Tauri
 commands remain trusted and bypass HTTP authentication.
+
+Host/workspace mutations such as changing the next-start workspace, replacing global configuration
+(including the proxy port), regenerating the CA, and installing the bundled Skill are not management
+HTTP resources. They are available only through trusted Tauri commands or explicit local CLI options
+and subcommands; the HTTP API keeps the corresponding workspace, config, and CA reads.
 
 Permission state is stored in the active workspace's `http_api_permissions.json`; a corrupt file
 stops only the management HTTP service rather than widening access. Full API keys are displayed once
@@ -65,7 +72,9 @@ and owner column changes, starts with the Session's current filter, and keeps ev
 filter stateless. Sorting, copying, log details, complete bodies, historical interceptor results,
 and script snapshots remain readable. Toolbar/sidebar management, column editing, interceptors,
 breakpoints, exports, and every other write surface are absent. Its token is accepted only by the
-dedicated Session-scoped `/share-api/*` routes and is never an Agent API key.
+dedicated Session-scoped `/share-api/*` routes as exactly one `token` query parameter and is never an
+Agent API key. These routes ignore `Authorization` and return `Cache-Control: no-store`; the share UI
+uses a no-referrer policy.
 
 The UI generates one URL for every non-loopback local IPv4 address. These links use plain HTTP by
 default, so the token and captured data must be shared only on a trusted network or protected by a

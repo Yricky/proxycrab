@@ -89,7 +89,7 @@ impl HttpPermissionService {
 #[async_trait]
 impl PermissionManager for HttpPermissionService {
     async fn check_permission(&self, action: PermissionAction) -> Option<PermissionDenied> {
-        let identity = match self.store.authenticate(action.authorization.as_deref()) {
+        let identity = match self.store.authenticate(&action.credential) {
             Ok(identity) => identity,
             Err(error) if error.code == "invalid_api_key" => {
                 tracing::warn!(
@@ -190,12 +190,12 @@ mod tests {
     use super::HttpPermissionService;
 
     #[test]
-    fn desktop_catalog_exposes_asset_management_actions() {
+    fn desktop_catalog_exposes_asset_and_share_management_actions() {
         let directory = tempdir().unwrap();
         let service = HttpPermissionService::open(directory.path(), Arc::new(|_| {})).unwrap();
         let catalog = service.catalog();
 
-        assert_eq!(catalog.len(), 65);
+        assert_eq!(catalog.len(), 63);
         assert!(catalog.iter().any(|action| {
             action.id == "GET /api/assets/{*asset_id}"
                 && action.route_template == "/api/assets/{*asset_id}"
@@ -203,6 +203,10 @@ mod tests {
         assert!(catalog.iter().any(|action| {
             action.id == "POST /api/assets/{*asset_id}"
                 && action.route_template == "/api/assets/{*asset_id}"
+        }));
+        assert!(catalog.iter().any(|action| {
+            action.id == "POST /api/session-shares"
+                && action.route_template == "/api/session-shares"
         }));
     }
 }

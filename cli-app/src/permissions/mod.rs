@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use proxy_crab_mgr::{
     dto::ManagerError,
     permission::{
-        ApiAction, PermissionAction, PermissionDenied, PermissionManager, PermissionMode,
-        api_actions,
+        ApiAction, ManagementCredential, PermissionAction, PermissionDenied, PermissionManager,
+        PermissionMode, api_actions,
     },
 };
 use sha2::{Digest, Sha256};
@@ -30,7 +30,14 @@ impl UiAccess {
         }
     }
 
-    pub fn allows(&self, authorization: Option<&str>) -> bool {
+    pub fn allows(&self, credential: &ManagementCredential) -> bool {
+        let ManagementCredential::Bearer(token) = credential else {
+            return false;
+        };
+        self.allows_token(token)
+    }
+
+    pub fn allows_authorization(&self, authorization: Option<&str>) -> bool {
         let Some(value) = authorization else {
             return false;
         };
@@ -38,9 +45,10 @@ impl UiAccess {
         let (Some(scheme), Some(token), None) = (parts.next(), parts.next(), parts.next()) else {
             return false;
         };
-        if !scheme.eq_ignore_ascii_case("bearer") {
-            return false;
-        }
+        scheme.eq_ignore_ascii_case("bearer") && self.allows_token(token)
+    }
+
+    fn allows_token(&self, token: &str) -> bool {
         let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
         self.digest.ct_eq(&digest).into()
     }
@@ -101,11 +109,11 @@ impl PermissionManager for CliPermissionService {
         if self
             .ui_access
             .as_ref()
-            .is_some_and(|access| access.allows(action.authorization.as_deref()))
+            .is_some_and(|access| access.allows(&action.credential))
         {
             return None;
         }
-        let identity = match self.store.authenticate(action.authorization.as_deref()) {
+        let identity = match self.store.authenticate(&action.credential) {
             Ok(identity) => identity,
             Err(error) if error.code == "invalid_api_key" => {
                 tracing::warn!(
@@ -179,7 +187,7 @@ mod tests {
     fn action(method: &'static str, route: &str) -> PermissionAction {
         PermissionAction {
             action: find_api_action(method, route).unwrap(),
-            authorization: None,
+            credential: ManagementCredential::LocalLoopback,
             actual_path: route.into(),
             query: None,
             source: None,
@@ -229,7 +237,7 @@ mod tests {
         let access = Arc::new(UiAccess::new("pcrab_ui_test"));
         let service = CliPermissionService::open(directory.path(), Some(access)).unwrap();
         let mut request = action("POST", "/api/proxy/start");
-        request.authorization = Some("Bearer pcrab_ui_test".into());
+        request.credential = ManagementCredential::Bearer("pcrab_ui_test".into());
         assert!(service.check_permission(request).await.is_none());
     }
 }

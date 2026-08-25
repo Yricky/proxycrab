@@ -9,7 +9,7 @@ use std::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use proxy_crab_mgr::{
     dto::ManagerError,
-    permission::{PermissionMode, api_actions},
+    permission::{ManagementCredential, OBSOLETE_API_ACTION_IDS, PermissionMode, api_actions},
 };
 use proxy_crab_mitm::workspace::now_millis;
 use sha2::{Digest, Sha256};
@@ -64,16 +64,15 @@ impl PermissionStore {
 
     pub fn authenticate(
         &self,
-        authorization: Option<&str>,
+        credential: &ManagementCredential,
     ) -> Result<AuthenticatedIdentity, ManagerError> {
-        let Some(authorization) = authorization else {
+        let ManagementCredential::Bearer(api_key) = credential else {
             let state = self.state.lock().map_err(lock_error)?;
             return Ok(AuthenticatedIdentity {
                 summary: local_summary(),
                 permissions: state.local.permissions.clone(),
             });
         };
-        let api_key = parse_bearer(authorization)?;
         let prefix = api_key
             .strip_prefix("pcrab_")
             .and_then(|value| value.split_once('_'))
@@ -243,8 +242,9 @@ fn validate_and_normalize(state: &mut PermissionFile) -> Result<bool, ManagerErr
         )));
     }
     let known = known_action_ids();
+    let mut changed = remove_obsolete_permissions(&mut state.local.permissions);
     validate_permission_keys(&state.local.permissions, &known)?;
-    let mut changed = add_missing_defaults(&mut state.local.permissions);
+    changed |= add_missing_defaults(&mut state.local.permissions);
     let mut ids = BTreeSet::new();
     let mut names = BTreeSet::new();
     let mut prefixes = BTreeSet::new();
@@ -279,10 +279,19 @@ fn validate_and_normalize(state: &mut PermissionFile) -> Result<bool, ManagerErr
                 "permission file contains invalid API key credentials",
             ));
         }
+        changed |= remove_obsolete_permissions(&mut record.permissions);
         validate_permission_keys(&record.permissions, &known)?;
         changed |= add_missing_defaults(&mut record.permissions);
     }
     Ok(changed)
+}
+
+fn remove_obsolete_permissions(permissions: &mut BTreeMap<String, PermissionMode>) -> bool {
+    let before = permissions.len();
+    for id in OBSOLETE_API_ACTION_IDS {
+        permissions.remove(*id);
+    }
+    permissions.len() != before
 }
 
 fn validate_permission_keys(
@@ -410,16 +419,6 @@ fn known_action_ids() -> BTreeSet<String> {
         .collect()
 }
 
-fn parse_bearer(value: &str) -> Result<&str, ManagerError> {
-    let mut parts = value.split_whitespace();
-    let scheme = parts.next().ok_or_else(invalid_api_key)?;
-    let key = parts.next().ok_or_else(invalid_api_key)?;
-    if !scheme.eq_ignore_ascii_case("bearer") || key.is_empty() || parts.next().is_some() {
-        return Err(invalid_api_key());
-    }
-    Ok(key)
-}
-
 fn invalid_api_key() -> ManagerError {
     ManagerError::new(
         "invalid_api_key",
@@ -508,7 +507,9 @@ mod tests {
     fn missing_file_creates_local_allow_all() {
         let directory = tempdir().unwrap();
         let store = PermissionStore::open(directory.path()).unwrap();
-        let identity = store.authenticate(None).unwrap();
+        let identity = store
+            .authenticate(&ManagementCredential::LocalLoopback)
+            .unwrap();
         assert_eq!(identity.summary.id, LOCAL_IDENTITY_ID);
         assert!(
             identity
@@ -582,6 +583,44 @@ mod tests {
                 mode => mode,
             };
             assert_eq!(entry.mode, expected);
+        }
+    }
+
+    #[test]
+    fn existing_permission_file_migrates_removed_and_added_actions() {
+        let directory = tempdir().unwrap();
+        let store = PermissionStore::open(directory.path()).unwrap();
+        let created = store.create_api_key("agent".into()).unwrap();
+        drop(store);
+
+        let path = directory.path().join(PERMISSION_FILE_NAME);
+        let mut state: PermissionFile = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for permissions in std::iter::once(&mut state.local.permissions).chain(
+            state
+                .api_keys
+                .iter_mut()
+                .map(|record| &mut record.permissions),
+        ) {
+            permissions.remove("POST /api/session-shares");
+            for action_id in OBSOLETE_API_ACTION_IDS {
+                permissions.insert((*action_id).to_owned(), PermissionMode::Deny);
+            }
+        }
+        fs::write(&path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
+
+        let store = PermissionStore::open(directory.path()).unwrap();
+        for identity_id in [LOCAL_IDENTITY_ID, created.identity.id.as_str()] {
+            let modes = store
+                .identity_permissions(identity_id)
+                .unwrap()
+                .permissions
+                .into_iter()
+                .map(|entry| (entry.action_id, entry.mode))
+                .collect::<BTreeMap<_, _>>();
+            assert_eq!(modes["POST /api/session-shares"], PermissionMode::Deny);
+            for action_id in OBSOLETE_API_ACTION_IDS {
+                assert!(!modes.contains_key(*action_id));
+            }
         }
     }
 }

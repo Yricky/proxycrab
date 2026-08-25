@@ -9,7 +9,7 @@ use std::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use proxy_crab_mgr::{
     dto::ManagerError,
-    permission::{PermissionMode, api_actions},
+    permission::{ManagementCredential, OBSOLETE_API_ACTION_IDS, PermissionMode, api_actions},
 };
 use proxy_crab_mitm::workspace::now_millis;
 use sha2::{Digest, Sha256};
@@ -158,9 +158,9 @@ impl PermissionStore {
 
     pub fn authenticate(
         &self,
-        authorization: Option<&str>,
+        credential: &ManagementCredential,
     ) -> Result<AuthenticatedIdentity, ManagerError> {
-        let Some(authorization) = authorization else {
+        let ManagementCredential::Bearer(api_key) = credential else {
             let state = self.state.lock().map_err(lock_error)?;
             return Ok(AuthenticatedIdentity {
                 key: IdentityKey::Local,
@@ -168,7 +168,6 @@ impl PermissionStore {
                 permissions: state.local.permissions.clone(),
             });
         };
-        let api_key = parse_bearer(authorization)?;
         let mut state = self.state.lock().map_err(lock_error)?;
         let record_index = state
             .api_keys
@@ -261,8 +260,9 @@ fn validate_and_normalize(state: &mut PermissionFile) -> Result<bool, ManagerErr
         )));
     }
     let known = known_action_ids();
+    let mut changed = remove_obsolete_permissions(&mut state.local.permissions);
     validate_permission_keys(&state.local.permissions, &known)?;
-    let mut changed = add_missing_defaults(&mut state.local.permissions);
+    changed |= add_missing_defaults(&mut state.local.permissions);
     let mut ids = BTreeSet::new();
     let mut names = BTreeSet::new();
     let mut prefixes = BTreeSet::new();
@@ -297,10 +297,19 @@ fn validate_and_normalize(state: &mut PermissionFile) -> Result<bool, ManagerErr
                 "permission file contains invalid API key credentials",
             ));
         }
+        changed |= remove_obsolete_permissions(&mut record.permissions);
         validate_permission_keys(&record.permissions, &known)?;
         changed |= add_missing_defaults(&mut record.permissions);
     }
     Ok(changed)
+}
+
+fn remove_obsolete_permissions(permissions: &mut BTreeMap<String, PermissionMode>) -> bool {
+    let before = permissions.len();
+    for id in OBSOLETE_API_ACTION_IDS {
+        permissions.remove(*id);
+    }
+    permissions.len() != before
 }
 
 fn validate_permission_keys(
@@ -412,16 +421,6 @@ fn known_action_ids() -> BTreeSet<String> {
         .iter()
         .map(|action| action.id.to_owned())
         .collect()
-}
-
-fn parse_bearer(value: &str) -> Result<&str, ManagerError> {
-    let mut parts = value.split_whitespace();
-    let scheme = parts.next().ok_or_else(invalid_api_key)?;
-    let key = parts.next().ok_or_else(invalid_api_key)?;
-    if !scheme.eq_ignore_ascii_case("bearer") || key.is_empty() || parts.next().is_some() {
-        return Err(invalid_api_key());
-    }
-    Ok(key)
 }
 
 fn invalid_api_key() -> ManagerError {
@@ -538,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_permission_file_adds_asset_actions_for_every_identity() {
+    fn existing_permission_file_migrates_action_catalog_for_every_identity() {
         let directory = tempdir().unwrap();
         let store = PermissionStore::open(directory.path()).unwrap();
         let created = store.create_api_key("agent".into()).unwrap();
@@ -554,6 +553,10 @@ mod tests {
         ) {
             permissions.remove("GET /api/assets/{*asset_id}");
             permissions.remove("POST /api/assets/{*asset_id}");
+            permissions.remove("POST /api/session-shares");
+            for action_id in OBSOLETE_API_ACTION_IDS {
+                permissions.insert((*action_id).to_owned(), PermissionMode::Deny);
+            }
         }
         fs::write(&path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
 
@@ -570,6 +573,10 @@ mod tests {
                 modes["POST /api/assets/{*asset_id}"],
                 PermissionMode::Approval
             );
+            assert_eq!(modes["POST /api/session-shares"], PermissionMode::Approval);
+            for action_id in OBSOLETE_API_ACTION_IDS {
+                assert!(!modes.contains_key(*action_id));
+            }
         }
     }
 
@@ -579,12 +586,12 @@ mod tests {
         let store = PermissionStore::open(directory.path()).unwrap();
         let created = store.create_api_key("agent".into()).unwrap();
         let identity = store
-            .authenticate(Some(&format!("Bearer {}", created.api_key)))
+            .authenticate(&ManagementCredential::Bearer(created.api_key.clone()))
             .unwrap();
         assert_eq!(identity.summary.id, created.identity.id);
         store.delete_api_key(&created.identity.id).unwrap();
         let error = store
-            .authenticate(Some(&format!("Bearer {}", created.api_key)))
+            .authenticate(&ManagementCredential::Bearer(created.api_key.clone()))
             .err()
             .unwrap();
         assert_eq!(error.code, "invalid_api_key");
@@ -610,7 +617,7 @@ mod tests {
         }
 
         let identity = store
-            .authenticate(Some(&format!("Bearer {api_key}")))
+            .authenticate(&ManagementCredential::Bearer(api_key.to_string()))
             .unwrap();
         assert_eq!(identity.summary.id, created.identity.id);
     }

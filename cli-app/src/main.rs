@@ -148,11 +148,16 @@ async fn run(args: RunArgs) -> Result<()> {
         let shares = SessionShareService::new();
         let share_manager = manager.clone();
         let share_service = shares.clone();
-        let handle = start_http_server_with_routes(manager.clone(), permissions, move |changes| {
-            ui::router(ui_manager, ui_permissions, access, shares, changes).merge(
-                proxy_crab_mgr::session_share::router(share_manager, share_service),
-            )
-        })
+        let handle = start_http_server_with_routes(
+            manager.clone(),
+            permissions,
+            shares.clone(),
+            move |changes| {
+                ui::router(ui_manager, ui_permissions, access, changes).merge(
+                    proxy_crab_mgr::session_share::router(share_manager, share_service),
+                )
+            },
+        )
         .await
         .context("start management HTTP API")?;
         ui_token = Some(token);

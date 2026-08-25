@@ -819,6 +819,7 @@ pub fn run() {
                 match tauri::async_runtime::block_on(start_http_server_with_routes(
                     manager.clone(),
                     permissions.clone(),
+                    shares.clone(),
                     move |_| {
                         share_ui::router().merge(proxy_crab_mgr::session_share::router(
                             share_manager,

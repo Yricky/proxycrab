@@ -6,7 +6,10 @@ use std::{
 use axum::{
     Json, Router,
     extract::{Extension, Path, Query, Request, State},
-    http::{HeaderMap, StatusCode, header::AUTHORIZATION},
+    http::{
+        HeaderMap, HeaderValue, StatusCode,
+        header::{CACHE_CONTROL, REFERRER_POLICY},
+    },
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -134,8 +137,10 @@ impl SessionShareService {
         })
     }
 
-    fn authenticate(&self, authorization: Option<&str>) -> Result<ShareScope, ShareAuthError> {
-        let token = bearer_token(authorization).ok_or(ShareAuthError::Invalid)?;
+    fn authenticate(&self, token: &str) -> Result<ShareScope, ShareAuthError> {
+        if !token.starts_with("pcrab_share_") {
+            return Err(ShareAuthError::Invalid);
+        }
         let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
         let now = Instant::now();
         let mut entries = self.entries.lock().expect("session share lock poisoned");
@@ -155,12 +160,11 @@ impl SessionShareService {
     }
 }
 
-fn bearer_token(authorization: Option<&str>) -> Option<&str> {
-    let mut parts = authorization?.split_whitespace();
-    let (Some(scheme), Some(token), None) = (parts.next(), parts.next(), parts.next()) else {
-        return None;
-    };
-    (scheme.eq_ignore_ascii_case("bearer") && token.starts_with("pcrab_share_")).then_some(token)
+fn query_token(request: &Request) -> Option<String> {
+    let mut tokens = url::form_urlencoded::parse(request.uri().query()?.as_bytes())
+        .filter_map(|(name, value)| (name == "token").then_some(value.into_owned()));
+    let token = tokens.next()?;
+    (!token.is_empty() && tokens.next().is_none()).then_some(token)
 }
 
 #[derive(Clone)]
@@ -189,7 +193,19 @@ pub fn router(manager: Arc<dyn ProxyCrabManager>, shares: Arc<SessionShareServic
             state.clone(),
             authorize_share,
         ))
+        .layer(middleware::from_fn(no_store))
         .with_state(state)
+}
+
+async fn no_store(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    response
 }
 
 async fn authorize_share(
@@ -197,11 +213,10 @@ async fn authorize_share(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let authorization = request
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok());
-    let scope = match state.shares.authenticate(authorization) {
+    let Some(token) = query_token(&request) else {
+        return ShareAuthError::Invalid.into_response();
+    };
+    let scope = match state.shares.authenticate(&token) {
         Ok(scope) => scope,
         Err(error) => return error.into_response(),
     };
@@ -436,17 +451,11 @@ mod tests {
             .create_with_duration(7, Duration::from_secs(60))
             .unwrap();
         assert_ne!(first.token, second.token);
-        assert_eq!(
-            service
-                .authenticate(Some(&format!("Bearer {}", first.token)))
-                .unwrap()
-                .session_id,
-            7
-        );
+        assert_eq!(service.authenticate(&first.token).unwrap().session_id, 7);
 
         let expired = service.create_with_duration(8, Duration::ZERO).unwrap();
         assert!(matches!(
-            service.authenticate(Some(&format!("Bearer {}", expired.token))),
+            service.authenticate(&expired.token),
             Err(ShareAuthError::Expired)
         ));
     }
@@ -455,15 +464,11 @@ mod tests {
     fn rejects_malformed_credentials() {
         let service = SessionShareService::default();
         assert!(matches!(
-            service.authenticate(None),
+            service.authenticate("pcrab_ui_wrong-kind"),
             Err(ShareAuthError::Invalid)
         ));
         assert!(matches!(
-            service.authenticate(Some("Bearer pcrab_ui_wrong-kind")),
-            Err(ShareAuthError::Invalid)
-        ));
-        assert!(matches!(
-            service.authenticate(Some("Basic pcrab_share_fake")),
+            service.authenticate("Bearer pcrab_share_fake"),
             Err(ShareAuthError::Invalid)
         ));
     }
@@ -545,14 +550,37 @@ mod tests {
             .await
             .unwrap();
         let app = router(manager.clone(), shares);
-        let authorization = format!("Bearer {}", created.token);
+        let token =
+            url::form_urlencoded::byte_serialize(created.token.as_bytes()).collect::<String>();
+
+        for request in [
+            Request::builder()
+                .uri("/share-api/bootstrap")
+                .header("authorization", format!("Bearer {}", created.token))
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .uri(format!("/share-api/bootstrap?token={token}&token={token}"))
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .uri("/share-api/bootstrap?token=")
+                .body(Body::empty())
+                .unwrap(),
+        ] {
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+        }
 
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/share-api/session-view?session_id={}", other.id))
-                    .header(AUTHORIZATION, &authorization)
+                    .uri(format!(
+                        "/share-api/session-view?session_id={}&token={token}",
+                        other.id
+                    ))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -567,8 +595,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/share-api/column-scripts")
-                    .header(AUTHORIZATION, &authorization)
+                    .uri(format!("/share-api/column-scripts?token={token}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -585,8 +612,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/share-api/logs/ids")
-                    .header(AUTHORIZATION, &authorization)
+                    .uri(format!("/share-api/logs/ids?token={token}"))
                     .header("content-type", "application/json")
                     .body(Body::from(format!(
                         r#"{{"session_id":{},"filter":{{"option":{{"kind":"column","column":{{"kind":"uri"}},"regex":false}},"input":"needle"}},"persist_filter":true}}"#,
@@ -607,8 +633,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri("/share-api/session-view")
-                    .header(AUTHORIZATION, &authorization)
+                    .uri(format!("/share-api/session-view?token={token}"))
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"columns":[]}"#))
                     .unwrap(),
@@ -628,8 +653,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/share-api/bootstrap")
-                    .header(AUTHORIZATION, &authorization)
+                    .uri(format!("/share-api/bootstrap?token={token}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -640,13 +664,13 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/share-api/bootstrap")
-                    .header(AUTHORIZATION, "Bearer pcrab_share_unknown")
+                    .uri("/share-api/bootstrap?token=pcrab_share_unknown")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
     }
 }

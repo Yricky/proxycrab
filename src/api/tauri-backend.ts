@@ -73,14 +73,19 @@ export function createTauriBackend(): Backend {
       target: "tauri",
       approvals: true,
       permissionModes: ["allow", "approval", "deny"],
-      workspaceSwitch: true,
       readonly: false,
     },
-    skillInstaller: {
-      getInfo: (parent: string) =>
-        call("get_proxycrab_skill_install_info", { parent }),
-      install: (parent: string, overwrite: boolean) =>
-        call("install_proxycrab_skill", { parent, overwrite }),
+    host: {
+      skillInstaller: {
+        getInfo: (parent: string) =>
+          call("get_proxycrab_skill_install_info", { parent }),
+        install: (parent: string, overwrite: boolean) =>
+          call("install_proxycrab_skill", { parent, overwrite }),
+      },
+      setWorkspaceForNextStart: (path) =>
+        call("set_workspace_for_next_start", { path }),
+      replaceConfig: (config: AppConfig) => call("replace_config", { config }),
+      regenerateCertificate: () => call("regenerate_certificate"),
     },
     fetchBody: async (target, side, maxSize) =>
       fetchBodyFromHttp(await call("get_config"), target, side, maxSize),
@@ -99,9 +104,7 @@ export function createTauriBackend(): Backend {
     openExternal: (url) => openUrl(url),
 
     getWorkspace: () => call("get_workspace"),
-    setWorkspaceForNextStart: (path) => call("set_workspace_for_next_start", { path }),
     getConfig: () => call("get_config"),
-    replaceConfig: (config: AppConfig) => call("replace_config", { config }),
     getAgentsPresets: () => call("get_agents_presets"),
     createAgentsPreset: (request: CreateAgentsPresetRequest) =>
       call("create_agents_preset", { request }),
@@ -194,7 +197,6 @@ export function createTauriBackend(): Backend {
     ) => call("replace_session_interceptors", { sessionId, request }),
 
     getCertificate: () => call("get_certificate"),
-    regenerateCertificate: () => call("regenerate_certificate"),
 
     getSystemLogs: (query: SystemLogsQuery) => call("get_system_logs", { query }),
     clearSystemLogs: () => call("clear_system_logs"),

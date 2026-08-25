@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 65);
+    assert_eq!(actions.len(), 63);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -81,10 +81,10 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "POST /api/proxy/start",
         "POST /api/proxy/stop",
         "POST /api/routing-scripts",
+        "POST /api/session-shares",
         "POST /api/sessions",
         "PUT /api/active-session",
         "PUT /api/column-scripts/{name}",
-        "PUT /api/config",
         "PUT /api/filter-scripts/{name}",
         "PUT /api/interceptors/{kind}/{name}",
         "PUT /api/routing-script-selection",
@@ -92,7 +92,6 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "PUT /api/session-interceptors",
         "PUT /api/session-view",
         "PUT /api/sessions/{id}",
-        "PUT /api/workspace",
     ]);
     let deny = BTreeSet::from([
         "DELETE /api/archived-sessions/{id}",
@@ -105,7 +104,6 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "DELETE /api/system-logs",
         "GET /api/ca",
         "POST /api/bypass/delete",
-        "POST /api/ca",
         "POST /api/sessions/{id}/archive",
     ]);
 
@@ -132,9 +130,14 @@ fn permission_lookup_uses_both_method_and_route_template() {
         find_api_action("GET", "/api/ca").unwrap().default_mode,
         PermissionMode::Deny
     );
+    assert!(find_api_action("POST", "/api/ca").is_none());
+    assert!(find_api_action("PUT", "/api/config").is_none());
+    assert!(find_api_action("PUT", "/api/workspace").is_none());
     assert_eq!(
-        find_api_action("POST", "/api/ca").unwrap().default_mode,
-        PermissionMode::Deny
+        find_api_action("POST", "/api/session-shares")
+            .unwrap()
+            .default_mode,
+        PermissionMode::Approval
     );
     assert!(find_api_action("DELETE", "/api/ca").is_none());
     assert!(find_api_action("GET", "/api/logs/123").is_none());

@@ -27,10 +27,6 @@ export interface ShareBootstrap {
 
 export const SHARE_INVALID_EVENT = "proxycrab-share-invalid";
 
-function authorization(token: string): string {
-  return `Bearer ${token}`;
-}
-
 async function request<T>(
   baseUrl: string,
   token: string,
@@ -38,11 +34,12 @@ async function request<T>(
   init: RequestInit = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
-  headers.set("Authorization", authorization(token));
   if (init.body !== undefined) headers.set("Content-Type", "application/json");
+  const url = new URL(path, baseUrl);
+  url.searchParams.append("token", token);
   let response: Response;
   try {
-    response = await fetch(new URL(path, baseUrl), { ...init, headers });
+    response = await fetch(url, { ...init, headers, referrerPolicy: "no-referrer" });
   } catch (cause) {
     throw new BackendError({ code: "network_error", message: String(cause) });
   }
@@ -97,9 +94,9 @@ export function createShareBackend(
       target: "share",
       approvals: false,
       permissionModes: [],
-      workspaceSwitch: false,
       readonly: true,
     },
+    host: undefined,
     fetchBody: (target, side, maxSize) => {
       if (target.kind !== "log") return unsupported("fetch breakpoint body")();
       return fetchBodyFromBase(
@@ -107,8 +104,9 @@ export function createShareBackend(
         target,
         side,
         maxSize,
-        authorization(token),
+        undefined,
         "/share-api",
+        token,
       );
     },
     subscribeChanges: async (handler) => {
