@@ -3,20 +3,22 @@ import vue from "@vitejs/plugin-vue";
 // @ts-expect-error type error without @types/node package
 import process from "node:process";
 const host = process.env.TAURI_DEV_HOST;
+const projectRoot = process.cwd();
+const sourceRoot = `${projectRoot}/src`;
 
 // https://vite.dev/config/
-export default defineConfig(({ mode }) => {
-  const target = mode === "cli" ? "cli" : "tauri";
-  return {
+export default defineConfig({
+  root: sourceRoot,
   plugins: [vue()],
-  resolve: {
-    alias: {
-      "@proxycrab/target-landing": `/src/landing/${target === "cli" ? "CliLanding" : "TauriLanding"}.vue`,
-    },
-  },
   build: {
-    outDir: `dist/${target}`,
+    outDir: `${projectRoot}/dist`,
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        app: `${sourceRoot}/index.html`,
+        session: `${sourceRoot}/session.html`,
+      },
+    },
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
@@ -40,5 +42,4 @@ export default defineConfig(({ mode }) => {
       ignored: ["**/src-tauri/**"],
     },
   },
-};
 });

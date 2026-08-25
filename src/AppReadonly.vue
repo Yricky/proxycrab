@@ -1,9 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, watch } from "vue";
-import AppToolbar from "./components/AppToolbar.vue";
-import SessionSidebar from "./components/SessionSidebar.vue";
 import FilterBar from "./components/FilterBar.vue";
-import InterceptorPipeline from "./components/InterceptorPipeline.vue";
 import LogTable from "./components/LogTable.vue";
 import FloatingWindow from "./components/FloatingWindow.vue";
 import Toast from "./components/Toast.vue";
@@ -14,16 +11,9 @@ import { sessionsStore } from "./stores/sessions";
 import { proxyStore } from "./stores/proxy";
 import { logsStore } from "./stores/logs";
 import { startHttpApiSync, stopHttpApiSync } from "./stores/http-api-sync";
-import { breakpointsStore } from "./stores/breakpoints";
-import { approvalsStore } from "./stores/approvals";
-import { useBackend } from "./api";
 
-const backend = useBackend();
-const readonly = backend.capabilities.readonly;
-
-// 日志与断点轮询仅在代理运行且存在活跃、正在查看的 Session 时才有意义：
-// 代理停止后不会有新抓包或断点进展；无活跃 Session 时流量被直接放行（no_active_session），
-// 无查看 Session 时轮询请求也只是空转。
+// 只读分享页只展示单个 Session 的历史日志，无断点/审批能力；
+// 日志轮询仅在代理运行且存在活跃、正在查看的 Session 时才有意义。
 function syncCapturePolling(): void {
   const canPoll =
     proxyStore.running &&
@@ -31,10 +21,8 @@ function syncCapturePolling(): void {
     sessionsStore.viewingSessionId !== null;
   if (canPoll) {
     logsStore.startPolling();
-    if (!readonly) breakpointsStore.startPolling();
   } else {
     logsStore.stopPolling();
-    breakpointsStore.stopPolling();
   }
 }
 
@@ -51,7 +39,6 @@ watch(
 
 onMounted(async () => {
   await startHttpApiSync();
-  if (backend.capabilities.approvals) await approvalsStore.start();
   proxyStore.startPolling();
   await sessionsStore.init();
   // 确保启动时状态已刷新，避免 syncCapturePolling 拿到过期的 stopped 状态。
@@ -62,21 +49,16 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   proxyStore.stopPolling();
   logsStore.stopPolling();
-  breakpointsStore.stopPolling();
   stopHttpApiSync();
-  if (backend.capabilities.approvals) approvalsStore.stop();
 });
 </script>
 
 <template>
   <div class="app-shell">
-    <AppToolbar v-if="!readonly" />
     <div class="app-main">
-      <SessionSidebar v-if="!readonly" />
       <section class="app-content">
         <div class="traffic-controls">
           <FilterBar />
-          <InterceptorPipeline v-if="!readonly" />
         </div>
         <LogTable />
       </section>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import App from "../App.vue";
+import AppReadonly from "../AppReadonly.vue";
 import { createShareBackend, SHARE_INVALID_EVENT, verifyShareAccess } from "../api/share-backend";
 import { installBackend } from "../api/runtime-backend";
 import type { ManagerError } from "../api/types";
@@ -35,7 +35,7 @@ onBeforeUnmount(() => window.removeEventListener(SHARE_INVALID_EVENT, invalidate
 </script>
 
 <template>
-  <App v-if="ready" />
+  <AppReadonly v-if="ready" />
   <main v-else class="share-state">
     <div class="share-card">
       <div class="brand">ProxyCrab</div>
