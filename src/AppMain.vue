@@ -51,7 +51,7 @@ watch(
 onMounted(async () => {
   await startHttpApiSync();
   if (backend.capabilities.approvals) await approvalsStore.start();
-  proxyStore.startPolling();
+  await proxyStore.init();
   await sessionsStore.init();
   // 确保启动时状态已刷新，避免 syncCapturePolling 拿到过期的 stopped 状态。
   await proxyStore.refresh();
@@ -59,7 +59,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
-  proxyStore.stopPolling();
+  proxyStore.dispose();
   logsStore.stopPolling();
   breakpointsStore.stopPolling();
   stopHttpApiSync();

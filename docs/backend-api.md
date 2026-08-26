@@ -107,21 +107,22 @@ the desktop binary does not embed a second CLI bundle. Every `/share-api/*` requ
 exactly one non-empty `token` query parameter; `Authorization` is ignored. Responses set
 `Cache-Control: no-store`, and the page uses `Referrer-Policy: no-referrer`. The server derives the
 Session scope on every request and overwrites any client Session ID. The surface
-contains bootstrap, proxy status, Session view, stateless log-ID queries, rendered log rows, detail,
+contains bootstrap, scoped proxy status and proxy-change long polling, Session view, stateless log-ID queries, rendered log rows, detail,
 body, name-only column/filter lists, and regex validation. It has no write, export, interceptor,
 breakpoint, config, permission, routing, CA, bypass, or system-log route. Expiry, process restart, or
 Session archive invalidates it. It is not accepted by `/api/*` and is not an Agent credential.
 
 ## HTTP changes and desktop UI synchronization
 
-Successful HTTP operations that mutate application-visible state publish an internal change event
-to the Tauri frontend. This event is not a public HTTP endpoint and does not change HTTP response
-envelopes. The frontend coalesces adjacent events, refreshes only affected resources, and keeps
-normal Agent/API activity silent.
+Successful HTTP operations that mutate application-visible state and runtime proxy lifecycle or
+activity transitions publish an internal change event. Tauri emits it to the desktop frontend and
+the CLI browser receives it through its private long-poll route. The frontend coalesces adjacent
+events and refreshes only affected resources. The read-only share page uses an authenticated,
+revision-based proxy-change long poll and then reloads its Session-scoped status.
 
 | HTTP operation | UI resources affected | Desktop behavior |
 | --- | --- | --- |
-| `POST /api/proxy/start`, `POST /api/proxy/stop` | Proxy status | Refreshes the toolbar state |
+| Proxy lifecycle or active netlog/bypass transition | Proxy status | Refreshes lifecycle controls and exact activity badges |
 | Session create/update/archive/restore | Active and archived Session lists | Archiving the viewed Session selects the first remaining Session |
 | Archived Session delete | Archived Session list | Refreshes the archived Session window |
 | `PUT /api/active-session` | Active Session and settings | Refreshes the active indicator without changing the viewed Session |
@@ -599,6 +600,25 @@ Breakpoints automatically release when their deadline expires. They are process-
 restored after restart.
 
 ## Capture lifecycle
+
+While the listener is running, `GET /api/proxy/status` includes the runtime-authoritative activity
+snapshot:
+
+```json
+{
+  "status": "running",
+  "host": "0.0.0.0",
+  "port": 8089,
+  "started_at": 1785380000000,
+  "active_netlog": { "1786333525006": [1, 2, 3, 4, 5] },
+  "active_bypass_count": 2
+}
+```
+
+`active_netlog` keys are Session IDs and its values are exact active capture IDs. This map is the
+only source for deciding whether a persisted netlog row is currently active; `outcome` remains the
+persisted result and `stage` remains its execution/failure phase. A share-token status response
+retains only the authorized Session key and omits `active_bypass_count`.
 
 A routed HTTP request is inserted into its selected Session database before it is forwarded. The
 Session is pinned for the entire request/response lifecycle even if the active Session changes.

@@ -30,7 +30,7 @@ use tokio_util::io::ReaderStream;
 
 use crate::{bypass::BypassStore, storage::CaptureBodyWriter};
 
-use super::TaskGroup;
+use super::{ActivityGuard, TaskGroup};
 
 const PACE_CHUNKS_PER_SECOND: u64 = 50;
 
@@ -642,16 +642,22 @@ pub(super) struct BypassTransfer {
     upload_bytes: AtomicU64,
     download_bytes: AtomicU64,
     finalized: AtomicBool,
+    activity: Mutex<Option<ActivityGuard>>,
 }
 
 impl BypassTransfer {
-    pub(super) fn new(store: BypassStore, entry_id: Option<u64>) -> Arc<Self> {
+    pub(super) fn new(
+        store: BypassStore,
+        entry_id: Option<u64>,
+        activity: Option<ActivityGuard>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             store,
             entry_id,
             upload_bytes: AtomicU64::new(0),
             download_bytes: AtomicU64::new(0),
             finalized: AtomicBool::new(false),
+            activity: Mutex::new(activity),
         })
     }
 
@@ -674,6 +680,10 @@ impl BypassTransfer {
                 Some(self.download_bytes.load(Ordering::Relaxed)),
             );
         }
+        self.activity
+            .lock()
+            .expect("bypass activity lock poisoned")
+            .take();
     }
 
     pub(super) fn fail(&self, error: &str) {
@@ -688,6 +698,10 @@ impl BypassTransfer {
                 Some(self.download_bytes.load(Ordering::Relaxed)),
             );
         }
+        self.activity
+            .lock()
+            .expect("bypass activity lock poisoned")
+            .take();
     }
 }
 
@@ -802,12 +816,18 @@ mod tests {
     use super::*;
     use crate::{
         model::{HeaderValues, RequestData, RequestTags},
+        proxy::ActivityTracker,
         storage::{BodySide, CaptureStore},
     };
     use futures::stream;
     use http_body_util::StreamBody;
     use hyper::http::HeaderValue;
     use tempfile::tempdir;
+
+    fn test_task_group() -> TaskGroup {
+        let (changes, _) = tokio::sync::watch::channel(0);
+        TaskGroup::new(ActivityTracker::new(changes))
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn deferred_empty_body_can_be_read_and_replayed_without_a_file() {
@@ -826,7 +846,7 @@ mod tests {
             .await
             .unwrap();
         let path = writer.path().to_path_buf();
-        let tracker = TaskGroup::new();
+        let tracker = test_task_group();
         let deferred = DeferredBody::new(http_body_util::Empty::new(), writer, &tracker);
         let reader = deferred.reader();
 
@@ -868,7 +888,7 @@ mod tests {
             Ok::<_, Infallible>(Frame::data(Bytes::from_static(b"payload"))),
             Ok(Frame::trailers(trailers)),
         ]));
-        let tracker = TaskGroup::new();
+        let tracker = test_task_group();
         let deferred = DeferredBody::new(body, writer, &tracker);
         let reader = deferred.reader();
 

@@ -390,6 +390,8 @@ pub enum ProxyStatus {
         host: String,
         port: u16,
         started_at: u64,
+        active_netlog: BTreeMap<u64, Vec<u64>>,
+        active_bypass_count: usize,
     },
     Stopping,
     Failed {

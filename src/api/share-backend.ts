@@ -112,6 +112,8 @@ export function createShareBackend(
     subscribeChanges: async (handler) => {
       let stopped = false;
       let columns = JSON.stringify(bootstrap.view.columns);
+      let proxyRevision: string | undefined;
+      const proxyAbort = new AbortController();
       const poll = async () => {
         if (stopped) return;
         try {
@@ -125,9 +127,29 @@ export function createShareBackend(
           // The request helper announces terminal share errors; network errors retry.
         }
       };
+      const watchProxy = async () => {
+        while (!stopped) {
+          try {
+            const query =
+              proxyRevision === undefined ? "" : `?after=${encodeURIComponent(proxyRevision)}`;
+            const change = await call<{ revision: string; changed: boolean }>(
+              `/share-api/proxy/changes${query}`,
+              { signal: proxyAbort.signal },
+            );
+            proxyRevision = change.revision;
+            if (change.changed) {
+              handler({ resources: ["proxy"], session_id: bootstrap.session.id });
+            }
+          } catch {
+            if (!stopped) await new Promise((resolve) => window.setTimeout(resolve, 1000));
+          }
+        }
+      };
+      void watchProxy();
       const timer = window.setInterval(() => void poll(), 1500);
       return () => {
         stopped = true;
+        proxyAbort.abort();
         window.clearInterval(timer);
       };
     },

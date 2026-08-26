@@ -159,8 +159,14 @@ where
         .await
         .map_err(|error| ManagerError::internal(format!("failed to bind {address}: {error}")))?;
     let cancellation = CancellationToken::new();
-    let shutdown = cancellation.clone();
+    let server_shutdown = cancellation.clone();
+    let task_shutdown = cancellation.clone();
     let (changes, _) = broadcast::channel(128);
+    let change_task = spawn_proxy_status_change_bridge(
+        manager.subscribe_proxy_status_changes(),
+        changes.clone(),
+        cancellation.clone(),
+    );
     let extra = extra_routes(changes.clone());
     let app =
         secured_router_with_changes_and_extra(manager, permissions, shares, changes.clone(), extra);
@@ -169,11 +175,13 @@ where
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .with_graceful_shutdown(async move { shutdown.cancelled().await })
+        .with_graceful_shutdown(async move { server_shutdown.cancelled().await })
         .await
         {
             tracing::error!("management HTTP server failed: {error}");
         }
+        task_shutdown.cancel();
+        let _ = change_task.await;
     });
     Ok(HttpServerHandle {
         host: std::net::Ipv4Addr::UNSPECIFIED.to_string(),
@@ -181,6 +189,29 @@ where
         cancellation,
         task,
         changes,
+    })
+}
+
+fn spawn_proxy_status_change_bridge(
+    mut status_changes: tokio::sync::watch::Receiver<u64>,
+    changes: ChangeSender,
+    cancellation: CancellationToken,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                result = status_changes.changed() => {
+                    if result.is_err() {
+                        break;
+                    }
+                    let _ = changes.send(HttpApiChange {
+                        resources: vec![HttpApiResource::Proxy],
+                        session_id: None,
+                    });
+                }
+                _ = cancellation.cancelled() => break,
+            }
+        }
     })
 }
 
@@ -541,9 +572,6 @@ async fn publish_successful_http_changes(
 
 fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Option<HttpApiChange> {
     let resources = match (method, path) {
-        (&Method::POST, "/api/proxy/start" | "/api/proxy/stop") => {
-            vec![HttpApiResource::Proxy]
-        }
         (&Method::POST, "/api/sessions") => {
             vec![HttpApiResource::Sessions, HttpApiResource::ActiveSession]
         }
@@ -1530,6 +1558,7 @@ mod tests {
         io::{Read, Write},
         net::SocketAddr,
         sync::{Arc, Mutex},
+        time::Duration,
     };
 
     use async_trait::async_trait;
@@ -1557,13 +1586,14 @@ mod tests {
     };
     use serde_json::Value;
     use tempfile::tempdir;
+    use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
 
     use crate::{
         dto::HttpApiResource,
         http::{
             ApiError, body_response, change_for_request, router, router_with_changes,
-            secured_router,
+            secured_router, spawn_proxy_status_change_bridge,
         },
         manager::{MitmManager, ProxyCrabManager},
         permission::{ManagementCredential, PermissionAction, PermissionDenied, PermissionManager},
@@ -2134,6 +2164,26 @@ mod tests {
             change_for_request(&Method::POST, "/api/filter-scripts/name/debug", None).is_none()
         );
         assert!(change_for_request(&Method::POST, "/api/logs/ids", None).is_none());
+        assert!(change_for_request(&Method::POST, "/api/proxy/start", None).is_none());
+    }
+
+    #[tokio::test]
+    async fn bridges_runtime_proxy_status_changes_to_ui_events() {
+        let (status_sender, status_receiver) = tokio::sync::watch::channel(0_u64);
+        let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
+        let cancellation = CancellationToken::new();
+        let task = spawn_proxy_status_change_bridge(status_receiver, changes, cancellation.clone());
+
+        status_sender.send(1).unwrap();
+        let change = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(change.resources, vec![HttpApiResource::Proxy]);
+        assert_eq!(change.session_id, None);
+
+        cancellation.cancel();
+        task.await.unwrap();
     }
 
     #[tokio::test]

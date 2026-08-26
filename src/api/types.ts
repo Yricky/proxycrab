@@ -137,7 +137,14 @@ export type InterceptorExecutionOrigin = "saved" | "temporary";
 export type ProxyStatus =
   | { status: "stopped" }
   | { status: "starting" }
-  | { status: "running"; host: string; port: number; started_at: number }
+  | {
+      status: "running";
+      host: string;
+      port: number;
+      started_at: number;
+      active_netlog: Record<string, number[]>;
+      active_bypass_count?: number;
+    }
   | { status: "stopping" }
   | { status: "failed"; message: string };
 

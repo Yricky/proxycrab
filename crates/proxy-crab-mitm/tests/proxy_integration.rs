@@ -600,6 +600,13 @@ async fn streams_plain_http_bypass_before_the_upstream_response_finishes() {
     })
     .await
     .expect("the proxy buffered the bypass response instead of streaming it");
+    assert!(matches!(
+        runtime.proxy_status(),
+        ProxyStatus::Running {
+            active_bypass_count: 1,
+            ..
+        }
+    ));
 
     release.send(()).unwrap();
     timeout(Duration::from_secs(2), stream.read_to_end(&mut response))
@@ -619,6 +626,19 @@ async fn streams_plain_http_bypass_before_the_upstream_response_finishes() {
                 assert_eq!(entries[0].download_bytes, Some(10));
                 break;
             }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    timeout(Duration::from_secs(1), async {
+        while !matches!(
+            runtime.proxy_status(),
+            ProxyStatus::Running {
+                active_bypass_count: 0,
+                ..
+            }
+        ) {
             sleep(Duration::from_millis(10)).await;
         }
     })
@@ -721,6 +741,12 @@ async fn streams_session_response_before_the_upstream_response_finishes() {
     })
     .await
     .expect("the Session buffered the response instead of streaming it");
+    let active_capture = runtime.list_captures(session.id, 1, None).unwrap()[0].id;
+    assert!(matches!(
+        runtime.proxy_status(),
+        ProxyStatus::Running { active_netlog, .. }
+            if active_netlog.get(&session.id) == Some(&vec![active_capture])
+    ));
 
     release.send(()).unwrap();
     timeout(Duration::from_secs(2), stream.read_to_end(&mut response))
@@ -749,6 +775,16 @@ async fn streams_session_response_before_the_upstream_response_finishes() {
         panic!("captured response body was not stored in a file");
     };
     assert_eq!(tokio::fs::read(path).await.unwrap(), b"helloworld");
+    timeout(Duration::from_secs(1), async {
+        while !matches!(
+            runtime.proxy_status(),
+            ProxyStatus::Running { active_netlog, .. } if active_netlog.is_empty()
+        ) {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
     runtime.stop_proxy().await.unwrap();
 }
 

@@ -1,6 +1,6 @@
 import type { CaptureOutcome, ProxyStatus } from "../api/types";
 
-export function isStaleInProgress(
+export function isStaleByProxyRun(
   outcome: CaptureOutcome,
   createdAt: number,
   proxyStatus: ProxyStatus,
@@ -11,3 +11,6 @@ export function isStaleInProgress(
   );
 }
 
+export function isInactiveInProgress(outcome: CaptureOutcome, active: boolean): boolean {
+  return outcome === "in_progress" && !active;
+}

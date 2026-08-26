@@ -23,7 +23,7 @@ pub(super) fn handle_bypass_connect(
         cancellation,
         tracker,
     } = context;
-    let entry_id = tracker
+    let entry = tracker
         .begin_bypass(runtime.bypass_store(), || {
             runtime.bypass_store().begin(
                 &source.to_string(),
@@ -44,10 +44,10 @@ pub(super) fn handle_bypass_connect(
         let mut client = match upgraded {
             Ok(upgraded) => TokioIo::new(upgraded),
             Err(error) => {
-                if let Some(id) = entry_id {
+                if let Some((id, _)) = &entry {
                     let _ = runtime
                         .bypass_store()
-                        .fail(id, &error.to_string(), None, None);
+                        .fail(*id, &error.to_string(), None, None);
                 }
                 return;
             }
@@ -56,17 +56,17 @@ pub(super) fn handle_bypass_connect(
             match timeout(CONNECT_TIMEOUT, TcpStream::connect(authority.as_str())).await {
                 Ok(Ok(upstream)) => upstream,
                 Ok(Err(error)) => {
-                    if let Some(id) = entry_id {
+                    if let Some((id, _)) = &entry {
                         let _ = runtime
                             .bypass_store()
-                            .fail(id, &error.to_string(), None, None);
+                            .fail(*id, &error.to_string(), None, None);
                     }
                     return;
                 }
                 Err(_) => {
-                    if let Some(id) = entry_id {
+                    if let Some((id, _)) = &entry {
                         let _ = runtime.bypass_store().fail(
-                            id,
+                            *id,
                             "upstream connection timed out",
                             None,
                             None,
@@ -79,9 +79,9 @@ pub(super) fn handle_bypass_connect(
             result = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {
                 match result {
                     Ok((upload, download)) => {
-                        if let Some(id) = entry_id {
+                        if let Some((id, _)) = &entry {
                             let _ = runtime.bypass_store().complete(
-                                id,
+                                *id,
                                 None,
                                 Some(upload),
                                 Some(download),
@@ -89,9 +89,9 @@ pub(super) fn handle_bypass_connect(
                         }
                     }
                     Err(error) => {
-                        if let Some(id) = entry_id {
+                        if let Some((id, _)) = &entry {
                             let _ = runtime.bypass_store().fail(
-                                id,
+                                *id,
                                 &error.to_string(),
                                 None,
                                 None,
@@ -115,7 +115,7 @@ pub(super) async fn handle_bypass_http(
     cancellation: CancellationToken,
     tracker: TaskGroup,
 ) -> Response<ProxyBody> {
-    let entry_id = tracker
+    let entry = tracker
         .begin_bypass(runtime.bypass_store(), || {
             runtime.bypass_store().begin(
                 &source.to_string(),
@@ -127,7 +127,11 @@ pub(super) async fn handle_bypass_http(
         })
         .map_err(|error| tracing::warn!("failed to persist bypass request: {error}"))
         .ok();
-    let transfer = BypassTransfer::new(runtime.bypass_store().clone(), entry_id);
+    let (entry_id, activity) = match entry {
+        Some((id, activity)) => (Some(id), Some(activity)),
+        None => (None, None),
+    };
+    let transfer = BypassTransfer::new(runtime.bypass_store().clone(), entry_id, activity);
     let downstream_upgrade = is_upgrade_request(&request).then(|| hyper::upgrade::on(&mut request));
     let upstream_request = match streaming_upstream_request(request, transfer.clone()) {
         Ok(request) => request,

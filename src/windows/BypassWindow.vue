@@ -8,13 +8,13 @@ import { bypassStore } from "../stores/bypass";
 import { confirmDialog } from "../stores/dialog";
 import { proxyStore } from "../stores/proxy";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
-import { isStaleInProgress } from "../utils/capture-outcome";
+import { isStaleByProxyRun } from "../utils/capture-outcome";
 import { formatDateTime } from "../utils/format";
 
 let timer: number | undefined;
 
 function isStale(entry: BypassEntry): boolean {
-  return isStaleInProgress(entry.outcome, entry.created_at, proxyStore.status);
+  return isStaleByProxyRun(entry.outcome, entry.created_at, proxyStore.status);
 }
 
 function isDeletable(entry: BypassEntry): boolean {
