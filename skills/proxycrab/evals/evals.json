@@ -46,7 +46,7 @@
     {
       "id": 8,
       "prompt": "Use ProxyCrab to inspect the most recent failed request while respecting the active workspace Agent instructions and without changing the user's current filter unless those instructions allow it.",
-      "expected_output": "The agent reads /api/agents.md before any other ProxyCrab API, follows the active policy unless the user's request overrides it, and uses persist_filter=false for a stateless filtered ID query.",
+      "expected_output": "The agent reads /api/agents.md before any other ProxyCrab API, follows the active policy unless the user's request overrides it, and uses the always-read-only POST /api/logs/ids without mutating the Session filter.",
       "files": []
     },
     {
@@ -122,7 +122,7 @@
     {
       "id": 20,
       "prompt": "Use ProxyCrab to find captures in Session 3 whose URI is exactly /api/orders/42 without changing the Session's saved filter, then report each returned row's capture outcome.",
-      "expected_output": "The agent queries IDs with persist_filter=false and a column filter using regex=true plus an escaped anchored Rust regex, batch-renders the matching logs, and reports each row's explicit outcome and created_at fields. It does not infer persisted outcome from status or stage; if asked whether an in_progress row is active, it reads ProxyStatus and requires the log ID to appear under Session 3 in running.active_netlog, treating absence from that exact set as inactive.",
+      "expected_output": "The agent uses the always-read-only ID query with a column filter using regex=true plus an escaped anchored Rust regex, consumes matched_ids, batch-renders the matching logs, and reports each row's explicit outcome and created_at fields. It does not infer persisted outcome from status or stage; if asked whether an in_progress row is active, it reads ProxyStatus and requires the log ID to appear under Session 3 in running.active_netlog, treating absence from that exact set as inactive.",
       "files": []
     },
     {
@@ -153,6 +153,42 @@
       "id": 25,
       "prompt": "Use the ProxyCrab management HTTP API to report the current workspace and switch the next-start workspace to /tmp/proxycrab-next.",
       "expected_output": "The agent explains that /api/workspace does not exist and makes no HTTP attempt. It directs desktop users to the trusted Tauri settings operation and CLI users to select the workspace explicitly with --workspace at process startup.",
+      "files": []
+    },
+    {
+      "id": 26,
+      "prompt": "Save a URI-contains-/checkout filter for ProxyCrab Session 3, then query its matching capture IDs without changing the configured columns.",
+      "expected_output": "The agent first calls PUT /api/sessions/3/filter with the SessionFilter body, then calls the read-only POST /api/logs/ids with the same explicit filter and consumes matched_ids. It does not add query-side persistence and does not replace the Session view columns.",
+      "files": []
+    },
+    {
+      "id": 27,
+      "prompt": "Re-evaluate ProxyCrab capture IDs 101 and 102 against a response-status filter while they may still be processing, and explain which information determines display membership versus current activity.",
+      "expected_output": "The agent calls POST /api/logs/ids with ids [101,102] and the explicit filter, treats matched_ids as display membership, retains in_progress_ids for later filter re-evaluation, allows the arrays to overlap, re-evaluates each ID once more when it leaves in_progress_ids, and uses that final matched_ids membership for display while ProxyStatus.running.active_netlog remains the only source of current activity.",
+      "files": []
+    },
+    {
+      "id": 28,
+      "prompt": "Using only a ProxyCrab browser share for Session 3, filter capture IDs by URI and explain whether this changes the Session's saved filter or can expose another Session.",
+      "expected_output": "The agent calls POST /share-api/logs/ids with the share token and an explicit filter, consumes matched_ids and in_progress_ids, explains that the request is read-only, that no share filter-save route exists, and that the server forcibly scopes the query to the token's Session regardless of any supplied session_id.",
+      "files": []
+    },
+    {
+      "id": 29,
+      "prompt": "Fetch every ProxyCrab capture ID in Session 3 matching a sparse URI filter when the result may exceed 10,000 rows.",
+      "expected_output": "The agent repeatedly calls the read-only POST /api/logs/ids with the explicit filter and limit 10000, uses the smallest returned matched ID as the next exclusive max_id, and stops only when matched_ids contains fewer than 10000 entries; it does not confuse sparse raw scans with a short match page because the endpoint fills filtered pages until the range is exhausted.",
+      "files": []
+    },
+    {
+      "id": 30,
+      "prompt": "Wait for a new capture selected by a ProxyCrab filter script, but do not report a request that matched only while it was still in progress and fails the filter after completion.",
+      "expected_output": "The agent uses log-wait.mjs, keeps in_progress_ids as candidates, re-evaluates candidate IDs through POST /api/logs/ids with explicit ids, and reports a completed capture only when its final evaluation remains in matched_ids; a completed non-match is discarded.",
+      "files": []
+    },
+    {
+      "id": 31,
+      "prompt": "ProxyCrab contains persisted in_progress captures left by an earlier proxy run. Query log IDs and explain whether those records are currently active or should keep being re-filtered.",
+      "expected_output": "The agent uses matched_ids for display membership but expects in_progress_ids to contain only records also present in the current run's ProxyStatus.running.active_netlog. Stale unfinished records from an earlier run may still match for display, but are excluded from in_progress_ids and are not described as currently active or repeatedly re-filtered.",
       "files": []
     }
   ]

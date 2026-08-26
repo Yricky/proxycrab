@@ -375,7 +375,6 @@ async fn log_ids(
     Json(mut request): Json<LogIdsRequest>,
 ) -> Result<Json<serde_json::Value>, ShareApiError> {
     request.session_id = Some(scope.session_id);
-    request.persist_filter = false;
     success(state.manager.log_ids(request).await?)
 }
 
@@ -755,7 +754,7 @@ mod tests {
                     .uri(format!("/share-api/logs/ids?token={token}"))
                     .header("content-type", "application/json")
                     .body(Body::from(format!(
-                        r#"{{"session_id":{},"filter":{{"option":{{"kind":"column","column":{{"kind":"uri"}},"regex":false}},"input":"needle"}},"persist_filter":true}}"#,
+                        r#"{{"session_id":{},"filter":{{"option":{{"kind":"column","column":{{"kind":"uri"}},"regex":false}},"input":"needle"}}}}"#,
                         other.id
                     )))
                     .unwrap(),
@@ -763,6 +762,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"]["matched_ids"], json!([]));
+        assert_eq!(body["data"]["in_progress_ids"], json!([]));
         assert_eq!(
             manager.session_view(Some(shared.id)).await.unwrap().filter,
             original_filter

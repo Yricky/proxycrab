@@ -215,10 +215,10 @@ export interface CreatedSessionShare {
 export interface LogIdsRequest {
   session_id?: number | null;
   filter?: SessionFilter | null;
+  ids?: number[] | null;
   min_id?: number | null;
   max_id?: number | null;
   limit?: number | null;
-  persist_filter?: boolean;
 }
 
 export interface CreateAgentsPresetRequest {
@@ -231,8 +231,8 @@ export interface UpdateAgentsPresetRequest {
 }
 
 export interface LogIdsPayload {
-  ids: number[];
-  filter: SessionFilter;
+  matched_ids: number[];
+  in_progress_ids: number[];
 }
 
 export interface LogViewItem {

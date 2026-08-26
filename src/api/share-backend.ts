@@ -166,7 +166,7 @@ export function createShareBackend(
     listSessions: async () => [bootstrap.session],
     listArchivedSessions: async () => [],
     getActiveSession: async () => ({ session_id: bootstrap.session.id }),
-    getLogIds: (value) => call("/share-api/logs/ids", json({ ...value, persist_filter: false })),
+    getLogIds: (value) => call("/share-api/logs/ids", json(value)),
     getLogViews: (value) => call("/share-api/logs/views", json(value)),
     validateFilterRegex: (pattern) =>
       call("/share-api/validate-filter-regex", json({ pattern })),

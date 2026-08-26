@@ -116,9 +116,9 @@ skill directory.
      --limit 50
    ```
 
-   The bundled query script applies supplied filters statelessly and does not change the Session's
-   persisted filter. A direct `POST /api/logs/ids` persists a supplied filter unless it explicitly
-   sets `persist_filter: false`. Column matching is case-sensitive; add `--regex` to
+   The bundled query script and direct `POST /api/logs/ids` calls are always read-only. Save a
+   Session filter only when the user explicitly requests it, through
+   `PUT /api/sessions/{id}/filter`. Column matching is case-sensitive; add `--regex` to
    `log-query.mjs` for Rust regex syntax such as anchored exact matches or inline `(?i)` flags.
 
 4. Fetch only the candidate captures needed for diagnosis:
@@ -156,7 +156,10 @@ node <skill-dir>/scripts/log-wait.mjs \
 ```
 
 The management API supports one filter option, so `--method` is applied locally when another remote
-filter such as `--uri` is present. See each script's `--help` output for supported options.
+filter such as `--uri` is present. The script re-evaluates explicit candidate IDs so a capture that
+was in progress but ultimately fails the remote filter is not reported. `in_progress_ids` contains
+only captures active in the current proxy run, not stale unfinished rows from an earlier run. See
+each script's `--help` output for supported options.
 
 ## HAR export
 

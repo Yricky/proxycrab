@@ -20,19 +20,19 @@ import { useBackend } from "./api";
 
 const backend = useBackend();
 
-// 日志与断点轮询仅在代理运行且存在活跃、正在查看的 Session 时才有意义：
-// 代理停止后不会有新抓包或断点进展；无活跃 Session 时流量被直接放行（no_active_session），
-// 无查看 Session 时轮询请求也只是空转。
+// 日志轮询由 store 根据当前 Session 的活跃/待复算状态动态降频或停止；
+// 断点轮询只对正在运行的活跃 Session 有意义。
 function syncCapturePolling(): void {
-  const canPoll =
-    proxyStore.running &&
-    sessionsStore.activeSessionId !== null &&
-    sessionsStore.viewingSessionId !== null;
-  if (canPoll) {
+  const canPollLogs = proxyStore.running && sessionsStore.viewingSessionId !== null;
+  if (canPollLogs) {
     logsStore.startPolling();
-    breakpointsStore.startPolling();
   } else {
     logsStore.stopPolling();
+  }
+  const canPollBreakpoints = canPollLogs && sessionsStore.activeSessionId !== null;
+  if (canPollBreakpoints) {
+    breakpointsStore.startPolling();
+  } else {
     breakpointsStore.stopPolling();
   }
 }

@@ -70,11 +70,11 @@ built-in conditions are checked locally against full capture details.
     body: {
       ...(sessionId === undefined ? {} : { session_id: sessionId }),
       filter: { option: null, input: "" },
-      persist_filter: false,
       limit: 10_000,
     },
   });
-  const baselineMax = baseline.ids.length === 0 ? 0 : Math.max(...baseline.ids);
+  const baselineMax =
+    baseline.matched_ids.length === 0 ? 0 : Math.max(...baseline.matched_ids);
   const candidates = new Set();
   const deadline = Date.now() + timeoutMs;
 
@@ -84,24 +84,63 @@ built-in conditions are checked locally against full capture details.
       body: {
         ...(sessionId === undefined ? {} : { session_id: sessionId }),
         filter: remoteFilter,
-        persist_filter: false,
         min_id: baselineMax,
         limit: 10_000,
       },
     });
-    for (const id of result.ids) {
+    for (const id of [...result.matched_ids, ...result.in_progress_ids]) {
       if (id > baselineMax) candidates.add(id);
     }
 
+    const matched = new Set();
+    const inProgress = new Set();
+    const candidateIds = [...candidates];
+    for (let index = 0; index < candidateIds.length; index += 10_000) {
+      const batch = candidateIds.slice(index, index + 10_000);
+      const membership = await apiRequest(args, "/api/logs/ids", {
+        method: "POST",
+        body: {
+          ...(sessionId === undefined ? {} : { session_id: sessionId }),
+          filter: remoteFilter,
+          ids: batch,
+        },
+      });
+      for (const id of membership.matched_ids) matched.add(id);
+      for (const id of membership.in_progress_ids) inProgress.add(id);
+    }
+
     for (const id of [...candidates].sort((left, right) => left - right)) {
+      if (!matched.has(id) && !inProgress.has(id)) {
+        candidates.delete(id);
+        continue;
+      }
       const detail = await apiRequest(args, `/api/logs/${id}${sessionQuery(sessionId)}`);
       const matches = matchesBuiltInCriteria(detail, args);
       const complete = detail.outcome !== "in_progress";
-      if (matches && (complete || args["include-in-progress"] === true)) {
+      let remoteMatch = matched.has(id);
+      let remotelyInProgress = inProgress.has(id);
+      if (complete && remotelyInProgress) {
+        const finalMembership = await apiRequest(args, "/api/logs/ids", {
+          method: "POST",
+          body: {
+            ...(sessionId === undefined ? {} : { session_id: sessionId }),
+            filter: remoteFilter,
+            ids: [id],
+          },
+        });
+        remoteMatch = finalMembership.matched_ids.includes(id);
+        remotelyInProgress = finalMembership.in_progress_ids.includes(id);
+      }
+      if (
+        remoteMatch &&
+        matches &&
+        ((complete && !remotelyInProgress) ||
+          (!complete && args["include-in-progress"] === true))
+      ) {
         printJson(detail);
         return;
       }
-      if (complete) candidates.delete(id);
+      if (complete && !remotelyInProgress) candidates.delete(id);
     }
     await sleep(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
   }

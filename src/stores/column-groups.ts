@@ -35,6 +35,7 @@ export interface ColumnGroupCache {
   rows: Map<number, CachedGroupRow>;
   knownIds: Set<number>;
   pendingIds: number[];
+  activeIds: Set<number>;
   groups: Map<string, number>;
   emptyCount: number;
   errorCount: number;
@@ -96,6 +97,7 @@ export function getColumnGroupCache(
     rows: new Map(),
     knownIds: new Set(),
     pendingIds: [],
+    activeIds: new Set(),
     groups: new Map(),
     emptyCount: 0,
     errorCount: 0,
@@ -243,13 +245,12 @@ async function discoverNew(
       filter: { option: null, input: "" },
       min_id: minId,
       limit: ID_PAGE_SIZE,
-      persist_filter: false,
     });
     if (!isActive(cache, runId)) return;
-    queueIds(cache, payload.ids);
+    queueIds(cache, payload.matched_ids);
     await hydratePending(backend, cache, runId);
-    if (payload.ids.length < ID_PAGE_SIZE) return;
-    minId = newestId(payload.ids)!;
+    if (payload.matched_ids.length < ID_PAGE_SIZE) return;
+    minId = newestId(payload.matched_ids)!;
   }
 }
 
@@ -264,16 +265,15 @@ async function discoverOlder(
       filter: { option: null, input: "" },
       max_id: cache.olderCursor,
       limit: ID_PAGE_SIZE,
-      persist_filter: false,
     });
     if (!isActive(cache, runId)) return;
-    queueIds(cache, payload.ids);
-    if (payload.ids.length === 0) {
+    queueIds(cache, payload.matched_ids);
+    if (payload.matched_ids.length === 0) {
       cache.olderExhausted = true;
       return;
     }
-    cache.olderCursor = oldestId(payload.ids)!;
-    cache.olderExhausted = payload.ids.length < ID_PAGE_SIZE;
+    cache.olderCursor = oldestId(payload.matched_ids)!;
+    cache.olderExhausted = payload.matched_ids.length < ID_PAGE_SIZE;
     await hydratePending(backend, cache, runId);
   }
 }
@@ -284,8 +284,11 @@ async function refreshInProgress(
   runId: number,
 ): Promise<void> {
   const active = new Set(proxyStore.activeNetlogIds(cache.sessionId));
-  const ids = [...cache.rows.keys()].filter((id) => active.has(id));
-  await hydrateIds(backend, cache, ids, true, runId);
+  const current = [...cache.rows.keys()].filter((id) => active.has(id));
+  const completed = [...cache.activeIds].filter((id) => !active.has(id));
+  await hydrateIds(backend, cache, current, true, runId);
+  await hydrateIds(backend, cache, completed, false, runId);
+  if (isActive(cache, runId)) cache.activeIds = active;
 }
 
 function schedulePoll(backend: Backend, cache: ColumnGroupCache, runId: number): void {

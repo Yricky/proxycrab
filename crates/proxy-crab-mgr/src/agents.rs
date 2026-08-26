@@ -43,7 +43,7 @@ pub const QUIET_INVESTIGATION_CONTENT: &str = r#"# ProxyCrab Agent 行为：静�
 ## 排查方式
 
 - 默认只读取现有 Session、捕获记录、脚本和配置，避免改变用户当前看到的界面或任何持久状态。
-- 使用过滤条件查询捕获 ID 时必须设置 `persist_filter: false`，不得改写 Session 当前过滤条件。
+- `POST /api/logs/ids` 始终只读；只有用户明确要求保存时才调用独立的 Session filter 写接口。
 - 不得自行创建、编辑、删除或切换 Session，不得修改 Session 视图、自定义列、脚本、分流选择、拦截器链、应用配置或其他会同步到桌面界面的状态。
 - 如果继续排查确实需要产生界面或持久状态变化，先说明原因并请求用户授权。
 - 不要覆盖用户尚未保存的编辑内容。

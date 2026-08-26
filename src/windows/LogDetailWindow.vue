@@ -54,6 +54,11 @@ const stale = computed(
       proxyStore.isNetlogActive(detail.value.session_id, detail.value.id),
     ),
 );
+const active = computed(
+  () =>
+    detail.value !== null &&
+    proxyStore.isNetlogActive(detail.value.session_id, detail.value.id),
+);
 
 async function load(silent = false): Promise<void> {
   if (loadInFlight) return;
@@ -200,6 +205,12 @@ watch(
   [() => detail.value?.outcome, stale],
   () => scheduleAutoRefresh(),
 );
+
+watch(active, (current, previous) => {
+  if (previous && !current && detail.value?.outcome === "in_progress") {
+    void load(true);
+  }
+});
 
 onMounted(() => {
   window.addEventListener("focus", handleWindowFocus);

@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 62);
+    assert_eq!(actions.len(), 63);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -91,6 +91,7 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "PUT /api/session-interceptors",
         "PUT /api/session-view",
         "PUT /api/sessions/{id}",
+        "PUT /api/sessions/{id}/filter",
     ]);
     let deny = BTreeSet::from([
         "DELETE /api/archived-sessions/{id}",

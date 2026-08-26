@@ -12,13 +12,10 @@ import { proxyStore } from "./stores/proxy";
 import { logsStore } from "./stores/logs";
 import { startHttpApiSync, stopHttpApiSync } from "./stores/http-api-sync";
 
-// 只读分享页只展示单个 Session 的历史日志，无断点/审批能力；
-// 日志轮询仅在代理运行且存在活跃、正在查看的 Session 时才有意义。
+// 只读分享页只展示单个 Session 的日志，无断点/审批能力；日志 store 会根据
+// 活跃/待复算状态动态降频或停止轮询。
 function syncCapturePolling(): void {
-  const canPoll =
-    proxyStore.running &&
-    sessionsStore.activeSessionId !== null &&
-    sessionsStore.viewingSessionId !== null;
+  const canPoll = proxyStore.running && sessionsStore.viewingSessionId !== null;
   if (canPoll) {
     logsStore.startPolling();
   } else {

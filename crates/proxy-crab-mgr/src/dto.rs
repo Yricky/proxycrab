@@ -137,21 +137,16 @@ pub const fn default_body_max_size() -> u64 {
 pub struct LogIdsRequest {
     pub session_id: Option<u64>,
     pub filter: Option<SessionFilter>,
+    pub ids: Option<Vec<u64>>,
     pub min_id: Option<u64>,
     pub max_id: Option<u64>,
     pub limit: Option<usize>,
-    #[serde(default = "default_true")]
-    pub persist_filter: bool,
-}
-
-const fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogIdsPayload {
-    pub ids: Vec<u64>,
-    pub filter: SessionFilter,
+    pub matched_ids: Vec<u64>,
+    pub in_progress_ids: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

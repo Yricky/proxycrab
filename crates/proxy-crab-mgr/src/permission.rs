@@ -111,6 +111,7 @@ pub static API_ACTIONS: &[ApiAction] = &[
     action!("GET", "/api/active-session", Allow),
     action!("PUT", "/api/active-session", Approval),
     action!("PUT", "/api/sessions/{id}", Approval),
+    action!("PUT", "/api/sessions/{id}/filter", Approval),
     action!("POST", "/api/session-shares", Approval),
     action!("POST", "/api/logs/export", Allow),
     action!("POST", "/api/logs/ids", Allow),

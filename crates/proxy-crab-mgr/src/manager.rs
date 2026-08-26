@@ -12,7 +12,7 @@ use proxy_crab_mitm::{
         AppConfig, BreakpointListFilter, BreakpointSummary, CaptureDetail, CaptureOutcome,
         CaptureSummary, Column, FilterColumn, FilterOption, HeaderValues, InterceptorKind,
         ProxyStatus, Script, ScriptKind, SessionFilter, SessionInterceptor, SessionInterceptors,
-        SessionMetadata, SessionView, SystemLogEntry, TemporaryExecutionResult,
+        SessionMetadata, SystemLogEntry, TemporaryExecutionResult,
     },
     storage::{BodySide, BodySource},
 };
@@ -105,6 +105,11 @@ pub trait ProxyCrabManager: Send + Sync {
         request: ExecuteTemporaryScriptRequest,
     ) -> ManagerResult<TemporaryExecutionResult>;
     async fn session_view(&self, session_id: Option<u64>) -> ManagerResult<SessionViewPayload>;
+    async fn replace_session_filter(
+        &self,
+        session_id: u64,
+        filter: SessionFilter,
+    ) -> ManagerResult<SessionViewPayload>;
     async fn replace_session_view(
         &self,
         session_id: Option<u64>,
@@ -356,6 +361,21 @@ impl MitmManager {
             }
         }
     }
+
+    fn classify_log_id(
+        filter: &PreparedFilter,
+        item: &CaptureSummary,
+        active_ids: &BTreeSet<u64>,
+        matched_ids: &mut Vec<u64>,
+        in_progress_ids: &mut Vec<u64>,
+    ) {
+        if Self::matches_filter(filter, item) {
+            matched_ids.push(item.id);
+        }
+        if item.outcome == CaptureOutcome::InProgress && active_ids.contains(&item.id) {
+            in_progress_ids.push(item.id);
+        }
+    }
 }
 
 #[async_trait]
@@ -528,52 +548,105 @@ impl ProxyCrabManager for MitmManager {
 
     async fn log_ids(&self, request: LogIdsRequest) -> ManagerResult<LogIdsPayload> {
         const DEFAULT_LIMIT: usize = 10_000;
+        const MAX_IDS: usize = 10_000;
         const SCAN_PAGE_SIZE: usize = 512;
 
         let session_id = self.session_id(request.session_id)?;
         let limit = request.limit.unwrap_or(DEFAULT_LIMIT).min(DEFAULT_LIMIT);
+        if request.ids.is_some() && (request.min_id.is_some() || request.max_id.is_some()) {
+            return Err(ManagerError::bad_request(
+                "ids cannot be combined with min_id or max_id",
+            ));
+        }
+        if request.ids.as_ref().is_some_and(|ids| ids.len() > MAX_IDS) {
+            return Err(ManagerError::bad_request(format!(
+                "at most {MAX_IDS} log IDs may be requested"
+            )));
+        }
         let ascending = request.min_id.is_some() && request.max_id.is_none();
-        let requested_filter = request.filter;
-        let persist_filter = request.persist_filter;
+        let filter = request.filter.unwrap_or_default();
+        let active_ids = match self.runtime.proxy_status() {
+            ProxyStatus::Running { active_netlog, .. } => active_netlog
+                .get(&session_id)
+                .into_iter()
+                .flatten()
+                .copied()
+                .collect(),
+            _ => BTreeSet::new(),
+        };
         let runtime = self.runtime.clone();
+        let requested_ids = request.ids;
         let min_id = request.min_id;
         let max_id = request.max_id;
         self.run_blocking("log ID", move || {
-            let filter = match &requested_filter {
-                Some(filter) => filter.clone(),
-                None => runtime.session_view(session_id).map_err(map_error)?.filter,
-            };
             let prepared = Self::prepare_filter(&runtime, &filter)?;
-            let ids = if limit == 0 {
-                Vec::new()
+            let mut matched_ids = Vec::with_capacity(limit);
+            let mut in_progress_ids = Vec::new();
+            if let Some(ids) = requested_ids {
+                let unique_ids = ids.into_iter().collect::<BTreeSet<_>>();
+                let mut summaries = HashMap::new();
+                for ids in unique_ids
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .chunks(SCAN_PAGE_SIZE)
+                {
+                    for item in runtime.captures(session_id, ids).map_err(map_error)? {
+                        summaries.insert(item.id, item);
+                    }
+                }
+                for id in unique_ids.into_iter().rev() {
+                    if let Some(item) = summaries.get(&id) {
+                        Self::classify_log_id(
+                            &prepared,
+                            item,
+                            &active_ids,
+                            &mut matched_ids,
+                            &mut in_progress_ids,
+                        );
+                    }
+                }
+            } else if limit == 0 {
+                // A zero limit is useful for validating a filter without scanning logs.
             } else if matches!(prepared, PreparedFilter::All) {
-                runtime
+                for item in runtime
                     .list_captures_range(session_id, limit, min_id, max_id, ascending)
-                    .map(|items| items.into_iter().map(|item| item.id).collect())
                     .map_err(map_error)?
+                {
+                    Self::classify_log_id(
+                        &prepared,
+                        &item,
+                        &active_ids,
+                        &mut matched_ids,
+                        &mut in_progress_ids,
+                    );
+                }
             } else {
-                let mut ids = Vec::with_capacity(limit);
                 let mut min_id = min_id;
                 let mut max_id = max_id;
-                'scan: loop {
+                'scan: while matched_ids.len() < limit {
                     let page = runtime
                         .list_captures_range(session_id, SCAN_PAGE_SIZE, min_id, max_id, ascending)
                         .map_err(map_error)?;
                     if page.is_empty() {
-                        break 'scan ids;
+                        break;
                     }
                     let page_len = page.len();
                     let cursor = page.last().map(|item| item.id);
                     for item in page {
-                        if Self::matches_filter(&prepared, &item) {
-                            ids.push(item.id);
-                            if ids.len() == limit {
-                                break 'scan ids;
-                            }
+                        Self::classify_log_id(
+                            &prepared,
+                            &item,
+                            &active_ids,
+                            &mut matched_ids,
+                            &mut in_progress_ids,
+                        );
+                        if matched_ids.len() == limit {
+                            break 'scan;
                         }
                     }
                     if page_len < SCAN_PAGE_SIZE {
-                        break 'scan ids;
+                        break;
                     }
                     if ascending {
                         min_id = cursor;
@@ -581,22 +654,10 @@ impl ProxyCrabManager for MitmManager {
                         max_id = cursor;
                     }
                 }
-            };
-            let effective_filter = match requested_filter {
-                Some(requested) if persist_filter => {
-                    let mut view = runtime.session_view(session_id).map_err(map_error)?;
-                    view.filter = requested;
-                    runtime
-                        .replace_session_view(session_id, view)
-                        .map_err(map_error)?
-                        .filter
-                }
-                Some(requested) => requested,
-                None => filter,
-            };
+            }
             Ok(LogIdsPayload {
-                ids,
-                filter: effective_filter,
+                matched_ids,
+                in_progress_ids,
             })
         })
         .await
@@ -945,22 +1006,31 @@ impl ProxyCrabManager for MitmManager {
         })
     }
 
+    async fn replace_session_filter(
+        &self,
+        session_id: u64,
+        filter: SessionFilter,
+    ) -> ManagerResult<SessionViewPayload> {
+        let view = self
+            .runtime
+            .replace_session_filter(session_id, filter)
+            .map_err(map_error)?;
+        Ok(SessionViewPayload {
+            session_id,
+            columns: view.columns,
+            filter: view.filter,
+        })
+    }
+
     async fn replace_session_view(
         &self,
         session_id: Option<u64>,
         request: ReplaceSessionViewRequest,
     ) -> ManagerResult<SessionViewPayload> {
         let session_id = self.session_id(session_id)?;
-        let current = self.runtime.session_view(session_id).map_err(map_error)?;
         let view = self
             .runtime
-            .replace_session_view(
-                session_id,
-                SessionView {
-                    columns: request.columns,
-                    filter: current.filter,
-                },
-            )
+            .replace_session_columns(session_id, request.columns)
             .map_err(map_error)?;
         Ok(SessionViewPayload {
             session_id,
@@ -1445,14 +1515,14 @@ fn map_session_archive_error(error: anyhow::Error) -> ManagerError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::BTreeSet, sync::Arc};
 
     use proxy_crab_mitm::{
         ProxyCrab,
         log_buffer::LogBuffer,
         model::{
-            Column, FilterColumn, FilterOption, HeaderValues, InterceptorKind, RequestData,
-            ResponseData, SessionFilter,
+            CaptureOutcome, CaptureSummary, Column, FilterColumn, FilterOption, HeaderValues,
+            InterceptorKind, RequestData, ResponseData, SessionFilter,
         },
         storage::{BodySide, CaptureStore},
     };
@@ -1465,13 +1535,51 @@ mod tests {
         SessionInterceptorInput, UpdateAgentsPresetRequest, UpdateScriptRequest,
     };
 
-    use super::{MAX_BLOCKING_MANAGEMENT_TASKS, MitmManager, ProxyCrabManager, status_text};
+    use super::{
+        MAX_BLOCKING_MANAGEMENT_TASKS, MitmManager, PreparedFilter, ProxyCrabManager, status_text,
+    };
 
     #[test]
     fn response_status_text_uses_the_canonical_reason() {
         assert_eq!(status_text(200), "OK");
         assert_eq!(status_text(404), "Not Found");
         assert_eq!(status_text(999), "");
+    }
+
+    #[test]
+    fn log_id_in_progress_requires_current_activity_membership() {
+        let item = CaptureSummary {
+            id: 7,
+            session_id: 3,
+            source: "127.0.0.1".into(),
+            request: request("active"),
+            response: None,
+            outcome: CaptureOutcome::InProgress,
+            stage: "request".into(),
+            error: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        let mut matched = Vec::new();
+        let mut in_progress = Vec::new();
+        MitmManager::classify_log_id(
+            &PreparedFilter::All,
+            &item,
+            &BTreeSet::new(),
+            &mut matched,
+            &mut in_progress,
+        );
+        assert_eq!(matched, vec![7]);
+        assert!(in_progress.is_empty());
+
+        MitmManager::classify_log_id(
+            &PreparedFilter::All,
+            &item,
+            &BTreeSet::from([7]),
+            &mut Vec::new(),
+            &mut in_progress,
+        );
+        assert_eq!(in_progress, vec![7]);
     }
 
     #[test]
@@ -1549,19 +1657,100 @@ mod tests {
                     }),
                     input: "/first".into(),
                 }),
+                ids: None,
                 min_id: None,
                 max_id: None,
                 limit: None,
-                persist_filter: false,
             })
             .await
             .unwrap();
 
-        assert_eq!(result.ids, vec![first]);
+        assert_eq!(result.matched_ids, vec![first]);
+        assert!(result.in_progress_ids.is_empty());
         assert_eq!(
             manager.session_view(Some(session.id)).await.unwrap().filter,
             original
         );
+
+        let explicit = manager
+            .log_ids(LogIdsRequest {
+                session_id: Some(session.id),
+                filter: Some(SessionFilter {
+                    option: Some(FilterOption::Column {
+                        column: FilterColumn::Uri,
+                        regex: false,
+                    }),
+                    input: "/first".into(),
+                }),
+                ids: Some(vec![first]),
+                min_id: None,
+                max_id: None,
+                limit: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(explicit.matched_ids, vec![first]);
+        assert!(explicit.in_progress_ids.is_empty());
+
+        store
+            .mark_in_progress_range_as_shutdown(first, first)
+            .unwrap();
+        let completed = manager
+            .log_ids(LogIdsRequest {
+                session_id: Some(session.id),
+                filter: Some(SessionFilter {
+                    option: Some(FilterOption::Column {
+                        column: FilterColumn::Uri,
+                        regex: false,
+                    }),
+                    input: "/first".into(),
+                }),
+                ids: Some(vec![first]),
+                min_id: None,
+                max_id: None,
+                limit: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(completed.matched_ids, vec![first]);
+        assert!(completed.in_progress_ids.is_empty());
+
+        let invalid = manager
+            .log_ids(LogIdsRequest {
+                session_id: Some(session.id),
+                filter: None,
+                ids: Some(vec![first]),
+                min_id: Some(0),
+                max_id: None,
+                limit: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(invalid.code, "bad_request");
+    }
+
+    #[tokio::test]
+    async fn replacing_session_filter_preserves_columns() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
+        let manager = MitmManager::new(runtime);
+        let before = manager.session_view(Some(session.id)).await.unwrap();
+        let filter = SessionFilter {
+            option: Some(FilterOption::Column {
+                column: FilterColumn::Uri,
+                regex: false,
+            }),
+            input: "needle".into(),
+        };
+
+        let after = manager
+            .replace_session_filter(session.id, filter.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(after.columns, before.columns);
+        assert_eq!(after.filter, filter);
     }
 
     fn request(path: &str) -> RequestData {
@@ -1596,14 +1785,15 @@ mod tests {
             .log_ids(LogIdsRequest {
                 session_id: Some(session.id),
                 filter: None,
+                ids: None,
                 min_id: Some(first),
                 max_id: Some(third),
                 limit: None,
-                persist_filter: true,
             })
             .await
             .unwrap();
-        assert_eq!(ids.ids, vec![second]);
+        assert_eq!(ids.matched_ids, vec![second]);
+        assert!(ids.in_progress_ids.is_empty());
 
         manager
             .create_column_script(ScriptRequest {
@@ -1679,7 +1869,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn structured_filters_persist_and_script_errors_are_non_matches() {
+    async fn structured_filters_are_read_only_and_script_errors_are_non_matches() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
@@ -1692,6 +1882,7 @@ mod tests {
             .begin("127.0.0.1", &request("second"), "request")
             .unwrap();
         let manager = MitmManager::new(runtime);
+        let original = manager.session_view(Some(session.id)).await.unwrap().filter;
 
         let regex_filter = SessionFilter {
             option: Some(FilterOption::Column {
@@ -1704,32 +1895,32 @@ mod tests {
             .log_ids(LogIdsRequest {
                 session_id: Some(session.id),
                 filter: Some(regex_filter.clone()),
+                ids: None,
                 min_id: None,
                 max_id: None,
                 limit: None,
-                persist_filter: true,
             })
             .await
             .unwrap();
-        assert_eq!(ids.ids, vec![first]);
+        assert_eq!(ids.matched_ids, vec![first]);
         assert_eq!(
             manager.session_view(Some(session.id)).await.unwrap().filter,
-            regex_filter
+            original
         );
         assert_eq!(
             manager
                 .log_ids(LogIdsRequest {
                     session_id: Some(session.id),
                     filter: None,
+                    ids: None,
                     min_id: None,
                     max_id: None,
                     limit: None,
-                    persist_filter: true,
                 })
                 .await
                 .unwrap()
-                .ids,
-            vec![first]
+                .matched_ids,
+            vec![second, first]
         );
 
         let exact = SessionFilter {
@@ -1744,14 +1935,14 @@ mod tests {
                 .log_ids(LogIdsRequest {
                     session_id: Some(session.id),
                     filter: Some(exact),
+                    ids: None,
                     min_id: None,
                     max_id: None,
                     limit: None,
-                    persist_filter: true,
                 })
                 .await
                 .unwrap()
-                .ids
+                .matched_ids
                 .is_empty()
         );
 
@@ -1765,10 +1956,10 @@ mod tests {
                     }),
                     input: "(".into(),
                 }),
+                ids: None,
                 min_id: None,
                 max_id: None,
                 limit: None,
-                persist_filter: true,
             })
             .await
             .unwrap_err();
@@ -1795,14 +1986,14 @@ mod tests {
                 .log_ids(LogIdsRequest {
                     session_id: Some(session.id),
                     filter: Some(custom),
+                    ids: None,
                     min_id: None,
                     max_id: None,
                     limit: None,
-                    persist_filter: true,
                 })
                 .await
                 .unwrap()
-                .ids,
+                .matched_ids,
             vec![first]
         );
 
@@ -1826,14 +2017,14 @@ mod tests {
                         }),
                         input: "anything".into(),
                     }),
+                    ids: None,
                     min_id: None,
                     max_id: None,
                     limit: None,
-                    persist_filter: true,
                 })
                 .await
                 .unwrap()
-                .ids
+                .matched_ids
                 .is_empty()
         );
 
@@ -1855,14 +2046,14 @@ mod tests {
                 .log_ids(LogIdsRequest {
                     session_id: Some(session.id),
                     filter: Some(scripted),
+                    ids: None,
                     min_id: None,
                     max_id: None,
                     limit: None,
-                    persist_filter: true,
                 })
                 .await
                 .unwrap()
-                .ids,
+                .matched_ids,
             vec![second]
         );
         assert!(
@@ -1896,14 +2087,14 @@ mod tests {
                         }),
                         input: "anything".into(),
                     }),
+                    ids: None,
                     min_id: None,
                     max_id: None,
                     limit: None,
-                    persist_filter: true,
                 })
                 .await
                 .unwrap()
-                .ids
+                .matched_ids
                 .is_empty()
         );
         assert!(
@@ -1930,17 +2121,17 @@ mod tests {
             .log_ids(LogIdsRequest {
                 session_id: Some(session.id),
                 filter: Some(empty.clone()),
+                ids: None,
                 min_id: None,
                 max_id: None,
                 limit: None,
-                persist_filter: true,
             })
             .await
             .unwrap();
-        assert_eq!(all.ids, vec![second, first]);
+        assert_eq!(all.matched_ids, vec![second, first]);
         assert_eq!(
             manager.session_view(Some(session.id)).await.unwrap().filter,
-            empty
+            original
         );
 
         let spaced = SessionFilter {
@@ -1955,14 +2146,14 @@ mod tests {
                 .log_ids(LogIdsRequest {
                     session_id: Some(session.id),
                     filter: Some(spaced),
+                    ids: None,
                     min_id: None,
                     max_id: None,
                     limit: None,
-                    persist_filter: true,
                 })
                 .await
                 .unwrap()
-                .ids
+                .matched_ids
                 .is_empty()
         );
     }

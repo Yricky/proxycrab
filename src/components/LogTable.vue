@@ -24,7 +24,7 @@ const backend = useBackend();
 const readonly = backend.capabilities.readonly;
 
 const ROW_HEIGHT = 26;
-const BUFFER = 8;
+const BUFFER = 500;
 const ID_COLUMN_WIDTH = 64;
 const ADD_COLUMN_WIDTH = 84;
 const MIN_COLUMN_WIDTH = 48;
@@ -71,22 +71,28 @@ const totalWidth = computed(() =>
   ),
 );
 
-const rows = computed(() => logsStore.displayRows);
+const rowIds = computed(() => logsStore.sortedIds);
 
 const startIndex = computed(() =>
   Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - BUFFER),
 );
 const endIndex = computed(() =>
   Math.min(
-    rows.value.length,
+    rowIds.value.length,
     Math.ceil((scrollTop.value + viewportHeight.value) / ROW_HEIGHT) + BUFFER,
   ),
 );
 const visibleRows = computed(() =>
-  rows.value.slice(startIndex.value, endIndex.value).map((row, i) => ({
-    row,
+  rowIds.value.slice(startIndex.value, endIndex.value).map((id, i) => ({
+    row: logsStore.row(id),
     index: startIndex.value + i,
   })),
+);
+
+watch(
+  () => visibleRows.value.map((entry) => entry.row.id),
+  (ids) => logsStore.setViewportIds(ids),
+  { immediate: true },
 );
 
 function onScroll(): void {
@@ -94,11 +100,6 @@ function onScroll(): void {
   if (!el) return;
   scrollTop.value = el.scrollTop;
   viewportHeight.value = el.clientHeight;
-  const threshold = el.clientHeight * 2;
-  const atOldRecordEdge = logsStore.sortDesc
-    ? el.scrollHeight - el.scrollTop - el.clientHeight < threshold
-    : el.scrollTop < threshold;
-  if (atOldRecordEdge) void logsStore.loadOlder();
 }
 
 let resizeObserver: ResizeObserver | null = null;
@@ -340,92 +341,104 @@ function outcomeDotClass(row: LogViewRow): string {
 </script>
 
 <template>
-  <div ref="scroller" class="lt-scroll" @scroll.passive="onScroll">
-    <div class="lt-content" :style="{ width: totalWidth + 'px' }">
-      <div class="lt-header" :style="{ gridTemplateColumns: gridTemplate }">
-        <div class="lt-cell lt-header-cell sortable" @click="toggleSort()">
-          <span class="lt-header-name">
-            id
-            <Io5ArrowDown v-if="logsStore.sortDesc" :size="11" />
-            <Io5ArrowUp v-else :size="11" />
-          </span>
-        </div>
-        <div
-          v-for="(column, i) in columns"
-          :key="column.key + i"
-          class="lt-cell lt-header-cell"
-        >
-          <button v-if="!readonly" class="lt-header-menu" @click="showColumnMenu(i, $event)">
-            <span class="lt-header-name">{{ column.name }}</span>
-            <Io5ChevronDown :size="11" class="lt-header-chevron" />
-          </button>
-          <span v-else class="lt-header-name">{{ column.name }}</span>
-          <span v-if="!readonly" class="lt-resize" @pointerdown="startResize(i, $event)" @click.stop />
-        </div>
-        <div v-if="!readonly" class="lt-cell lt-header-cell lt-add-cell">
-          <button
-            class="lt-header-menu"
-            :disabled="sessionsStore.viewingSessionId === null"
-            @click="showAddColumnMenu($event)"
-          >
-            <Io5Add :size="13" />
-            <span class="lt-header-name">添加列</span>
-          </button>
-        </div>
-      </div>
-      <div class="lt-body" :style="{ height: rows.length * ROW_HEIGHT + 'px' }">
-        <div
-          class="lt-window"
-          :style="{ transform: `translateY(${startIndex * ROW_HEIGHT}px)` }"
-        >
+  <div class="lt-wrap">
+    <div ref="scroller" class="lt-scroll" @scroll.passive="onScroll">
+      <div class="lt-content" :style="{ width: totalWidth + 'px' }">
+        <div class="lt-header" :style="{ gridTemplateColumns: gridTemplate }">
+          <div class="lt-cell lt-header-cell sortable" @click="toggleSort()">
+            <span class="lt-header-name">
+              id
+              <Io5ArrowDown v-if="logsStore.sortDesc" :size="11" />
+              <Io5ArrowUp v-else :size="11" />
+            </span>
+          </div>
           <div
-            v-for="entry in visibleRows"
-            :key="entry.row.id"
-            class="lt-row"
-            :class="{ stripe: entry.index % 2 === 1 }"
-            :style="{ gridTemplateColumns: gridTemplate, height: ROW_HEIGHT + 'px' }"
-            @click="openRow(entry.row.id)"
+            v-for="(column, i) in columns"
+            :key="column.key + i"
+            class="lt-cell lt-header-cell"
           >
-            <div
-              class="lt-cell mono"
-              :title="String(entry.row.id)"
-              @contextmenu="showCellMenu($event, String(entry.row.id))"
+            <button v-if="!readonly" class="lt-header-menu" @click="showColumnMenu(i, $event)">
+              <span class="lt-header-name">{{ column.name }}</span>
+              <Io5ChevronDown :size="11" class="lt-header-chevron" />
+            </button>
+            <span v-else class="lt-header-name">{{ column.name }}</span>
+            <span v-if="!readonly" class="lt-resize" @pointerdown="startResize(i, $event)" @click.stop />
+          </div>
+          <div v-if="!readonly" class="lt-cell lt-header-cell lt-add-cell">
+            <button
+              class="lt-header-menu"
+              :disabled="sessionsStore.viewingSessionId === null"
+              @click="showAddColumnMenu($event)"
             >
-              <span
-                v-if="outcomeDotClass(entry.row)"
-                class="lt-outcome-dot"
-                :class="outcomeDotClass(entry.row)"
-                aria-hidden="true"
-              />
-              {{ entry.row.id }}
-            </div>
-            <div
-              v-for="(cell, i) in entry.row.cells"
-              :key="i"
-              class="lt-cell mono"
-              :class="[
-                cellClass(i, cell),
-                { 'cell-error': logsStore.cellError(entry.row.id, i) },
-              ]"
-              :title="logsStore.cellError(entry.row.id, i) ?? cell"
-              @contextmenu="showCellMenu($event, cell)"
-            >
-              {{ cell }}
-            </div>
-            <div v-if="!readonly" class="lt-cell lt-spacer-cell" aria-hidden="true" />
+              <Io5Add :size="13" />
+              <span class="lt-header-name">添加列</span>
+            </button>
           </div>
         </div>
+        <div class="lt-body" :style="{ height: rowIds.length * ROW_HEIGHT + 'px' }">
+          <div
+            class="lt-window"
+            :style="{ transform: `translateY(${startIndex * ROW_HEIGHT}px)` }"
+          >
+            <div
+              v-for="entry in visibleRows"
+              :key="entry.row.id"
+              class="lt-row"
+              :class="{ stripe: entry.index % 2 === 1 }"
+              :style="{ gridTemplateColumns: gridTemplate, height: ROW_HEIGHT + 'px' }"
+              @click="openRow(entry.row.id)"
+            >
+              <div
+                class="lt-cell mono"
+                :title="String(entry.row.id)"
+                @contextmenu="showCellMenu($event, String(entry.row.id))"
+              >
+                <span
+                  v-if="outcomeDotClass(entry.row)"
+                  class="lt-outcome-dot"
+                  :class="outcomeDotClass(entry.row)"
+                  aria-hidden="true"
+                />
+                {{ entry.row.id }}
+              </div>
+              <div
+                v-for="(cell, i) in entry.row.cells"
+                :key="i"
+                class="lt-cell mono"
+                :class="[
+                  cellClass(i, cell),
+                  { 'cell-error': logsStore.cellError(entry.row.id, i) },
+                ]"
+                :title="logsStore.cellError(entry.row.id, i) ?? cell"
+                @contextmenu="showCellMenu($event, cell)"
+              >
+                {{ cell }}
+              </div>
+              <div v-if="!readonly" class="lt-cell lt-spacer-cell" aria-hidden="true" />
+            </div>
+          </div>
+        </div>
+        <div v-if="!logsStore.loading && rowIds.length === 0" class="lt-empty">
+          <template v-if="sessionsStore.viewingSessionId === null">请选择或创建一个会话</template>
+          <template v-else-if="logsStore.filterActive">没有匹配过滤条件的记录</template>
+          <template v-else>暂无抓包记录</template>
+        </div>
       </div>
-      <div v-if="rows.length === 0 && !logsStore.loading" class="lt-empty">
-        <template v-if="sessionsStore.viewingSessionId === null">请选择或创建一个会话</template>
-        <template v-else-if="logsStore.filterActive">没有匹配过滤条件的记录</template>
-        <template v-else>暂无抓包记录</template>
-      </div>
+    </div>
+    <div v-if="logsStore.loading" class="lt-loading" role="status" aria-label="正在加载日志">
+      <span class="lt-spinner" aria-hidden="true" />
     </div>
   </div>
 </template>
 
 <style scoped>
+.lt-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
 .lt-scroll {
   flex: 1;
   min-height: 0;
@@ -578,6 +591,34 @@ function outcomeDotClass(row: LogViewRow): string {
   text-align: center;
   color: var(--text-faint);
   padding: 40px 0;
+}
+.lt-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg-app) 55%, transparent);
+  z-index: 6;
+}
+.lt-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: lt-spin 0.8s linear infinite;
+}
+@keyframes lt-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lt-spinner {
+    animation: none;
+  }
 }
 .code-2xx {
   color: var(--success);
