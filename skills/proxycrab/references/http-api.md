@@ -348,7 +348,10 @@ permission is changed.
 `pcrab_share_…` token, Session ID, and expiry. Never use the token as a Bearer credential: the share
 browser sends it only as exactly one `token` query parameter to the read-only `/share-api/*` surface.
 The share bootstrap and proxy-status route are projected through that token's Session scope, so
-other Session activity and the global bypass activity count are never returned.
+other Session activity and the global bypass activity count are never returned. Its
+`POST /share-api/logs/ids` route uses the same read-only request and
+`matched_ids`/`in_progress_ids` response as the management route, while forcibly scoping the
+Session and exposing no filter-persistence route.
 
 ### `PUT /api/sessions/{id}`
 
@@ -414,19 +417,17 @@ Request:
     },
     "input": "/api/orders"
   },
+  "ids": null,
   "min_id": 100,
   "max_id": 10000,
-  "limit": 100,
-  "persist_filter": false
+  "limit": 100
 }
 ```
 
 Every field is optional.
 
-- Omitting `filter` reuses the Session's persisted filter.
-- Supplying `filter` applies it and persists it only after the scan succeeds. Set
-  `persist_filter: false` to use it for this query without changing the Session view or notifying
-  the desktop UI. Omitting `persist_filter` preserves the compatible default of `true`.
+- The endpoint is always read-only. Omitting `filter` matches all captures and never reads or
+  changes the Session's saved filter.
 - `option: null` or an empty `input` matches all captures; an empty input still preserves the
   selected option.
 - With `regex: false`, built-in and custom-column filters use case-sensitive contains matching.
@@ -435,28 +436,28 @@ Every field is optional.
 - Lua filter input is passed exactly, including whitespace.
 - Filter/custom-column errors count as non-matches in this endpoint.
 - `min_id` and `max_id` are exclusive.
+- `ids` re-evaluates an explicit candidate set and cannot be combined with range bounds.
 - Default and maximum `limit` are 10,000. `0` returns no IDs.
 - Only `min_id` scans newer IDs. `max_id` or no bounds scans older IDs.
+- For filtered range queries, the server scans until it has collected `limit` matches or exhausted
+  the bounded range. Therefore a page shorter than `limit` means that range is exhausted; paginate
+  a full result by passing the smallest returned match as the next exclusive `max_id`.
 - Response ID order is intentionally unspecified.
 
 Response:
 
 ```json
 {
-  "ids": [1042, 1041],
-  "filter": {
-    "option": {
-      "kind": "column",
-      "column": { "kind": "uri" },
-      "regex": false
-    },
-    "input": "/api/orders"
-  }
+  "matched_ids": [1042, 1041],
+  "in_progress_ids": [1042]
 }
 ```
 
-If a referenced filter script was removed outside the app, the Session filter is repaired to the
-empty filter and returned that way.
+The arrays may overlap. Use `matched_ids` for result membership. `in_progress_ids` contains only
+persisted in-progress records that are also active in the current run's authoritative status; stale
+unfinished records from earlier runs are excluded. Keep re-evaluating those IDs until they complete.
+When an ID leaves `in_progress_ids`, re-evaluate it once more and use that final `matched_ids`
+membership; current UI activity still comes only from `ProxyStatus.running.active_netlog`.
 
 ### `POST /api/logs/views`
 
@@ -694,6 +695,14 @@ Atomically replaces all columns and preserves the current filter:
 
 A new view cannot reference a missing custom-column script. Deleting a referenced custom-column
 script removes matching table columns and resets filters that reference it.
+
+### `PUT /api/sessions/3/filter`
+
+Saves only the Session filter and preserves its columns:
+
+```json
+{ "option": { "kind": "column", "column": { "kind": "uri" }, "regex": false }, "input": "/api" }
+```
 
 ## Column, filter, and routing scripts
 

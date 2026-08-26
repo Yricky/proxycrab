@@ -25,6 +25,7 @@ export const ACTION_LABELS: Record<string, string> = {
   "GET /api/active-session": "读取活动 Session",
   "PUT /api/active-session": "切换活动 Session",
   "PUT /api/sessions/{id}": "更新 Session",
+  "PUT /api/sessions/{id}/filter": "保存 Session 过滤条件",
   "POST /api/session-shares": "创建 Session 分享链接",
   "POST /api/logs/export": "导出抓包日志",
   "POST /api/logs/ids": "查询日志 ID",

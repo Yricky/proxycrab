@@ -115,9 +115,12 @@ Session archive invalidates it. It is not accepted by `/api/*` and is not an Age
 ## HTTP changes and desktop UI synchronization
 
 Successful HTTP operations that mutate application-visible state and runtime proxy lifecycle or
-activity transitions publish an internal change event. Tauri emits it to the desktop frontend and
-the CLI browser receives it through its private long-poll route. The frontend coalesces adjacent
-events and refreshes only affected resources. The read-only share page uses an authenticated,
+activity transitions publish an internal change event. Tauri also subscribes to runtime status
+directly, so activity updates remain available when the management HTTP service cannot start; the
+CLI browser receives them through its private long-poll route. The frontend coalesces adjacent
+events and refreshes only affected resources. During `stopping`, it retains the final running
+activity snapshot until `stopped`, so final filtering and row/detail hydration happen after drain
+has persisted terminal capture state. The read-only share page uses an authenticated,
 revision-based proxy-change long poll and then reloads its Session-scoped status.
 
 | HTTP operation | UI resources affected | Desktop behavior |
@@ -128,7 +131,7 @@ revision-based proxy-change long poll and then reloads its Session-scoped status
 | `PUT /api/active-session` | Active Session and settings | Refreshes the active indicator without changing the viewed Session |
 | Routing-script create/update/delete/selection | Routing library and selection | Refreshes the routing manager |
 | Bypass delete/batch delete/clear | Bypass table | Refreshes the bypass window |
-| `POST /api/logs/ids` with a changed persisted `filter` | Target Session filter and visible log set | Reloads the table only when that Session is being viewed; `persist_filter: false` stays silent |
+| `PUT /api/sessions/{id}/filter` | Target Session filter and visible log set | Reloads the table only when that Session is being viewed; ID queries stay silent |
 | `PUT /api/session-view` | Target Session columns | Reloads the table only when that Session is being viewed |
 | Column-script create/update/delete | Column/filter choices and rendered custom columns | Refreshes script lists and the current table view |
 | Filter-script create/update/delete | Filter choices and filtered results | Refreshes script lists and the current table view |
@@ -137,6 +140,14 @@ revision-based proxy-change long poll and then reloads its Session-scoped status
 | `DELETE /api/system-logs` | System-log viewer | Clears and reloads an open log window |
 
 If HTTP archives the viewed Session, the frontend selects the first remaining Session.
+
+The log table separates ID membership from row rendering. On every Session switch or filter
+change, it captures the newest unfiltered ID as a fixed upper bound, pages every matching ID up to
+that bound, then resumes incremental unfiltered discovery from its frontend-only `max_id`. With a
+filter, newly discovered IDs and `active_netlog ∪ in_progress_ids` candidates are re-evaluated
+through the same read-only ID endpoint; leaving `active_netlog` triggers one final filter and row
+refresh. The virtual table requests row values only for the visible window plus 500 rows on each
+side, in batches of 200, and retains at most 5,000 non-protected rows for the current Session.
 
 Open script and settings windows automatically reload when clean. If they contain unsaved input,
 the frontend preserves it, displays an external-change warning, and lets the user explicitly reload
@@ -158,6 +169,7 @@ browser UI.
 | `/api/proxy/start`, `/api/proxy/stop` | `POST` |
 | `/api/sessions` | `GET`, `POST` |
 | `/api/sessions/{id}` | `PUT` |
+| `/api/sessions/{id}/filter` | `PUT` save only the Session filter |
 | `/api/sessions/{id}/archive` | `POST` inactive Session archive |
 | `/api/archived-sessions` | `GET` archived metadata |
 | `/api/archived-sessions/{id}/restore` | `POST` restore |
@@ -261,40 +273,40 @@ Session. If no Session is active, the operation returns `409 conflict`.
     },
     "input": "example.com"
   },
+  "ids": null,
   "min_id": 100,
   "max_id": 10000,
-  "limit": 10000,
-  "persist_filter": false
+  "limit": 10000
 }
 ```
 
-Every field is optional. Omitting `filter` reuses the Session's persisted filter. Supplying it
-applies the draft to this query and persists it only after the ID scan succeeds. Set
-`persist_filter: false` to filter without changing the Session view or emitting a UI synchronization
-event; omitting the field retains the compatible default of `true`. `option: null` or an empty
-`input` matches all logs; an empty input still preserves the selected option.
+Every field is optional. The endpoint is always read-only. Omitting `filter`, using `option: null`,
+or using an empty `input` matches all logs. A supplied filter is evaluated only for this request and
+never changes the Session's saved filter.
 
 A column option supports `method`, `uri`, `code`, `source`, `stage`, or `{ "kind": "script", "script_name": "..." }`. With `regex: false`, built-in and custom-column output use case-sensitive contains matching. With `regex: true`, `input` uses Rust `regex` syntax and substring matching unless the pattern is anchored; inline flags such as `(?i)` control case folding. Invalid patterns return `400 bad_request`. A script option has the form `{ "kind": "script", "script_name": "..." }` and passes `input` to that global Lua filter script. Custom-column and filter-script execution errors silently count as non-matches.
 
-`min_id` and `max_id` are exclusive (`id > min_id && id < max_id`). The default and maximum page size are both 10,000.
+`min_id` and `max_id` are exclusive (`id > min_id && id < max_id`). `ids` re-evaluates an explicit
+candidate set and cannot be combined with range bounds. The default and maximum range page size,
+and the maximum explicit candidate count, are 10,000.
 
 When only `min_id` is supplied, the database scans toward newer IDs. When `max_id` or neither bound is supplied, it scans toward older IDs. Callers page in either direction by passing the relevant edge ID from their current list. Response order is intentionally unspecified:
 
 ```json
 {
-  "ids": [9999, 9998],
-  "filter": {
-    "option": {
-      "kind": "column",
-      "column": { "kind": "uri" },
-      "regex": false
-    },
-    "input": "example.com"
-  }
+  "matched_ids": [9999, 9998],
+  "in_progress_ids": [9999]
 }
 ```
 
-The response always includes the effective persisted filter. If a referenced script was removed outside the application, it is repaired to `{ "option": null, "input": "" }` and returned that way.
+The arrays may overlap: matching controls display membership, while `in_progress_ids` contains only
+records that are both persisted as in-progress and present in the current run's authoritative
+`active_netlog`, telling clients which candidates may still change. Stale unfinished records from
+an earlier proxy run are never returned there. For filtered range
+queries, the server scans until it has collected `limit` matches or exhausted the bounded range;
+therefore clients can paginate with the smallest returned match as the next exclusive `max_id` and
+stop when a page contains fewer than `limit` matches. When an ID leaves `in_progress_ids`, clients
+perform one final explicit-ID evaluation and use its final `matched_ids` membership.
 
 ### Batch-render log views
 
@@ -478,6 +490,12 @@ The ID column is not part of the view model. `PUT` changes only `columns` and pr
 filter. Column widths must be positive. A new/updated view cannot reference a missing global column
 script. Deleting a referenced script removes matching table columns and resets filters that
 reference it. Script names cannot be changed.
+
+`PUT /api/sessions/1/filter` independently saves only the Session filter and preserves columns:
+
+```json
+{ "option": { "kind": "column", "column": { "kind": "uri" }, "regex": false }, "input": "/api" }
+```
 
 New Sessions always use the fixed built-in method, URI, status-code, and source columns plus an
 empty filter. The first Session created in an empty workspace becomes active. Later creation does

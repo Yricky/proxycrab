@@ -25,7 +25,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::{StreamExt, stream};
-use proxy_crab_mitm::model::InterceptorKind;
+use proxy_crab_mitm::model::{InterceptorKind, SessionFilter};
 use proxy_crab_mitm::storage::{BodySide, BodySource, BodySourceData};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -254,6 +254,7 @@ fn router_with_changes_and_extra(
         .route("/api/sessions", get(sessions).post(create_session))
         .route("/api/archived-sessions", get(archived_sessions))
         .route("/api/sessions/{id}/archive", post(archive_session))
+        .route("/api/sessions/{id}/filter", put(replace_session_filter))
         .route("/api/archived-sessions/{id}/restore", post(restore_session))
         .route(
             "/api/archived-sessions/{id}",
@@ -584,6 +585,11 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
         (&Method::DELETE, value) if value.starts_with("/api/archived-sessions/") => {
             vec![HttpApiResource::ArchivedSessions]
         }
+        (&Method::PUT, value)
+            if value.starts_with("/api/sessions/") && value.ends_with("/filter") =>
+        {
+            vec![HttpApiResource::SessionView]
+        }
         (&Method::PUT, value) if value.starts_with("/api/sessions/") => {
             vec![HttpApiResource::Sessions]
         }
@@ -637,8 +643,15 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
     };
     Some(HttpApiChange {
         resources,
-        session_id: session_id_from_query(query),
+        session_id: session_id_from_query(query).or_else(|| session_filter_id_from_path(path)),
     })
+}
+
+fn session_filter_id_from_path(path: &str) -> Option<u64> {
+    path.strip_prefix("/api/sessions/")?
+        .strip_suffix("/filter")?
+        .parse()
+        .ok()
 }
 
 fn session_id_from_query(query: Option<&str>) -> Option<u64> {
@@ -735,35 +748,9 @@ async fn delete_archived_session(
 
 async fn log_ids(
     State(manager): State<ManagerState>,
-    Extension(changes): Extension<ChangeSender>,
     ApiJson(request): ApiJson<LogIdsRequest>,
 ) -> ApiResult {
-    let requested_filter = request.filter.clone();
-    let persist_filter = request.persist_filter;
-    let affected_session_id = match request.session_id {
-        Some(id) => Some(id),
-        None => manager.active_session().await?.session_id,
-    };
-    let previous_filter = if requested_filter.is_some() && persist_filter {
-        manager
-            .session_view(affected_session_id)
-            .await
-            .ok()
-            .map(|view| view.filter)
-    } else {
-        None
-    };
-    let payload = manager.log_ids(request).await?;
-    if requested_filter.is_some()
-        && persist_filter
-        && previous_filter.as_ref() != Some(&payload.filter)
-    {
-        let _ = changes.send(HttpApiChange {
-            resources: vec![HttpApiResource::SessionView],
-            session_id: affected_session_id,
-        });
-    }
-    success(payload)
+    success(manager.log_ids(request).await?)
 }
 
 async fn log_views(
@@ -984,6 +971,14 @@ async fn replace_session_view(
             .replace_session_view(query.session_id, request)
             .await?,
     )
+}
+
+async fn replace_session_filter(
+    State(manager): State<ManagerState>,
+    ApiPath(id): ApiPath<u64>,
+    ApiJson(filter): ApiJson<SessionFilter>,
+) -> ApiResult {
+    success(manager.replace_session_filter(id, filter).await?)
 }
 
 async fn session_interceptors(
@@ -2094,6 +2089,13 @@ mod tests {
             ),
             (
                 "PUT",
+                "/api/sessions/42/filter",
+                None,
+                vec![HttpApiResource::SessionView],
+                Some(42),
+            ),
+            (
+                "PUT",
                 "/api/session-view",
                 Some("session_id=42"),
                 vec![HttpApiResource::SessionView],
@@ -2477,33 +2479,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn publishes_session_view_only_when_an_http_log_filter_changes() {
+    async fn log_id_reads_are_silent_and_filter_writes_publish_session_view() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
         let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
         let app = router_with_changes(MitmManager::new(runtime), allow_all(), changes);
-        let body = r#"{"filter":{"option":{"kind":"column","column":{"kind":"uri"},"regex":false},"input":"example"}}"#;
+        let filter_body = r#"{"option":{"kind":"column","column":{"kind":"uri"},"regex":false},"input":"example"}"#;
+        let query_body = format!(r#"{{"filter":{filter_body}}}"#);
 
-        for _ in 0..2 {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri("/api/logs/ids")
-                        .header("content-type", "application/json")
-                        .body(Body::from(body))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), axum::http::StatusCode::OK);
-        }
-
-        let change = receiver.try_recv().unwrap();
-        assert_eq!(change.resources, vec![HttpApiResource::SessionView]);
-        assert_eq!(change.session_id, Some(session.id));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/logs/ids")
+                    .header("content-type", "application/json")
+                    .body(Body::from(query_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
         assert!(matches!(
             receiver.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -2512,26 +2509,18 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .method("POST")
-                    .uri("/api/logs/ids")
+                    .method("PUT")
+                    .uri(format!("/api/sessions/{}/filter", session.id))
                     .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"filter":{"option":null,"input":""},"persist_filter":false}"#,
-                    ))
+                    .body(Body::from(filter_body))
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::OK);
-        let unexpected = receiver.try_recv();
-        assert!(
-            matches!(
-                unexpected,
-                Err(tokio::sync::broadcast::error::TryRecvError::Empty
-                    | tokio::sync::broadcast::error::TryRecvError::Closed)
-            ),
-            "unexpected UI event after stateless filter: {unexpected:?}"
-        );
+        let change = receiver.try_recv().unwrap();
+        assert_eq!(change.resources, vec![HttpApiResource::SessionView]);
+        assert_eq!(change.session_id, Some(session.id));
     }
 
     #[tokio::test]
@@ -2564,6 +2553,7 @@ mod tests {
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
+        let filter_uri = format!("/api/sessions/{}/filter", session.id);
 
         for (method, uri, body) in [
             ("POST", "/api/logs/ids", r#"{}"#),
@@ -2577,6 +2567,7 @@ mod tests {
             ("GET", "/api/active-session", ""),
             ("GET", "/api/breakpoints", ""),
             ("PUT", "/api/session-view", r#"{"columns":[]}"#),
+            ("PUT", filter_uri.as_str(), r#"{"option":null,"input":""}"#),
             ("GET", "/api/session-interceptors", ""),
             (
                 "PUT",

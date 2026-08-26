@@ -152,6 +152,8 @@ export function createTauriBackend(): Backend {
       call("get_session_view", { sessionId }),
     replaceSessionView: (sessionId: number | null, request: ReplaceSessionViewRequest) =>
       call("replace_session_view", { sessionId, request }),
+    replaceSessionFilter: (sessionId, filter) =>
+      call("replace_session_filter", { sessionId, filter }),
 
     listColumnScripts: () => call("list_column_scripts"),
     createColumnScript: (request: ScriptRequest) => call("create_column_script", { request }),

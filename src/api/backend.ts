@@ -39,6 +39,7 @@ import type {
   RoutingSelection,
   Script,
   ScriptRequest,
+  SessionFilter,
   SessionMetadata,
   SessionInterceptorsPayload,
   SessionViewPayload,
@@ -144,6 +145,10 @@ export interface Backend {
   replaceSessionView(
     sessionId: number | null,
     request: ReplaceSessionViewRequest,
+  ): Promise<SessionViewPayload>;
+  replaceSessionFilter(
+    sessionId: number,
+    filter: SessionFilter,
   ): Promise<SessionViewPayload>;
 
   // column scripts

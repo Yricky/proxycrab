@@ -9,6 +9,8 @@ import { reportError } from "./app";
 let portPersistTimer: number | undefined;
 let refreshQueue = Promise.resolve();
 let directStatusVersion = 0;
+let lastActiveNetlog: Record<string, number[]> = {};
+let lastActiveBypassCount = 0;
 
 /** Delay before a valid port edit is written back to AppConfig. */
 const PORT_PERSIST_DEBOUNCE_MS = 500;
@@ -40,12 +42,16 @@ export const proxyStore = reactive({
   },
 
   get activeBypassCount(): number {
-    return this.status.status === "running" ? (this.status.active_bypass_count ?? 0) : 0;
+    if (this.status.status === "running") return this.status.active_bypass_count ?? 0;
+    return this.status.status === "stopping" ? lastActiveBypassCount : 0;
   },
 
   activeNetlogIds(sessionId: number | null): number[] {
-    if (sessionId === null || this.status.status !== "running") return [];
-    return this.status.active_netlog[String(sessionId)] ?? [];
+    if (sessionId === null) return [];
+    if (this.status.status === "running") {
+      return this.status.active_netlog[String(sessionId)] ?? [];
+    }
+    return this.status.status === "stopping" ? (lastActiveNetlog[String(sessionId)] ?? []) : [];
   },
 
   activeNetlogCount(sessionId: number | null): number {
@@ -57,6 +63,13 @@ export const proxyStore = reactive({
   },
 
   applyStatus(status: ProxyStatus): void {
+    if (status.status === "running") {
+      lastActiveNetlog = status.active_netlog;
+      lastActiveBypassCount = status.active_bypass_count ?? 0;
+    } else if (status.status !== "stopping") {
+      lastActiveNetlog = {};
+      lastActiveBypassCount = 0;
+    }
     this.status = status;
     if (status.status === "running") {
       this.displayIp = status.host;

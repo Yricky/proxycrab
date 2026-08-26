@@ -6,56 +6,103 @@ import type {
   LogViewsPayload,
   SessionFilter,
 } from "../api/types";
+import { LruKeys } from "../utils/lru";
 import { reportError } from "./app";
 import { proxyStore } from "./proxy";
 import { sessionsStore } from "./sessions";
 
 const VIEW_BATCH_SIZE = 200;
 const ID_PAGE_SIZE = 10_000;
-/** 有活跃（in_progress）记录时的快轮询间隔。 */
-const POLL_INTERVAL = 1000;
-/** 无活跃记录时的低频 ID 探测间隔（新记录只能靠轮询发现，不能完全停）。 */
-const IDLE_POLL_INTERVAL = 2000;
-const FILTER_POLL_INTERVAL = 2000;
+const ROW_CACHE_CAPACITY = 5_000;
+const POLL_INTERVAL = 1_000;
+const IDLE_POLL_INTERVAL = 2_000;
 
+let generation = 0;
+let rowGeneration = 0;
+let maxId = 0;
 let pollTimer: number | undefined;
+let pollingEnabled = false;
 let pollInFlight = false;
-let olderInFlight = false;
-let finalHydrateInFlight = false;
-let finalHydratePending = false;
-const pendingFinalIds = new Set<number>();
+let pollAgain = false;
+let hydrateQueue = Promise.resolve();
+let viewportTimer: number | undefined;
+const pendingFilterIds = new Set<number>();
+const viewportIds = new Set<number>();
+const rowLru = new LruKeys<number>(ROW_CACHE_CAPACITY);
 
-async function flushFinalHydration(): Promise<void> {
-  if (pendingFinalIds.size === 0) return;
-  if (finalHydrateInFlight) {
-    finalHydratePending = true;
-    return;
+function cellErrorKey(id: number, columnIndex: number): string {
+  return `${id}:${columnIndex}`;
+}
+
+function sortedUnique(ids: Iterable<number>): number[] {
+  return [...new Set(ids)].sort((left, right) => right - left);
+}
+
+function maxOf(ids: number[]): number | undefined {
+  return ids.reduce<number | undefined>(
+    (current, id) => (current === undefined || id > current ? id : current),
+    undefined,
+  );
+}
+
+function minOf(ids: number[]): number | undefined {
+  return ids.reduce<number | undefined>(
+    (current, id) => (current === undefined || id < current ? id : current),
+    undefined,
+  );
+}
+
+function columnContentSignature(columns: Column[]): string {
+  return JSON.stringify(
+    columns.map((column) => {
+      const { width: _width, ...content } = column;
+      return content;
+    }),
+  );
+}
+
+function sameFilter(left: SessionFilter, right: SessionFilter): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function evictRows(): void {
+  const protectedIds = new Set(viewportIds);
+  for (const id of proxyStore.activeNetlogIds(sessionsStore.viewingSessionId)) {
+    protectedIds.add(id);
   }
-  finalHydrateInFlight = true;
-  try {
-    const ids = [...pendingFinalIds];
-    await logsStore.hydrate(ids, true);
-    for (const id of ids) {
-      const row = logsStore.rowsById.get(id);
-      if (
-        row === undefined ||
-        row.outcome !== "in_progress" ||
-        proxyStore.isNetlogActive(sessionsStore.viewingSessionId, id)
-      ) {
-        pendingFinalIds.delete(id);
-      }
-    }
-  } finally {
-    finalHydrateInFlight = false;
-    if (finalHydratePending) {
-      finalHydratePending = false;
-      void flushFinalHydration();
+  for (const id of rowLru.evict(protectedIds)) {
+    logsStore.rowsById.delete(id);
+    for (const key of logsStore.cellErrors.keys()) {
+      if (key.startsWith(`${id}:`)) logsStore.cellErrors.delete(key);
     }
   }
 }
 
-function cellErrorKey(id: number, columnIndex: number): string {
-  return `${id}:${columnIndex}`;
+function clearPollTimer(): void {
+  if (pollTimer !== undefined) {
+    window.clearTimeout(pollTimer);
+    pollTimer = undefined;
+  }
+}
+
+function schedulePoll(delay?: number): void {
+  clearPollTimer();
+  if (!pollingEnabled || sessionsStore.viewingSessionId === null) return;
+  const hasWork = logsStore.hasActive || pendingFilterIds.size > 0;
+  const discoversNew = sessionsStore.viewingSessionId === sessionsStore.activeSessionId;
+  if (!hasWork && !discoversNew) return;
+  pollTimer = window.setTimeout(
+    async () => {
+      pollTimer = undefined;
+      await logsStore.poll();
+      schedulePoll();
+    },
+    delay ?? (hasWork ? POLL_INTERVAL : IDLE_POLL_INTERVAL),
+  );
+}
+
+function wakePoll(): void {
+  if (pollingEnabled) schedulePoll(0);
 }
 
 export function emptySessionFilter(): SessionFilter {
@@ -68,105 +115,113 @@ export function cloneSessionFilter(filter: SessionFilter): SessionFilter {
 
 export const logsStore = reactive({
   columns: [] as Column[],
-  /** IDs are retained newest first regardless of display direction. */
+  /** Complete matching ID set, retained newest first. */
   ids: [] as number[],
   rowsById: new Map<number, LogViewRow>(),
   cellErrors: new Map<string, string>(),
   sortDesc: true,
   appliedFilter: emptySessionFilter() as SessionFilter,
   loading: false,
-  olderExhausted: false,
 
   get filterActive(): boolean {
     return this.appliedFilter.option !== null && this.appliedFilter.input.length > 0;
   },
 
-  /** 当前查看 Session 是否有后端确认仍在处理的记录。 */
   get hasActive(): boolean {
     return proxyStore.activeNetlogCount(sessionsStore.viewingSessionId) > 0;
   },
 
-  get displayRows(): LogViewRow[] {
-    const ids = this.sortDesc ? this.ids : [...this.ids].reverse();
-    return ids.map(
-      (id) =>
-        this.rowsById.get(id) ?? {
-          id,
-          created_at: 0,
-          updated_at: 0,
-          outcome: "success",
-          cells: this.columns.map(() => ""),
-        },
-    );
+  get sortedIds(): number[] {
+    return this.sortDesc ? this.ids : [...this.ids].reverse();
+  },
+
+  row(id: number): LogViewRow {
+    const cached = this.rowsById.get(id);
+    if (cached) {
+      rowLru.touch(id);
+      return cached;
+    }
+    return {
+      id,
+      created_at: 0,
+      updated_at: 0,
+      outcome: proxyStore.isNetlogActive(sessionsStore.viewingSessionId, id)
+        ? "in_progress"
+        : "success",
+      cells: this.columns.map(() => "…"),
+    };
   },
 
   syncAppliedFilter(filter: SessionFilter): void {
-    if (JSON.stringify(this.appliedFilter) !== JSON.stringify(filter)) {
+    if (!sameFilter(this.appliedFilter, filter)) {
       this.appliedFilter = cloneSessionFilter(filter);
     }
   },
 
-  resetData(): void {
-    this.columns = [];
-    this.ids = [];
+  applyColumns(columns: Column[], forceContentRefresh = false): void {
+    const contentChanged =
+      forceContentRefresh ||
+      columnContentSignature(this.columns) !== columnContentSignature(columns);
+    this.columns = columns;
+    if (contentChanged) {
+      rowGeneration += 1;
+      this.clearRows();
+    }
+  },
+
+  clearRows(): void {
     this.rowsById = new Map();
     this.cellErrors = new Map();
-    this.sortDesc = true;
-    this.olderExhausted = false;
-    pendingFinalIds.clear();
+    rowLru.clear();
+  },
+
+  clearIds(): void {
+    this.ids = [];
+    maxId = 0;
+    pendingFilterIds.clear();
   },
 
   reset(): void {
-    this.resetData();
+    generation += 1;
+    rowGeneration += 1;
+    this.columns = [];
+    this.clearIds();
+    this.clearRows();
     this.appliedFilter = emptySessionFilter();
+    this.sortDesc = true;
+    this.loading = false;
+    viewportIds.clear();
   },
 
-  mergeIds(incoming: number[]): number[] {
-    if (incoming.length === 0) return [];
-    const known = new Set(this.ids);
-    const added = incoming.filter((id) => !known.has(id));
-    this.ids = [...new Set([...this.ids, ...incoming])].sort((left, right) => right - left);
-    return added;
-  },
-
-  replaceNewestIdPage(incoming: number[]): number[] {
-    const known = new Set(this.ids);
-    const oldestIncoming = incoming.reduce(
-      (oldest, id) => Math.min(oldest, id),
-      Number.POSITIVE_INFINITY,
-    );
-    const retainedOlder =
-      incoming.length === ID_PAGE_SIZE
-        ? this.ids.filter((id) => id < oldestIncoming)
-        : [];
-    const next = [...new Set([...incoming, ...retainedOlder])].sort(
-      (left, right) => right - left,
-    );
-    const nextSet = new Set(next);
-    for (const id of this.ids) {
-      if (!nextSet.has(id)) this.removeLog(id);
-    }
-    this.ids = next;
-    return incoming.filter((id) => !known.has(id));
+  mergeIds(incoming: number[]): void {
+    if (incoming.length > 0) this.ids = sortedUnique([...this.ids, ...incoming]);
   },
 
   removeLog(id: number): void {
     this.ids = this.ids.filter((item) => item !== id);
     this.rowsById.delete(id);
+    pendingFilterIds.delete(id);
+    rowLru.delete(id);
     for (const key of this.cellErrors.keys()) {
       if (key.startsWith(`${id}:`)) this.cellErrors.delete(key);
     }
   },
 
-  mergeViews(payload: LogViewsPayload): void {
-    this.columns = payload.columns;
+  mergeViews(payload: LogViewsPayload, requestedIds: number[]): void {
+    if (this.columns.length === 0) this.applyColumns(payload.columns);
     const returnedIds = new Set(payload.rows.map((row) => row.id));
     for (const id of returnedIds) {
       for (const key of this.cellErrors.keys()) {
         if (key.startsWith(`${id}:`)) this.cellErrors.delete(key);
       }
     }
-    for (const row of payload.rows) this.rowsById.set(row.id, row);
+    for (const row of payload.rows) {
+      this.rowsById.set(row.id, row);
+      rowLru.touch(row.id);
+    }
+    for (const id of requestedIds) {
+      if (this.rowsById.has(id)) rowLru.touch(id);
+    }
     for (const exception of payload.exceptions) {
       if (exception.code === "log_not_found") {
         this.removeLog(exception.id);
@@ -181,21 +236,32 @@ export const logsStore = reactive({
         );
       }
     }
+    evictRows();
   },
 
-  async hydrate(ids: number[], force = false): Promise<void> {
-    const sessionId = sessionsStore.viewingSessionId;
-    if (sessionId === null) return;
-    if (ids.length === 0) {
-      const payload = await backend.getLogViews({
-        session_id: sessionId,
-        logs: [],
-      });
-      if (sessionsStore.viewingSessionId === sessionId) this.mergeViews(payload);
+  async hydrateNow(
+    sessionId: number,
+    targetGeneration: number,
+    targetRowGeneration: number,
+    ids: number[],
+    force: boolean,
+  ): Promise<void> {
+    if (
+      ids.length === 0 ||
+      sessionsStore.viewingSessionId !== sessionId ||
+      generation !== targetGeneration ||
+      rowGeneration !== targetRowGeneration
+    ) {
       return;
     }
     for (let index = 0; index < ids.length; index += VIEW_BATCH_SIZE) {
-      if (sessionsStore.viewingSessionId !== sessionId) return;
+      if (
+        sessionsStore.viewingSessionId !== sessionId ||
+        generation !== targetGeneration ||
+        rowGeneration !== targetRowGeneration
+      ) {
+        return;
+      }
       const batch = ids.slice(index, index + VIEW_BATCH_SIZE);
       const payload = await backend.getLogViews({
         session_id: sessionId,
@@ -203,219 +269,376 @@ export const logsStore = reactive({
           const updatedAt = this.rowsById.get(id)?.updated_at;
           return force || updatedAt === undefined ? { id } : { id, updated_at: updatedAt };
         }),
+        view: { columns: this.columns },
       });
-      if (sessionsStore.viewingSessionId !== sessionId) return;
-      this.mergeViews(payload);
-    }
-  },
-
-  async discoverInitial(): Promise<void> {
-    const sessionId = sessionsStore.viewingSessionId;
-    if (sessionId === null) return;
-    const payload = await backend.getLogIds({
-      session_id: sessionId,
-    });
-    if (sessionsStore.viewingSessionId !== sessionId) return;
-    this.syncAppliedFilter(payload.filter);
-    const added = this.mergeIds(payload.ids);
-    if (added.length > 0) {
-      await this.hydrate(added);
-    } else if (this.columns.length === 0) {
-      // 会话暂无日志：仅在列定义缺失（如 loadSession 失败后的恢复路径）时才发空列表请求补列。
-      await this.hydrate(added);
-    }
-  },
-
-  async poll(): Promise<void> {
-    const sessionId = sessionsStore.viewingSessionId;
-    if (sessionId === null || pollInFlight || this.loading) return;
-    pollInFlight = true;
-    try {
-      const isActiveView = sessionsStore.activeSessionId === sessionId;
-      if (!isActiveView) {
-        // 查看非活跃会话：不会有新记录到达，只需跟踪已有活跃记录直到完成。
-        await this.hydrateActive();
-      } else if (this.filterActive) {
-        const payload = await backend.getLogIds({
-          session_id: sessionId,
-        });
-        if (sessionsStore.viewingSessionId !== sessionId) return;
-        this.syncAppliedFilter(payload.filter);
-        const added = this.replaceNewestIdPage(payload.ids);
-        if (added.length > 0) await this.hydrate(added);
-        await this.hydrateActive();
-      } else if (this.ids.length === 0) {
-        await this.discoverInitial();
-      } else {
-        const payload = await backend.getLogIds({
-          session_id: sessionId,
-          min_id: this.ids[0],
-        });
-        if (sessionsStore.viewingSessionId !== sessionId) return;
-        this.syncAppliedFilter(payload.filter);
-        const added = this.mergeIds(payload.ids);
-        if (added.length > 0) await this.hydrate(added);
-        await this.hydrateActive();
+      if (
+        sessionsStore.viewingSessionId !== sessionId ||
+        generation !== targetGeneration ||
+        rowGeneration !== targetRowGeneration
+      ) {
+        return;
       }
-    } catch {
-      // Polling failures are transient (for example, while sessions switch).
-    } finally {
-      pollInFlight = false;
+      this.mergeViews(payload, batch);
     }
   },
 
-  /** 只刷新状态快照中仍活跃、且已经出现在当前列表里的记录。 */
-  async hydrateActive(): Promise<void> {
-    const listed = new Set(this.ids);
-    const ids = proxyStore
-      .activeNetlogIds(sessionsStore.viewingSessionId)
-      .filter((id) => listed.has(id));
-    if (ids.length > 0) {
-      await this.hydrate(ids);
-    } else if (this.columns.length === 0) {
-      // 列定义缺失（如 loadSession 失败后的恢复路径）时补取列。
-      await this.hydrate([]);
-    }
-  },
-
-  async loadOlder(): Promise<void> {
+  async hydrate(ids: number[], force = false): Promise<void> {
     const sessionId = sessionsStore.viewingSessionId;
-    const oldestId = this.ids[this.ids.length - 1];
-    if (
-      sessionId === null ||
-      oldestId === undefined ||
-      olderInFlight ||
-      this.olderExhausted ||
-      this.loading
-    ) {
-      return;
+    if (sessionId === null || ids.length === 0) return;
+    await this.hydrateFor(sessionId, generation, ids, force);
+  },
+
+  async hydrateFor(
+    sessionId: number,
+    targetGeneration: number,
+    ids: number[],
+    force = false,
+  ): Promise<void> {
+    if (ids.length === 0) return;
+    const unique = [...new Set(ids)];
+    const targetRowGeneration = rowGeneration;
+    const request = hydrateQueue.then(() =>
+      this.hydrateNow(
+        sessionId,
+        targetGeneration,
+        targetRowGeneration,
+        unique,
+        force,
+      ),
+    );
+    hydrateQueue = request.catch(() => undefined);
+    await request;
+  },
+
+  setViewportIds(ids: number[]): void {
+    viewportIds.clear();
+    for (const id of ids) {
+      viewportIds.add(id);
+      if (this.rowsById.has(id)) rowLru.touch(id);
     }
-    olderInFlight = true;
-    try {
+    evictRows();
+    if (viewportTimer !== undefined) window.clearTimeout(viewportTimer);
+    viewportTimer = window.setTimeout(() => {
+      viewportTimer = undefined;
+      const missing = [...viewportIds].filter((id) => !this.rowsById.has(id));
+      void this.hydrate(missing).catch(() => undefined);
+    }, 0);
+  },
+
+  applyCandidateResult(
+    candidates: number[],
+    matchedIds: number[],
+    inProgressIds: number[],
+  ): void {
+    const displayed = new Set(this.ids);
+    const matched = new Set(matchedIds);
+    const inProgress = new Set(inProgressIds);
+    for (const id of candidates) {
+      if (matched.has(id)) displayed.add(id);
+      else displayed.delete(id);
+      if (inProgress.has(id)) pendingFilterIds.add(id);
+      else pendingFilterIds.delete(id);
+    }
+    this.ids = sortedUnique(displayed);
+  },
+
+  async filterCandidates(
+    sessionId: number,
+    targetGeneration: number,
+    candidates: number[],
+  ): Promise<void> {
+    for (let index = 0; index < candidates.length; index += ID_PAGE_SIZE) {
+      if (sessionsStore.viewingSessionId !== sessionId || generation !== targetGeneration) {
+        return;
+      }
+      const batch = candidates.slice(index, index + ID_PAGE_SIZE);
       const payload = await backend.getLogIds({
         session_id: sessionId,
-        max_id: oldestId,
+        filter: cloneSessionFilter(this.appliedFilter),
+        ids: batch,
       });
-      if (sessionsStore.viewingSessionId !== sessionId) return;
-      this.syncAppliedFilter(payload.filter);
-      this.olderExhausted = payload.ids.length === 0;
-      const added = this.mergeIds(payload.ids);
-      if (added.length > 0) await this.hydrate(added);
-    } catch (error) {
-      reportError(error, "加载更早记录失败");
-    } finally {
-      olderInFlight = false;
+      if (sessionsStore.viewingSessionId !== sessionId || generation !== targetGeneration) {
+        return;
+      }
+      this.applyCandidateResult(batch, payload.matched_ids, payload.in_progress_ids);
     }
   },
 
-  async refreshView(): Promise<void> {
-    this.columns = [];
-    this.cellErrors = new Map();
-    await this.hydrate(this.ids, true);
-  },
-
-  cellError(id: number, columnIndex: number): string | undefined {
-    return this.cellErrors.get(cellErrorKey(id, columnIndex));
+  async loadAllIds(
+    sessionId: number,
+    targetGeneration: number,
+    filter: SessionFilter,
+  ): Promise<void> {
+    const latest = await backend.getLogIds({
+      session_id: sessionId,
+      filter: emptySessionFilter(),
+      limit: 1,
+    });
+    if (sessionsStore.viewingSessionId !== sessionId || generation !== targetGeneration) return;
+    const initialMaxId = latest.matched_ids[0] ?? 0;
+    let cursor = initialMaxId > 0 ? initialMaxId + 1 : undefined;
+    const matched = new Set<number>();
+    const pending = new Set<number>();
+    while (true) {
+      const payload = await backend.getLogIds({
+        session_id: sessionId,
+        filter: cloneSessionFilter(filter),
+        max_id: cursor,
+        limit: ID_PAGE_SIZE,
+      });
+      if (sessionsStore.viewingSessionId !== sessionId || generation !== targetGeneration) return;
+      for (const id of payload.matched_ids) matched.add(id);
+      for (const id of payload.in_progress_ids) pending.add(id);
+      if (payload.matched_ids.length < ID_PAGE_SIZE) break;
+      cursor = minOf(payload.matched_ids);
+    }
+    this.ids = sortedUnique(matched);
+    pendingFilterIds.clear();
+    for (const id of pending) pendingFilterIds.add(id);
+    maxId = initialMaxId;
   },
 
   async loadSession(): Promise<void> {
     const sessionId = sessionsStore.viewingSessionId;
     if (sessionId === null) return;
+    const targetGeneration = ++generation;
     this.loading = true;
+    this.columns = [];
+    this.clearIds();
+    this.clearRows();
     try {
       const view = await backend.getSessionView(sessionId);
-      if (sessionsStore.viewingSessionId !== sessionId) return;
-      this.appliedFilter = cloneSessionFilter(view.filter);
-      this.resetData();
-      await this.discoverInitial();
+      if (sessionsStore.viewingSessionId !== sessionId || generation !== targetGeneration) return;
+      this.applyColumns(view.columns);
+      this.syncAppliedFilter(view.filter);
+      await this.loadAllIds(sessionId, targetGeneration, view.filter);
     } catch (error) {
-      reportError(error, "加载会话记录失败");
+      if (sessionsStore.viewingSessionId === sessionId && generation === targetGeneration) {
+        reportError(error, "加载会话记录失败");
+      }
     } finally {
-      if (sessionsStore.viewingSessionId === sessionId) this.loading = false;
+      if (sessionsStore.viewingSessionId === sessionId && generation === targetGeneration) {
+        this.loading = false;
+        wakePoll();
+      }
+    }
+  },
+
+  async reloadFilter(filter: SessionFilter): Promise<boolean> {
+    const sessionId = sessionsStore.viewingSessionId;
+    if (sessionId === null) return false;
+    const targetGeneration = ++generation;
+    this.loading = true;
+    this.syncAppliedFilter(filter);
+    this.clearIds();
+    try {
+      await this.loadAllIds(sessionId, targetGeneration, filter);
+      return sessionsStore.viewingSessionId === sessionId && generation === targetGeneration;
+    } catch (error) {
+      if (sessionsStore.viewingSessionId === sessionId && generation === targetGeneration) {
+        reportError(error, "过滤失败");
+      }
+      return false;
+    } finally {
+      if (sessionsStore.viewingSessionId === sessionId && generation === targetGeneration) {
+        this.loading = false;
+        wakePoll();
+      }
     }
   },
 
   async applyFilter(filter: SessionFilter): Promise<boolean> {
     const sessionId = sessionsStore.viewingSessionId;
     if (sessionId === null) return false;
-    this.loading = true;
+    const targetGeneration = generation;
+    const previous = cloneSessionFilter(this.appliedFilter);
+    this.syncAppliedFilter(filter);
+    if (!backend.capabilities.readonly) {
+      try {
+        await backend.replaceSessionFilter(sessionId, cloneSessionFilter(filter));
+        if (
+          sessionsStore.viewingSessionId !== sessionId ||
+          generation !== targetGeneration
+        ) {
+          return false;
+        }
+      } catch (error) {
+        if (
+          sessionsStore.viewingSessionId === sessionId &&
+          generation === targetGeneration
+        ) {
+          this.syncAppliedFilter(previous);
+          reportError(error, "保存过滤条件失败");
+        }
+        return false;
+      }
+    }
+    return this.reloadFilter(filter);
+  },
+
+  async syncSessionView(): Promise<void> {
+    const sessionId = sessionsStore.viewingSessionId;
+    if (sessionId === null) return;
     try {
+      const view = await backend.getSessionView(sessionId);
+      if (sessionsStore.viewingSessionId !== sessionId) return;
+      this.applyColumns(view.columns);
+      if (!backend.capabilities.readonly && !sameFilter(this.appliedFilter, view.filter)) {
+        await this.reloadFilter(view.filter);
+      } else {
+        this.setViewportIds([...viewportIds]);
+      }
+    } catch (error) {
+      reportError(error, "同步 Session 视图失败");
+    }
+  },
+
+  async discoverNew(sessionId: number, targetGeneration: number): Promise<void> {
+    while (sessionsStore.viewingSessionId === sessionId && generation === targetGeneration) {
       const payload = await backend.getLogIds({
         session_id: sessionId,
-        filter: cloneSessionFilter(filter),
-        persist_filter: !backend.capabilities.readonly,
+        filter: emptySessionFilter(),
+        min_id: maxId,
+        limit: ID_PAGE_SIZE,
       });
-      if (sessionsStore.viewingSessionId !== sessionId) return false;
-      this.appliedFilter = cloneSessionFilter(payload.filter);
-      this.resetData();
-      const added = this.mergeIds(payload.ids);
-      await this.hydrate(added);
-      return true;
-    } catch (error) {
-      reportError(error, "过滤失败");
-      return false;
-    } finally {
-      if (sessionsStore.viewingSessionId === sessionId) this.loading = false;
+      if (sessionsStore.viewingSessionId !== sessionId || generation !== targetGeneration) return;
+      const rawIds = payload.matched_ids;
+      if (rawIds.length === 0) return;
+      if (this.filterActive) {
+        await this.filterCandidates(sessionId, targetGeneration, rawIds);
+        if (sessionsStore.viewingSessionId !== sessionId || generation !== targetGeneration) return;
+      } else {
+        this.mergeIds(rawIds);
+      }
+      maxId = maxOf(rawIds) ?? maxId;
+      if (rawIds.length < ID_PAGE_SIZE) return;
     }
+  },
+
+  async refreshFilterCandidates(sessionId: number, targetGeneration: number): Promise<void> {
+    if (!this.filterActive) {
+      pendingFilterIds.clear();
+      return;
+    }
+    const candidates = sortedUnique([
+      ...proxyStore.activeNetlogIds(sessionId),
+      ...pendingFilterIds,
+    ]);
+    await this.filterCandidates(sessionId, targetGeneration, candidates);
+  },
+
+  async poll(): Promise<void> {
+    const sessionId = sessionsStore.viewingSessionId;
+    if (sessionId === null || this.loading) return;
+    if (pollInFlight) {
+      pollAgain = true;
+      return;
+    }
+    pollInFlight = true;
+    const targetGeneration = generation;
+    try {
+      if (sessionsStore.activeSessionId === sessionId) {
+        await this.discoverNew(sessionId, targetGeneration);
+      }
+      if (sessionsStore.viewingSessionId !== sessionId || generation !== targetGeneration) return;
+      await this.refreshFilterCandidates(sessionId, targetGeneration);
+      if (sessionsStore.viewingSessionId !== sessionId || generation !== targetGeneration) return;
+      const activeIds = proxyStore.activeNetlogIds(sessionId);
+      if (activeIds.length > 0) {
+        await this.hydrateFor(sessionId, targetGeneration, activeIds);
+      }
+    } catch {
+      // Polling failures are transient; the next tick retries from the same maxId.
+    } finally {
+      pollInFlight = false;
+      if (pollAgain) {
+        pollAgain = false;
+        void this.poll();
+      }
+    }
+  },
+
+  async finalize(ids: number[]): Promise<void> {
+    const sessionId = sessionsStore.viewingSessionId;
+    if (sessionId === null || ids.length === 0) return;
+    const targetGeneration = generation;
+    try {
+      if (this.filterActive) {
+        await this.filterCandidates(sessionId, targetGeneration, ids);
+      }
+      if (sessionsStore.viewingSessionId !== sessionId || generation !== targetGeneration) return;
+      await this.hydrateFor(sessionId, targetGeneration, ids, true);
+    } catch {
+      if (sessionsStore.viewingSessionId === sessionId && generation === targetGeneration) {
+        for (const id of ids) pendingFilterIds.add(id);
+      }
+    } finally {
+      wakePoll();
+    }
+  },
+
+  async refreshView(): Promise<void> {
+    const sessionId = sessionsStore.viewingSessionId;
+    if (sessionId === null) return;
+    try {
+      const view = await backend.getSessionView(sessionId);
+      if (sessionsStore.viewingSessionId !== sessionId) return;
+      this.applyColumns(view.columns, true);
+      this.setViewportIds([...viewportIds]);
+      await this.hydrate(proxyStore.activeNetlogIds(sessionId), true);
+    } catch (error) {
+      reportError(error, "刷新日志列失败");
+    }
+  },
+
+  cellError(id: number, columnIndex: number): string | undefined {
+    return this.cellErrors.get(cellErrorKey(id, columnIndex));
   },
 
   startPolling(): void {
-    this.stopPolling();
-    const tick = () => {
-      void this.poll();
-      pollTimer = window.setTimeout(
-        tick,
-        this.filterActive
-          ? FILTER_POLL_INTERVAL
-          : this.hasActive
-            ? POLL_INTERVAL
-            : IDLE_POLL_INTERVAL,
-      );
-    };
-    pollTimer = window.setTimeout(tick, POLL_INTERVAL);
+    pollingEnabled = true;
+    schedulePoll(0);
   },
 
   stopPolling(): void {
-    if (pollTimer !== undefined) {
-      window.clearTimeout(pollTimer);
-      pollTimer = undefined;
-    }
+    pollingEnabled = false;
+    clearPollTimer();
   },
 });
 
-watch(
+const stopViewingSessionWatch = watch(
   () => sessionsStore.viewingSessionId,
   (id, previous) => {
     if (id === previous) return;
     logsStore.reset();
-    if (id !== null) {
-      void logsStore.loadSession();
-    }
+    if (id !== null) void logsStore.loadSession();
   },
+  { immediate: true },
 );
 
-watch(
+const stopActivityWatch = watch(
   () => {
     const sessionId = sessionsStore.viewingSessionId;
-    return {
-      sessionId,
-      ids: proxyStore.activeNetlogIds(sessionId),
-    };
+    return { sessionId, ids: proxyStore.activeNetlogIds(sessionId) };
   },
   (current, previous) => {
-    if (current.sessionId === null || current.sessionId !== previous.sessionId) {
-      pendingFinalIds.clear();
-      return;
-    }
+    if (current.sessionId === null || current.sessionId !== previous.sessionId) return;
     const currentIds = new Set(current.ids);
-    const previousIds = new Set(previous.ids);
-    const removed = previous.ids.filter(
-      (id) => !currentIds.has(id) && logsStore.rowsById.has(id),
-    );
-    for (const id of removed) pendingFinalIds.add(id);
-    for (const id of current.ids) pendingFinalIds.delete(id);
-    void flushFinalHydration();
-    if (current.ids.some((id) => !previousIds.has(id))) void logsStore.poll();
+    const removed = previous.ids.filter((id) => !currentIds.has(id));
+    if (removed.length > 0) void logsStore.finalize(removed);
+    evictRows();
+    void logsStore.poll();
+    wakePoll();
   },
   { deep: true },
 );
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    stopViewingSessionWatch();
+    stopActivityWatch();
+    logsStore.stopPolling();
+    if (viewportTimer !== undefined) window.clearTimeout(viewportTimer);
+    generation += 1;
+  });
+}

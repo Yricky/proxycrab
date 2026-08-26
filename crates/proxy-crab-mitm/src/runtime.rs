@@ -67,6 +67,7 @@ pub struct ProxyCrab {
     bypass: BypassStore,
     stores: Mutex<HashMap<u64, CaptureStore>>,
     session_pins: Mutex<HashMap<u64, usize>>,
+    view_updates: Mutex<()>,
     log_buffer: Arc<LogBuffer>,
     breakpoints: Arc<BreakpointRegistry>,
     upstream: RwLock<UpstreamClient>,
@@ -91,6 +92,7 @@ impl ProxyCrab {
             bypass,
             stores: Mutex::new(HashMap::new()),
             session_pins: Mutex::new(HashMap::new()),
+            view_updates: Mutex::new(()),
             log_buffer,
             breakpoints: Arc::new(BreakpointRegistry::default()),
             upstream: RwLock::new(UpstreamClient::new()),
@@ -587,6 +589,11 @@ impl ProxyCrab {
     }
 
     pub fn session_view(&self, session_id: u64) -> Result<SessionView> {
+        let _guard = self.view_updates.lock().expect("view update lock poisoned");
+        self.session_view_unlocked(session_id)
+    }
+
+    fn session_view_unlocked(&self, session_id: u64) -> Result<SessionView> {
         let mut view = self.workspace.session_view(session_id)?;
         if self.validate_session_filter(&view.filter).is_err() {
             view.filter = SessionFilter::default();
@@ -596,7 +603,12 @@ impl ProxyCrab {
         Ok(view)
     }
 
-    pub fn replace_session_view(
+    pub fn replace_session_view(&self, session_id: u64, view: SessionView) -> Result<SessionView> {
+        let _guard = self.view_updates.lock().expect("view update lock poisoned");
+        self.replace_session_view_unlocked(session_id, view)
+    }
+
+    fn replace_session_view_unlocked(
         &self,
         session_id: u64,
         mut view: SessionView,
@@ -615,6 +627,28 @@ impl ProxyCrab {
             self.validate_session_filter(&view.filter)?;
         }
         self.workspace.replace_session_view(session_id, view)
+    }
+
+    pub fn replace_session_filter(
+        &self,
+        session_id: u64,
+        filter: SessionFilter,
+    ) -> Result<SessionView> {
+        let _guard = self.view_updates.lock().expect("view update lock poisoned");
+        let mut view = self.session_view_unlocked(session_id)?;
+        view.filter = filter;
+        self.replace_session_view_unlocked(session_id, view)
+    }
+
+    pub fn replace_session_columns(
+        &self,
+        session_id: u64,
+        columns: Vec<Column>,
+    ) -> Result<SessionView> {
+        let _guard = self.view_updates.lock().expect("view update lock poisoned");
+        let mut view = self.session_view_unlocked(session_id)?;
+        view.columns = columns;
+        self.replace_session_view_unlocked(session_id, view)
     }
 
     pub fn session_interceptors(&self, session_id: u64) -> Result<SessionInterceptors> {

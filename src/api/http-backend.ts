@@ -215,6 +215,8 @@ export function createHttpBackend(
       call(query("/api/session-view", { session_id: sessionId })),
     replaceSessionView: (sessionId: number | null, requestValue: ReplaceSessionViewRequest) =>
       call(query("/api/session-view", { session_id: sessionId }), json("PUT", requestValue)),
+    replaceSessionFilter: (sessionId, filter) =>
+      call(`/api/sessions/${sessionId}/filter`, json("PUT", filter)),
 
     listColumnScripts: () => call("/api/column-scripts"),
     createColumnScript: (requestValue: ScriptRequest) =>

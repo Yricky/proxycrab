@@ -26,8 +26,8 @@ use proxy_crab_mitm::{
     ProxyCrab,
     log_buffer::{BufferLayer, LogBuffer},
     model::{
-        AppConfig, BreakpointSummary, InterceptorKind, ProxyStatus, Script, SessionMetadata,
-        SystemLogEntry, TemporaryExecutionResult,
+        AppConfig, BreakpointSummary, InterceptorKind, ProxyStatus, Script, SessionFilter,
+        SessionMetadata, SystemLogEntry, TemporaryExecutionResult,
     },
 };
 use tauri::{
@@ -344,6 +344,18 @@ async fn replace_session_view(
     state
         .manager()
         .replace_session_view(session_id, request)
+        .await
+}
+
+#[tauri::command]
+async fn replace_session_filter(
+    state: State<'_, BackendState>,
+    session_id: u64,
+    filter: SessionFilter,
+) -> Result<SessionViewPayload, ManagerError> {
+    state
+        .manager()
+        .replace_session_filter(session_id, filter)
         .await
 }
 
@@ -805,6 +817,21 @@ pub fn run() {
             let runtime = ProxyCrab::open(workspace.current_path(), log_buffer)?;
             let workspace_path = workspace.current_path().to_path_buf();
             let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
+            let mut proxy_status_changes = manager.subscribe_proxy_status_changes();
+            let status_app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while proxy_status_changes.changed().await.is_ok() {
+                    let change = HttpApiChange {
+                        resources: vec![HttpApiResource::Proxy],
+                        session_id: None,
+                    };
+                    if let Err(error) =
+                        status_app_handle.emit("proxycrab://http-api-change", change)
+                    {
+                        tracing::warn!("failed to emit proxy status change: {error}");
+                    }
+                }
+            });
             let shares = SessionShareService::new();
             let share_assets = app.asset_resolver();
             let approval_handle = app.handle().clone();
@@ -917,6 +944,7 @@ pub fn run() {
             execute_breakpoint_script,
             get_session_view,
             replace_session_view,
+            replace_session_filter,
             list_column_scripts,
             create_column_script,
             get_column_script,

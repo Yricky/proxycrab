@@ -27,9 +27,9 @@ Start with the narrowest stable discriminator available:
 4. a correlation header exposed by a custom column;
 5. a Lua filter for compound conditions.
 
-The API stores one filter per Session. A filtered `POST /api/logs/ids` updates that persisted filter
-after a successful scan unless `persist_filter: false` is supplied. Bundled query/wait scripts use
-stateless filtering by default.
+The API stores one filter per Session, but `POST /api/logs/ids` is always read-only. Save a filter
+only when explicitly requested through `PUT /api/sessions/{id}/filter`. Bundled query/wait scripts
+therefore cannot mutate the Session view while inspecting traffic.
 
 Capture/bypass queries and management Lua evaluations share an eight-task concurrency limit.
 Additional calls queue asynchronously, so prefer bounded batches over unbounded parallel fan-out.
