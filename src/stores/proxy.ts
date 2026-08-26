@@ -4,10 +4,11 @@ import type { AppConfig, ProxyStatus } from "../api/types";
 import { reportError } from "./app";
 
 // Stores are module singletons; they use their own backend handle so that
-// polling logic can live outside component setup. Components still go
+// synchronization logic can live outside component setup. Components still go
 // through useBackend() for user-triggered actions.
-let pollTimer: number | undefined;
 let portPersistTimer: number | undefined;
+let refreshQueue = Promise.resolve();
+let directStatusVersion = 0;
 
 /** Delay before a valid port edit is written back to AppConfig. */
 const PORT_PERSIST_DEBOUNCE_MS = 500;
@@ -36,6 +37,31 @@ export const proxyStore = reactive({
 
   get running(): boolean {
     return this.status.status === "running";
+  },
+
+  get activeBypassCount(): number {
+    return this.status.status === "running" ? (this.status.active_bypass_count ?? 0) : 0;
+  },
+
+  activeNetlogIds(sessionId: number | null): number[] {
+    if (sessionId === null || this.status.status !== "running") return [];
+    return this.status.active_netlog[String(sessionId)] ?? [];
+  },
+
+  activeNetlogCount(sessionId: number | null): number {
+    return this.activeNetlogIds(sessionId).length;
+  },
+
+  isNetlogActive(sessionId: number | null, id: number): boolean {
+    return this.activeNetlogIds(sessionId).includes(id);
+  },
+
+  applyStatus(status: ProxyStatus): void {
+    this.status = status;
+    if (status.status === "running") {
+      this.displayIp = status.host;
+      this.portText = String(status.port);
+    }
   },
 
   get portNumber(): number | null {
@@ -74,14 +100,18 @@ export const proxyStore = reactive({
   },
 
   async refresh(): Promise<void> {
+    const refresh = refreshQueue.then(() => this.refreshNow());
+    refreshQueue = refresh.catch(() => undefined);
+    await refresh;
+  },
+
+  async refreshNow(): Promise<void> {
+    const version = directStatusVersion;
     try {
       const status = await backend.getProxyStatus();
-      this.status = status;
-      if (status.status === "running") {
-        // Show the real listening address while running; editing is disabled.
-        this.displayIp = status.host;
-        this.portText = String(status.port);
-      }
+      if (version !== directStatusVersion) return;
+      // Show the real listening address while running; editing is disabled.
+      this.applyStatus(status);
     } catch (error) {
       reportError(error, "获取代理状态失败");
     }
@@ -163,15 +193,20 @@ export const proxyStore = reactive({
     this.busy = true;
     try {
       if (this.running) {
-        this.status = await backend.stopProxy();
+        const status = await backend.stopProxy();
+        directStatusVersion += 1;
+        this.applyStatus(status);
       } else {
         const port = this.portNumber;
         if (port === null) return;
         // Write the current port through so start binds exactly what is shown.
         if (backend.host && !(await this.persistPort(port))) return;
-        this.status = await backend.startProxy();
+        const status = await backend.startProxy();
+        directStatusVersion += 1;
+        this.applyStatus(status);
       }
     } catch (error) {
+      directStatusVersion += 1;
       reportError(error, this.running ? "停止代理失败" : "启动代理失败");
       await this.refresh();
     } finally {
@@ -180,17 +215,7 @@ export const proxyStore = reactive({
     }
   },
 
-  startPolling(intervalMs = 2000): void {
-    this.stopPolling();
-    void this.init();
-    pollTimer = window.setInterval(() => void this.refresh(), intervalMs);
-  },
-
-  stopPolling(): void {
-    if (pollTimer !== undefined) {
-      window.clearInterval(pollTimer);
-      pollTimer = undefined;
-    }
+  dispose(): void {
     cancelPortPersist();
   },
 });

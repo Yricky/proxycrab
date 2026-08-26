@@ -8,7 +8,7 @@ import { appStore, reportError } from "../stores/app";
 import { openContextMenu, openDropdownMenu, type MenuItem } from "../stores/dialog";
 import { openLogDetail } from "../windows/launcher";
 import type { Column, LogViewRow, Script } from "../api/types";
-import { isStaleInProgress } from "../utils/capture-outcome";
+import { isInactiveInProgress } from "../utils/capture-outcome";
 import { copyText as writeClipboardText } from "../utils/clipboard";
 import {
   Io5Add,
@@ -331,8 +331,9 @@ function cellClass(index: number, value: string): string {
 }
 
 function outcomeDotClass(row: LogViewRow): string {
-  if (isStaleInProgress(row.outcome, row.created_at, proxyStore.status)) return "stale";
-  if (row.outcome === "in_progress") return "active";
+  const active = proxyStore.isNetlogActive(sessionsStore.viewingSessionId, row.id);
+  if (isInactiveInProgress(row.outcome, active)) return "stale";
+  if (active) return "active";
   if (row.outcome === "failed") return "failed";
   return "";
 }

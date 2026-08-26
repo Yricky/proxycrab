@@ -57,7 +57,7 @@ pub(super) async fn process_connect<C>(
     authority: hyper::http::uri::Authority,
     source: SocketAddr,
     pin: SessionPin,
-    capture: ConnectCapture,
+    mut capture: ConnectCapture,
     cancellation: CancellationToken,
     tracker: TaskGroup,
 ) where
@@ -101,7 +101,7 @@ pub(super) async fn process_connect<C>(
     };
 
     if payload.first().copied() != Some(0x16) {
-        tunnel_connect(client, &authority, &capture, cancellation).await;
+        tunnel_connect(client, &authority, &mut capture, cancellation).await;
         return;
     }
 
@@ -155,6 +155,7 @@ pub(super) async fn process_connect<C>(
         );
         return;
     }
+    capture.finish_activity();
     serve_mitm_tls(tls, authority, source, pin, cancellation, tracker, is_http2).await;
 }
 
@@ -264,10 +265,10 @@ pub(super) async fn handle_session_http_request(
         headers: headers_to_values(&parts.headers),
         tags: Default::default(),
     };
-    let capture_id = match tracker.begin_capture(&store, || {
+    let (capture_id, activity) = match tracker.begin_capture(&store, || {
         store.begin(&source.to_string(), &request_data, "request")
     }) {
-        Ok(id) => id,
+        Ok(record) => record,
         Err(error) => {
             tracing::error!("capture insert failed; refusing to forward request: {error}");
             return text_response(
@@ -502,6 +503,7 @@ pub(super) async fn handle_session_http_request(
                 store,
                 session_id: pin.session_id(),
                 capture_id,
+                activity,
                 raw_request_done,
                 modified_request_done: None,
                 tracker: tracker.clone(),
@@ -639,6 +641,7 @@ pub(super) async fn handle_session_http_request(
             store,
             session_id: pin.session_id(),
             capture_id,
+            activity,
             raw_request_done,
             modified_request_done,
             tracker: tracker.clone(),
@@ -656,6 +659,7 @@ struct SessionResponseContext {
     store: CaptureStore,
     session_id: u64,
     capture_id: u64,
+    activity: ActivityGuard,
     raw_request_done: tokio::sync::oneshot::Receiver<PumpResult>,
     modified_request_done: Option<tokio::sync::oneshot::Receiver<PumpResult>>,
     tracker: TaskGroup,
@@ -673,6 +677,7 @@ async fn finish_session_response(
         store,
         session_id,
         capture_id,
+        activity,
         raw_request_done,
         modified_request_done,
         tracker,
@@ -929,6 +934,7 @@ async fn finish_session_response(
     let final_response = response_data.clone();
     let final_modifications = response_modifications.clone();
     tracker.spawn(async move {
+        let _activity = activity;
         let request_result = raw_request_done.await.ok();
         let modified_request_result = match modified_request_done {
             Some(done) => done.await.ok(),
@@ -1186,7 +1192,7 @@ fn append_run_error(current: &mut Option<String>, next: String) {
 async fn tunnel_connect<C>(
     mut client: C,
     authority: &hyper::http::uri::Authority,
-    capture: &ConnectCapture,
+    capture: &mut ConnectCapture,
     cancellation: CancellationToken,
 ) where
     C: AsyncRead + AsyncWrite + Unpin,
@@ -1216,6 +1222,7 @@ async fn tunnel_connect<C>(
         }
     };
     let _ = capture.store.tunneled(capture.id);
+    capture.finish_activity();
     tokio::select! {
         result = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {
             if let Err(error) = result {

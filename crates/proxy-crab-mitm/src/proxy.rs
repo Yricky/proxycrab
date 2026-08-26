@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, BTreeSet, HashMap},
     convert::Infallible,
     future::Future,
     net::SocketAddr,
@@ -24,7 +24,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufStream},
     net::{TcpListener, TcpStream},
-    sync::Semaphore,
+    sync::{Semaphore, watch},
     task::{AbortHandle, JoinHandle},
     time::timeout,
 };
@@ -87,6 +87,8 @@ struct SessionInterceptorSnapshot {
 
 pub struct ProxyController {
     status: Arc<RwLock<ProxyStatus>>,
+    activity: ActivityTracker,
+    status_changes: watch::Sender<u64>,
     cancellation: Mutex<Option<CancellationToken>>,
     connections: Mutex<Option<Arc<ConnectionRegistry>>>,
     task: Mutex<Option<JoinHandle<()>>>,
@@ -95,8 +97,11 @@ pub struct ProxyController {
 
 impl ProxyController {
     pub fn new() -> Self {
+        let (status_changes, _) = watch::channel(0);
         Self {
             status: Arc::new(RwLock::new(ProxyStatus::Stopped)),
+            activity: ActivityTracker::new(status_changes.clone()),
+            status_changes,
             cancellation: Mutex::new(None),
             connections: Mutex::new(None),
             task: Mutex::new(None),
@@ -105,10 +110,30 @@ impl ProxyController {
     }
 
     pub fn status(&self) -> ProxyStatus {
-        self.status
+        let mut status = self
+            .status
             .read()
             .expect("proxy status lock poisoned")
-            .clone()
+            .clone();
+        if let ProxyStatus::Running {
+            active_netlog,
+            active_bypass_count,
+            ..
+        } = &mut status
+        {
+            let snapshot = self.activity.snapshot();
+            *active_netlog = snapshot.active_netlog;
+            *active_bypass_count = snapshot.active_bypass_count;
+        }
+        status
+    }
+
+    pub fn subscribe_status_changes(&self) -> watch::Receiver<u64> {
+        self.status_changes.subscribe()
+    }
+
+    fn notify_status_change(&self) {
+        notify_status_change(&self.status_changes);
     }
 
     pub(crate) async fn mutate_sessions<T>(&self, action: impl FnOnce() -> Result<T>) -> Result<T> {
@@ -148,7 +173,9 @@ impl ProxyController {
         ) {
             bail!("proxy is already running or changing state");
         }
+        self.activity.clear();
         *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Starting;
+        self.notify_status_change();
         let config = runtime.config();
         let listener = match TcpListener::bind((config.proxy_host.as_str(), config.proxy_port))
             .await
@@ -159,11 +186,12 @@ impl ProxyController {
                 *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Failed {
                     message: message.clone(),
                 };
+                self.notify_status_change();
                 bail!("failed to bind proxy: {message}");
             }
         };
         let cancellation = CancellationToken::new();
-        let connections = Arc::new(ConnectionRegistry::new());
+        let connections = Arc::new(ConnectionRegistry::new(self.activity.clone()));
         *self
             .cancellation
             .lock()
@@ -173,6 +201,7 @@ impl ProxyController {
             .lock()
             .expect("proxy connections lock poisoned") = Some(connections.clone());
         let status = self.status.clone();
+        let status_changes = self.status_changes.clone();
         let host = config.proxy_host.clone();
         let port = config.proxy_port;
         let started_at = now_millis();
@@ -180,12 +209,16 @@ impl ProxyController {
             host: host.clone(),
             port,
             started_at,
+            active_netlog: BTreeMap::new(),
+            active_bypass_count: 0,
         };
+        self.notify_status_change();
         tracing::info!("MITM proxy listening on {host}:{port}");
 
         let task = tokio::spawn(async move {
             accept_loop(listener, runtime, cancellation, connections).await;
             *status.write().expect("proxy status lock poisoned") = ProxyStatus::Stopped;
+            notify_status_change(&status_changes);
             tracing::info!("MITM proxy stopped");
         });
         *self.task.lock().expect("proxy task lock poisoned") = Some(task);
@@ -198,6 +231,7 @@ impl ProxyController {
             return Ok(ProxyStatus::Stopped);
         }
         *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Stopping;
+        self.notify_status_change();
         if let Some(cancellation) = self
             .cancellation
             .lock()
@@ -218,7 +252,10 @@ impl ProxyController {
             .lock()
             .expect("proxy connections lock poisoned")
             .take();
-        *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Stopped;
+        if !matches!(self.status(), ProxyStatus::Stopped) {
+            *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Stopped;
+            self.notify_status_change();
+        }
         Ok(ProxyStatus::Stopped)
     }
 
@@ -229,10 +266,149 @@ impl ProxyController {
     }
 }
 
+fn notify_status_change(changes: &watch::Sender<u64>) {
+    changes.send_modify(|revision| *revision = revision.wrapping_add(1));
+}
+
+#[derive(Default)]
+struct ActivityState {
+    netlog: BTreeMap<u64, BTreeSet<u64>>,
+    bypass: BTreeSet<u64>,
+}
+
+struct ActivitySnapshot {
+    active_netlog: BTreeMap<u64, Vec<u64>>,
+    active_bypass_count: usize,
+}
+
+#[derive(Clone)]
+struct ActivityTracker {
+    state: Arc<Mutex<ActivityState>>,
+    changes: watch::Sender<u64>,
+}
+
+impl ActivityTracker {
+    fn new(changes: watch::Sender<u64>) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ActivityState::default())),
+            changes,
+        }
+    }
+
+    fn begin_netlog(&self, session_id: u64, id: u64) -> ActivityGuard {
+        self.state
+            .lock()
+            .expect("proxy activity lock poisoned")
+            .netlog
+            .entry(session_id)
+            .or_default()
+            .insert(id);
+        notify_status_change(&self.changes);
+        ActivityGuard::new(self.clone(), ActivityKind::Netlog { session_id, id })
+    }
+
+    fn begin_bypass(&self, id: u64) -> ActivityGuard {
+        self.state
+            .lock()
+            .expect("proxy activity lock poisoned")
+            .bypass
+            .insert(id);
+        notify_status_change(&self.changes);
+        ActivityGuard::new(self.clone(), ActivityKind::Bypass { id })
+    }
+
+    fn finish(&self, kind: ActivityKind) {
+        let changed = {
+            let mut state = self.state.lock().expect("proxy activity lock poisoned");
+            match kind {
+                ActivityKind::Netlog { session_id, id } => {
+                    let removed = state
+                        .netlog
+                        .get_mut(&session_id)
+                        .is_some_and(|ids| ids.remove(&id));
+                    if state
+                        .netlog
+                        .get(&session_id)
+                        .is_some_and(BTreeSet::is_empty)
+                    {
+                        state.netlog.remove(&session_id);
+                    }
+                    removed
+                }
+                ActivityKind::Bypass { id } => state.bypass.remove(&id),
+            }
+        };
+        if changed {
+            notify_status_change(&self.changes);
+        }
+    }
+
+    fn snapshot(&self) -> ActivitySnapshot {
+        let state = self.state.lock().expect("proxy activity lock poisoned");
+        ActivitySnapshot {
+            active_netlog: state
+                .netlog
+                .iter()
+                .map(|(session_id, ids)| (*session_id, ids.iter().copied().collect()))
+                .collect(),
+            active_bypass_count: state.bypass.len(),
+        }
+    }
+
+    fn clear(&self) {
+        let changed = {
+            let mut state = self.state.lock().expect("proxy activity lock poisoned");
+            let changed = !state.netlog.is_empty() || !state.bypass.is_empty();
+            *state = ActivityState::default();
+            changed
+        };
+        if changed {
+            notify_status_change(&self.changes);
+        }
+    }
+
+    fn notify(&self) {
+        notify_status_change(&self.changes);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ActivityKind {
+    Netlog { session_id: u64, id: u64 },
+    Bypass { id: u64 },
+}
+
+pub(super) struct ActivityGuard {
+    tracker: ActivityTracker,
+    kind: Option<ActivityKind>,
+}
+
+impl ActivityGuard {
+    fn new(tracker: ActivityTracker, kind: ActivityKind) -> Self {
+        Self {
+            tracker,
+            kind: Some(kind),
+        }
+    }
+
+    pub(super) fn finish(&mut self) {
+        if let Some(kind) = self.kind.take() {
+            self.tracker.finish(kind);
+        }
+    }
+}
+
+impl Drop for ActivityGuard {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TaskGroup {
     tracker: TaskTracker,
     state: Arc<Mutex<TaskGroupState>>,
+    activity: ActivityTracker,
 }
 
 struct TaskGroupState {
@@ -250,15 +426,17 @@ struct ConnectionGeneration {
 
 struct ConnectionRegistry {
     generation: Mutex<ConnectionGeneration>,
+    activity: ActivityTracker,
 }
 
 impl ConnectionRegistry {
-    fn new() -> Self {
+    fn new(activity: ActivityTracker) -> Self {
         Self {
             generation: Mutex::new(ConnectionGeneration {
                 cancellation: CancellationToken::new(),
-                tasks: TaskGroup::new(),
+                tasks: TaskGroup::new(activity.clone()),
             }),
+            activity,
         }
     }
 
@@ -279,7 +457,7 @@ impl ConnectionRegistry {
             &mut *generation,
             ConnectionGeneration {
                 cancellation: CancellationToken::new(),
-                tasks: TaskGroup::new(),
+                tasks: TaskGroup::new(self.activity.clone()),
             },
         )
     }
@@ -294,10 +472,17 @@ impl ConnectionRegistry {
 struct ConnectCapture {
     store: CaptureStore,
     id: u64,
+    activity: ActivityGuard,
+}
+
+impl ConnectCapture {
+    fn finish_activity(&mut self) {
+        self.activity.finish();
+    }
 }
 
 impl TaskGroup {
-    fn new() -> Self {
+    fn new(activity: ActivityTracker) -> Self {
         Self {
             tracker: TaskTracker::new(),
             state: Arc::new(Mutex::new(TaskGroupState {
@@ -306,6 +491,7 @@ impl TaskGroup {
                 capture_id_ranges: HashMap::new(),
                 bypass_id_range: None,
             })),
+            activity,
         }
     }
 
@@ -320,7 +506,7 @@ impl TaskGroup {
         &self,
         store: &CaptureStore,
         begin: impl FnOnce() -> Result<u64>,
-    ) -> Result<u64> {
+    ) -> Result<(u64, ActivityGuard)> {
         let mut state = self.state.lock().expect("proxy task state lock poisoned");
         if state.closing {
             bail!("proxy connection is closing");
@@ -334,14 +520,15 @@ impl TaskGroup {
                 *max_id = (*max_id).max(id);
             })
             .or_insert((store.clone(), id, id));
-        Ok(id)
+        let activity = self.activity.begin_netlog(store.session_id(), id);
+        Ok((id, activity))
     }
 
     fn begin_bypass(
         &self,
         store: &BypassStore,
         begin: impl FnOnce() -> Result<u64>,
-    ) -> Result<u64> {
+    ) -> Result<(u64, ActivityGuard)> {
         let mut state = self.state.lock().expect("proxy task state lock poisoned");
         if state.closing {
             bail!("proxy connection is closing");
@@ -354,7 +541,8 @@ impl TaskGroup {
             }
             range @ None => *range = Some((store.clone(), id, id)),
         }
-        Ok(id)
+        let activity = self.activity.begin_bypass(id);
+        Ok((id, activity))
     }
 
     fn spawn<F>(&self, future: F)
@@ -405,6 +593,7 @@ impl TaskGroup {
         if let Some((store, min_id, max_id)) = bypass_id_range {
             let _ = store.mark_in_progress_range_as_shutdown(min_id, max_id);
         }
+        self.activity.notify();
     }
 }
 
@@ -858,10 +1047,14 @@ fn begin_connect_capture(
     request: &RequestData,
 ) -> Result<ConnectCapture> {
     let store = pin.store().clone();
-    let id = tracker.begin_capture(&store, || {
+    let (id, activity) = tracker.begin_capture(&store, || {
         store.begin(&source.to_string(), request, "connect")
     })?;
-    Ok(ConnectCapture { store, id })
+    Ok(ConnectCapture {
+        store,
+        id,
+        activity,
+    })
 }
 
 fn record_connect_error(capture: &ConnectCapture, stage: ErrorStage, kind: &str, message: &str) {
@@ -1002,10 +1195,52 @@ mod tests {
 
     use super::mitm::{parse_positive_decimal, parse_tls_insecure_tag, response_from_data};
     use super::{
-        PacedBody, headers_to_values, normalize_tls_error, remove_header_value,
+        PacedBody, ProxyController, headers_to_values, normalize_tls_error, remove_header_value,
         strip_hop_by_hop_headers, values_to_headers, version_name,
     };
-    use crate::model::{HeaderValues, ResponseData};
+    use crate::model::{HeaderValues, ProxyStatus, ResponseData};
+
+    #[tokio::test]
+    async fn running_status_tracks_exact_active_records_and_notifies() {
+        let controller = ProxyController::new();
+        *controller
+            .status
+            .write()
+            .expect("proxy status lock poisoned") = ProxyStatus::Running {
+            host: "127.0.0.1".into(),
+            port: 8080,
+            started_at: 1,
+            active_netlog: Default::default(),
+            active_bypass_count: 0,
+        };
+        let mut changes = controller.subscribe_status_changes();
+
+        let netlog_a = controller.activity.begin_netlog(42, 7);
+        changes.changed().await.unwrap();
+        let netlog_b = controller.activity.begin_netlog(42, 9);
+        let bypass = controller.activity.begin_bypass(11);
+
+        assert!(matches!(
+            controller.status(),
+            ProxyStatus::Running {
+                active_netlog,
+                active_bypass_count: 1,
+                ..
+            } if active_netlog.get(&42) == Some(&vec![7, 9])
+        ));
+
+        drop(netlog_a);
+        drop(netlog_b);
+        drop(bypass);
+        assert!(matches!(
+            controller.status(),
+            ProxyStatus::Running {
+                active_netlog,
+                active_bypass_count: 0,
+                ..
+            } if active_netlog.is_empty()
+        ));
+    }
 
     #[test]
     fn recognizes_client_ca_rejection() {

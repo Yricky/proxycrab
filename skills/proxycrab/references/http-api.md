@@ -168,12 +168,23 @@ Exactly one of:
 ```json
 { "status": "stopped" }
 { "status": "starting" }
-{ "status": "running", "host": "0.0.0.0", "port": 8089, "started_at": 1785380000000 }
+{
+  "status": "running",
+  "host": "0.0.0.0",
+  "port": 8089,
+  "started_at": 1785380000000,
+  "active_netlog": { "1786333525006": [1, 2, 3, 4, 5] },
+  "active_bypass_count": 2
+}
 { "status": "stopping" }
 { "status": "failed", "message": "bind failed" }
 ```
 
 `started_at` is a Unix-millisecond timestamp and is exposed only while the listener is running.
+`active_netlog` maps Session IDs to exact active capture IDs and is the sole activity source for
+netlogs. `active_bypass_count` is the total number of active transparent-forwarding records.
+Persisted `outcome` and `stage` continue to represent result and execution phase; they do not imply
+current activity.
 
 ### Script
 
@@ -284,6 +295,12 @@ Returns `AppConfig`.
 
 Returns `ProxyStatus`.
 
+Runtime lifecycle and activity transitions publish the existing `proxy` UI-change resource. The
+management UI reads this endpoint initially and after those notifications rather than polling it.
+Share-token browser responses use the same status contract internally but retain only their
+authorized Session in `active_netlog` and omit `active_bypass_count`; `/share-api/proxy/changes`
+provides the authenticated revision-based long-poll invalidation.
+
 ### `POST /api/proxy/start`
 
 Starts the MITM listener and returns `ProxyStatus`.
@@ -330,6 +347,8 @@ permission is changed.
 `hours` must be an integer from 1 through 720. The response contains the one-time cleartext
 `pcrab_share_…` token, Session ID, and expiry. Never use the token as a Bearer credential: the share
 browser sends it only as exactly one `token` query parameter to the read-only `/share-api/*` surface.
+The share bootstrap and proxy-status route are projected through that token's Session scope, so
+other Session activity and the global bypass activity count are never returned.
 
 ### `PUT /api/sessions/{id}`
 

@@ -900,6 +900,10 @@ impl ProxyCrab {
     pub fn proxy_status(&self) -> ProxyStatus {
         self.proxy.status()
     }
+
+    pub fn subscribe_proxy_status_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.proxy.subscribe_status_changes()
+    }
 }
 
 fn first_header<'a>(headers: &'a crate::model::HeaderValues, name: &str) -> Option<&'a str> {

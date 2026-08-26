@@ -9,7 +9,6 @@ import type {
 import { reportError } from "./app";
 import { proxyStore } from "./proxy";
 import { sessionsStore } from "./sessions";
-import { isStaleInProgress } from "../utils/capture-outcome";
 
 const VIEW_BATCH_SIZE = 200;
 const ID_PAGE_SIZE = 10_000;
@@ -22,6 +21,38 @@ const FILTER_POLL_INTERVAL = 2000;
 let pollTimer: number | undefined;
 let pollInFlight = false;
 let olderInFlight = false;
+let finalHydrateInFlight = false;
+let finalHydratePending = false;
+const pendingFinalIds = new Set<number>();
+
+async function flushFinalHydration(): Promise<void> {
+  if (pendingFinalIds.size === 0) return;
+  if (finalHydrateInFlight) {
+    finalHydratePending = true;
+    return;
+  }
+  finalHydrateInFlight = true;
+  try {
+    const ids = [...pendingFinalIds];
+    await logsStore.hydrate(ids, true);
+    for (const id of ids) {
+      const row = logsStore.rowsById.get(id);
+      if (
+        row === undefined ||
+        row.outcome !== "in_progress" ||
+        proxyStore.isNetlogActive(sessionsStore.viewingSessionId, id)
+      ) {
+        pendingFinalIds.delete(id);
+      }
+    }
+  } finally {
+    finalHydrateInFlight = false;
+    if (finalHydratePending) {
+      finalHydratePending = false;
+      void flushFinalHydration();
+    }
+  }
+}
 
 function cellErrorKey(id: number, columnIndex: number): string {
   return `${id}:${columnIndex}`;
@@ -50,17 +81,9 @@ export const logsStore = reactive({
     return this.appliedFilter.option !== null && this.appliedFilter.input.length > 0;
   },
 
-  /** 是否存在尚未完成的 in_progress 记录（已完成记录不会再变化，无需刷新）。 */
+  /** 当前查看 Session 是否有后端确认仍在处理的记录。 */
   get hasActive(): boolean {
-    for (const row of this.rowsById.values()) {
-      if (
-        row.outcome === "in_progress" &&
-        !isStaleInProgress(row.outcome, row.created_at, proxyStore.status)
-      ) {
-        return true;
-      }
-    }
-    return false;
+    return proxyStore.activeNetlogCount(sessionsStore.viewingSessionId) > 0;
   },
 
   get displayRows(): LogViewRow[] {
@@ -90,6 +113,7 @@ export const logsStore = reactive({
     this.cellErrors = new Map();
     this.sortDesc = true;
     this.olderExhausted = false;
+    pendingFinalIds.clear();
   },
 
   reset(): void {
@@ -240,17 +264,12 @@ export const logsStore = reactive({
     }
   },
 
-  /** 只轮询处于 in_progress 的活跃记录；无活跃记录时跳过（已完成记录不会再变化）。 */
+  /** 只刷新状态快照中仍活跃、且已经出现在当前列表里的记录。 */
   async hydrateActive(): Promise<void> {
-    const ids: number[] = [];
-    for (const [id, row] of this.rowsById) {
-      if (
-        row.outcome === "in_progress" &&
-        !isStaleInProgress(row.outcome, row.created_at, proxyStore.status)
-      ) {
-        ids.push(id);
-      }
-    }
+    const listed = new Set(this.ids);
+    const ids = proxyStore
+      .activeNetlogIds(sessionsStore.viewingSessionId)
+      .filter((id) => listed.has(id));
     if (ids.length > 0) {
       await this.hydrate(ids);
     } else if (this.columns.length === 0) {
@@ -373,4 +392,30 @@ watch(
       void logsStore.loadSession();
     }
   },
+);
+
+watch(
+  () => {
+    const sessionId = sessionsStore.viewingSessionId;
+    return {
+      sessionId,
+      ids: proxyStore.activeNetlogIds(sessionId),
+    };
+  },
+  (current, previous) => {
+    if (current.sessionId === null || current.sessionId !== previous.sessionId) {
+      pendingFinalIds.clear();
+      return;
+    }
+    const currentIds = new Set(current.ids);
+    const previousIds = new Set(previous.ids);
+    const removed = previous.ids.filter(
+      (id) => !currentIds.has(id) && logsStore.rowsById.has(id),
+    );
+    for (const id of removed) pendingFinalIds.add(id);
+    for (const id of current.ids) pendingFinalIds.delete(id);
+    void flushFinalHydration();
+    if (current.ids.some((id) => !previousIds.has(id))) void logsStore.poll();
+  },
+  { deep: true },
 );

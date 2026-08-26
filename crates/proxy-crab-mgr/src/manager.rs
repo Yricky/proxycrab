@@ -34,12 +34,13 @@ use crate::{
     },
     har::{self, HarCapture},
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, watch};
 
 const MAX_BLOCKING_MANAGEMENT_TASKS: usize = 8;
 
 #[async_trait]
 pub trait ProxyCrabManager: Send + Sync {
+    fn subscribe_proxy_status_changes(&self) -> watch::Receiver<u64>;
     async fn asset(&self, id: String) -> ManagerResult<Asset>;
     async fn begin_asset_upload(
         &self,
@@ -359,6 +360,10 @@ impl MitmManager {
 
 #[async_trait]
 impl ProxyCrabManager for MitmManager {
+    fn subscribe_proxy_status_changes(&self) -> watch::Receiver<u64> {
+        self.runtime.subscribe_proxy_status_changes()
+    }
+
     async fn asset(&self, id: String) -> ManagerResult<Asset> {
         self.runtime
             .asset(&id)

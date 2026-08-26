@@ -11,7 +11,7 @@ import type {
 import { BackendError } from "../api/backend-error";
 import { appStore, reportError } from "../stores/app";
 import { proxyStore } from "../stores/proxy";
-import { isStaleInProgress } from "../utils/capture-outcome";
+import { isInactiveInProgress } from "../utils/capture-outcome";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import BodyViewer from "../components/BodyViewer.vue";
 import { Io5Checkmark, Io5ChevronDown, Io5Copy, Io5Warning } from "vue-icons-plus/io5";
@@ -49,7 +49,10 @@ const AUTO_REFRESH_INTERVAL = 2000;
 const stale = computed(
   () =>
     detail.value !== null &&
-    isStaleInProgress(detail.value.outcome, detail.value.created_at, proxyStore.status),
+    isInactiveInProgress(
+      detail.value.outcome,
+      proxyStore.isNetlogActive(detail.value.session_id, detail.value.id),
+    ),
 );
 
 async function load(silent = false): Promise<void> {

@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -47,9 +48,55 @@ pub struct CreatedSessionShare {
 pub struct SessionShareBootstrap {
     pub session: proxy_crab_mitm::model::SessionMetadata,
     pub view: SessionViewPayload,
-    pub proxy_status: proxy_crab_mitm::model::ProxyStatus,
+    pub proxy_status: SharedProxyStatus,
     pub api_port: u16,
     pub expires_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SharedProxyStatus {
+    Stopped,
+    Starting,
+    Running {
+        host: String,
+        port: u16,
+        started_at: u64,
+        active_netlog: BTreeMap<u64, Vec<u64>>,
+    },
+    Stopping,
+    Failed {
+        message: String,
+    },
+}
+
+fn scope_proxy_status(
+    status: proxy_crab_mitm::model::ProxyStatus,
+    session_id: u64,
+) -> SharedProxyStatus {
+    use proxy_crab_mitm::model::ProxyStatus;
+
+    match status {
+        ProxyStatus::Stopped => SharedProxyStatus::Stopped,
+        ProxyStatus::Starting => SharedProxyStatus::Starting,
+        ProxyStatus::Running {
+            host,
+            port,
+            started_at,
+            mut active_netlog,
+            ..
+        } => {
+            active_netlog.retain(|candidate, _| *candidate == session_id);
+            SharedProxyStatus::Running {
+                host,
+                port,
+                started_at,
+                active_netlog,
+            }
+        }
+        ProxyStatus::Stopping => SharedProxyStatus::Stopping,
+        ProxyStatus::Failed { message } => SharedProxyStatus::Failed { message },
+    }
 }
 
 #[derive(Clone)]
@@ -178,6 +225,7 @@ pub fn router(manager: Arc<dyn ProxyCrabManager>, shares: Arc<SessionShareServic
     Router::new()
         .route("/share-api/bootstrap", get(bootstrap))
         .route("/share-api/proxy/status", get(proxy_status))
+        .route("/share-api/proxy/changes", get(proxy_changes))
         .route("/share-api/session-view", get(session_view))
         .route("/share-api/logs/ids", post(log_ids))
         .route("/share-api/logs/views", post(log_views))
@@ -253,7 +301,7 @@ async fn bootstrap(
     success(SessionShareBootstrap {
         session,
         view,
-        proxy_status,
+        proxy_status: scope_proxy_status(proxy_status, scope.session_id),
         api_port: config.api_port,
         expires_at: scope.expires_at,
     })
@@ -261,8 +309,57 @@ async fn bootstrap(
 
 async fn proxy_status(
     State(state): State<Arc<ShareState>>,
+    Extension(scope): Extension<ShareScope>,
 ) -> Result<Json<serde_json::Value>, ShareApiError> {
-    success(state.manager.proxy_status().await?)
+    success(scope_proxy_status(
+        state.manager.proxy_status().await?,
+        scope.session_id,
+    ))
+}
+
+#[derive(Deserialize)]
+struct ProxyChangesQuery {
+    after: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SharedProxyChange {
+    revision: String,
+    changed: bool,
+}
+
+fn shared_proxy_revision(status: &SharedProxyStatus) -> Result<String, ManagerError> {
+    let encoded = serde_json::to_vec(status)
+        .map_err(|error| ManagerError::internal(format!("encode shared proxy status: {error}")))?;
+    Ok(URL_SAFE_NO_PAD.encode(Sha256::digest(encoded)))
+}
+
+async fn proxy_changes(
+    State(state): State<Arc<ShareState>>,
+    Extension(scope): Extension<ShareScope>,
+    Query(query): Query<ProxyChangesQuery>,
+) -> Result<Json<serde_json::Value>, ShareApiError> {
+    let mut changes = state.manager.subscribe_proxy_status_changes();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
+    loop {
+        let status = scope_proxy_status(state.manager.proxy_status().await?, scope.session_id);
+        let revision = shared_proxy_revision(&status)?;
+        if query.after.as_ref() != Some(&revision) {
+            return success(SharedProxyChange {
+                revision,
+                changed: true,
+            });
+        }
+        if !matches!(
+            tokio::time::timeout_at(deadline, changes.changed()).await,
+            Ok(Ok(()))
+        ) {
+            return success(SharedProxyChange {
+                revision,
+                changed: false,
+            });
+        }
+    }
 }
 
 async fn session_view(
@@ -440,6 +537,49 @@ mod tests {
         MitmManager,
         dto::{ActiveSession, CreateSessionRequest, ScriptRequest},
     };
+
+    #[test]
+    fn shared_proxy_status_contains_only_authorized_netlogs() {
+        let status = proxy_crab_mitm::model::ProxyStatus::Running {
+            host: "127.0.0.1".into(),
+            port: 8080,
+            started_at: 1,
+            active_netlog: BTreeMap::from([(7, vec![1, 2]), (8, vec![3])]),
+            active_bypass_count: 4,
+        };
+
+        let scoped = scope_proxy_status(status, 7);
+        let revision = shared_proxy_revision(&scoped).unwrap();
+        let value = serde_json::to_value(&scoped).unwrap();
+
+        assert_eq!(value["active_netlog"]["7"], json!([1, 2]));
+        assert!(value["active_netlog"].get("8").is_none());
+        assert!(value.get("active_bypass_count").is_none());
+
+        let unrelated_change = scope_proxy_status(
+            proxy_crab_mitm::model::ProxyStatus::Running {
+                host: "127.0.0.1".into(),
+                port: 8080,
+                started_at: 1,
+                active_netlog: BTreeMap::from([(7, vec![1, 2]), (8, vec![3, 4])]),
+                active_bypass_count: 9,
+            },
+            7,
+        );
+        assert_eq!(shared_proxy_revision(&unrelated_change).unwrap(), revision);
+
+        let authorized_change = scope_proxy_status(
+            proxy_crab_mitm::model::ProxyStatus::Running {
+                host: "127.0.0.1".into(),
+                port: 8080,
+                started_at: 1,
+                active_netlog: BTreeMap::from([(7, vec![1])]),
+                active_bypass_count: 9,
+            },
+            7,
+        );
+        assert_ne!(shared_proxy_revision(&authorized_change).unwrap(), revision);
+    }
 
     #[test]
     fn token_is_scoped_distinct_and_expires() {

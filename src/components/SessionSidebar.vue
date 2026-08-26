@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import { sessionsStore } from "../stores/sessions";
 import { routingStore } from "../stores/routing";
+import { proxyStore } from "../stores/proxy";
 import { confirmDialog, openContextMenu } from "../stores/dialog";
 import { formatRelativeTime } from "../utils/format";
 import { appStore } from "../stores/app";
@@ -23,6 +24,10 @@ const editingId = ref<number | null>(null);
 const editName = ref("");
 const editDesc = ref("");
 const sharingSession = ref<SessionMetadata | null>(null);
+
+function formatActivityCount(count: number): string {
+  return count > 99 ? "99+" : String(count);
+}
 
 /* ---- 侧边栏宽度拖拽调整 ---- */
 const SIDEBAR_MIN = 160;
@@ -162,8 +167,24 @@ onMounted(() => {
       <div class="sb-header">
         <span class="sb-title">会话</span>
         <div class="sb-header-actions">
-          <button class="btn icon" title="透明转发记录" @click="openBypass">
-            <IoArrowForwardCircle :size="15" />
+          <button
+            class="btn icon"
+            :title="
+              proxyStore.activeBypassCount > 0
+                ? `透明转发记录（${proxyStore.activeBypassCount} 条活跃）`
+                : '透明转发记录'
+            "
+            :aria-label="
+              proxyStore.activeBypassCount > 0
+                ? `透明转发记录，${proxyStore.activeBypassCount} 条活跃`
+                : '透明转发记录'
+            "
+            @click="openBypass"
+          >
+            <span v-if="proxyStore.activeBypassCount > 0" class="activity-badge">
+              {{ formatActivityCount(proxyStore.activeBypassCount) }}
+            </span>
+            <IoArrowForwardCircle v-else :size="15" />
           </button>
           <button
             class="btn icon"
@@ -233,9 +254,19 @@ onMounted(() => {
             <span
               v-if="sessionsStore.activeSessionId === session.id"
               class="sb-active"
-              title="活跃会话"
+              :title="
+                proxyStore.activeNetlogCount(session.id) > 0
+                  ? `活跃会话，${proxyStore.activeNetlogCount(session.id)} 条活跃连接`
+                  : '活跃会话'
+              "
             >
-              <Io5RadioButtonOn :size="11" />活跃
+              <span
+                v-if="proxyStore.activeNetlogCount(session.id) > 0"
+                class="activity-badge session-activity-badge"
+              >
+                {{ formatActivityCount(proxyStore.activeNetlogCount(session.id)) }}
+              </span>
+              <Io5RadioButtonOn v-else :size="11" />活跃
             </span>
           </div>
           <div class="sb-item-meta">
@@ -434,6 +465,26 @@ onMounted(() => {
   gap: 3px;
   color: var(--accent);
   font-size: 10px;
+}
+.activity-badge {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+.session-activity-badge {
+  min-width: 13px;
+  height: 13px;
+  padding: 0 2px;
+  font-size: 8px;
 }
 .sb-item-meta {
   display: flex;

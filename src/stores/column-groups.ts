@@ -16,7 +16,6 @@ import {
 import { reportError } from "./app";
 import { logsStore } from "./logs";
 import { proxyStore } from "./proxy";
-import { isStaleInProgress } from "../utils/capture-outcome";
 
 const ID_PAGE_SIZE = 10_000;
 const VIEW_BATCH_SIZE = 200;
@@ -284,13 +283,8 @@ async function refreshInProgress(
   cache: ColumnGroupCache,
   runId: number,
 ): Promise<void> {
-  const ids = [...cache.rows.entries()]
-    .filter(
-      ([, row]) =>
-        row.outcome === "in_progress" &&
-        !isStaleInProgress(row.outcome, row.createdAt, proxyStore.status),
-    )
-    .map(([id]) => id);
+  const active = new Set(proxyStore.activeNetlogIds(cache.sessionId));
+  const ids = [...cache.rows.keys()].filter((id) => active.has(id));
   await hydrateIds(backend, cache, ids, true, runId);
 }
 
