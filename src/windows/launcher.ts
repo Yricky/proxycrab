@@ -20,6 +20,7 @@ import AgentsPresetsWindow from "./AgentsPresetsWindow.vue";
 import ArchivedSessionsWindow from "./ArchivedSessionsWindow.vue";
 import ApprovalWindow from "./ApprovalWindow.vue";
 import BrowserWindow from "./BrowserWindow.vue";
+import SessionExportShareWindow from "./SessionExportShareWindow.vue";
 
 /** 内置浏览器窗口：同一 URL 复用已有窗口。 */
 export function openBrowser(url: string): void {
@@ -187,6 +188,19 @@ export function openArchivedSessions(): void {
     width: 720,
     height: 480,
   });
+}
+
+export function openSessionExportShare(sessionId: number, sessionName: string): void {
+  windowsStore.open(`session-export-share-${sessionId}`, {
+    title: `导出和分享 — ${sessionName}`,
+    component: SessionExportShareWindow,
+    props: { sessionId },
+    width: 700,
+    height: 420,
+  });
+  window.dispatchEvent(
+    new CustomEvent("proxycrab-refresh-session-share", { detail: sessionId }),
+  );
 }
 
 export function openBase64(): void {

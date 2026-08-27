@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use axum::{
@@ -28,20 +28,17 @@ use crate::{
     http::body_response,
 };
 
-pub const DEFAULT_SHARE_HOURS: u16 = 24;
-pub const MAX_SHARE_HOURS: u16 = 720;
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct CreateSessionShareRequest {
+pub struct EnableSessionShareRequest {
     pub session_id: u64,
-    pub hours: u16,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct CreatedSessionShare {
-    pub token: String,
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SessionShareState {
     pub session_id: u64,
-    pub expires_at: u64,
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,7 +47,6 @@ pub struct SessionShareBootstrap {
     pub view: SessionViewPayload,
     pub proxy_status: SharedProxyStatus,
     pub api_port: u16,
-    pub expires_at: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,21 +97,18 @@ fn scope_proxy_status(
 
 #[derive(Clone)]
 struct ShareEntry {
+    token: String,
     digest: [u8; 32],
-    session_id: u64,
-    expires_at: u64,
-    deadline: Instant,
 }
 
 #[derive(Debug, Clone)]
 struct ShareScope {
     session_id: u64,
-    expires_at: u64,
 }
 
 #[derive(Default)]
 pub struct SessionShareService {
-    entries: Mutex<Vec<ShareEntry>>,
+    entries: Mutex<BTreeMap<u64, ShareEntry>>,
 }
 
 impl SessionShareService {
@@ -123,64 +116,88 @@ impl SessionShareService {
         Arc::new(Self::default())
     }
 
-    pub async fn create(
-        &self,
+    async fn ensure_session(
         manager: &Arc<dyn ProxyCrabManager>,
-        request: CreateSessionShareRequest,
-    ) -> Result<CreatedSessionShare, ManagerError> {
-        if !(1..=MAX_SHARE_HOURS).contains(&request.hours) {
-            return Err(ManagerError::bad_request(format!(
-                "share hours must be between 1 and {MAX_SHARE_HOURS}"
-            )));
-        }
-        if !manager
+        session_id: u64,
+    ) -> Result<(), ManagerError> {
+        if manager
             .sessions()
             .await?
             .iter()
-            .any(|session| session.id == request.session_id)
+            .any(|session| session.id == session_id)
         {
-            return Err(ManagerError::not_found("session not found"));
+            Ok(())
+        } else {
+            Err(ManagerError::not_found("session not found"))
         }
-        self.create_with_duration(
-            request.session_id,
-            Duration::from_secs(u64::from(request.hours) * 60 * 60),
-        )
     }
 
-    fn create_with_duration(
+    pub async fn status(
         &self,
+        manager: &Arc<dyn ProxyCrabManager>,
         session_id: u64,
-        duration: Duration,
-    ) -> Result<CreatedSessionShare, ManagerError> {
+    ) -> Result<SessionShareState, ManagerError> {
+        Self::ensure_session(manager, session_id).await?;
+        let entries = self.entries.lock().expect("session share lock poisoned");
+        Ok(match entries.get(&session_id) {
+            Some(entry) => SessionShareState {
+                session_id,
+                enabled: true,
+                token: Some(entry.token.clone()),
+            },
+            None => SessionShareState {
+                session_id,
+                enabled: false,
+                token: None,
+            },
+        })
+    }
+
+    pub async fn enable(
+        &self,
+        manager: &Arc<dyn ProxyCrabManager>,
+        session_id: u64,
+    ) -> Result<SessionShareState, ManagerError> {
+        Self::ensure_session(manager, session_id).await?;
+        let mut entries = self.entries.lock().expect("session share lock poisoned");
+        if let Some(entry) = entries.get(&session_id) {
+            return Ok(SessionShareState {
+                session_id,
+                enabled: true,
+                token: Some(entry.token.clone()),
+            });
+        }
+
         let mut bytes = [0_u8; 32];
         getrandom::fill(&mut bytes)
             .map_err(|error| ManagerError::internal(format!("generate share token: {error}")))?;
         let token = format!("pcrab_share_{}", URL_SAFE_NO_PAD.encode(bytes));
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| ManagerError::internal(format!("read system clock: {error}")))?;
-        let expires_at = now
-            .checked_add(duration)
-            .ok_or_else(|| ManagerError::bad_request("share expiry is out of range"))?
-            .as_millis()
-            .try_into()
-            .map_err(|_| ManagerError::bad_request("share expiry is out of range"))?;
-        let deadline = Instant::now()
-            .checked_add(duration)
-            .ok_or_else(|| ManagerError::bad_request("share expiry is out of range"))?;
         let entry = ShareEntry {
+            token: token.clone(),
             digest: Sha256::digest(token.as_bytes()).into(),
-            session_id,
-            expires_at,
-            deadline,
         };
-        let mut entries = self.entries.lock().expect("session share lock poisoned");
-        entries.retain(|candidate| candidate.deadline > Instant::now());
-        entries.push(entry);
-        Ok(CreatedSessionShare {
-            token,
+        entries.insert(session_id, entry);
+        Ok(SessionShareState {
             session_id,
-            expires_at,
+            enabled: true,
+            token: Some(token),
+        })
+    }
+
+    pub async fn disable(
+        &self,
+        manager: &Arc<dyn ProxyCrabManager>,
+        session_id: u64,
+    ) -> Result<SessionShareState, ManagerError> {
+        Self::ensure_session(manager, session_id).await?;
+        self.entries
+            .lock()
+            .expect("session share lock poisoned")
+            .remove(&session_id);
+        Ok(SessionShareState {
+            session_id,
+            enabled: false,
+            token: None,
         })
     }
 
@@ -189,21 +206,14 @@ impl SessionShareService {
             return Err(ShareAuthError::Invalid);
         }
         let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-        let now = Instant::now();
-        let mut entries = self.entries.lock().expect("session share lock poisoned");
-        let matched = entries
+        let entries = self.entries.lock().expect("session share lock poisoned");
+        entries
             .iter()
-            .find(|entry| bool::from(entry.digest.ct_eq(&digest)))
-            .cloned();
-        entries.retain(|entry| entry.deadline > now);
-        match matched {
-            Some(entry) if entry.deadline > now => Ok(ShareScope {
-                session_id: entry.session_id,
-                expires_at: entry.expires_at,
-            }),
-            Some(_) => Err(ShareAuthError::Expired),
-            None => Err(ShareAuthError::Invalid),
-        }
+            .find(|(_, entry)| bool::from(entry.digest.ct_eq(&digest)))
+            .map(|(session_id, _)| ShareScope {
+                session_id: *session_id,
+            })
+            .ok_or(ShareAuthError::Invalid)
     }
 }
 
@@ -303,7 +313,6 @@ async fn bootstrap(
         view,
         proxy_status: scope_proxy_status(proxy_status, scope.session_id),
         api_port: config.api_port,
-        expires_at: scope.expires_at,
     })
 }
 
@@ -471,14 +480,12 @@ fn success(value: impl Serialize) -> Result<Json<serde_json::Value>, ShareApiErr
 #[derive(Debug)]
 enum ShareAuthError {
     Invalid,
-    Expired,
 }
 
 impl IntoResponse for ShareAuthError {
     fn into_response(self) -> Response {
         let (code, message) = match self {
             Self::Invalid => ("invalid_share_token", "分享链接无效"),
-            Self::Expired => ("share_expired", "分享链接已过期"),
         };
         (
             StatusCode::UNAUTHORIZED,
@@ -581,25 +588,6 @@ mod tests {
     }
 
     #[test]
-    fn token_is_scoped_distinct_and_expires() {
-        let service = SessionShareService::default();
-        let first = service
-            .create_with_duration(7, Duration::from_secs(60))
-            .unwrap();
-        let second = service
-            .create_with_duration(7, Duration::from_secs(60))
-            .unwrap();
-        assert_ne!(first.token, second.token);
-        assert_eq!(service.authenticate(&first.token).unwrap().session_id, 7);
-
-        let expired = service.create_with_duration(8, Duration::ZERO).unwrap();
-        assert!(matches!(
-            service.authenticate(&expired.token),
-            Err(ShareAuthError::Expired)
-        ));
-    }
-
-    #[test]
     fn rejects_malformed_credentials() {
         let service = SessionShareService::default();
         assert!(matches!(
@@ -613,7 +601,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_creation_validates_duration_and_session() {
+    async fn share_is_idempotent_revocable_and_process_local() {
         let directory = tempdir().unwrap();
         let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
         let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
@@ -625,29 +613,44 @@ mod tests {
             .await
             .unwrap();
         let service = SessionShareService::default();
-        for hours in [0, MAX_SHARE_HOURS + 1] {
-            let error = service
-                .create(
-                    &manager,
-                    CreateSessionShareRequest {
-                        session_id: session.id,
-                        hours,
-                    },
-                )
+        assert_eq!(
+            service.status(&manager, session.id).await.unwrap(),
+            SessionShareState {
+                session_id: session.id,
+                enabled: false,
+                token: None,
+            }
+        );
+
+        let first = service.enable(&manager, session.id).await.unwrap();
+        let second = service.enable(&manager, session.id).await.unwrap();
+        assert!(first.enabled);
+        assert_eq!(first, second);
+        let token = first.token.as_deref().unwrap();
+        assert_eq!(service.authenticate(token).unwrap().session_id, session.id);
+        assert_eq!(service.status(&manager, session.id).await.unwrap(), first);
+
+        assert_eq!(
+            service.disable(&manager, session.id).await.unwrap(),
+            SessionShareState {
+                session_id: session.id,
+                enabled: false,
+                token: None,
+            }
+        );
+        assert!(matches!(
+            service.authenticate(token),
+            Err(ShareAuthError::Invalid)
+        ));
+        assert!(
+            !SessionShareService::default()
+                .status(&manager, session.id)
                 .await
-                .unwrap_err();
-            assert_eq!(error.code, "bad_request");
-        }
-        let error = service
-            .create(
-                &manager,
-                CreateSessionShareRequest {
-                    session_id: u64::MAX,
-                    hours: DEFAULT_SHARE_HOURS,
-                },
-            )
-            .await
-            .unwrap_err();
+                .unwrap()
+                .enabled
+        );
+
+        let error = service.enable(&manager, u64::MAX).await.unwrap_err();
         assert_eq!(error.code, "not_found");
     }
 
@@ -678,24 +681,15 @@ mod tests {
             .await
             .unwrap();
         let shares = SessionShareService::new();
-        let created = shares
-            .create(
-                &manager,
-                CreateSessionShareRequest {
-                    session_id: shared.id,
-                    hours: DEFAULT_SHARE_HOURS,
-                },
-            )
-            .await
-            .unwrap();
+        let created = shares.enable(&manager, shared.id).await.unwrap();
         let app = router(manager.clone(), shares);
-        let token =
-            url::form_urlencoded::byte_serialize(created.token.as_bytes()).collect::<String>();
+        let token = url::form_urlencoded::byte_serialize(created.token.unwrap().as_bytes())
+            .collect::<String>();
 
         for request in [
             Request::builder()
                 .uri("/share-api/bootstrap")
-                .header("authorization", format!("Bearer {}", created.token))
+                .header("authorization", "Bearer pcrab_share_wrong-transport")
                 .body(Body::empty())
                 .unwrap(),
             Request::builder()

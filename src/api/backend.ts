@@ -9,7 +9,6 @@ import type {
   BypassPage,
   BypassQuery,
   CertificateResponse,
-  CreatedSessionShare,
   CreatedApiKey,
   CreateAgentsPresetRequest,
   CreateSessionRequest,
@@ -41,6 +40,7 @@ import type {
   ScriptRequest,
   SessionFilter,
   SessionMetadata,
+  SessionShareState,
   SessionInterceptorsPayload,
   SessionViewPayload,
   SystemLogEntry,
@@ -123,7 +123,9 @@ export interface Backend {
   deleteArchivedSession(id: number): Promise<void>;
   getActiveSession(): Promise<ActiveSession>;
   replaceActiveSession(active: ActiveSession): Promise<ActiveSession>;
-  createSessionShare(sessionId: number, hours: number): Promise<CreatedSessionShare>;
+  getSessionShare(sessionId: number): Promise<SessionShareState>;
+  enableSessionShare(sessionId: number): Promise<SessionShareState>;
+  disableSessionShare(sessionId: number): Promise<SessionShareState>;
 
   // capture logs
   getLogIds(request: LogIdsRequest): Promise<LogIdsPayload>;

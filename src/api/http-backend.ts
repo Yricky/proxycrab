@@ -8,7 +8,6 @@ import type {
   BypassQuery,
   CreatedApiKey,
   CreateAgentsPresetRequest,
-  CreatedSessionShare,
   CreateSessionRequest,
   DebugFilterScriptRequest,
   ExecuteTemporaryScriptRequest,
@@ -30,6 +29,7 @@ import type {
   ReplaceSessionViewRequest,
   ResolveApprovalRequest,
   RoutingSelection,
+  SessionShareState,
   ScriptRequest,
   SystemLogsQuery,
   UpdateAgentsPresetRequest,
@@ -188,10 +188,17 @@ export function createHttpBackend(
     getActiveSession: () => call("/api/active-session"),
     replaceActiveSession: (active: ActiveSession) =>
       call("/api/active-session", json("PUT", active)),
-    createSessionShare: (sessionId: number, hours: number) =>
-      call<CreatedSessionShare>(
+    getSessionShare: (sessionId: number) =>
+      call<SessionShareState>(`/api/session-shares/${sessionId}`),
+    enableSessionShare: (sessionId: number) =>
+      call<SessionShareState>(
         "/api/session-shares",
-        json("POST", { session_id: sessionId, hours }),
+        json("POST", { session_id: sessionId }),
+      ),
+    disableSessionShare: (sessionId: number) =>
+      call<SessionShareState>(
+        `/api/session-shares/${sessionId}`,
+        json("DELETE"),
       ),
 
     getLogIds: (requestValue: LogIdsRequest) =>

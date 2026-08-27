@@ -195,7 +195,7 @@ mod tests {
         let service = HttpPermissionService::open(directory.path(), Arc::new(|_| {})).unwrap();
         let catalog = service.catalog();
 
-        assert_eq!(catalog.len(), 63);
+        assert_eq!(catalog.len(), 65);
         assert!(catalog.iter().any(|action| {
             action.id == "GET /api/assets/{*asset_id}"
                 && action.route_template == "/api/assets/{*asset_id}"
@@ -207,6 +207,14 @@ mod tests {
         assert!(catalog.iter().any(|action| {
             action.id == "POST /api/session-shares"
                 && action.route_template == "/api/session-shares"
+        }));
+        assert!(catalog.iter().any(|action| {
+            action.id == "GET /api/session-shares/{id}"
+                && action.route_template == "/api/session-shares/{id}"
+        }));
+        assert!(catalog.iter().any(|action| {
+            action.id == "DELETE /api/session-shares/{id}"
+                && action.route_template == "/api/session-shares/{id}"
         }));
     }
 }

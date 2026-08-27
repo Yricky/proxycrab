@@ -50,8 +50,9 @@ UI routes and trusted UI calls, is not an Agent API key, and must never be copie
 `PROXYCRAB_API_KEY`. The browser backend exposes no Skill-install method or HTTP route.
 
 Session sharing uses separate `pcrab_share_…` tokens and `/share-api/*` browser routes. Those tokens
-are scoped to one read-only Session, expire in memory, are not accepted by the Agent API, and must
-never be copied into `PROXYCRAB_API_KEY`, Agent commands, logs, or reports.
+are scoped to one read-only Session, live only for the current process while sharing remains
+enabled, are not accepted by the Agent API, and must never be copied into `PROXYCRAB_API_KEY`, Agent
+commands, logs, or reports.
 
 Workspace switching, full config replacement (including proxy-port changes), CA regeneration, and
 Skill installation are host operations, not Agent HTTP resources. Their reads remain available, but
@@ -336,17 +337,34 @@ not change the active Session.
 
 ### `POST /api/session-shares`
 
-Creates a read-only browser link for one active Session. This is an ordinary permission-controlled
-Agent API action whose default mode is `approval` on desktop and therefore `deny` on CLI unless the
-permission is changed.
+Enables a read-only browser link for one non-archived Session. This operation is idempotent: when
+sharing is already enabled, it returns the existing process-local token. It is an ordinary
+permission-controlled Agent API action whose default mode is `approval` on desktop and therefore
+`deny` on CLI unless the permission is changed.
 
 ```json
-{ "session_id": 3, "hours": 24 }
+{ "session_id": 3 }
 ```
 
-`hours` must be an integer from 1 through 720. The response contains the one-time cleartext
-`pcrab_share_…` token, Session ID, and expiry. Never use the token as a Bearer credential: the share
-browser sends it only as exactly one `token` query parameter to the read-only `/share-api/*` surface.
+The response contains `session_id`, `enabled: true`, and the cleartext `pcrab_share_…` token. The
+owner management service retains that token in process memory so the UI can reopen the same link.
+Never use the token as a Bearer credential or print it in a report: the share browser sends it only
+as exactly one `token` query parameter to the read-only `/share-api/*` surface.
+
+### `GET /api/session-shares/{id}`
+
+Returns the current process-local share state for one non-archived Session. Its default permission
+is `allow`. A disabled response contains `session_id` and `enabled: false`; an enabled response also
+contains the current browser token. Treat the token as sensitive and do not expose it in output.
+
+### `DELETE /api/session-shares/{id}`
+
+Disables sharing idempotently and immediately invalidates the Session's previous browser token. Its
+default permission is `approval` on desktop and therefore `deny` on CLI unless changed. The response
+contains `session_id` and `enabled: false`. Process exit also resets sharing to disabled. An archived
+Session is unavailable to the share browser; restoring it in the same process does not rotate its
+still-enabled token.
+
 The share bootstrap and proxy-status route are projected through that token's Session scope, so
 other Session activity and the global bypass activity count are never returned. Its
 `POST /share-api/logs/ids` route uses the same read-only request and
