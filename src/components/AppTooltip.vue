@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from "vue";
 
-defineProps<{
-  title: string;
+const props = defineProps<{
+  title?: string;
   detail?: string;
   status?: string;
+  /** 为 true 时 hover 立即弹出，不走默认延迟。 */
+  immediate?: boolean;
 }>();
 
 const visible = ref(false);
@@ -12,8 +14,9 @@ const position = ref({ left: 0, top: 0 });
 let timer: number | null = null;
 
 function open(event: PointerEvent): void {
+  if (!props.title && !props.detail && !props.status) return;
   const target = event.currentTarget as HTMLElement;
-  timer = window.setTimeout(() => {
+  const show = (): void => {
     const rect = target.getBoundingClientRect();
     const width = 240;
     position.value = {
@@ -21,7 +24,12 @@ function open(event: PointerEvent): void {
       top: rect.bottom + 8,
     };
     visible.value = true;
-  }, 260);
+  };
+  if (props.immediate) {
+    show();
+    return;
+  }
+  timer = window.setTimeout(show, 260);
 }
 
 function close(): void {
@@ -44,7 +52,7 @@ onBeforeUnmount(close);
         class="app-tooltip"
         :style="{ left: `${position.left}px`, top: `${position.top}px` }"
       >
-        <strong>{{ title }}</strong>
+        <strong v-if="title">{{ title }}</strong>
         <span v-if="detail">{{ detail }}</span>
         <span v-if="status" class="app-tooltip-status">{{ status }}</span>
       </div>

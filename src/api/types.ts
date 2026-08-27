@@ -191,6 +191,8 @@ export interface SkillInstallInfo {
   exists: boolean;
 }
 
+export type SkillInstallStatus = "not_installed" | "installed" | "mismatched";
+
 // ---------- dto.rs ----------
 
 export interface CreateSessionRequest {

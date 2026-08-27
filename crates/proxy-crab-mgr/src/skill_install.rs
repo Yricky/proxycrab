@@ -11,6 +11,14 @@ use serde::Serialize;
 const SKILL_DIRECTORY_NAME: &str = "proxycrab";
 static INSTALL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillInstallStatus {
+    NotInstalled,
+    Installed,
+    Mismatched,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SkillInstallInfo {
     pub parent_path: String,
@@ -28,6 +36,64 @@ pub fn install_info(parent: &str) -> Result<SkillInstallInfo, ManagerError> {
         target_path: target.to_string_lossy().into_owned(),
         exists: path_exists(&target),
     })
+}
+
+/// Compares the skill installed at the default location (`~/.agents/skills/proxycrab`)
+/// against the bundled copy. Any inspection error is reported as `NotInstalled`.
+pub fn check_default(bundled: &Path) -> SkillInstallStatus {
+    let Ok(home) = home_directory() else {
+        return SkillInstallStatus::NotInstalled;
+    };
+    check(bundled, &home.join(".agents").join("skills"))
+}
+
+/// Compares the installed skill tree against the bundled one, file by file.
+pub fn check(bundled: &Path, parent: &Path) -> SkillInstallStatus {
+    let target = parent.join(SKILL_DIRECTORY_NAME);
+    if !bundled.is_dir() || !target.is_dir() {
+        return SkillInstallStatus::NotInstalled;
+    }
+    match trees_match(bundled, &target) {
+        Ok(true) => SkillInstallStatus::Installed,
+        Ok(false) => SkillInstallStatus::Mismatched,
+        Err(_) => SkillInstallStatus::NotInstalled,
+    }
+}
+
+fn trees_match(bundled: &Path, installed: &Path) -> std::io::Result<bool> {
+    let bundled_files = collect_files(bundled)?;
+    if bundled_files != collect_files(installed)? {
+        return Ok(false);
+    }
+    for relative in bundled_files {
+        if fs::read(bundled.join(&relative))? != fs::read(installed.join(&relative))? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Collects the sorted relative paths of all regular files under `root`.
+/// Symlinks and other special entries are skipped, which naturally flags them
+/// as a mismatch whenever the other tree holds a regular file at the same path.
+fn collect_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    fn walk(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                walk(root, &path, files)?;
+            } else if file_type.is_file() {
+                files.push(path.strip_prefix(root).unwrap_or(&path).to_path_buf());
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    walk(root, root, &mut files)?;
+    files.sort();
+    Ok(files)
 }
 
 pub fn install(
@@ -187,7 +253,42 @@ fn io_error(action: &str, path: &Path, error: std::io::Error) -> ManagerError {
 mod tests {
     use tempfile::tempdir;
 
-    use super::{install, install_info};
+    use super::{check, install, install_info, SkillInstallStatus};
+
+    #[test]
+    fn check_reports_not_installed_installed_and_mismatched() {
+        let source = tempdir().unwrap();
+        std::fs::write(source.path().join("SKILL.md"), "first").unwrap();
+        std::fs::create_dir(source.path().join("scripts")).unwrap();
+        std::fs::write(source.path().join("scripts/tool.mjs"), "first").unwrap();
+        let parent = tempdir().unwrap();
+        let parent_path = parent.path().to_string_lossy();
+
+        assert_eq!(
+            check(source.path(), parent.path()),
+            SkillInstallStatus::NotInstalled
+        );
+
+        install(source.path(), &parent_path, false).unwrap();
+        assert_eq!(
+            check(source.path(), parent.path()),
+            SkillInstallStatus::Installed
+        );
+
+        let target = parent.path().join("proxycrab");
+        std::fs::write(target.join("SKILL.md"), "edited").unwrap();
+        assert_eq!(
+            check(source.path(), parent.path()),
+            SkillInstallStatus::Mismatched
+        );
+
+        std::fs::write(target.join("SKILL.md"), "first").unwrap();
+        std::fs::write(target.join("extra.txt"), "extra").unwrap();
+        assert_eq!(
+            check(source.path(), parent.path()),
+            SkillInstallStatus::Mismatched
+        );
+    }
 
     #[test]
     fn installs_and_completely_overwrites_the_target_directory() {
