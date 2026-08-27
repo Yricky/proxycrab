@@ -7,6 +7,7 @@ import type { ManagerError } from "../api/types";
 
 const ready = ref(false);
 const error = ref("");
+const focusLogId = ref<number | undefined>(undefined);
 
 function invalidate(event: Event): void {
   const detail = (event as CustomEvent<ManagerError>).detail;
@@ -16,11 +17,14 @@ function invalidate(event: Event): void {
 
 onMounted(async () => {
   window.addEventListener(SHARE_INVALID_EVENT, invalidate);
-  const token = new URLSearchParams(window.location.search).get("token")?.trim() ?? "";
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("token")?.trim() ?? "";
   if (!token) {
     error.value = "分享链接缺少 token";
     return;
   }
+  const idParam = Number(params.get("id"));
+  if (Number.isInteger(idParam) && idParam > 0) focusLogId.value = idParam;
   try {
     const bootstrap = await verifyShareAccess(window.location.origin, token);
     installBackend(createShareBackend(window.location.origin, token, bootstrap));
@@ -35,7 +39,7 @@ onBeforeUnmount(() => window.removeEventListener(SHARE_INVALID_EVENT, invalidate
 </script>
 
 <template>
-  <AppReadonly v-if="ready" />
+  <AppReadonly v-if="ready" :focus-log-id="focusLogId" />
   <main v-else class="share-state">
     <div class="share-card">
       <div class="brand">ProxyCrab</div>

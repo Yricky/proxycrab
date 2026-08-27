@@ -5,11 +5,13 @@ import { logsStore } from "../stores/logs";
 import { sessionsStore } from "../stores/sessions";
 import { proxyStore } from "../stores/proxy";
 import { appStore, reportError } from "../stores/app";
-import { openContextMenu, openMenuAt, type MenuItem } from "../stores/dialog";
+import { openContextMenu, openMenuAt, confirmDialog, type MenuItem } from "../stores/dialog";
 import { openLogDetail } from "../windows/launcher";
+import LogDetailWindow from "../windows/LogDetailWindow.vue";
 import type { Column, LogViewRow, Script } from "../api/types";
 import { isInactiveInProgress } from "../utils/capture-outcome";
 import { copyText as writeClipboardText } from "../utils/clipboard";
+import { buildSessionShareLinks } from "../utils/session-share";
 import {
   anchoredScrollTop,
   clamp,
@@ -18,7 +20,10 @@ import {
 } from "../utils/log-canvas";
 import {
   Io5Checkmark,
+  Io5Close,
   Io5Copy,
+  Io5Link,
+  Io5OpenOutline,
   Io5Trash,
 } from "vue-icons-plus/io5";
 
@@ -27,7 +32,6 @@ const readonly = backend.capabilities.readonly;
 
 const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
-const BUFFER = 500;
 const ID_COLUMN_WIDTH = 64;
 const ADD_COLUMN_WIDTH = 84;
 const MIN_COLUMN_WIDTH = 48;
@@ -36,6 +40,7 @@ const MIN_THUMB_SIZE = 28;
 const RESIZE_HIT_WIDTH = 7;
 
 const wrap = ref<HTMLElement | null>(null);
+const tableWrap = ref<HTMLElement | null>(null);
 const canvas = ref<HTMLCanvasElement | null>(null);
 const viewportWidth = ref(0);
 const viewportHeight = ref(0);
@@ -116,17 +121,17 @@ const layout = computed<CanvasLayout>(() => {
   };
 });
 
-const bufferedIds = computed(() => {
-  const start = Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - BUFFER);
+const visibleIds = computed(() => {
+  const start = Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT));
   const end = Math.min(
     rowIds.value.length,
-    Math.ceil((scrollTop.value + layout.value.bodyHeight) / ROW_HEIGHT) + BUFFER,
+    Math.ceil((scrollTop.value + layout.value.bodyHeight) / ROW_HEIGHT),
   );
   return rowIds.value.slice(start, end);
 });
 
 watch(
-  bufferedIds,
+  visibleIds,
   (ids) => logsStore.setViewportIds(ids),
   { immediate: true },
 );
@@ -137,7 +142,86 @@ function toggleSort(): void {
 
 function openRow(id: number): void {
   const sessionId = sessionsStore.viewingSessionId;
-  if (sessionId !== null) openLogDetail(sessionId, id);
+  if (sessionId === null) return;
+  // 再次点击已选中行则关闭底部面板。
+  if (panelLogId.value === id) {
+    closePanel();
+    return;
+  }
+  openPanel(sessionId, id);
+}
+
+// ---------- bottom detail panel ----------
+
+const MIN_PANEL_HEIGHT = 160;
+const MIN_TABLE_HEIGHT = 120;
+
+/** 面板按 log id 跟踪，新日志插入导致行位移不影响展示内容。 */
+const panelSessionId = ref<number | null>(null);
+const panelLogId = ref<number | null>(null);
+/** 0 表示尚未初始化，首次打开时按容器高度 40% 计算。 */
+const panelHeight = ref(0);
+const panelDragging = ref(false);
+
+function closePanel(): void {
+  panelSessionId.value = null;
+  panelLogId.value = null;
+}
+
+function openPanel(sessionId: number, id: number): void {
+  panelSessionId.value = sessionId;
+  panelLogId.value = id;
+  if (panelHeight.value <= 0) {
+    panelHeight.value = Math.round((wrap.value?.clientHeight ?? 0) * 0.4);
+  }
+}
+
+/** 分享链接定位：滚动到目标行（尽量居中）并打开底部详情面板。 */
+function focusLog(id: number): boolean {
+  const sessionId = sessionsStore.viewingSessionId;
+  if (sessionId === null) return false;
+  const index = rowIds.value.indexOf(id);
+  if (index < 0) return false;
+  const target = index * ROW_HEIGHT - (layout.value.bodyHeight - ROW_HEIGHT) / 2;
+  setScrollOffsets(scrollLeft.value, target);
+  openPanel(sessionId, id);
+  return true;
+}
+
+defineExpose({ focusLog });
+
+function openPanelInWindow(): void {
+  if (panelSessionId.value === null || panelLogId.value === null) return;
+  openLogDetail(panelSessionId.value, panelLogId.value);
+  closePanel();
+}
+
+watch(() => sessionsStore.viewingSessionId, closePanel);
+
+function maxPanelHeight(): number {
+  const container = wrap.value?.clientHeight ?? 0;
+  return Math.max(MIN_PANEL_HEIGHT, container - MIN_TABLE_HEIGHT);
+}
+
+function startPanelDrag(event: PointerEvent): void {
+  event.preventDefault();
+  panelDragging.value = true;
+  const startY = event.clientY;
+  const startHeight = panelHeight.value;
+  const onMove = (e: PointerEvent) => {
+    panelHeight.value = clamp(
+      startHeight + (startY - e.clientY),
+      MIN_PANEL_HEIGHT,
+      maxPanelHeight(),
+    );
+  };
+  const onUp = () => {
+    panelDragging.value = false;
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 async function copyCell(value: string): Promise<void> {
@@ -149,14 +233,73 @@ async function copyCell(value: string): Promise<void> {
   }
 }
 
-function showCellMenu(event: MouseEvent, value: string): void {
-  openContextMenu(event, [
-    {
+function showCellMenu(event: MouseEvent, value: string | null, rowId: number): void {
+  const items: MenuItem[] = [];
+  if (value !== null) {
+    items.push({
       label: "复制",
       icon: Io5Copy,
       action: () => void copyCell(value),
-    },
-  ]);
+    });
+  }
+  items.push({
+    label: "复制聚焦到此行的分享链接",
+    icon: Io5Link,
+    action: () => void copyFocusedShareLink(rowId),
+  });
+  openContextMenu(event, items);
+}
+
+/** 复制带 `id` 定位参数的分享链接；未分享时先弹窗确认开启分享。 */
+async function copyFocusedShareLink(id: number): Promise<void> {
+  // 分享页本身即为只读分享，直接基于当前 URL 设置聚焦 id。
+  if (readonly) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("id", String(id));
+    try {
+      await writeClipboardText(url.toString());
+      appStore.toast("分享链接已复制", "success");
+    } catch (error) {
+      reportError(error, "复制分享链接失败");
+    }
+    return;
+  }
+  const sessionId = sessionsStore.viewingSessionId;
+  if (sessionId === null) return;
+  try {
+    const [current, status, addresses] = await Promise.all([
+      backend.getSessionShare(sessionId),
+      backend.getHttpServiceStatus(),
+      backend.listLocalIps(),
+    ]);
+    if (!status.running) {
+      appStore.toast("HTTP 服务未运行，无法生成分享链接", "error");
+      return;
+    }
+    let share = current;
+    if (!share.enabled || !share.token) {
+      const confirmed = await confirmDialog({
+        title: "开启 Session 分享",
+        message: "开启后，任何获得链接的人都可以只读查看此会话的抓包内容。",
+        confirmText: "开启并复制",
+      });
+      if (!confirmed) return;
+      share = await backend.enableSessionShare(sessionId);
+    }
+    const link = share.token
+      ? buildSessionShareLinks(addresses, status.port, share.token)[0]
+      : undefined;
+    if (!link) {
+      appStore.toast("暂无可用的本机地址，无法生成分享链接", "error");
+      return;
+    }
+    const url = new URL(link);
+    url.searchParams.set("id", String(id));
+    await writeClipboardText(url.toString());
+    appStore.toast("分享链接已复制", "success");
+  } catch (error) {
+    reportError(error, "复制分享链接失败");
+  }
 }
 
 // ---------- column menu ----------
@@ -854,10 +997,17 @@ function drawRows(ctx: CanvasRenderingContext2D, colors: Palette): void {
     const id = rowIds.value[index];
     const row = logsStore.row(id);
     const y = HEADER_HEIGHT + index * ROW_HEIGHT - scrollTop.value;
+    const selected = id === panelLogId.value;
 
     if (hoveredRow.value === index) {
       ctx.fillStyle = colors.selected;
       ctx.fillRect(0, y, targetLayout.bodyWidth, ROW_HEIGHT);
+    } else if (selected) {
+      ctx.save();
+      ctx.globalAlpha = 0.14;
+      ctx.fillStyle = colors.accent;
+      ctx.fillRect(0, y, targetLayout.bodyWidth, ROW_HEIGHT);
+      ctx.restore();
     } else if (index % 2 === 1) {
       ctx.fillStyle = colors.stripe;
       ctx.fillRect(0, y, targetLayout.bodyWidth, ROW_HEIGHT);
@@ -1301,10 +1451,15 @@ function onCanvasClick(event: MouseEvent): void {
 function onCanvasContextMenu(event: MouseEvent): void {
   const point = canvasPoint(event);
   const hit = hitTest(point.x, point.y);
-  if (hit?.type !== "row" || hit.cellIndex === null) return;
-  const row = logsStore.row(rowIds.value[hit.rowIndex]);
+  if (hit?.type !== "row") return;
+  const rowId = rowIds.value[hit.rowIndex];
+  if (hit.cellIndex === null) {
+    showCellMenu(event, null, rowId);
+    return;
+  }
+  const row = logsStore.row(rowId);
   const value = hit.cellIndex === -1 ? String(row.id) : (row.cells[hit.cellIndex] ?? "");
-  showCellMenu(event, value);
+  showCellMenu(event, value, rowId);
 }
 
 function normalizeWheelDelta(value: number, mode: number, pageSize: number): number {
@@ -1356,20 +1511,31 @@ watchEffect(() => {
   void unseenIds.value.size;
   void hoveredRow.value;
   void hoverHit.value;
+  void panelLogId.value;
   scheduleDraw();
 });
 
 onMounted(() => {
   const updateSize = () => {
-    const rect = wrap.value?.getBoundingClientRect();
+    const rect = tableWrap.value?.getBoundingClientRect();
     if (!rect) return;
     viewportWidth.value = rect.width;
     viewportHeight.value = rect.height;
     setScrollOffsets(scrollLeft.value, scrollTop.value);
+    if (panelHeight.value > maxPanelHeight()) {
+      panelHeight.value = maxPanelHeight();
+    }
+    // ResizeObserver 在绘制前触发，这里同步重绘，避免 canvas 的 CSS 尺寸已变
+    // 而位图仍待下一帧 rAF 更新，导致浏览器拉伸旧位图产生形变。
+    if (drawFrame !== undefined) {
+      window.cancelAnimationFrame(drawFrame);
+      drawFrame = undefined;
+    }
+    drawCanvas();
   };
-  if (wrap.value) {
+  if (tableWrap.value) {
     resizeObserver = new ResizeObserver(updateSize);
-    resizeObserver.observe(wrap.value);
+    resizeObserver.observe(tableWrap.value);
     updateSize();
   }
   themeObserver = new MutationObserver(scheduleDraw);
@@ -1388,21 +1554,50 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="wrap" class="lt-wrap">
-    <canvas
-      ref="canvas"
-      class="lt-canvas"
-      @pointermove="onPointerMove"
-      @pointerleave="onPointerLeave"
-      @pointerdown="onPointerDown"
-      @pointerup="onPointerUp"
-      @pointercancel="onPointerUp"
-      @click="onCanvasClick"
-      @contextmenu="onCanvasContextMenu"
-      @wheel="onWheel"
-    />
-    <div v-if="logsStore.loading" class="lt-loading" role="status" aria-label="正在加载日志">
-      <span class="lt-spinner" aria-hidden="true" />
+    <div ref="tableWrap" class="lt-table">
+      <canvas
+        ref="canvas"
+        class="lt-canvas"
+        @pointermove="onPointerMove"
+        @pointerleave="onPointerLeave"
+        @pointerdown="onPointerDown"
+        @pointerup="onPointerUp"
+        @pointercancel="onPointerUp"
+        @click="onCanvasClick"
+        @contextmenu="onCanvasContextMenu"
+        @wheel="onWheel"
+      />
+      <div v-if="logsStore.loading" class="lt-loading" role="status" aria-label="正在加载日志">
+        <span class="lt-spinner" aria-hidden="true" />
+      </div>
     </div>
+    <template v-if="panelSessionId !== null && panelLogId !== null">
+      <div class="lt-panel" :style="{ height: `${panelHeight}px` }">
+        <div
+          class="lt-splitter"
+          :class="{ dragging: panelDragging }"
+          title="拖动调整详情面板高度"
+          @pointerdown="startPanelDrag"
+        />
+        <header class="lt-panel-bar">
+          <span class="lt-panel-title mono">#{{ panelLogId }}</span>
+          <span class="lt-panel-label">详情</span>
+          <span class="lt-panel-spacer" />
+          <button class="btn icon" title="在窗口中打开" @click="openPanelInWindow">
+            <Io5OpenOutline :size="14" />
+          </button>
+          <button class="btn icon" title="关闭" @click="closePanel">
+            <Io5Close :size="14" />
+          </button>
+        </header>
+        <LogDetailWindow
+          :key="panelLogId"
+          :session-id="panelSessionId"
+          :log-id="panelLogId"
+          class="lt-panel-body"
+        />
+      </div>
+    </template>
   </div>
 </template>
 
@@ -1410,8 +1605,71 @@ onBeforeUnmount(() => {
 .lt-wrap {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.lt-table {
+  flex: 1;
+  min-height: 0;
   position: relative;
   overflow: hidden;
+}
+.lt-splitter {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 5px;
+  z-index: 10;
+  cursor: row-resize;
+  touch-action: none;
+}
+.lt-splitter::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.lt-splitter:hover::after,
+.lt-splitter.dragging::after {
+  background: var(--accent);
+}
+.lt-panel {
+  flex: none;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.lt-panel-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+.lt-panel-title {
+  font-weight: 600;
+}
+.lt-panel-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.lt-panel-spacer {
+  flex: 1;
+}
+.lt-panel-body {
+  flex: 1;
+  min-height: 0;
 }
 .lt-canvas {
   display: block;

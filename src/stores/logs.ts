@@ -25,7 +25,10 @@ let pollingEnabled = false;
 let pollInFlight = false;
 let pollAgain = false;
 let hydrateQueue = Promise.resolve();
-let viewportTimer: number | undefined;
+let viewportQueued = false;
+let viewportRunning = false;
+let viewportDirty = false;
+let lastViewportMid: number | null = null;
 const pendingFilterIds = new Set<number>();
 const viewportIds = new Set<number>();
 const rowLru = new LruKeys<number>(ROW_CACHE_CAPACITY);
@@ -76,6 +79,38 @@ function evictRows(): void {
       if (key.startsWith(`${id}:`)) logsStore.cellErrors.delete(key);
     }
   }
+}
+
+function indexOfId(sorted: number[], id: number): number {
+  let low = 0;
+  let high = sorted.length - 1;
+  const ascending = sorted.length < 2 || sorted[low] <= sorted[high];
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const value = sorted[mid];
+    if (value === id) return mid;
+    if (value < id === ascending) low = mid + 1;
+    else high = mid - 1;
+  }
+  return -1;
+}
+
+function queueViewportHydrate(): void {
+  viewportDirty = true;
+  if (viewportQueued || viewportRunning) return;
+  viewportQueued = true;
+  const run = hydrateQueue.then(async () => {
+    viewportQueued = false;
+    viewportRunning = true;
+    viewportDirty = false;
+    try {
+      await logsStore.loadViewportWindow();
+    } finally {
+      viewportRunning = false;
+      if (viewportDirty) queueViewportHydrate();
+    }
+  });
+  hydrateQueue = run.catch(() => undefined);
 }
 
 function clearPollTimer(): void {
@@ -179,6 +214,7 @@ export const logsStore = reactive({
     this.ids = [];
     maxId = 0;
     pendingFilterIds.clear();
+    lastViewportMid = null;
   },
 
   reset(): void {
@@ -246,14 +282,6 @@ export const logsStore = reactive({
     ids: number[],
     force: boolean,
   ): Promise<void> {
-    if (
-      ids.length === 0 ||
-      sessionsStore.viewingSessionId !== sessionId ||
-      generation !== targetGeneration ||
-      rowGeneration !== targetRowGeneration
-    ) {
-      return;
-    }
     for (let index = 0; index < ids.length; index += VIEW_BATCH_SIZE) {
       if (
         sessionsStore.viewingSessionId !== sessionId ||
@@ -280,12 +308,6 @@ export const logsStore = reactive({
       }
       this.mergeViews(payload, batch);
     }
-  },
-
-  async hydrate(ids: number[], force = false): Promise<void> {
-    const sessionId = sessionsStore.viewingSessionId;
-    if (sessionId === null || ids.length === 0) return;
-    await this.hydrateFor(sessionId, generation, ids, force);
   },
 
   async hydrateFor(
@@ -317,12 +339,73 @@ export const logsStore = reactive({
       if (this.rowsById.has(id)) rowLru.touch(id);
     }
     evictRows();
-    if (viewportTimer !== undefined) window.clearTimeout(viewportTimer);
-    viewportTimer = window.setTimeout(() => {
-      viewportTimer = undefined;
-      const missing = [...viewportIds].filter((id) => !this.rowsById.has(id));
-      void this.hydrate(missing).catch(() => undefined);
-    }, 0);
+    queueViewportHydrate();
+  },
+
+  async loadViewportWindow(): Promise<void> {
+    const sessionId = sessionsStore.viewingSessionId;
+    if (sessionId === null || viewportIds.size === 0) return;
+    const targetGeneration = generation;
+    const targetRowGeneration = rowGeneration;
+    const displayed = this.sortedIds;
+    let visibleStart = -1;
+    let visibleEnd = -1;
+    for (const id of viewportIds) {
+      const index = indexOfId(displayed, id);
+      if (index < 0) continue;
+      if (visibleStart < 0 || index < visibleStart) visibleStart = index;
+      if (index > visibleEnd) visibleEnd = index;
+    }
+    if (visibleStart < 0) return;
+    const mid = (visibleStart + visibleEnd) / 2;
+    const scrollingUp = lastViewportMid !== null && mid < lastViewportMid;
+    lastViewportMid = mid;
+    let windowIds: number[];
+    if (scrollingUp) {
+      // 向上：在可视区底部向前 200 条内找最后一个未缓存位置，从那里向前顺取 200 条
+      let frontier = -1;
+      const limit = Math.max(0, visibleEnd + 1 - VIEW_BATCH_SIZE);
+      for (let index = visibleEnd; index >= limit; index -= 1) {
+        if (!this.rowsById.has(displayed[index])) {
+          frontier = index;
+          break;
+        }
+      }
+      windowIds =
+        frontier < 0
+          ? []
+          : displayed.slice(Math.max(0, frontier + 1 - VIEW_BATCH_SIZE), frontier + 1);
+    } else {
+      // 向下（含初始加载）：在可视区顶部向后 200 条内找第一个未缓存位置，从那里向后顺取 200 条
+      let frontier = -1;
+      const limit = Math.min(displayed.length, visibleStart + VIEW_BATCH_SIZE);
+      for (let index = visibleStart; index < limit; index += 1) {
+        if (!this.rowsById.has(displayed[index])) {
+          frontier = index;
+          break;
+        }
+      }
+      windowIds = frontier < 0 ? [] : displayed.slice(frontier, frontier + VIEW_BATCH_SIZE);
+    }
+    const missing = windowIds.filter((id) => !this.rowsById.has(id));
+    if (missing.length > 0) {
+      const payload = await backend.getLogViews({
+        session_id: sessionId,
+        logs: missing.map((id) => ({ id })),
+        view: { columns: this.columns },
+      });
+      if (
+        sessionsStore.viewingSessionId !== sessionId ||
+        generation !== targetGeneration ||
+        rowGeneration !== targetRowGeneration
+      ) {
+        return;
+      }
+      this.mergeViews(payload, missing);
+    }
+    for (const id of windowIds) {
+      if (this.rowsById.has(id)) rowLru.touch(id);
+    }
   },
 
   applyCandidateResult(
@@ -585,7 +668,12 @@ export const logsStore = reactive({
       if (sessionsStore.viewingSessionId !== sessionId) return;
       this.applyColumns(view.columns, true);
       this.setViewportIds([...viewportIds]);
-      await this.hydrate(proxyStore.activeNetlogIds(sessionId), true);
+      await this.hydrateFor(
+        sessionId,
+        generation,
+        proxyStore.activeNetlogIds(sessionId),
+        true,
+      );
     } catch (error) {
       reportError(error, "刷新日志列失败");
     }
@@ -627,7 +715,6 @@ const stopActivityWatch = watch(
     const removed = previous.ids.filter((id) => !currentIds.has(id));
     if (removed.length > 0) void logsStore.finalize(removed);
     evictRows();
-    void logsStore.poll();
     wakePoll();
   },
   { deep: true },
@@ -638,7 +725,6 @@ if (import.meta.hot) {
     stopViewingSessionWatch();
     stopActivityWatch();
     logsStore.stopPolling();
-    if (viewportTimer !== undefined) window.clearTimeout(viewportTimer);
     generation += 1;
   });
 }
