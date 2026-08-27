@@ -76,6 +76,10 @@ export function openContextMenu(event: MouseEvent, items: MenuItem[]): void {
   showContextMenu(event.clientX, event.clientY, items);
 }
 
+export function openMenuAt(x: number, y: number, items: MenuItem[]): void {
+  showContextMenu(x, y, items);
+}
+
 export function openDropdownMenu(anchor: HTMLElement, items: MenuItem[]): void {
   const rect = anchor.getBoundingClientRect();
   showContextMenu(rect.left, rect.bottom + 4, items);
