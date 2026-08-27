@@ -20,7 +20,7 @@ use proxy_crab_mgr::{
     },
     http::{HttpServerHandle, start_http_server_with_routes},
     session_share::{SessionShareService, SessionShareState},
-    skill_install::{self, SkillInstallInfo},
+    skill_install::{self, SkillInstallInfo, SkillInstallStatus},
 };
 use proxy_crab_mitm::{
     ProxyCrab,
@@ -641,17 +641,7 @@ fn get_http_service_error(state: State<'_, BackendState>) -> Option<String> {
         .clone()
 }
 
-#[tauri::command]
-fn get_proxycrab_skill_install_info(parent: String) -> Result<SkillInstallInfo, ManagerError> {
-    skill_install::install_info(&parent)
-}
-
-#[tauri::command]
-fn install_proxycrab_skill(
-    app: tauri::AppHandle,
-    parent: String,
-    overwrite: bool,
-) -> Result<SkillInstallInfo, ManagerError> {
+fn bundled_skill_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, ManagerError> {
     let bundled = app
         .path()
         .resource_dir()
@@ -667,6 +657,29 @@ fn install_proxycrab_skill(
             .join("skills")
             .join("proxycrab")
     };
+    Ok(bundled)
+}
+
+#[tauri::command]
+fn get_proxycrab_skill_install_info(parent: String) -> Result<SkillInstallInfo, ManagerError> {
+    skill_install::install_info(&parent)
+}
+
+#[tauri::command]
+fn check_proxycrab_skill_status(app: tauri::AppHandle) -> SkillInstallStatus {
+    match bundled_skill_dir(&app) {
+        Ok(bundled) => skill_install::check_default(&bundled),
+        Err(_) => SkillInstallStatus::NotInstalled,
+    }
+}
+
+#[tauri::command]
+fn install_proxycrab_skill(
+    app: tauri::AppHandle,
+    parent: String,
+    overwrite: bool,
+) -> Result<SkillInstallInfo, ManagerError> {
+    let bundled = bundled_skill_dir(&app)?;
     skill_install::install(&bundled, &parent, overwrite)
 }
 
@@ -1007,6 +1020,7 @@ pub fn run() {
             list_http_approvals,
             resolve_http_approval,
             get_proxycrab_skill_install_info,
+            check_proxycrab_skill_status,
             install_proxycrab_skill,
         ]));
 

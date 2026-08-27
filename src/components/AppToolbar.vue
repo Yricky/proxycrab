@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { proxyStore } from "../stores/proxy";
 import { appStore, type ThemeMode } from "../stores/app";
 import { approvalsStore } from "../stores/approvals";
+import { skillStore } from "../stores/skill";
 import { useBackend } from "../api";
+import AppTooltip from "./AppTooltip.vue";
 import {
   openBase64,
   openAgentsPresets,
@@ -41,11 +43,21 @@ import {
   Io5Stop,
   Io5Flash,
   Io5Sunny,
+  Io5Warning,
 } from "vue-icons-plus/io5";
 
 type ToolbarMenu = "ai" | "scripts" | "tools" | "system";
 
 const backend = useBackend();
+
+const aiTooltipTitle = computed(() => {
+  if (skillStore.status === "not_installed") return "skill未安装";
+  if (skillStore.status === "mismatched") return "本机skill与当前应用版本不一致";
+  return undefined;
+});
+const aiTooltipDetail = computed(() =>
+  skillStore.status === "mismatched" ? "可能导致预期外的行为，建议重新安装" : undefined,
+);
 
 const toolbarMenus = ref<HTMLElement | null>(null);
 const activeMenu = ref<ToolbarMenu | null>(null);
@@ -186,15 +198,22 @@ onBeforeUnmount(() => {
         <span>{{ approvalsStore.count }}</span>
       </button>
       <div class="tb-menu-wrap">
-        <button
-          class="tb-menu-trigger"
-          :class="{ active: activeMenu === 'ai' }"
-          :aria-expanded="activeMenu === 'ai'"
-          @click="toggleMenu('ai')"
-        >
-          AI
-          <Io5ChevronDown :size="11" />
-        </button>
+        <AppTooltip :title="aiTooltipTitle" :detail="aiTooltipDetail" immediate>
+          <button
+            class="tb-menu-trigger"
+            :class="{
+              active: activeMenu === 'ai',
+              'skill-missing': skillStore.status === 'not_installed',
+              'skill-mismatched': skillStore.status === 'mismatched',
+            }"
+            :aria-expanded="activeMenu === 'ai'"
+            @click="toggleMenu('ai')"
+          >
+            <Io5Warning v-if="skillStore.status === 'mismatched'" :size="13" />
+            AI
+            <Io5ChevronDown :size="11" />
+          </button>
+        </AppTooltip>
         <div v-if="activeMenu === 'ai'" class="tb-menu">
           <button class="tb-menu-item" @click="runMenuAction(openAgentsPresets)">
             <Io5DocumentText :size="14" />
@@ -400,6 +419,18 @@ onBeforeUnmount(() => {
 .tb-menu-trigger.active {
   color: var(--text);
   background: var(--bg-hover);
+}
+.tb-menu-trigger.skill-missing,
+.tb-menu-trigger.skill-missing:hover,
+.tb-menu-trigger.skill-missing.active {
+  background: var(--warning);
+  color: #fff;
+}
+.tb-menu-trigger.skill-mismatched,
+.tb-menu-trigger.skill-mismatched:hover,
+.tb-menu-trigger.skill-mismatched.active {
+  background: var(--danger);
+  color: #fff;
 }
 .tb-menu {
   position: absolute;

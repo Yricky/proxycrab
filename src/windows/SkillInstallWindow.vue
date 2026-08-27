@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { Io5CheckmarkCircle, Io5Download, Io5FolderOpenOutline } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import { appStore, reportError } from "../stores/app";
+import { skillStore } from "../stores/skill";
 import { confirmDialog } from "../stores/dialog";
 
 const backend = useBackend();
@@ -38,6 +39,7 @@ async function install(): Promise<void> {
     }
     const result = await installer.install(parent, info.exists);
     installedPath.value = result.target_path;
+    void skillStore.refresh();
     appStore.toast("ProxyCrab Skill 已安装", "success");
   } catch (error) {
     reportError(error, "安装 ProxyCrab Skill 失败");

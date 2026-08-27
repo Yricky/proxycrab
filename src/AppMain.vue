@@ -16,6 +16,7 @@ import { logsStore } from "./stores/logs";
 import { startHttpApiSync, stopHttpApiSync } from "./stores/http-api-sync";
 import { breakpointsStore } from "./stores/breakpoints";
 import { approvalsStore } from "./stores/approvals";
+import { skillStore } from "./stores/skill";
 import { useBackend } from "./api";
 
 const backend = useBackend();
@@ -51,6 +52,7 @@ watch(
 onMounted(async () => {
   await startHttpApiSync();
   if (backend.capabilities.approvals) await approvalsStore.start();
+  void skillStore.refresh();
   await proxyStore.init();
   await sessionsStore.init();
   // 确保启动时状态已刷新，避免 syncCapturePolling 拿到过期的 stopped 状态。

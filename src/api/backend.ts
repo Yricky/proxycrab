@@ -46,6 +46,7 @@ import type {
   SystemLogEntry,
   SystemLogsQuery,
   SkillInstallInfo,
+  SkillInstallStatus,
   UpdateScriptRequest,
   UpdateAgentsPresetRequest,
   UpdateSessionRequest,
@@ -66,6 +67,8 @@ export type Unsubscribe = () => void;
 export interface SkillInstaller {
   getInfo(parent: string): Promise<SkillInstallInfo>;
   install(parent: string, overwrite: boolean): Promise<SkillInstallInfo>;
+  /** 检查默认位置（~/.agents/skills/proxycrab）的 skill 与内置副本是否一致。 */
+  checkStatus(): Promise<SkillInstallStatus>;
 }
 
 export interface HostOperations {

@@ -81,6 +81,7 @@ export function createTauriBackend(): Backend {
           call("get_proxycrab_skill_install_info", { parent }),
         install: (parent: string, overwrite: boolean) =>
           call("install_proxycrab_skill", { parent, overwrite }),
+        checkStatus: () => call("check_proxycrab_skill_status"),
       },
       setWorkspaceForNextStart: (path) =>
         call("set_workspace_for_next_start", { path }),
