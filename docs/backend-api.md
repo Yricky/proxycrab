@@ -99,7 +99,9 @@ and `DELETE /api/session-shares/{id}`. Enable accepts only `session_id`, is idem
 the same cleartext `pcrab_share_…` token while enabled. The token and its SHA-256 digest are retained
 only in process memory so the owner UI can reopen the same links; disable removes them immediately.
 
-The browser bundle serves `/session?token=…`. The shared frontend output uses `index.html` as the
+The browser bundle serves `/session?token=…`, plus an optional `id` query parameter that focuses the
+matching record (scrolls the list to that row and opens its inline detail panel). The shared frontend
+output uses `index.html` as the
 application entry and `session.html` as the dedicated read-only sharing entry; both reuse the same
 emitted chunks. Tauri and CLI consume this same output, while the application entry selects its
 Landing from the runtime host. In Tauri, the Session entry and assets

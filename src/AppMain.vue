@@ -110,6 +110,8 @@ onBeforeUnmount(() => {
   flex: none;
   display: flex;
   flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-panel) 72%, var(--bg-app));
 }

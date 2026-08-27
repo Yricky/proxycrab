@@ -364,7 +364,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .pipeline-shell {
-  height: 32px;
+  height: 24px;
   flex: none;
   display: flex;
   align-items: stretch;
@@ -385,10 +385,10 @@ onBeforeUnmount(() => {
 }
 .pipeline-track {
   min-width: max-content;
-  height: 33px;
+  height: 24px;
   display: flex;
   align-items: center;
-  padding: 0 10px;
+  padding: 0 1px;
   transition: opacity 0.14s ease;
 }
 .pipeline-track.saving {

@@ -73,7 +73,8 @@ the share page; restoring it in the same process preserves its share state.
 
 The `/session?token=…` page renders only the main traffic content. It follows new/finished captures
 and owner column changes, starts with the Session's current filter, and keeps every viewer's later
-filter stateless. Sorting, copying, log details, complete bodies, historical interceptor results,
+filter stateless. An optional `id` query parameter focuses the matching record: the list scrolls to
+that row and opens its inline detail panel. Sorting, copying, log details, complete bodies, historical interceptor results,
 and script snapshots remain readable. Toolbar/sidebar management, column editing, interceptors,
 breakpoints, exports, and every other write surface are absent. Its token is accepted only by the
 dedicated Session-scoped `/share-api/*` routes as exactly one `token` query parameter and is never an
