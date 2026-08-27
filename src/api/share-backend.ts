@@ -22,7 +22,6 @@ export interface ShareBootstrap {
   view: SessionViewPayload;
   proxy_status: ProxyStatus;
   api_port: number;
-  expires_at: number;
 }
 
 export const SHARE_INVALID_EVENT = "proxycrab-share-invalid";
@@ -54,7 +53,7 @@ async function request<T>(
       code: `http_${response.status}`,
       message: `HTTP ${response.status}`,
     };
-    if (["invalid_share_token", "share_expired", "share_session_unavailable"].includes(error.code)) {
+    if (["invalid_share_token", "share_session_unavailable"].includes(error.code)) {
       window.dispatchEvent(new CustomEvent(SHARE_INVALID_EVENT, { detail: error }));
     }
     throw new BackendError(error);

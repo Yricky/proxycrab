@@ -19,7 +19,7 @@ use proxy_crab_mgr::{
         UpdateSessionRequest,
     },
     http::{HttpServerHandle, start_http_server_with_routes},
-    session_share::{CreateSessionShareRequest, CreatedSessionShare, SessionShareService},
+    session_share::{SessionShareService, SessionShareState},
     skill_install::{self, SkillInstallInfo},
 };
 use proxy_crab_mitm::{
@@ -53,11 +53,27 @@ struct BackendState {
 }
 
 #[tauri::command]
-async fn create_session_share(
+async fn get_session_share(
     state: State<'_, BackendState>,
-    request: CreateSessionShareRequest,
-) -> Result<CreatedSessionShare, ManagerError> {
-    state.shares.create(&state.manager(), request).await
+    session_id: u64,
+) -> Result<SessionShareState, ManagerError> {
+    state.shares.status(&state.manager(), session_id).await
+}
+
+#[tauri::command]
+async fn enable_session_share(
+    state: State<'_, BackendState>,
+    session_id: u64,
+) -> Result<SessionShareState, ManagerError> {
+    state.shares.enable(&state.manager(), session_id).await
+}
+
+#[tauri::command]
+async fn disable_session_share(
+    state: State<'_, BackendState>,
+    session_id: u64,
+) -> Result<SessionShareState, ManagerError> {
+    state.shares.disable(&state.manager(), session_id).await
 }
 
 impl BackendState {
@@ -154,9 +170,8 @@ async fn get_proxy_status(state: State<'_, BackendState>) -> Result<ProxyStatus,
     state.manager().proxy_status().await
 }
 
-/// Enumerates the machine's IPv4 addresses (including loopback) for the
-/// toolbar's display-only IP picker. The proxy itself always binds to the
-/// configured `proxy_host`; this list is purely informational.
+/// Enumerates the machine's IPv4 addresses (including loopback) for display
+/// in the UI. The management HTTP service currently listens on IPv4 only.
 #[tauri::command]
 fn list_local_ips() -> Vec<String> {
     let mut ips: Vec<String> = if_addrs::get_if_addrs()
@@ -980,7 +995,9 @@ pub fn run() {
             clear_bypass_entries,
             get_http_service_error,
             get_http_service_status,
-            create_session_share,
+            get_session_share,
+            enable_session_share,
+            disable_session_share,
             get_http_permission_catalog,
             list_http_permission_identities,
             get_http_identity_permissions,

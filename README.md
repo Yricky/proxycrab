@@ -63,10 +63,13 @@ The Tauri command surface also reports the management HTTP service's `running`, 
 
 ## Read-only Session links
 
-The desktop and CLI management UIs can create a link from a Session's context menu. Each action
-creates a new 256-bit `pcrab_share_…` token scoped to that one active Session, stores only its
-SHA-256 digest in process memory, and accepts an integer lifetime from 1 through 720 hours (24 by
-default). Restarting ProxyCrab, expiry, or archiving the Session invalidates the link.
+The desktop and CLI management UIs open a managed application window from “导出和分享” in a
+Session's context menu. Sharing is a process-local toggle: enabling it creates one 256-bit
+`pcrab_share_…` token scoped to that Session,
+and reopening the dialog reuses the same token until sharing is disabled. The cleartext token and
+its SHA-256 digest remain only in process memory. Disabling sharing immediately invalidates the
+link, and restarting ProxyCrab resets sharing to disabled. An archived Session is unavailable to
+the share page; restoring it in the same process preserves its share state.
 
 The `/session?token=…` page renders only the main traffic content. It follows new/finished captures
 and owner column changes, starts with the Session's current filter, and keeps every viewer's later
@@ -82,9 +85,10 @@ from source files under `src/`. Tauri and CLI reuse the same `dist` output, and 
 selects its Landing from the runtime host. The desktop HTTP server reads the Session page through
 Tauri's embedded asset resolver instead of embedding another copy of the frontend bundle.
 
-The UI generates one URL for every non-loopback local IPv4 address. These links use plain HTTP by
-default, so the token and captured data must be shared only on a trusted network or protected by a
-TLS reverse proxy.
+The UI lists one complete URL for every non-loopback local IPv4 address; when none exists, it falls
+back to `127.0.0.1`. Each row can be opened or copied directly. These links use plain HTTP by default,
+so the token and captured data must be shared only on a trusted network or protected by a TLS
+reverse proxy.
 
 ## CLI browser UI
 

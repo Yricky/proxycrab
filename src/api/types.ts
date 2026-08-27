@@ -167,6 +167,7 @@ export type HttpApiResource =
   | "sessions"
   | "archived_sessions"
   | "active_session"
+  | "session_share"
   | "session_view"
   | "column_scripts"
   | "filter_scripts"
@@ -206,10 +207,10 @@ export interface ActiveSession {
   session_id: number | null;
 }
 
-export interface CreatedSessionShare {
-  token: string;
+export interface SessionShareState {
   session_id: number;
-  expires_at: number;
+  enabled: boolean;
+  token?: string;
 }
 
 export interface LogIdsRequest {

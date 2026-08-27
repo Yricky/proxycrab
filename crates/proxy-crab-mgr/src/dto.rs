@@ -414,6 +414,7 @@ pub enum HttpApiResource {
     Sessions,
     ArchivedSessions,
     ActiveSession,
+    SessionShare,
     SessionView,
     ColumnScripts,
     FilterScripts,

@@ -51,7 +51,7 @@ use crate::{
         ManagementCredential, PermissionAction, PermissionDenied, PermissionDeniedStatus,
         PermissionManager, api_actions, find_api_action,
     },
-    session_share::{CreateSessionShareRequest, SessionShareService},
+    session_share::{EnableSessionShareRequest, SessionShareService},
 };
 
 type ManagerState = Arc<dyn ProxyCrabManager>;
@@ -265,7 +265,11 @@ fn router_with_changes_and_extra(
             get(active_session).put(replace_active_session),
         )
         .route("/api/sessions/{id}", put(update_session))
-        .route("/api/session-shares", post(create_session_share))
+        .route("/api/session-shares", post(enable_session_share))
+        .route(
+            "/api/session-shares/{id}",
+            get(get_session_share).delete(disable_session_share),
+        )
         .route("/api/logs/export", post(export_logs))
         .route("/api/logs/ids", post(log_ids))
         .route("/api/logs/views", post(log_views))
@@ -596,6 +600,10 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
         (&Method::PUT, "/api/active-session") => {
             vec![HttpApiResource::ActiveSession, HttpApiResource::Config]
         }
+        (&Method::POST, "/api/session-shares") => vec![HttpApiResource::SessionShare],
+        (&Method::DELETE, value) if value.starts_with("/api/session-shares/") => {
+            vec![HttpApiResource::SessionShare]
+        }
         (&Method::PUT, "/api/session-view") => vec![HttpApiResource::SessionView],
         (&Method::POST, "/api/column-scripts") => {
             vec![HttpApiResource::ColumnScripts, HttpApiResource::SessionView]
@@ -643,7 +651,9 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
     };
     Some(HttpApiChange {
         resources,
-        session_id: session_id_from_query(query).or_else(|| session_filter_id_from_path(path)),
+        session_id: session_id_from_query(query)
+            .or_else(|| session_filter_id_from_path(path))
+            .or_else(|| session_share_id_from_path(path)),
     })
 }
 
@@ -652,6 +662,10 @@ fn session_filter_id_from_path(path: &str) -> Option<u64> {
         .strip_suffix("/filter")?
         .parse()
         .ok()
+}
+
+fn session_share_id_from_path(path: &str) -> Option<u64> {
+    path.strip_prefix("/api/session-shares/")?.parse().ok()
 }
 
 fn session_id_from_query(query: Option<&str>) -> Option<u64> {
@@ -716,12 +730,28 @@ async fn update_session(
     success(manager.update_session(id, request).await?)
 }
 
-async fn create_session_share(
+async fn enable_session_share(
     State(manager): State<ManagerState>,
     Extension(shares): Extension<Arc<SessionShareService>>,
-    ApiJson(request): ApiJson<CreateSessionShareRequest>,
+    ApiJson(request): ApiJson<EnableSessionShareRequest>,
 ) -> ApiResult {
-    success(shares.create(&manager, request).await?)
+    success(shares.enable(&manager, request.session_id).await?)
+}
+
+async fn get_session_share(
+    State(manager): State<ManagerState>,
+    Extension(shares): Extension<Arc<SessionShareService>>,
+    ApiPath(id): ApiPath<u64>,
+) -> ApiResult {
+    success(shares.status(&manager, id).await?)
+}
+
+async fn disable_session_share(
+    State(manager): State<ManagerState>,
+    Extension(shares): Extension<Arc<SessionShareService>>,
+    ApiPath(id): ApiPath<u64>,
+) -> ApiResult {
+    success(shares.disable(&manager, id).await?)
 }
 
 async fn archive_session(
@@ -2102,6 +2132,20 @@ mod tests {
                 Some(42),
             ),
             (
+                "POST",
+                "/api/session-shares",
+                None,
+                vec![HttpApiResource::SessionShare],
+                None,
+            ),
+            (
+                "DELETE",
+                "/api/session-shares/42",
+                None,
+                vec![HttpApiResource::SessionShare],
+                Some(42),
+            ),
+            (
                 "PUT",
                 "/api/column-scripts/host",
                 None,
@@ -2615,10 +2659,41 @@ mod tests {
                     .method("POST")
                     .uri("/api/session-shares")
                     .header("content-type", "application/json")
-                    .body(Body::from(format!(
-                        r#"{{"session_id":{},"hours":24}}"#,
-                        session.id
-                    )))
+                    .body(Body::from(format!(r#"{{"session_id":{}}}"#, session.id)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/session-shares/{}", session.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"]["enabled"], true);
+        assert!(
+            body["data"]["token"]
+                .as_str()
+                .unwrap()
+                .starts_with("pcrab_share_")
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/session-shares/{}", session.id))
+                    .body(Body::empty())
                     .unwrap(),
             )
             .await

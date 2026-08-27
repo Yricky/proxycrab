@@ -6,9 +6,13 @@ import { proxyStore } from "../stores/proxy";
 import { confirmDialog, openContextMenu } from "../stores/dialog";
 import { formatRelativeTime } from "../utils/format";
 import { appStore } from "../stores/app";
-import { openArchivedSessions, openBypass, openRoutingManager } from "../windows/launcher";
+import {
+  openArchivedSessions,
+  openBypass,
+  openRoutingManager,
+  openSessionExportShare,
+} from "../windows/launcher";
 import type { SessionMetadata } from "../api/types";
-import SessionShareDialog from "./SessionShareDialog.vue";
 import {
   Io5Add,
   Io5Archive,
@@ -23,7 +27,6 @@ const creating = ref(false);
 const editingId = ref<number | null>(null);
 const editName = ref("");
 const editDesc = ref("");
-const sharingSession = ref<SessionMetadata | null>(null);
 
 function formatActivityCount(count: number): string {
   return count > 99 ? "99+" : String(count);
@@ -127,7 +130,11 @@ async function toggleActive(session: SessionMetadata): Promise<void> {
 function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
   openContextMenu(event, [
     { label: "查看", icon: Io5Eye, action: () => sessionsStore.view(session.id) },
-    { label: "链接分享", icon: Io5Link, action: () => { sharingSession.value = session; } },
+    {
+      label: "导出和分享",
+      icon: Io5Link,
+      action: () => openSessionExportShare(session.id, session.name),
+    },
     { label: "编辑会话", icon: Io5Create, action: () => startEdit(session) },
     {
       label: sessionsStore.activeSessionId === session.id ? "取消活跃" : "设为活跃",
@@ -285,7 +292,6 @@ onMounted(() => {
       <Io5Archive :size="14" />
       <span>已归档 Session</span>
     </button>
-    <SessionShareDialog :session="sharingSession" @close="sharingSession = null" />
   </aside>
 </template>
 

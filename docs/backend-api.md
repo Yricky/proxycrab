@@ -92,11 +92,12 @@ operation; it cannot be initiated by the browser bundle, which may be hosted rem
 
 ### Read-only Session sharing
 
-Both trusted targets can create an in-memory Session share. Tauri uses `create_session_share`; HTTP
-clients, including the CLI browser, use permission-controlled `POST /api/session-shares`. Creation accepts a
-`session_id` and an integer `hours` from 1 through 720. Every creation returns a new cleartext
-`pcrab_share_…` token once; only its SHA-256 digest, Session ID, monotonic deadline, and wall-clock
-expiry are retained in memory.
+Both trusted targets can inspect, enable, and disable one in-memory share per Session. Tauri uses
+`get_session_share`, `enable_session_share`, and `disable_session_share`; HTTP clients, including the
+CLI browser, use permission-controlled `GET /api/session-shares/{id}`, `POST /api/session-shares`,
+and `DELETE /api/session-shares/{id}`. Enable accepts only `session_id`, is idempotent, and returns
+the same cleartext `pcrab_share_…` token while enabled. The token and its SHA-256 digest are retained
+only in process memory so the owner UI can reopen the same links; disable removes them immediately.
 
 The browser bundle serves `/session?token=…`. The shared frontend output uses `index.html` as the
 application entry and `session.html` as the dedicated read-only sharing entry; both reuse the same
@@ -109,8 +110,9 @@ exactly one non-empty `token` query parameter; `Authorization` is ignored. Respo
 Session scope on every request and overwrites any client Session ID. The surface
 contains bootstrap, scoped proxy status and proxy-change long polling, Session view, stateless log-ID queries, rendered log rows, detail,
 body, name-only column/filter lists, and regex validation. It has no write, export, interceptor,
-breakpoint, config, permission, routing, CA, bypass, or system-log route. Expiry, process restart, or
-Session archive invalidates it. It is not accepted by `/api/*` and is not an Agent credential.
+breakpoint, config, permission, routing, CA, bypass, or system-log route. Disable or process restart
+invalidates it. An archived Session is unavailable; restoring it in the same process preserves its
+still-enabled share. The token is not accepted by `/api/*` and is not an Agent credential.
 
 ## HTTP changes and desktop UI synchronization
 
@@ -129,6 +131,7 @@ revision-based proxy-change long poll and then reloads its Session-scoped status
 | Session create/update/archive/restore | Active and archived Session lists | Archiving the viewed Session selects the first remaining Session |
 | Archived Session delete | Archived Session list | Refreshes the archived Session window |
 | `PUT /api/active-session` | Active Session and settings | Refreshes the active indicator without changing the viewed Session |
+| Session share enable/disable | Target Session share state | Refreshes an open “导出和分享” window; enabling refreshes all such windows because the Session ID is carried in the request body |
 | Routing-script create/update/delete/selection | Routing library and selection | Refreshes the routing manager |
 | Bypass delete/batch delete/clear | Bypass table | Refreshes the bypass window |
 | `PUT /api/sessions/{id}/filter` | Target Session filter and visible log set | Reloads the table only when that Session is being viewed; ID queries stay silent |
@@ -175,7 +178,8 @@ browser UI.
 | `/api/archived-sessions/{id}/restore` | `POST` restore |
 | `/api/archived-sessions/{id}` | `DELETE` permanent archived-only deletion |
 | `/api/active-session` | `GET`, `PUT` nullable active Session |
-| `/api/session-shares` | `POST` create a scoped read-only link (default permission: `approval`) |
+| `/api/session-shares` | `POST` idempotently enable a scoped read-only link (default: `approval`) |
+| `/api/session-shares/{id}` | `GET` current state (default: `allow`); `DELETE` disable immediately (default: `approval`) |
 | `/api/assets/{id}` | `POST` immutable raw upload; `GET` metadata or raw bytes with `format=raw` |
 | `/api/logs/ids` | `POST` bounded/filterable log ID query |
 | `/api/logs/views` | `POST` batch incremental table-view rendering |

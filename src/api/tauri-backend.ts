@@ -8,7 +8,6 @@ import type {
   ActiveSession,
   ApiActionView,
   AppConfig,
-  CreatedSessionShare,
   CreatedApiKey,
   CreateAgentsPresetRequest,
   BreakpointQuery,
@@ -33,6 +32,7 @@ import type {
   ReplaceSessionViewRequest,
   ResolveApprovalRequest,
   RoutingSelection,
+  SessionShareState,
   ScriptRequest,
   SystemLogsQuery,
   UpdateScriptRequest,
@@ -130,10 +130,12 @@ export function createTauriBackend(): Backend {
     getActiveSession: () => call("get_active_session"),
     replaceActiveSession: (active: ActiveSession) =>
       call("replace_active_session", { active }),
-    createSessionShare: (sessionId: number, hours: number) =>
-      call<CreatedSessionShare>("create_session_share", {
-        request: { session_id: sessionId, hours },
-      }),
+    getSessionShare: (sessionId: number) =>
+      call<SessionShareState>("get_session_share", { sessionId }),
+    enableSessionShare: (sessionId: number) =>
+      call<SessionShareState>("enable_session_share", { sessionId }),
+    disableSessionShare: (sessionId: number) =>
+      call<SessionShareState>("disable_session_share", { sessionId }),
 
     getLogIds: (request: LogIdsRequest) => call("get_log_ids", { request }),
     getLogViews: (request: LogViewsRequest) => call("get_log_views", { request }),

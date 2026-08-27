@@ -1,10 +1,5 @@
-export const DEFAULT_SHARE_HOURS = 24;
-export const MAX_SHARE_HOURS = 720;
-
-export function parseShareHours(value: string): number | null {
-  if (!/^\d+$/.test(value)) return null;
-  const hours = Number(value);
-  return Number.isInteger(hours) && hours >= 1 && hours <= MAX_SHARE_HOURS ? hours : null;
+function isLoopback(address: string): boolean {
+  return address === "127.0.0.1";
 }
 
 export function buildSessionShareLinks(
@@ -12,10 +7,12 @@ export function buildSessionShareLinks(
   port: number,
   token: string,
 ): string[] {
-  return [...new Set(addresses)]
-    .filter((address) => address !== "127.0.0.1" && address !== "0.0.0.0")
-    .map(
-      (address) =>
-        `http://${address}:${port}/session?token=${encodeURIComponent(token)}`,
-    );
+  const usable = [...new Set(addresses)].filter((address) => address !== "0.0.0.0");
+  const external = usable.filter((address) => !isLoopback(address));
+  const selected = external.length > 0 ? external : usable.filter(isLoopback);
+  const encodedToken = encodeURIComponent(token);
+
+  return selected.map(
+    (address) => `http://${address}:${port}/session?token=${encodedToken}`,
+  );
 }

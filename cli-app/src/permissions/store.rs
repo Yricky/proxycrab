@@ -601,7 +601,9 @@ mod tests {
                 .iter_mut()
                 .map(|record| &mut record.permissions),
         ) {
+            permissions.remove("GET /api/session-shares/{id}");
             permissions.remove("POST /api/session-shares");
+            permissions.remove("DELETE /api/session-shares/{id}");
             for action_id in OBSOLETE_API_ACTION_IDS {
                 permissions.insert((*action_id).to_owned(), PermissionMode::Deny);
             }
@@ -617,7 +619,12 @@ mod tests {
                 .into_iter()
                 .map(|entry| (entry.action_id, entry.mode))
                 .collect::<BTreeMap<_, _>>();
+            assert_eq!(modes["GET /api/session-shares/{id}"], PermissionMode::Allow);
             assert_eq!(modes["POST /api/session-shares"], PermissionMode::Deny);
+            assert_eq!(
+                modes["DELETE /api/session-shares/{id}"],
+                PermissionMode::Deny
+            );
             for action_id in OBSOLETE_API_ACTION_IDS {
                 assert!(!modes.contains_key(*action_id));
             }

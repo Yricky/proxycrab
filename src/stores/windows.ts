@@ -50,7 +50,7 @@ export const windowsStore = reactive({
       title: options.title,
       component: markRaw(options.component),
       props: options.props ?? {},
-      x: 120 + base,
+      x: 360 + base,
       y: 80 + base,
       width: options.width ?? 720,
       height: options.height ?? 480,

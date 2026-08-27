@@ -17,6 +17,7 @@ const ALL_RESOURCES: HttpApiResource[] = [
   "sessions",
   "archived_sessions",
   "active_session",
+  "session_share",
   "session_view",
   "column_scripts",
   "filter_scripts",

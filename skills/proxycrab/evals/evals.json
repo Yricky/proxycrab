@@ -145,8 +145,8 @@
     },
     {
       "id": 24,
-      "prompt": "Create a 24-hour read-only ProxyCrab share for Session 3 using the normal management API, but do not expose the resulting token in the report.",
-      "expected_output": "The agent calls permission-controlled POST /api/session-shares with the Agent Bearer credential and {session_id:3,hours:24}, handles approval or denial normally, never sends the returned pcrab_share_ token as Authorization, and reports only that the browser link was created without printing the token.",
+      "prompt": "Enable the process-local read-only ProxyCrab share for Session 3 using the normal management API, but do not expose the resulting token in the report.",
+      "expected_output": "The agent calls permission-controlled POST /api/session-shares with the Agent Bearer credential and {session_id:3}, handles approval or denial normally, understands that enable is idempotent, never sends the returned pcrab_share_ token as Authorization, and reports only that sharing is enabled without printing the token.",
       "files": []
     },
     {
@@ -189,6 +189,12 @@
       "id": 31,
       "prompt": "ProxyCrab contains persisted in_progress captures left by an earlier proxy run. Query log IDs and explain whether those records are currently active or should keep being re-filtered.",
       "expected_output": "The agent uses matched_ids for display membership but expects in_progress_ids to contain only records also present in the current run's ProxyStatus.running.active_netlog. Stale unfinished records from an earlier run may still match for display, but are excluded from in_progress_ids and are not described as currently active or repeatedly re-filtered.",
+      "files": []
+    },
+    {
+      "id": 32,
+      "prompt": "Check whether ProxyCrab Session 3 is currently shared, then disable it so every previously issued browser link stops working immediately. Do not print any token.",
+      "expected_output": "The agent calls permission-controlled GET /api/session-shares/3, does not print an enabled response token, then calls permission-controlled DELETE /api/session-shares/3, handles approval or denial normally, and reports only the resulting disabled state and immediate revocation behavior.",
       "files": []
     }
   ]

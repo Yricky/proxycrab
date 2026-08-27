@@ -553,7 +553,9 @@ mod tests {
         ) {
             permissions.remove("GET /api/assets/{*asset_id}");
             permissions.remove("POST /api/assets/{*asset_id}");
+            permissions.remove("GET /api/session-shares/{id}");
             permissions.remove("POST /api/session-shares");
+            permissions.remove("DELETE /api/session-shares/{id}");
             for action_id in OBSOLETE_API_ACTION_IDS {
                 permissions.insert((*action_id).to_owned(), PermissionMode::Deny);
             }
@@ -574,6 +576,11 @@ mod tests {
                 PermissionMode::Approval
             );
             assert_eq!(modes["POST /api/session-shares"], PermissionMode::Approval);
+            assert_eq!(modes["GET /api/session-shares/{id}"], PermissionMode::Allow);
+            assert_eq!(
+                modes["DELETE /api/session-shares/{id}"],
+                PermissionMode::Approval
+            );
             for action_id in OBSOLETE_API_ACTION_IDS {
                 assert!(!modes.contains_key(*action_id));
             }
