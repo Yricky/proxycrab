@@ -20,7 +20,13 @@ struct ShareUiState {
 }
 
 pub fn router(assets: AssetResolver<Wry>) -> Router {
-    let embedded_paths = assets.iter().map(|(path, _)| path.into_owned()).collect();
+    // Embedded asset keys are normalized with a leading `/` (e.g. `/session.html`),
+    // while lookups below use relative paths (e.g. `session.html`); strip the root so
+    // the known-asset check compares like with like.
+    let embedded_paths = assets
+        .iter()
+        .map(|(path, _)| path.trim_start_matches('/').to_owned())
+        .collect();
     let assets = Arc::new(assets);
     Router::new()
         .route("/session", get(page))
@@ -99,5 +105,16 @@ mod tests {
     #[test]
     fn defers_to_filesystem_resolution_when_no_assets_are_embedded() {
         assert!(is_known_asset("assets/app.js", &HashSet::new()));
+    }
+
+    #[test]
+    fn strips_root_prefix_from_embedded_asset_keys() {
+        let paths = HashSet::from(["/session.html".to_owned(), "/assets/app.js".to_owned()]);
+        let normalized: HashSet<String> = paths
+            .iter()
+            .map(|path| path.trim_start_matches('/').to_owned())
+            .collect();
+        assert!(is_known_asset("session.html", &normalized));
+        assert!(is_known_asset("assets/app.js", &normalized));
     }
 }
