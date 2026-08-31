@@ -194,7 +194,7 @@ onBeforeUnmount(() => {
         aria-label="打开管理接口审批"
         @click="openApprovals"
       >
-        <IoHandRight :size="17" class="approval-hand" />
+        <IoHandRight :size="16" class="approval-hand" />
         <span>{{ approvalsStore.count }}</span>
       </button>
       <div class="tb-menu-wrap">
@@ -369,7 +369,7 @@ onBeforeUnmount(() => {
 }
 .approval-trigger {
   align-self: center;
-  height: 28px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -399,7 +399,7 @@ onBeforeUnmount(() => {
   align-items: center;
 }
 .tb-menu-trigger {
-  height: 28px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -486,7 +486,7 @@ onBeforeUnmount(() => {
 .proxy-control {
   display: flex;
   align-items: stretch;
-  height: 30px;
+  height: 26px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-panel);
@@ -558,7 +558,7 @@ onBeforeUnmount(() => {
   padding: 0;
 }
 .proxy-toggle-btn {
-  width: 30px;
+  width: 24px;
   height: 100%;
   display: inline-flex;
   align-items: center;

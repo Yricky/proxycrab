@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { copyText } from "./clipboard.ts";
+import { copyText, setNativeClipboardWriter } from "./clipboard.ts";
 
 function legacyDocument(copyResult = true): {
   document: Document;
@@ -57,6 +57,27 @@ test("copyText prefers the Clipboard API", async () => {
   await copyText("secret", clipboard);
 
   assert.equal(copied, "secret");
+});
+
+test("copyText prefers the configured native clipboard writer", async () => {
+  let nativeCopied = "";
+  let browserCalled = false;
+  setNativeClipboardWriter(async (value) => {
+    nativeCopied = value;
+  });
+
+  try {
+    await copyText("secret", {
+      async writeText() {
+        browserCalled = true;
+      },
+    });
+  } finally {
+    setNativeClipboardWriter(undefined);
+  }
+
+  assert.equal(nativeCopied, "secret");
+  assert.equal(browserCalled, false);
 });
 
 test("copyText falls back to execCommand outside a secure context", async () => {

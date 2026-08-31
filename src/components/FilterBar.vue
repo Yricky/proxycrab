@@ -513,7 +513,7 @@ onBeforeUnmount(() => {
 .filter-bar {
   display: flex;
   align-items: center;
-  min-height: 32px;
+  min-height: 28px;
   margin: 0;
   padding: 0;
   border: 1px solid var(--border);
