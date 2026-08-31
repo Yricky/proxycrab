@@ -66,18 +66,18 @@ function parseMessage(cursor: Cursor, depth = 0, endGroup?: number): ProtoField[
       cursor.offset += length;
       const text = printableUtf8(bytes);
       if (text !== null) {
-        value = { length, text };
+        value = { len:length, txt: text };
       } else if (depth < 64 && bytes.length > 0) {
         try {
           const nestedCursor: Cursor = { bytes, offset: 0 };
           const message = parseMessage(nestedCursor, depth + 1);
           if (nestedCursor.offset !== bytes.length || message.length === 0) throw new Error();
-          value = { length, message };
+          value = { len:length, msg: message };
         } catch {
-          value = { length, bytes: hex(bytes) };
+          value = { len:length, bytes: hex(bytes) };
         }
       } else {
-        value = { length, bytes: hex(bytes) };
+        value = { len:length, bytes: hex(bytes) };
       }
     } else if (wire === 3) {
       value = { group: parseMessage(cursor, depth + 1, field) };
@@ -99,7 +99,7 @@ function parseMessage(cursor: Cursor, depth = 0, endGroup?: number): ProtoField[
 }
 
 function formatJson(value: unknown, depth = 0): string[] {
-  const indent = "  ".repeat(depth);
+  const indent = " ".repeat(depth);
   if (value === null || typeof value !== "object") {
     return [`${indent}${JSON.stringify(value)}`];
   }
@@ -118,19 +118,32 @@ function formatJson(value: unknown, depth = 0): string[] {
 
   const record = value as Record<string, unknown>;
   const entries = Object.entries(record);
+  const inlineEntry = (prefix: string, item: unknown): string[] => {
+    const itemLines = formatJson(item, depth + 1);
+    const firstItemLine = itemLines.shift()?.trimStart() ?? "null";
+    const lines = [`${indent}${prefix}${firstItemLine}`, ...itemLines];
+    lines[lines.length - 1] += " }";
+    return lines;
+  };
   const isProtoField =
     typeof record.field === "number" &&
     typeof record.wire === "number" &&
     Object.prototype.hasOwnProperty.call(record, "value");
   if (isProtoField) {
-    const valueLines = formatJson(record.value, depth + 1);
-    const firstValueLine = valueLines.shift()?.trimStart() ?? "null";
-    const lines = [
-      `${indent}{ "field": ${record.field}, "wire": ${record.wire}, "value": ${firstValueLine}`,
-      ...valueLines,
-    ];
-    lines[lines.length - 1] += " }";
-    return lines;
+    return inlineEntry(
+      `{ "field": ${record.field}, "wire": ${record.wire}, "value": `,
+      record.value,
+    );
+  }
+  const dataKey =
+    typeof record.len === "number" && entries.length === 2
+      ? entries.find(([key]) => key !== "len")?.[0]
+      : undefined;
+  if (dataKey !== undefined) {
+    return inlineEntry(
+      `{ "len": ${record.len}, ${JSON.stringify(dataKey)}: `,
+      record[dataKey],
+    );
   }
 
   if (entries.length === 0) return [`${indent}{}`];
@@ -139,7 +152,7 @@ function formatJson(value: unknown, depth = 0): string[] {
     const itemLines = formatJson(item, depth + 1);
     const firstItemLine = itemLines.shift()?.trimStart() ?? "null";
     const entryLines = [
-      `${"  ".repeat(depth + 1)}${JSON.stringify(key)}: ${firstItemLine}`,
+      `${indent} ${JSON.stringify(key)}: ${firstItemLine}`,
       ...itemLines,
     ];
     if (index < entries.length - 1) entryLines[entryLines.length - 1] += ",";

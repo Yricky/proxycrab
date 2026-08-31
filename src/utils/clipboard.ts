@@ -1,9 +1,22 @@
+export type ClipboardWriter = (value: string) => Promise<void>;
+
+let nativeClipboardWriter: ClipboardWriter | undefined;
+
+export function setNativeClipboardWriter(writer: ClipboardWriter | undefined): void {
+  nativeClipboardWriter = writer;
+}
+
 export async function copyText(
   value: string,
   clipboard: Pick<Clipboard, "writeText"> | undefined =
     typeof navigator === "undefined" ? undefined : navigator.clipboard,
   documentRef: Document | undefined = typeof document === "undefined" ? undefined : document,
 ): Promise<void> {
+  if (nativeClipboardWriter) {
+    await nativeClipboardWriter(value);
+    return;
+  }
+
   if (clipboard) {
     try {
       await clipboard.writeText(value);
