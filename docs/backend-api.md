@@ -341,7 +341,9 @@ The response columns and cells do not contain the ID column; `row.id` is a separ
 ```json
 {
   "columns": [
-    { "kind": "method", "width": 50.0 }
+    { "kind": "method", "width": 50.0 },
+    { "kind": "created_at", "width": 200.0 },
+    { "kind": "updated_at", "width": 200.0 }
   ],
   "rows": [
     {
@@ -349,7 +351,7 @@ The response columns and cells do not contain the ID column; `row.id` is a separ
       "created_at": 1720000000000,
       "updated_at": 1720000000100,
       "outcome": "success",
-      "cells": ["GET"]
+      "cells": ["GET", "1720000000000", "1720000000100"]
     }
   ],
   "exceptions": [
@@ -369,6 +371,12 @@ The response columns and cells do not contain the ID column; `row.id` is a separ
 ```
 
 `column_index` is zero-based and aligns with `columns` and `cells`. Every returned row includes its immutable capture creation time and persisted `outcome` (`in_progress`, `success`, `failed`, or `tunneled`). A custom-column error leaves that cell empty while preserving the rest of the row. A missing log has no row and no `column_index`. Unchanged logs appear in neither `rows` nor `exceptions`.
+
+Built-in table column kinds are `method`, `uri`, `code`, `source`, `stage`, `created_at`, and
+`updated_at`. The two time-column cells are decimal Unix-millisecond strings so the existing
+string-cell protocol remains unchanged; the numeric `row.created_at` and `row.updated_at` fields
+remain the canonical frontend values. The desktop formats them in the computer's current timezone
+as `YYYY-MM-DD HH:mm:ss GMT±HH:mm`. Time columns are not filter options.
 
 `updated_at` is a monotonic Unix-millisecond version for the complete log. Metadata transitions and request/response body writes advance it, even when multiple updates happen in the same wall-clock millisecond.
 
@@ -493,8 +501,9 @@ breakpoints expose the same contract at
 ```
 
 The ID column is not part of the view model. `PUT` changes only `columns` and preserves the Session
-filter. Column widths must be positive. A new/updated view cannot reference a missing global column
-script. Deleting a referenced script removes matching table columns and resets filters that
+filter. Built-in column kinds are `method`, `uri`, `code`, `source`, `stage`, `created_at`, and
+`updated_at`. Column widths must be positive. A new/updated view cannot reference a missing global
+column script. Deleting a referenced script removes matching table columns and resets filters that
 reference it. Script names cannot be changed.
 
 `PUT /api/sessions/1/filter` independently saves only the Session filter and preserves columns:

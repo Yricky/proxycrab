@@ -10,7 +10,15 @@ export interface ManagerError {
 
 // ---------- model.rs ----------
 
-export type ColumnKind = "method" | "uri" | "code" | "source" | "stage" | "script";
+export type ColumnKind =
+  | "method"
+  | "uri"
+  | "code"
+  | "source"
+  | "stage"
+  | "created_at"
+  | "updated_at"
+  | "script";
 
 export type Column =
   | { kind: "method"; width: number }
@@ -18,6 +26,8 @@ export type Column =
   | { kind: "code"; width: number }
   | { kind: "source"; width: number }
   | { kind: "stage"; width: number }
+  | { kind: "created_at"; width: number }
+  | { kind: "updated_at"; width: number }
   | { kind: "script"; width: number; script_name: string };
 
 export type FilterColumn =

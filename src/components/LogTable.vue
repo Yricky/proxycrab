@@ -11,6 +11,7 @@ import LogDetailWindow from "../windows/LogDetailWindow.vue";
 import type { Column, LogViewRow, Script } from "../api/types";
 import { isInactiveInProgress } from "../utils/capture-outcome";
 import { copyText as writeClipboardText } from "../utils/clipboard";
+import { formatDateTimeWithZone } from "../utils/format";
 import { buildSessionShareLinks } from "../utils/session-share";
 import {
   anchoredScrollTop,
@@ -32,10 +33,10 @@ const readonly = backend.capabilities.readonly;
 
 const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
-const ID_COLUMN_WIDTH = 64;
+const ID_COLUMN_WIDTH = 58;
 const ADD_COLUMN_WIDTH = 84;
 const MIN_COLUMN_WIDTH = 48;
-const SCROLLBAR_SIZE = 10;
+const SCROLLBAR_SIZE = 8;
 const MIN_THUMB_SIZE = 28;
 const RESIZE_HIT_WIDTH = 7;
 
@@ -306,7 +307,7 @@ async function copyFocusedShareLink(id: number): Promise<void> {
 
 interface ColumnChoice {
   key: string;
-  label: string;
+  label?: string;
   defaultWidth: number;
   create: (width: number) => Column;
 }
@@ -314,33 +315,38 @@ interface ColumnChoice {
 const BUILTIN_COLUMN_CHOICES: ColumnChoice[] = [
   {
     key: "method",
-    label: "方法",
     defaultWidth: 80,
     create: (width) => ({ kind: "method", width }),
   },
   {
     key: "uri",
-    label: "URI",
     defaultWidth: 300,
     create: (width) => ({ kind: "uri", width }),
   },
   {
     key: "code",
-    label: "状态码",
     defaultWidth: 50,
     create: (width) => ({ kind: "code", width }),
   },
   {
     key: "source",
-    label: "来源",
     defaultWidth: 130,
     create: (width) => ({ kind: "source", width }),
   },
   {
     key: "stage",
-    label: "阶段",
     defaultWidth: 70,
     create: (width) => ({ kind: "stage", width }),
+  },
+  {
+    key: "created_at",
+    defaultWidth: 200,
+    create: (width) => ({ kind: "created_at", width }),
+  },
+  {
+    key: "updated_at",
+    defaultWidth: 200,
+    create: (width) => ({ kind: "updated_at", width }),
   },
 ];
 
@@ -403,7 +409,7 @@ async function showColumnMenu(index: number, x: number, y: number): Promise<void
       },
     },
     ...choices.map((choice, choiceIndex) => ({
-      label: choice.label,
+      label: choice.label ?? choice.key,
       icon: choice.key === currentKey ? Io5Checkmark : undefined,
       disabled: choice.key === currentKey,
       dividerBefore: choiceIndex === 0,
@@ -427,7 +433,7 @@ async function showAddColumnMenu(x: number, y: number): Promise<void> {
     x,
     y,
     choices.map((choice) => ({
-      label: choice.label,
+      label: choice.label ?? choice.key,
       action: () => {
         void updateColumns(
           (viewColumns) => [...viewColumns, choice.create(choice.defaultWidth)],
@@ -488,6 +494,15 @@ function cellClass(index: number, value: string): string {
     if (value.startsWith("5")) return "code-5xx";
   }
   return "";
+}
+
+function displayCellValue(row: LogViewRow, index: number): string {
+  const rawValue = row.cells[index] ?? "";
+  if (rawValue === "…") return rawValue;
+  const kind = columns.value[index]?.kind;
+  if (kind === "created_at") return formatDateTimeWithZone(row.created_at);
+  if (kind === "updated_at") return formatDateTimeWithZone(row.updated_at);
+  return rawValue;
 }
 
 function outcomeDotClass(row: LogViewRow): string {
@@ -1065,7 +1080,7 @@ function drawRows(ctx: CanvasRenderingContext2D, colors: Palette): void {
 
     drawCell(ID_COLUMN_WIDTH, String(id), colors.text, false, outcomeDotClass(row));
     columns.value.forEach((_, columnIndex) => {
-      const value = row.cells[columnIndex] ?? "";
+      const value = displayCellValue(row, columnIndex);
       const isLast = readonly && columnIndex === columns.value.length - 1;
       drawCell(
         columnWidth(columnIndex),
@@ -1458,7 +1473,7 @@ function onCanvasContextMenu(event: MouseEvent): void {
     return;
   }
   const row = logsStore.row(rowId);
-  const value = hit.cellIndex === -1 ? String(row.id) : (row.cells[hit.cellIndex] ?? "");
+  const value = hit.cellIndex === -1 ? String(row.id) : displayCellValue(row, hit.cellIndex);
   showCellMenu(event, value, rowId);
 }
 

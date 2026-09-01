@@ -123,6 +123,8 @@ pub enum Column {
     Code { width: f32 },
     Source { width: f32 },
     Stage { width: f32 },
+    CreatedAt { width: f32 },
+    UpdatedAt { width: f32 },
     Script { width: f32, script_name: String },
 }
 
@@ -134,6 +136,8 @@ impl Column {
             | Self::Code { width }
             | Self::Source { width }
             | Self::Stage { width }
+            | Self::CreatedAt { width }
+            | Self::UpdatedAt { width }
             | Self::Script { width, .. } => *width,
         }
     }
@@ -145,6 +149,8 @@ impl Column {
             Self::Code { .. } => "code",
             Self::Source { .. } => "source",
             Self::Stage { .. } => "stage",
+            Self::CreatedAt { .. } => "created_at",
+            Self::UpdatedAt { .. } => "updated_at",
             Self::Script { script_name, .. } => script_name,
         }
     }
@@ -409,7 +415,7 @@ pub struct SystemLogEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppConfig, FilterColumn, FilterOption};
+    use super::{default_columns, AppConfig, Column, FilterColumn, FilterOption};
 
     #[test]
     fn legacy_api_host_is_ignored_and_not_serialized() {
@@ -436,5 +442,28 @@ mod tests {
                 regex: false,
             }
         );
+    }
+
+    #[test]
+    fn time_columns_use_snake_case_kinds_without_changing_defaults() {
+        let columns = vec![
+            Column::CreatedAt { width: 200.0 },
+            Column::UpdatedAt { width: 200.0 },
+        ];
+
+        assert_eq!(
+            serde_json::to_value(&columns).unwrap(),
+            serde_json::json!([
+                { "kind": "created_at", "width": 200.0 },
+                { "kind": "updated_at", "width": 200.0 }
+            ])
+        );
+        assert_eq!(
+            serde_json::from_value::<Vec<Column>>(serde_json::to_value(&columns).unwrap()).unwrap(),
+            columns
+        );
+        assert!(default_columns()
+            .iter()
+            .all(|column| !matches!(column, Column::CreatedAt { .. } | Column::UpdatedAt { .. })));
     }
 }
