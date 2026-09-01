@@ -243,7 +243,8 @@ Built-in:
 { "kind": "method", "width": 50.0 }
 ```
 
-Kinds are `method`, `uri`, `code`, `source`, and `stage`. A custom column is:
+Kinds are `method`, `uri`, `code`, `source`, `stage`, `created_at`, and `updated_at`. The time
+columns are table-only and are not valid filter columns. A custom column is:
 
 ```json
 { "kind": "script", "width": 120.0, "script_name": "correlation-id" }
@@ -504,7 +505,9 @@ newer.
 ```json
 {
   "columns": [
-    { "kind": "method", "width": 50.0 }
+    { "kind": "method", "width": 50.0 },
+    { "kind": "created_at", "width": 200.0 },
+    { "kind": "updated_at", "width": 200.0 }
   ],
   "rows": [
     {
@@ -512,7 +515,7 @@ newer.
       "created_at": 1785380000000,
       "updated_at": 1785380000100,
       "outcome": "success",
-      "cells": ["GET"]
+      "cells": ["GET", "1785380000000", "1785380000100"]
     }
   ],
   "exceptions": [
@@ -531,10 +534,12 @@ newer.
 }
 ```
 
-The ID, immutable `created_at`, and persisted capture `outcome` (`in_progress`, `success`, `failed`,
-or `tunneled`) are separate from cells. `column_index` is zero-based. A column error leaves that cell
-empty; a missing log has no row or `column_index`. IDs and rows are unordered. Unchanged logs appear
-in neither `rows` nor `exceptions`.
+The ID, numeric `created_at`/`updated_at`, and persisted capture `outcome` (`in_progress`, `success`,
+`failed`, or `tunneled`) are separate from cells. When `created_at` or `updated_at` is selected as a
+table column, its aligned cell is the same Unix-millisecond value encoded as a decimal string, so
+the string-cell protocol remains unchanged. `column_index` is zero-based. A column error leaves that
+cell empty; a missing log has no row or `column_index`. IDs and rows are unordered. Unchanged logs
+appear in neither `rows` nor `exceptions`.
 
 ### `POST /api/logs/export`
 

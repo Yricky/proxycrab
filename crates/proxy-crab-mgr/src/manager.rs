@@ -266,6 +266,8 @@ impl MitmManager {
                 .or_else(|| Some("...".into())),
             Column::Source { .. } => Some(item.source.clone()),
             Column::Stage { .. } => Some(item.stage.clone()),
+            Column::CreatedAt { .. } => Some(item.created_at.to_string()),
+            Column::UpdatedAt { .. } => Some(item.updated_at.to_string()),
             Column::Script { .. } => None,
         }
     }
@@ -1808,6 +1810,8 @@ mod tests {
                 ReplaceSessionViewRequest {
                     columns: vec![
                         Column::Method { width: 50.0 },
+                        Column::CreatedAt { width: 200.0 },
+                        Column::UpdatedAt { width: 200.0 },
                         Column::Script {
                             width: 100.0,
                             script_name: "broken".into(),
@@ -1835,14 +1839,22 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(payload.columns.len(), 2);
-        assert_eq!(payload.rows[0].cells, vec!["GET", ""]);
+        assert_eq!(payload.columns.len(), 4);
+        assert_eq!(
+            payload.rows[0].cells,
+            vec![
+                "GET".to_string(),
+                payload.rows[0].created_at.to_string(),
+                payload.rows[0].updated_at.to_string(),
+                String::new(),
+            ]
+        );
         assert!(payload.rows[0].created_at > 0);
         assert_eq!(payload.rows[0].outcome, "in_progress");
         assert_eq!(payload.exceptions.len(), 2);
         assert!(payload.exceptions.iter().any(|error| {
             error.id == second
-                && error.column_index == Some(1)
+                && error.column_index == Some(3)
                 && error.code == "column_script_error"
         }));
         assert!(
