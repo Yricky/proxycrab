@@ -19,6 +19,7 @@ use proxy_crab_mgr::{
         SessionViewPayload, SystemLogsQuery, UpdateAgentsPresetRequest, UpdateScriptRequest,
         UpdateSessionRequest,
     },
+    har_share::{EnableHarShareRequest, HarShareService, HarShareState},
     http::{HttpServerHandle, start_http_server_with_routes},
     session_share::{SessionShareService, SessionShareState},
     skill_install,
@@ -51,6 +52,7 @@ struct BackendState {
     http: Mutex<Option<HttpServerHandle>>,
     http_error: RwLock<Option<String>>,
     shares: Arc<SessionShareService>,
+    har_shares: Arc<HarShareService>,
     skill_manager: SkillManager,
     workspace: WorkspaceSelection,
 }
@@ -77,6 +79,30 @@ async fn disable_session_share(
     session_id: u64,
 ) -> Result<SessionShareState, ManagerError> {
     state.shares.disable(&state.manager(), session_id).await
+}
+
+#[tauri::command]
+async fn get_har_share(
+    state: State<'_, BackendState>,
+    session_id: u64,
+) -> Result<HarShareState, ManagerError> {
+    state.har_shares.status(&state.manager(), session_id).await
+}
+
+#[tauri::command]
+async fn enable_har_share(
+    state: State<'_, BackendState>,
+    request: EnableHarShareRequest,
+) -> Result<HarShareState, ManagerError> {
+    state.har_shares.enable(&state.manager(), request).await
+}
+
+#[tauri::command]
+async fn disable_har_share(
+    state: State<'_, BackendState>,
+    session_id: u64,
+) -> Result<HarShareState, ManagerError> {
+    state.har_shares.disable(&state.manager(), session_id).await
 }
 
 impl BackendState {
@@ -872,6 +898,7 @@ pub fn run() {
                 }
             });
             let shares = SessionShareService::new();
+            let har_shares = HarShareService::new();
             let share_assets = app.asset_resolver();
             let approval_handle = app.handle().clone();
             let permissions = HttpPermissionService::open(
@@ -887,15 +914,23 @@ pub fn run() {
             let (http, http_error) = if let Some(permissions) = permissions.as_ref() {
                 let share_manager = manager.clone();
                 let share_service = shares.clone();
+                let har_share_manager = manager.clone();
+                let har_share_service = har_shares.clone();
                 match tauri::async_runtime::block_on(start_http_server_with_routes(
                     manager.clone(),
                     permissions.clone(),
                     shares.clone(),
+                    har_shares.clone(),
                     move |_| {
-                        share_ui::router(share_assets).merge(proxy_crab_mgr::session_share::router(
-                            share_manager,
-                            share_service,
-                        ))
+                        share_ui::router(share_assets)
+                            .merge(proxy_crab_mgr::session_share::router(
+                                share_manager,
+                                share_service,
+                            ))
+                            .merge(proxy_crab_mgr::har_share::router(
+                                har_share_manager,
+                                har_share_service,
+                            ))
                     },
                 )) {
                     Ok(handle) => (Some(handle), None),
@@ -937,6 +972,7 @@ pub fn run() {
                 http: Mutex::new(http),
                 http_error: RwLock::new(http_error),
                 shares,
+                har_shares,
                 skill_manager,
                 workspace,
             });
@@ -1023,6 +1059,9 @@ pub fn run() {
             get_session_share,
             enable_session_share,
             disable_session_share,
+            get_har_share,
+            enable_har_share,
+            disable_har_share,
             get_http_permission_catalog,
             list_http_permission_identities,
             get_http_identity_permissions,

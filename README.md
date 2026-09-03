@@ -69,7 +69,7 @@ other management calls. A supplied log filter can be kept stateless with
 
 The Tauri command surface also reports the management HTTP service's `running`, `host`, `port`, and startup error state through `get_http_service_status`.
 
-## Read-only Session links
+## Session sharing links
 
 The desktop and CLI management UIs open a managed application window from “导出和分享” in a
 Session's context menu. Sharing is a process-local toggle: enabling it creates one 256-bit
@@ -98,6 +98,20 @@ The UI lists one complete URL for every non-loopback local IPv4 address; when no
 back to `127.0.0.1`. Each row can be opened or copied directly. These links use plain HTTP by default,
 so the token and captured data must be shared only on a trusted network or protected by a TLS
 reverse proxy.
+
+The same window contains a separate HAR sharing card. Before enabling it, choose either all
+captures or the Session's currently applied filter. Enabling freezes the matching capture IDs and
+creates an independent process-local `pcrab_har_…` token; later captures and filter changes do not
+change the file. Opening `/session.har?token=…` directly downloads
+`proxycrab-session-<id>.har`. The HAR switch has its own state and revocation, so it does not affect
+the read-only page share. Empty selections produce a valid empty HAR, while failed, unfinished, and
+synthetic TLS CONNECT captures are skipped during generation. Downloads stream one capture entry at
+a time without `Content-Length`; a body or storage failure after streaming starts interrupts the
+download and leaves the partial file invalid.
+
+HAR files are not redacted and can contain Authorization headers, Cookie/Set-Cookie values, and
+complete request and response bodies. The link and downloaded file must be treated as sensitive.
+Like the page share, disabling, process exit, or Session archival makes the HAR link unavailable.
 
 ## CLI browser UI
 

@@ -41,6 +41,8 @@ import type {
   SessionFilter,
   SessionMetadata,
   SessionShareState,
+  EnableHarShareRequest,
+  HarShareState,
   SessionInterceptorsPayload,
   SessionViewPayload,
   SystemLogEntry,
@@ -128,6 +130,9 @@ export interface Backend {
   getSessionShare(sessionId: number): Promise<SessionShareState>;
   enableSessionShare(sessionId: number): Promise<SessionShareState>;
   disableSessionShare(sessionId: number): Promise<SessionShareState>;
+  getHarShare(sessionId: number): Promise<HarShareState>;
+  enableHarShare(request: EnableHarShareRequest): Promise<HarShareState>;
+  disableHarShare(sessionId: number): Promise<HarShareState>;
 
   // capture logs
   getLogIds(request: LogIdsRequest): Promise<LogIdsPayload>;

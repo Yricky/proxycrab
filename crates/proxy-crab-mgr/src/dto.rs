@@ -1,5 +1,7 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, pin::Pin};
 
+use bytes::Bytes;
+use futures::Stream;
 use proxy_crab_mitm::{
     bypass::BypassEntry,
     model::{
@@ -200,11 +202,21 @@ pub struct ExportLogsRequest {
     pub log_ids: Option<Vec<u64>>,
 }
 
-#[derive(Debug)]
 pub struct LogExport {
     pub session_id: u64,
     pub filename: String,
-    pub bytes: Vec<u8>,
+    pub body: Pin<Box<dyn Stream<Item = ManagerResult<Bytes>> + Send>>,
+}
+
+impl std::fmt::Debug for LogExport {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LogExport")
+            .field("session_id", &self.session_id)
+            .field("filename", &self.filename)
+            .field("body", &"<stream>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -415,6 +427,7 @@ pub enum HttpApiResource {
     ArchivedSessions,
     ActiveSession,
     SessionShare,
+    SessionHarShare,
     SessionView,
     ColumnScripts,
     FilterScripts,

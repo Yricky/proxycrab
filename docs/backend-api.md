@@ -137,6 +137,7 @@ revision-based proxy-change long poll and then reloads its Session-scoped status
 | Archived Session delete | Archived Session list | Refreshes the archived Session window |
 | `PUT /api/active-session` | Active Session and settings | Refreshes the active indicator without changing the viewed Session |
 | Session share enable/disable | Target Session share state | Refreshes an open “导出和分享” window; enabling refreshes all such windows because the Session ID is carried in the request body |
+| HAR share enable/disable | Target HAR share state | Refreshes the independent HAR card in an open “导出和分享” window |
 | Routing-script create/update/delete/selection | Routing library and selection | Refreshes the routing manager |
 | Bypass delete/batch delete/clear | Bypass table | Refreshes the bypass window |
 | `PUT /api/sessions/{id}/filter` | Target Session filter and visible log set | Reloads the table only when that Session is being viewed; ID queries stay silent |
@@ -185,6 +186,8 @@ browser UI.
 | `/api/active-session` | `GET`, `PUT` nullable active Session |
 | `/api/session-shares` | `POST` idempotently enable a scoped read-only link (default: `approval`) |
 | `/api/session-shares/{id}` | `GET` current state (default: `allow`); `DELETE` disable immediately (default: `approval`) |
+| `/api/session-har-shares` | `POST` idempotently enable a frozen HAR download link (default: `approval`) |
+| `/api/session-har-shares/{id}` | `GET` current state (default: `allow`); `DELETE` disable immediately (default: `approval`) |
 | `/api/assets/{id}` | `POST` immutable raw upload; `GET` metadata or raw bytes with `format=raw` |
 | `/api/logs/ids` | `POST` bounded/filterable log ID query |
 | `/api/logs/views` | `POST` batch incremental table-view rendering |
@@ -383,33 +386,44 @@ as `YYYY-MM-DD HH:mm:ss GMT±HH:mm`. Time columns are not filter options.
 
 `updated_at` is a monotonic Unix-millisecond version for the complete log. Metadata transitions and request/response body writes advance it, even when multiple updates happen in the same wall-clock millisecond.
 
-### Export logs as HAR
+### Share logs as HAR
 
-`POST /api/logs/export` accepts a strict JSON body:
+HAR sharing is independent from the read-only Session page share. Both trusted targets expose
+`get_har_share`, `enable_har_share`, and `disable_har_share`; HTTP management clients use
+permission-controlled `GET /api/session-har-shares/{id}`, `POST /api/session-har-shares`, and
+`DELETE /api/session-har-shares/{id}` with the same allow/approval/approval defaults as Session page
+sharing. Enable accepts a strict body:
 
 ```json
 {
-  "format": "har",
   "session_id": 1,
+  "scope": "filtered",
   "log_ids": [123, 124]
 }
 ```
 
-`format` is required and currently only accepts `har`; unsupported values return
-`400 unsupported_export_format`, and unknown fields return `400 bad_request`. `session_id` is
-optional and defaults to the active Session. Omitting `log_ids` snapshots the Session's current
-maximum log ID and exports all eligible records up to that point. An empty array creates a valid HAR
-with no entries. Explicit IDs are deduplicated and emitted in ascending order; if any explicit ID
-does not exist in that Session, the whole request returns `404 log_not_found`.
+`scope` is `all` or `filtered` and records which option the owner selected. `log_ids` is the exact
+ID snapshot collected by the UI through the existing log-ID query. The service deduplicates and
+sorts it, then retains it with an independent `pcrab_har_…` token in process memory. Re-enabling an
+existing share is idempotent and preserves its original scope, IDs, and token. State responses
+include `scope` and `log_count` while enabled. Disable immediately invalidates the old token.
+
+The owner UI produces one `http://<local-ip>:<api-port>/session.har?token=…` link per usable local
+IPv4 address. `GET /session.har` authenticates only that query token, checks that the Session remains
+active, and generates the HAR from the frozen IDs. An empty array creates a valid HAR with no
+entries. IDs are emitted in ascending order; if a frozen ID no longer exists in that Session, the
+download returns `404 log_not_found`.
 
 Only captures with `outcome: success` and a response are eligible. Synthetic `CONNECT` captures at
 the `tls_mitm` stage are skipped; ordinary HTTP responses and `101` upgrade handshakes remain
-eligible. Ineligible explicit IDs are silently skipped. The endpoint generates the complete file
-before sending HTTP 200, so a storage read failure returns a structured HTTP 500 instead of a
-partial HAR. There is no application-level body or export-size limit.
+eligible. Ineligible frozen IDs are silently skipped. The download generates the complete file
+as an entry-granular stream after validating the Session and frozen IDs. Each entry is loaded,
+serialized, and released before the next one is generated, and the response has no `Content-Length`.
+An error before streaming starts returns the normal structured HTTP error; a body or storage error
+after HTTP 200 interrupts the connection and leaves a partial, invalid HAR. There is no
+application-level body or export-size limit.
 
-The response is the raw UTF-8 HAR 1.2 JSON document, without the normal `{ "ok": true, "data": ... }`
-envelope. Headers include:
+The successful response is the raw UTF-8 HAR 1.2 JSON document. Headers include:
 
 ```text
 Content-Type: application/json; charset=utf-8
@@ -430,7 +444,7 @@ address, and original millisecond timestamps. Interceptor source and execution h
 embedded. Query parameters, redirects, and cookies are populated on a best-effort basis while the
 original headers are always retained.
 
-HAR export performs no redaction. Authorization headers, Cookie/Set-Cookie values, and request and
+HAR generation performs no redaction. Authorization headers, Cookie/Set-Cookie values, and request and
 response bodies can contain credentials or personal data; treat the file as sensitive.
 
 ### Read one complete log

@@ -16,6 +16,8 @@ import type {
   DebugFilterScriptRequest,
   ExecuteTemporaryScriptRequest,
   ExtendBreakpointRequest,
+  EnableHarShareRequest,
+  HarShareState,
   InterceptorCreateRequest,
   InterceptorKind,
   InterceptorUpdateRequest,
@@ -136,6 +138,12 @@ export function createTauriBackend(): Backend {
       call<SessionShareState>("enable_session_share", { sessionId }),
     disableSessionShare: (sessionId: number) =>
       call<SessionShareState>("disable_session_share", { sessionId }),
+    getHarShare: (sessionId: number) =>
+      call<HarShareState>("get_har_share", { sessionId }),
+    enableHarShare: (request: EnableHarShareRequest) =>
+      call<HarShareState>("enable_har_share", { request }),
+    disableHarShare: (sessionId: number) =>
+      call<HarShareState>("disable_har_share", { sessionId }),
 
     getLogIds: (request: LogIdsRequest) => call("get_log_ids", { request }),
     getLogViews: (request: LogViewsRequest) => call("get_log_views", { request }),

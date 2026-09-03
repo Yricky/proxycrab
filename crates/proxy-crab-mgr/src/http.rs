@@ -40,12 +40,13 @@ use crate::{
     dto::{
         ActiveSession, AssetQuery, BodyQuery, BreakpointQuery, BypassQuery, CreateSessionRequest,
         DebugFilterScriptRequest, DeleteBypassRequest, ExecuteTemporaryScriptRequest,
-        ExportLogsRequest, ExtendBreakpointRequest, HttpApiChange, HttpApiResource,
-        InterceptorCreateRequest, InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest,
-        ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest,
-        RoutingSelection, ScriptRequest, SessionQuery, SystemLogsQuery, UpdateScriptRequest,
-        UpdateSessionRequest, default_body_max_size,
+        ExtendBreakpointRequest, HttpApiChange, HttpApiResource, InterceptorCreateRequest,
+        InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError, ManagerResult,
+        ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, RoutingSelection,
+        ScriptRequest, SessionQuery, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
+        default_body_max_size,
     },
+    har_share::{EnableHarShareRequest, HarShareService},
     manager::ProxyCrabManager,
     permission::{
         ManagementCredential, PermissionAction, PermissionDenied, PermissionDeniedStatus,
@@ -138,9 +139,16 @@ pub async fn start_http_server(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
 ) -> Result<HttpServerHandle, ManagerError> {
-    start_http_server_with_routes(manager, permissions, SessionShareService::new(), |_| {
-        Router::new()
-    })
+    let har_shares = HarShareService::new();
+    let har_manager = manager.clone();
+    let har_service = har_shares.clone();
+    start_http_server_with_routes(
+        manager,
+        permissions,
+        SessionShareService::new(),
+        har_shares,
+        |_| crate::har_share::router(har_manager, har_service),
+    )
     .await
 }
 
@@ -148,6 +156,7 @@ pub async fn start_http_server_with_routes<F>(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
     shares: Arc<SessionShareService>,
+    har_shares: Arc<HarShareService>,
     extra_routes: F,
 ) -> Result<HttpServerHandle, ManagerError>
 where
@@ -168,8 +177,14 @@ where
         cancellation.clone(),
     );
     let extra = extra_routes(changes.clone());
-    let app =
-        secured_router_with_changes_and_extra(manager, permissions, shares, changes.clone(), extra);
+    let app = secured_router_with_changes_and_extra(
+        manager,
+        permissions,
+        shares,
+        har_shares,
+        changes.clone(),
+        extra,
+    );
     let task = tokio::spawn(async move {
         if let Err(error) = axum::serve(
             listener,
@@ -231,6 +246,7 @@ fn router_with_changes(
         manager,
         permissions,
         SessionShareService::new(),
+        HarShareService::new(),
         changes,
         Router::new(),
     )
@@ -241,6 +257,7 @@ fn router_with_changes_and_extra(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
     shares: Arc<SessionShareService>,
+    har_shares: Arc<HarShareService>,
     changes: ChangeSender,
     extra: Router,
 ) -> Router {
@@ -270,7 +287,11 @@ fn router_with_changes_and_extra(
             "/api/session-shares/{id}",
             get(get_session_share).delete(disable_session_share),
         )
-        .route("/api/logs/export", post(export_logs))
+        .route("/api/session-har-shares", post(enable_har_share))
+        .route(
+            "/api/session-har-shares/{id}",
+            get(get_har_share).delete(disable_har_share),
+        )
         .route("/api/logs/ids", post(log_ids))
         .route("/api/logs/views", post(log_views))
         .route("/api/logs/{id}/body", get(log_body))
@@ -360,6 +381,7 @@ fn router_with_changes_and_extra(
         ))
         .with_state(manager)
         .layer(Extension(shares))
+        .layer(Extension(har_shares))
         .layer(Extension(changes.clone()))
         .layer(middleware::from_fn_with_state(
             changes,
@@ -385,6 +407,7 @@ fn secured_router_with_changes(
         manager,
         permissions,
         SessionShareService::new(),
+        HarShareService::new(),
         changes,
         Router::new(),
     )
@@ -394,10 +417,11 @@ fn secured_router_with_changes_and_extra(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
     shares: Arc<SessionShareService>,
+    har_shares: Arc<HarShareService>,
     changes: ChangeSender,
     extra: Router,
 ) -> Router {
-    router_with_changes_and_extra(manager, permissions, shares, changes, extra)
+    router_with_changes_and_extra(manager, permissions, shares, har_shares, changes, extra)
         .layer(middleware::from_fn(auth::prepare_management_request))
 }
 
@@ -604,6 +628,12 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
         (&Method::DELETE, value) if value.starts_with("/api/session-shares/") => {
             vec![HttpApiResource::SessionShare]
         }
+        (&Method::POST, "/api/session-har-shares") => {
+            vec![HttpApiResource::SessionHarShare]
+        }
+        (&Method::DELETE, value) if value.starts_with("/api/session-har-shares/") => {
+            vec![HttpApiResource::SessionHarShare]
+        }
         (&Method::PUT, "/api/session-view") => vec![HttpApiResource::SessionView],
         (&Method::POST, "/api/column-scripts") => {
             vec![HttpApiResource::ColumnScripts, HttpApiResource::SessionView]
@@ -653,7 +683,8 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
         resources,
         session_id: session_id_from_query(query)
             .or_else(|| session_filter_id_from_path(path))
-            .or_else(|| session_share_id_from_path(path)),
+            .or_else(|| session_share_id_from_path(path))
+            .or_else(|| session_har_share_id_from_path(path)),
     })
 }
 
@@ -666,6 +697,10 @@ fn session_filter_id_from_path(path: &str) -> Option<u64> {
 
 fn session_share_id_from_path(path: &str) -> Option<u64> {
     path.strip_prefix("/api/session-shares/")?.parse().ok()
+}
+
+fn session_har_share_id_from_path(path: &str) -> Option<u64> {
+    path.strip_prefix("/api/session-har-shares/")?.parse().ok()
 }
 
 fn session_id_from_query(query: Option<&str>) -> Option<u64> {
@@ -754,6 +789,30 @@ async fn disable_session_share(
     success(shares.disable(&manager, id).await?)
 }
 
+async fn enable_har_share(
+    State(manager): State<ManagerState>,
+    Extension(shares): Extension<Arc<HarShareService>>,
+    ApiJson(request): ApiJson<EnableHarShareRequest>,
+) -> ApiResult {
+    success(shares.enable(&manager, request).await?)
+}
+
+async fn get_har_share(
+    State(manager): State<ManagerState>,
+    Extension(shares): Extension<Arc<HarShareService>>,
+    ApiPath(id): ApiPath<u64>,
+) -> ApiResult {
+    success(shares.status(&manager, id).await?)
+}
+
+async fn disable_har_share(
+    State(manager): State<ManagerState>,
+    Extension(shares): Extension<Arc<HarShareService>>,
+    ApiPath(id): ApiPath<u64>,
+) -> ApiResult {
+    success(shares.disable(&manager, id).await?)
+}
+
 async fn archive_session(
     State(manager): State<ManagerState>,
     ApiPath(id): ApiPath<u64>,
@@ -788,30 +847,6 @@ async fn log_views(
     ApiJson(request): ApiJson<LogViewsRequest>,
 ) -> ApiResult {
     success(manager.log_views(request).await?)
-}
-
-async fn export_logs(
-    State(manager): State<ManagerState>,
-    ApiJson(request): ApiJson<ExportLogsRequest>,
-) -> Result<Response, ApiError> {
-    let export = manager.export_logs(request).await?;
-    let content_length = export.bytes.len();
-    let mut response = Response::new(Body::from(export.bytes));
-    response.headers_mut().insert(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/json; charset=utf-8"),
-    );
-    response.headers_mut().insert(
-        CONTENT_DISPOSITION,
-        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", export.filename))
-            .map_err(|error| ApiError(ManagerError::internal(error.to_string())))?,
-    );
-    response.headers_mut().insert(
-        CONTENT_LENGTH,
-        HeaderValue::from_str(&content_length.to_string())
-            .expect("usize is always a valid Content-Length"),
-    );
-    Ok(response)
 }
 
 async fn upload_asset(
@@ -1606,7 +1641,7 @@ mod tests {
     };
     use proxy_crab_mitm::{ProxyCrab, log_buffer::LogBuffer};
     use proxy_crab_mitm::{
-        model::{CaptureError, ErrorStage, HeaderValues, RequestData, ResponseData},
+        model::{HeaderValues, RequestData},
         storage::{BodySide, BodySource, BodySourceData, CaptureStore},
     };
     use serde_json::Value;
@@ -2074,6 +2109,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::OK);
+
         assert_eq!(response.headers()["x-proxycrab-body-size"], "14");
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(body.as_ref(), b"captured bytes");
@@ -2143,6 +2179,20 @@ mod tests {
                 "/api/session-shares/42",
                 None,
                 vec![HttpApiResource::SessionShare],
+                Some(42),
+            ),
+            (
+                "POST",
+                "/api/session-har-shares",
+                None,
+                vec![HttpApiResource::SessionHarShare],
+                None,
+            ),
+            (
+                "DELETE",
+                "/api/session-har-shares/42",
+                None,
+                vec![HttpApiResource::SessionHarShare],
                 Some(42),
             ),
             (
@@ -2714,6 +2764,7 @@ mod tests {
             ("PUT", "/api/workspace"),
             ("PUT", "/api/config"),
             ("POST", "/api/ca"),
+            ("POST", "/api/logs/export"),
         ] {
             let response = app
                 .clone()
@@ -2766,153 +2817,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_route_returns_a_complete_har_download() {
+    async fn har_share_management_routes_expose_frozen_state() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
-        let session_dir = runtime
-            .workspace()
-            .root()
-            .join("sessions")
-            .join(session.id.to_string());
-        let store = CaptureStore::open(session.id, &session_dir).unwrap();
-        let request = RequestData {
-            method: "GET".into(),
-            uri: "https://example.com/export?q=one&q=two".into(),
-            version: "HTTP/1.1".into(),
-            headers: HeaderValues::new(),
-            tags: [("export".into(), "yes".into())].into(),
-        };
-        let success = store.begin("127.0.0.1:1234", &request, "request").unwrap();
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(b"complete response body").unwrap();
-        let compressed = encoder.finish().unwrap();
-        let response = ResponseData {
-            status: 200,
-            version: "HTTP/1.1".into(),
-            headers: HeaderValues::from([
-                ("content-type".into(), vec!["text/plain".into()]),
-                ("content-encoding".into(), vec!["gzip".into()]),
-            ]),
-        };
-        store
-            .save_body(success, BodySide::Response, false, &compressed)
-            .unwrap();
-        store.complete(success, &response, &[]).unwrap();
-        let failed = store.begin("127.0.0.1:1234", &request, "request").unwrap();
-        store
-            .fail(
-                failed,
-                &CaptureError {
-                    stage: ErrorStage::Upstream,
-                    kind: "test".into(),
-                    message: "not exported".into(),
-                },
-            )
-            .unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
 
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/logs/export")
+                    .uri("/api/session-har-shares")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(
-                        r#"{{"format":"har","session_id":{}}}"#,
+                        r#"{{"session_id":{},"scope":"filtered","log_ids":[]}}"#,
                         session.id
                     )))
                     .unwrap(),
             )
             .await
             .unwrap();
-
         assert_eq!(response.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            response.headers()["content-type"],
-            "application/json; charset=utf-8"
-        );
-        assert_eq!(
-            response.headers()["content-disposition"],
-            format!(
-                "attachment; filename=\"proxycrab-session-{}.har\"",
-                session.id
-            )
-        );
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let har: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let entries = har["log"]["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0]["_proxyCrab"]["logId"], success);
-        assert_eq!(
-            entries[0]["response"]["content"]["text"],
-            "complete response body"
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"]["scope"], "filtered");
+        assert_eq!(body["data"]["log_count"], 0);
+        assert!(
+            body["data"]["token"]
+                .as_str()
+                .unwrap()
+                .starts_with("pcrab_har_")
         );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/session-har-shares/{}", session.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/session-har-shares/{}", session.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
     }
 
     #[tokio::test]
-    async fn export_route_validates_request_contract() {
+    async fn removed_export_route_is_not_available() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
 
-        for (body, expected_status, expected_code) in [
-            (r#"{}"#, axum::http::StatusCode::BAD_REQUEST, "bad_request"),
-            (
-                r#"{"format":"json"}"#,
-                axum::http::StatusCode::BAD_REQUEST,
-                "unsupported_export_format",
-            ),
-            (
-                r#"{"format":"har","unknown":true}"#,
-                axum::http::StatusCode::BAD_REQUEST,
-                "bad_request",
-            ),
-            (
-                r#"{"format":"har","log_ids":[999]}"#,
-                axum::http::StatusCode::NOT_FOUND,
-                "log_not_found",
-            ),
-        ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri("/api/logs/export")
-                        .header("content-type", "application/json")
-                        .body(Body::from(body))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), expected_status);
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(payload["error"]["code"], expected_code);
-        }
-
         let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/logs/export")
-                    .header("content-type", "application/json")
-                    .body(Body::from(format!(
-                        r#"{{"format":"har","session_id":{},"log_ids":[]}}"#,
-                        session.id
-                    )))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
-
-        let no_session_data = tempdir().unwrap();
-        let no_session_runtime =
-            ProxyCrab::open(no_session_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let response = router(MitmManager::new(no_session_runtime), allow_all())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -2923,7 +2892,11 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::METHOD_NOT_ALLOWED
+        );
     }
 
     #[tokio::test]
