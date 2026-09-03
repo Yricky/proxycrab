@@ -45,8 +45,8 @@ import type {
   SessionViewPayload,
   SystemLogEntry,
   SystemLogsQuery,
-  SkillInstallInfo,
-  SkillInstallStatus,
+  SkillManagerState,
+  SkillSaveResult,
   UpdateScriptRequest,
   UpdateAgentsPresetRequest,
   UpdateSessionRequest,
@@ -64,15 +64,14 @@ export interface BackendCapabilities {
 
 export type Unsubscribe = () => void;
 
-export interface SkillInstaller {
-  getInfo(parent: string): Promise<SkillInstallInfo>;
-  install(parent: string, overwrite: boolean): Promise<SkillInstallInfo>;
-  /** 检查默认位置（~/.agents/skills/proxycrab）的 skill 与内置副本是否一致。 */
-  checkStatus(): Promise<SkillInstallStatus>;
+export interface SkillManager {
+  getState(): Promise<SkillManagerState>;
+  savePaths(paths: string[], deleteRemoved: boolean): Promise<SkillSaveResult>;
+  sync(): Promise<SkillManagerState>;
 }
 
 export interface HostOperations {
-  readonly skillInstaller: SkillInstaller;
+  readonly skillManager: SkillManager;
   setWorkspaceForNextStart(path: string): Promise<WorkspacePaths>;
   replaceConfig(config: AppConfig): Promise<AppConfig>;
   regenerateCertificate(): Promise<CertificateResponse>;

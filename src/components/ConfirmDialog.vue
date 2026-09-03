@@ -4,16 +4,23 @@ import { confirmState, settleConfirm } from "../stores/dialog";
 
 <template>
   <Teleport to="body">
-    <div v-if="confirmState.visible" class="confirm-mask" @click.self="settleConfirm(false)">
+    <div v-if="confirmState.visible" class="confirm-mask" @click.self="settleConfirm('cancel')">
       <div class="confirm-box">
         <div class="confirm-title">{{ confirmState.title }}</div>
         <div class="confirm-message">{{ confirmState.message }}</div>
         <div class="confirm-actions">
-          <button class="btn" @click="settleConfirm(false)">取消</button>
+          <button class="btn" @click="settleConfirm('cancel')">取消</button>
+          <button
+            v-if="confirmState.secondaryText"
+            class="btn"
+            @click="settleConfirm('secondary')"
+          >
+            {{ confirmState.secondaryText }}
+          </button>
           <button
             class="btn"
             :class="confirmState.danger ? 'danger-solid' : 'primary'"
-            @click="settleConfirm(true)"
+            @click="settleConfirm('confirm')"
           >
             {{ confirmState.confirmText }}
           </button>

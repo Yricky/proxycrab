@@ -76,12 +76,11 @@ export function createTauriBackend(): Backend {
       readonly: false,
     },
     host: {
-      skillInstaller: {
-        getInfo: (parent: string) =>
-          call("get_proxycrab_skill_install_info", { parent }),
-        install: (parent: string, overwrite: boolean) =>
-          call("install_proxycrab_skill", { parent, overwrite }),
-        checkStatus: () => call("check_proxycrab_skill_status"),
+      skillManager: {
+        getState: () => call("get_proxycrab_skill_manager_state"),
+        savePaths: (paths: string[], deleteRemoved: boolean) =>
+          call("save_proxycrab_skill_paths", { paths, deleteRemoved }),
+        sync: () => call("sync_proxycrab_skills"),
       },
       setWorkspaceForNextStart: (path) =>
         call("set_workspace_for_next_start", { path }),

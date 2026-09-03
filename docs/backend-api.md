@@ -31,7 +31,9 @@ permission-manager implementation.
 The exposed operations are split into four boundaries: trusted host operations (Tauri commands or
 explicit local CLI actions), permission-controlled `/api/*` proxy operations, token-scoped read-only
 `/share-api/*` operations, and target-private `/ui-api/*` browser operations. Host operations include
-workspace switching, full config replacement, CA regeneration, and Skill installation. Workspace
+workspace switching, full config replacement, CA regeneration, and desktop Skill path management.
+Desktop Skill paths are application-data-owned and synchronize the bundled Skill at startup, on
+save, and on explicit manual sync; these operations are not part of `ProxyCrabManager`. Workspace
 selection has no management HTTP resource; read-only config and CA resources remain on `/api/*`.
 
 ## Management HTTP authentication and permissions
@@ -86,9 +88,10 @@ displayed and evaluated as `deny`, and CLI updates reject `approval`. The Tauri 
 approval workflow. The CLI workspace path is read-only in the UI because `--workspace` selects it
 at process startup.
 
-The CLI Backend intentionally does not define a Skill installer, and the CLI HTTP router has no
-Skill-install endpoint. Skill installation is a local, explicit CLI subcommand or a trusted Tauri
-operation; it cannot be initiated by the browser bundle, which may be hosted remotely.
+The CLI Backend intentionally does not define a Skill path manager, and the CLI HTTP router has no
+Skill-management endpoint. CLI Skill installation remains a local, explicit `install-skill`
+subcommand; desktop path management remains a trusted Tauri operation. Neither can be initiated by
+the browser bundle, which may be hosted remotely.
 
 ### Read-only Session sharing
 

@@ -47,16 +47,12 @@ operations under Settings > 管理接口; they are not public Agent HTTP resourc
 
 The CLI also prints a per-run `pcrab_ui_…` token for its browser landing page. It authorizes private
 UI routes and trusted UI calls, is not an Agent API key, and must never be copied into
-`PROXYCRAB_API_KEY`. The browser backend exposes no Skill-install method or HTTP route.
+`PROXYCRAB_API_KEY`.
 
 Session sharing uses separate `pcrab_share_…` tokens and `/share-api/*` browser routes. Those tokens
 are scoped to one read-only Session, live only for the current process while sharing remains
 enabled, are not accepted by the Agent API, and must never be copied into `PROXYCRAB_API_KEY`, Agent
 commands, logs, or reports.
-
-Workspace switching, full config replacement (including proxy-port changes), CA regeneration, and
-Skill installation are host operations, not Agent HTTP resources. Their reads remain available, but
-mutations require a trusted Tauri command or an explicit local CLI option/subcommand.
 
 The service binds to every IPv4 interface. Public CLI UI and Session-share assets can load remotely,
 but a remote Host or Origin on `/api/*` requires Bearer authorization. Remote CORS preflight is
