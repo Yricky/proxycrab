@@ -11,89 +11,11 @@ use serde::Serialize;
 const SKILL_DIRECTORY_NAME: &str = "proxycrab";
 static INSTALL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SkillInstallStatus {
-    NotInstalled,
-    Installed,
-    Mismatched,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct SkillInstallInfo {
     pub parent_path: String,
     pub target_path: String,
     pub exists: bool,
-}
-
-pub fn install_info(parent: &str) -> Result<SkillInstallInfo, ManagerError> {
-    let parent = expand_parent(parent)?;
-    validate_existing_directory(&parent, "skill parent path")?;
-    let target = parent.join(SKILL_DIRECTORY_NAME);
-    validate_existing_directory(&target, "skill target path")?;
-    Ok(SkillInstallInfo {
-        parent_path: parent.to_string_lossy().into_owned(),
-        target_path: target.to_string_lossy().into_owned(),
-        exists: path_exists(&target),
-    })
-}
-
-/// Compares the skill installed at the default location (`~/.agents/skills/proxycrab`)
-/// against the bundled copy. Any inspection error is reported as `NotInstalled`.
-pub fn check_default(bundled: &Path) -> SkillInstallStatus {
-    let Ok(home) = home_directory() else {
-        return SkillInstallStatus::NotInstalled;
-    };
-    check(bundled, &home.join(".agents").join("skills"))
-}
-
-/// Compares the installed skill tree against the bundled one, file by file.
-pub fn check(bundled: &Path, parent: &Path) -> SkillInstallStatus {
-    let target = parent.join(SKILL_DIRECTORY_NAME);
-    if !bundled.is_dir() || !target.is_dir() {
-        return SkillInstallStatus::NotInstalled;
-    }
-    match trees_match(bundled, &target) {
-        Ok(true) => SkillInstallStatus::Installed,
-        Ok(false) => SkillInstallStatus::Mismatched,
-        Err(_) => SkillInstallStatus::NotInstalled,
-    }
-}
-
-fn trees_match(bundled: &Path, installed: &Path) -> std::io::Result<bool> {
-    let bundled_files = collect_files(bundled)?;
-    if bundled_files != collect_files(installed)? {
-        return Ok(false);
-    }
-    for relative in bundled_files {
-        if fs::read(bundled.join(&relative))? != fs::read(installed.join(&relative))? {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-/// Collects the sorted relative paths of all regular files under `root`.
-/// Symlinks and other special entries are skipped, which naturally flags them
-/// as a mismatch whenever the other tree holds a regular file at the same path.
-fn collect_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    fn walk(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let file_type = entry.file_type()?;
-            if file_type.is_dir() {
-                walk(root, &path, files)?;
-            } else if file_type.is_file() {
-                files.push(path.strip_prefix(root).unwrap_or(&path).to_path_buf());
-            }
-        }
-        Ok(())
-    }
-    let mut files = Vec::new();
-    walk(root, root, &mut files)?;
-    files.sort();
-    Ok(files)
 }
 
 pub fn install(
@@ -108,7 +30,7 @@ pub fn install(
         ));
     }
 
-    let parent = expand_parent(parent)?;
+    let parent = normalize_parent(parent)?;
     validate_existing_directory(&parent, "skill parent path")?;
     fs::create_dir_all(&parent)
         .map_err(|error| io_error("create skill parent directory", &parent, error))?;
@@ -163,7 +85,7 @@ pub fn install(
     })
 }
 
-fn expand_parent(value: &str) -> Result<PathBuf, ManagerError> {
+pub fn normalize_parent(value: &str) -> Result<PathBuf, ManagerError> {
     let value = value.trim();
     if value.is_empty() {
         return Err(ManagerError::bad_request(
@@ -182,7 +104,32 @@ fn expand_parent(value: &str) -> Result<PathBuf, ManagerError> {
             "skill installation parent path must be absolute or start with ~/",
         ));
     }
-    Ok(expanded)
+    let mut normalized = PathBuf::new();
+    for component in expanded.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    Ok(normalized)
+}
+
+/// Removes the fixed ProxyCrab Skill child without touching any sibling entry.
+/// Returns whether an installed target existed.
+pub fn uninstall(parent: &str) -> Result<bool, ManagerError> {
+    let parent = normalize_parent(parent)?;
+    validate_existing_directory(&parent, "skill parent path")?;
+    let target = parent.join(SKILL_DIRECTORY_NAME);
+    validate_existing_directory(&target, "skill target path")?;
+    if !path_exists(&target) {
+        return Ok(false);
+    }
+    fs::remove_dir_all(&target)
+        .map_err(|error| io_error("remove ProxyCrab skill", &target, error))?;
+    Ok(true)
 }
 
 fn home_directory() -> Result<PathBuf, ManagerError> {
@@ -253,42 +200,7 @@ fn io_error(action: &str, path: &Path, error: std::io::Error) -> ManagerError {
 mod tests {
     use tempfile::tempdir;
 
-    use super::{check, install, install_info, SkillInstallStatus};
-
-    #[test]
-    fn check_reports_not_installed_installed_and_mismatched() {
-        let source = tempdir().unwrap();
-        std::fs::write(source.path().join("SKILL.md"), "first").unwrap();
-        std::fs::create_dir(source.path().join("scripts")).unwrap();
-        std::fs::write(source.path().join("scripts/tool.mjs"), "first").unwrap();
-        let parent = tempdir().unwrap();
-        let parent_path = parent.path().to_string_lossy();
-
-        assert_eq!(
-            check(source.path(), parent.path()),
-            SkillInstallStatus::NotInstalled
-        );
-
-        install(source.path(), &parent_path, false).unwrap();
-        assert_eq!(
-            check(source.path(), parent.path()),
-            SkillInstallStatus::Installed
-        );
-
-        let target = parent.path().join("proxycrab");
-        std::fs::write(target.join("SKILL.md"), "edited").unwrap();
-        assert_eq!(
-            check(source.path(), parent.path()),
-            SkillInstallStatus::Mismatched
-        );
-
-        std::fs::write(target.join("SKILL.md"), "first").unwrap();
-        std::fs::write(target.join("extra.txt"), "extra").unwrap();
-        assert_eq!(
-            check(source.path(), parent.path()),
-            SkillInstallStatus::Mismatched
-        );
-    }
+    use super::{install, normalize_parent, uninstall};
 
     #[test]
     fn installs_and_completely_overwrites_the_target_directory() {
@@ -325,34 +237,62 @@ mod tests {
     }
 
     #[test]
-    fn reports_the_fixed_proxycrab_target_without_creating_it() {
+    fn reports_the_fixed_proxycrab_target() {
+        let source = tempdir().unwrap();
+        std::fs::write(source.path().join("SKILL.md"), "skill").unwrap();
         let parent = tempdir().unwrap();
-        let info = install_info(&parent.path().to_string_lossy()).unwrap();
+        let info = install(source.path(), &parent.path().to_string_lossy(), false).unwrap();
         assert_eq!(
             info.target_path,
             parent.path().join("proxycrab").to_string_lossy()
         );
-        assert!(!info.exists);
-        assert!(!parent.path().join("proxycrab").exists());
+        assert!(info.exists);
     }
 
     #[test]
     fn rejects_a_file_as_the_parent_or_target() {
+        let source = tempdir().unwrap();
+        std::fs::write(source.path().join("SKILL.md"), "skill").unwrap();
         let parent = tempdir().unwrap();
         let file = parent.path().join("not-a-directory");
         std::fs::write(&file, "file").unwrap();
         assert_eq!(
-            install_info(&file.to_string_lossy()).unwrap_err().code,
+            install(source.path(), &file.to_string_lossy(), false)
+                .unwrap_err()
+                .code,
             "bad_request"
         );
 
         let target = parent.path().join("proxycrab");
         std::fs::write(&target, "file").unwrap();
         assert_eq!(
-            install_info(&parent.path().to_string_lossy())
+            install(source.path(), &parent.path().to_string_lossy(), false)
                 .unwrap_err()
                 .code,
             "bad_request"
         );
+    }
+
+    #[test]
+    fn normalizes_absolute_parent_paths() {
+        let parent = tempdir().unwrap();
+        assert_eq!(
+            normalize_parent(&parent.path().to_string_lossy()).unwrap(),
+            parent.path()
+        );
+    }
+
+    #[test]
+    fn uninstall_removes_only_the_proxycrab_child() {
+        let parent = tempdir().unwrap();
+        let target = parent.path().join("proxycrab");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("SKILL.md"), "skill").unwrap();
+        std::fs::write(parent.path().join("keep.txt"), "keep").unwrap();
+
+        assert!(uninstall(&parent.path().to_string_lossy()).unwrap());
+        assert!(!target.exists());
+        assert!(parent.path().join("keep.txt").exists());
+        assert!(!uninstall(&parent.path().to_string_lossy()).unwrap());
     }
 }

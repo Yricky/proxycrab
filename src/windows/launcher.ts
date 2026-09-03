@@ -12,7 +12,7 @@ import CertManagerWindow from "./CertManagerWindow.vue";
 import SystemLogsWindow from "./SystemLogsWindow.vue";
 import SettingsWindow from "./SettingsWindow.vue";
 import ReadonlyViewerWindow from "./ReadonlyViewerWindow.vue";
-import SkillInstallWindow from "./SkillInstallWindow.vue";
+import SkillManagerWindow from "./SkillManagerWindow.vue";
 import RoutingManagerWindow from "./RoutingManagerWindow.vue";
 import BypassWindow from "./BypassWindow.vue";
 import BreakpointListWindow from "./BreakpointListWindow.vue";
@@ -257,12 +257,12 @@ export function openSettings(): void {
   });
 }
 
-export function openSkillInstall(): void {
-  windowsStore.open("skill-install", {
-    title: "安装 ProxyCrab Skill",
-    component: SkillInstallWindow,
-    width: 560,
-    height: 360,
+export function openSkillManager(): void {
+  windowsStore.open("skill-manager", {
+    title: "ProxyCrab Skill 管理",
+    component: SkillManagerWindow,
+    width: 680,
+    height: 480,
   });
 }
 

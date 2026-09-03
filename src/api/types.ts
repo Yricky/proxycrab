@@ -195,13 +195,27 @@ export interface HttpApiChange {
   session_id?: number;
 }
 
-export interface SkillInstallInfo {
+export interface SkillPathState {
   parent_path: string;
   target_path: string;
-  exists: boolean;
+  error?: string;
 }
 
-export type SkillInstallStatus = "not_installed" | "installed" | "mismatched";
+export interface SkillManagerState {
+  configured: boolean;
+  config_error?: string;
+  paths: SkillPathState[];
+}
+
+export interface SkillRemovalError {
+  parent_path: string;
+  message: string;
+}
+
+export interface SkillSaveResult {
+  state: SkillManagerState;
+  removal_errors: SkillRemovalError[];
+}
 
 // ---------- dto.rs ----------
 

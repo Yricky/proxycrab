@@ -1,5 +1,6 @@
 mod http_permissions;
 mod share_ui;
+mod skill_manager;
 mod workspace_selection;
 
 use std::sync::{Arc, Mutex, RwLock};
@@ -20,7 +21,7 @@ use proxy_crab_mgr::{
     },
     http::{HttpServerHandle, start_http_server_with_routes},
     session_share::{SessionShareService, SessionShareState},
-    skill_install::{self, SkillInstallInfo, SkillInstallStatus},
+    skill_install,
 };
 use proxy_crab_mitm::{
     ProxyCrab,
@@ -40,6 +41,7 @@ use crate::http_permissions::{
     ApiActionView, CreatedApiKey, HttpPermissionService, IdentityPermissions, PendingApproval,
     PermissionEntry, PermissionIdentitySummary, ResolveApprovalRequest,
 };
+use crate::skill_manager::{SkillManager, SkillManagerState, SkillSaveResult};
 use crate::workspace_selection::{WorkspacePaths, WorkspaceSelection};
 
 struct BackendState {
@@ -49,6 +51,7 @@ struct BackendState {
     http: Mutex<Option<HttpServerHandle>>,
     http_error: RwLock<Option<String>>,
     shares: Arc<SessionShareService>,
+    skill_manager: SkillManager,
     workspace: WorkspaceSelection,
 }
 
@@ -661,26 +664,26 @@ fn bundled_skill_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, Manag
 }
 
 #[tauri::command]
-fn get_proxycrab_skill_install_info(parent: String) -> Result<SkillInstallInfo, ManagerError> {
-    skill_install::install_info(&parent)
+fn get_proxycrab_skill_manager_state(
+    state: State<'_, BackendState>,
+) -> Result<SkillManagerState, ManagerError> {
+    state.skill_manager.state()
 }
 
 #[tauri::command]
-fn check_proxycrab_skill_status(app: tauri::AppHandle) -> SkillInstallStatus {
-    match bundled_skill_dir(&app) {
-        Ok(bundled) => skill_install::check_default(&bundled),
-        Err(_) => SkillInstallStatus::NotInstalled,
-    }
+fn save_proxycrab_skill_paths(
+    state: State<'_, BackendState>,
+    paths: Vec<String>,
+    delete_removed: bool,
+) -> Result<SkillSaveResult, ManagerError> {
+    state.skill_manager.save_paths(paths, delete_removed)
 }
 
 #[tauri::command]
-fn install_proxycrab_skill(
-    app: tauri::AppHandle,
-    parent: String,
-    overwrite: bool,
-) -> Result<SkillInstallInfo, ManagerError> {
-    let bundled = bundled_skill_dir(&app)?;
-    skill_install::install(&bundled, &parent, overwrite)
+fn sync_proxycrab_skills(
+    state: State<'_, BackendState>,
+) -> Result<SkillManagerState, ManagerError> {
+    state.skill_manager.sync()
 }
 
 #[tauri::command]
@@ -833,7 +836,7 @@ pub fn run() {
         .setup(|app| {
             setup_global_menu(app)?;
             let app_data_dir = app.path().app_data_dir()?;
-            let workspace = WorkspaceSelection::open(app_data_dir)?;
+            let workspace = WorkspaceSelection::open(app_data_dir.clone())?;
             let log_buffer = Arc::new(LogBuffer::default());
             let _ = tracing_subscriber::registry()
                 .with(
@@ -843,6 +846,13 @@ pub fn run() {
                 .with(tracing_subscriber::fmt::layer())
                 .with(BufferLayer::new(log_buffer.clone()))
                 .try_init();
+            let bundled_skill = bundled_skill_dir(app.handle()).unwrap_or_else(|error| {
+                tracing::warn!("failed to resolve bundled Skill directory: {error}");
+                app_data_dir.join("missing-bundled-skill")
+            });
+            let default_skill_parent = skill_install::normalize_parent("~/.agents/skills").ok();
+            let skill_manager =
+                SkillManager::open(app_data_dir.clone(), bundled_skill, default_skill_parent);
             let runtime = ProxyCrab::open(workspace.current_path(), log_buffer)?;
             let workspace_path = workspace.current_path().to_path_buf();
             let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
@@ -927,6 +937,7 @@ pub fn run() {
                 http: Mutex::new(http),
                 http_error: RwLock::new(http_error),
                 shares,
+                skill_manager,
                 workspace,
             });
             Ok(())
@@ -1020,9 +1031,9 @@ pub fn run() {
             delete_http_api_key,
             list_http_approvals,
             resolve_http_approval,
-            get_proxycrab_skill_install_info,
-            check_proxycrab_skill_status,
-            install_proxycrab_skill,
+            get_proxycrab_skill_manager_state,
+            save_proxycrab_skill_paths,
+            sync_proxycrab_skills,
         ]));
 
     let app = builder

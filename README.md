@@ -22,6 +22,14 @@ Neither reusable crate depends on Tauri.
 
 The Tauri application data directory contains `config.json`, which points at the workspace. When the pointer is absent or invalid, `app_data_dir/workspace` is used and persisted. A changed pointer takes effect only on the next application launch.
 
+Desktop ProxyCrab Skill parent paths are stored separately in application data as
+`skill-paths.json` and do not follow workspace switches. On first use only, an existing
+`~/.agents/skills/proxycrab` directory causes `~/.agents/skills` to be adopted automatically;
+otherwise the UI warns that no Skill path is configured. Every application launch, path save, and
+manual sync completely replaces the `proxycrab` child under each configured parent with the bundled
+copy. Removing a path can either leave that child in place or delete it. Corrupt path configuration
+is preserved and reported until the user explicitly saves a replacement.
+
 The management API listens on every IPv4 interface and explicitly authenticates each `/api/*`
 request as either `LocalLoopback` or `Bearer`. `LocalLoopback` requires a loopback TCP peer, a local
 Host, and no Origin or a local Origin. Exactly one `Authorization: Bearer <key>` header always selects
@@ -33,7 +41,7 @@ Settings > 管理接口 through target-private operations, not the public agent 
 commands remain trusted and bypass HTTP authentication.
 
 Host mutations such as changing the next-start workspace, replacing global configuration
-(including the proxy port), regenerating the CA, and installing the bundled Skill are not management
+(including the proxy port), regenerating the CA, and managing bundled Skill paths are not management
 HTTP resources. They are available only through trusted Tauri commands or explicit local CLI options
 and subcommands. Workspace selection is not exposed through HTTP; the API retains read-only config
 and CA resources.
@@ -117,7 +125,7 @@ server's reachable IP addresses. Remote `/api/*` requests require the Bearer tok
 the token travels in cleartext over plain HTTP, so direct exposure should be limited to a trusted
 network or placed behind authenticated TLS.
 
-The CLI browser backend deliberately has no ProxyCrab Skill installation capability or HTTP route.
+The CLI browser backend deliberately has no ProxyCrab Skill path-management capability or HTTP route.
 This remains true even if the CLI frontend bundle is hosted outside the local binary. Users who
 want to install the bundled Skill must explicitly run the local
 `proxycrab-cli install-skill` command; a browser page cannot trigger it.

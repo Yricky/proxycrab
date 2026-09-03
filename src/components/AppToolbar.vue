@@ -18,7 +18,7 @@ import {
   openResponseInterceptorManager,
   openRoutingManager,
   openSettings,
-  openSkillInstall,
+  openSkillManager,
   openSystemLogs,
 } from "../windows/launcher";
 import { IoHandRight } from "vue-icons-plus/io";
@@ -51,12 +51,10 @@ type ToolbarMenu = "ai" | "scripts" | "tools" | "system";
 const backend = useBackend();
 
 const aiTooltipTitle = computed(() => {
-  if (skillStore.status === "not_installed") return "skill未安装";
-  if (skillStore.status === "mismatched") return "本机skill与当前应用版本不一致";
-  return undefined;
+  return skillStore.warningTitle;
 });
 const aiTooltipDetail = computed(() =>
-  skillStore.status === "mismatched" ? "可能导致预期外的行为，建议重新安装" : undefined,
+  skillStore.warning ? "请打开 Skill 管理查看并处理" : undefined,
 );
 
 const toolbarMenus = ref<HTMLElement | null>(null);
@@ -203,13 +201,12 @@ onBeforeUnmount(() => {
             class="tb-menu-trigger"
             :class="{
               active: activeMenu === 'ai',
-              'skill-missing': skillStore.status === 'not_installed',
-              'skill-mismatched': skillStore.status === 'mismatched',
+              'skill-warning': skillStore.warning,
             }"
             :aria-expanded="activeMenu === 'ai'"
             @click="toggleMenu('ai')"
           >
-            <Io5Warning v-if="skillStore.status === 'mismatched'" :size="13" />
+            <Io5Warning v-if="skillStore.warning" :size="13" />
             AI
             <Io5ChevronDown :size="11" />
           </button>
@@ -217,15 +214,15 @@ onBeforeUnmount(() => {
         <div v-if="activeMenu === 'ai'" class="tb-menu">
           <button class="tb-menu-item" @click="runMenuAction(openAgentsPresets)">
             <Io5DocumentText :size="14" />
-            <span>AGENTS.md 预设…</span>
+            <span>AGENTS.md 预设</span>
           </button>
           <button
-            v-if="backend.host?.skillInstaller"
+            v-if="backend.host?.skillManager"
             class="tb-menu-item"
-            @click="runMenuAction(openSkillInstall)"
+            @click="runMenuAction(openSkillManager)"
           >
             <Io5Download :size="14" />
-            <span>安装 ProxyCrab Skill…</span>
+            <span>管理 Skill</span>
           </button>
         </div>
       </div>
@@ -420,16 +417,10 @@ onBeforeUnmount(() => {
   color: var(--text);
   background: var(--bg-hover);
 }
-.tb-menu-trigger.skill-missing,
-.tb-menu-trigger.skill-missing:hover,
-.tb-menu-trigger.skill-missing.active {
+.tb-menu-trigger.skill-warning,
+.tb-menu-trigger.skill-warning:hover,
+.tb-menu-trigger.skill-warning.active {
   background: var(--warning);
-  color: #fff;
-}
-.tb-menu-trigger.skill-mismatched,
-.tb-menu-trigger.skill-mismatched:hover,
-.tb-menu-trigger.skill-mismatched.active {
-  background: var(--danger);
   color: #fff;
 }
 .tb-menu {
