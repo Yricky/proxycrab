@@ -8,6 +8,7 @@ import ColumnManagerWindow from "./ColumnManagerWindow.vue";
 import FilterManagerWindow from "./FilterManagerWindow.vue";
 import Base64Window from "./Base64Window.vue";
 import JwtWindow from "./JwtWindow.vue";
+import QrCodeWindow from "./QrCodeWindow.vue";
 import CertManagerWindow from "./CertManagerWindow.vue";
 import SystemLogsWindow from "./SystemLogsWindow.vue";
 import SettingsWindow from "./SettingsWindow.vue";
@@ -218,6 +219,15 @@ export function openJwt(): void {
     component: JwtWindow,
     width: 940,
     height: 640,
+  });
+}
+
+export function openQrCode(): void {
+  windowsStore.open("tool-qrcode", {
+    title: "二维码生成",
+    component: QrCodeWindow,
+    width: 520,
+    height: 560,
   });
 }
 
