@@ -11,7 +11,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use clap::{Parser, Subcommand};
 use include_dir::{Dir, include_dir};
 use proxy_crab_mgr::{
-    MitmManager, ProxyCrabManager, http::start_http_server_with_routes,
+    MitmManager, ProxyCrabManager, har_share::HarShareService, http::start_http_server_with_routes,
     session_share::SessionShareService, skill_install,
 };
 use proxy_crab_mitm::{
@@ -149,14 +149,24 @@ async fn run(args: RunArgs) -> Result<()> {
         let shares = SessionShareService::new();
         let share_manager = manager.clone();
         let share_service = shares.clone();
+        let har_shares = HarShareService::new();
+        let har_share_manager = manager.clone();
+        let har_share_service = har_shares.clone();
         let handle = start_http_server_with_routes(
             manager.clone(),
             permissions,
             shares.clone(),
+            har_shares,
             move |changes| {
-                ui::router(ui_manager, ui_workspace, ui_permissions, access, changes).merge(
-                    proxy_crab_mgr::session_share::router(share_manager, share_service),
-                )
+                ui::router(ui_manager, ui_workspace, ui_permissions, access, changes)
+                    .merge(proxy_crab_mgr::session_share::router(
+                        share_manager,
+                        share_service,
+                    ))
+                    .merge(proxy_crab_mgr::har_share::router(
+                        har_share_manager,
+                        har_share_service,
+                    ))
             },
         )
         .await

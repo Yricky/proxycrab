@@ -76,12 +76,6 @@
       ]
     },
     {
-      "id": 13,
-      "prompt": "Use ProxyCrab to export logs 41, 42, and 43 from Session 3 as a HAR file at /tmp/checkout.har. Do not print captured headers or bodies.",
-      "expected_output": "The agent uses har-export.mjs with Session 3, the requested comma-separated log IDs, and /tmp/checkout.har; it reports the saved path and warns that HAR may contain unredacted credentials, cookies, headers, and bodies without printing them.",
-      "files": []
-    },
-    {
       "id": 14,
       "prompt": "List the available ProxyCrab Sessions and tell me which custom table columns are configured for each one.",
       "expected_output": "The agent uses session-list.mjs and reports the column names returned with each Session, including custom-column script names, without making separate manual Session-view calls.",
@@ -195,6 +189,12 @@
       "id": 32,
       "prompt": "Check whether ProxyCrab Session 3 is currently shared, then disable it so every previously issued browser link stops working immediately. Do not print any token.",
       "expected_output": "The agent calls permission-controlled GET /api/session-shares/3, does not print an enabled response token, then calls permission-controlled DELETE /api/session-shares/3, handles approval or denial normally, and reports only the resulting disabled state and immediate revocation behavior.",
+      "files": []
+    },
+    {
+      "id": 33,
+      "prompt": "Check whether ProxyCrab Session 3 has an active HAR download share, then disable it without exposing or using its browser token as an Agent credential.",
+      "expected_output": "The agent calls permission-controlled GET /api/session-har-shares/3, does not print any pcrab_har_ token, then calls DELETE /api/session-har-shares/3, handles approval or denial normally, and reports only that the frozen HAR share was disabled and its link immediately revoked.",
       "files": []
     }
   ]

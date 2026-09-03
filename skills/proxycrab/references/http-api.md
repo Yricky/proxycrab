@@ -54,6 +54,10 @@ are scoped to one read-only Session, live only for the current process while sha
 enabled, are not accepted by the Agent API, and must never be copied into `PROXYCRAB_API_KEY`, Agent
 commands, logs, or reports.
 
+HAR sharing uses an independent `pcrab_har_…` browser token for a frozen set of capture IDs. It is
+also process-local, is accepted only by `/session.har`, and must not be copied into Agent commands,
+logs, reports, or `Authorization`.
+
 The service binds to every IPv4 interface. Public CLI UI and Session-share assets can load remotely,
 but a remote Host or Origin on `/api/*` requires Bearer authorization. Remote CORS preflight is
 accepted only when it requests `Authorization`; the subsequent request still passes normal token
@@ -368,6 +372,38 @@ other Session activity and the global bypass activity count are never returned. 
 `matched_ids`/`in_progress_ids` response as the management route, while forcibly scoping the
 Session and exposing no filter-persistence route.
 
+### Session HAR shares
+
+HAR download sharing is independent from the read-only browser share. Use
+`GET /api/session-har-shares/{id}` to inspect its state, `POST /api/session-har-shares` to enable it,
+and `DELETE /api/session-har-shares/{id}` to disable it. The defaults are `allow`, `approval`, and
+`approval`, respectively. Enabling accepts one Session, a display scope, and the exact capture IDs
+to freeze:
+
+```json
+{
+  "session_id": 3,
+  "scope": "filtered",
+  "log_ids": [1041, 1042]
+}
+```
+
+`scope` is `all` or `filtered`; it describes the owner UI selection and does not cause a later
+query. IDs are deduplicated and frozen for the lifetime of the share. Re-enabling is idempotent and
+keeps the original scope, IDs, and token until the share is disabled. The enabled state includes
+`scope`, `log_count`, and a sensitive process-local `pcrab_har_…` token; disabled state has
+`log_count: 0` and no token.
+
+The owner UI builds `http://<local-ip>:<api-port>/session.har?token=…`. A GET downloads
+`proxycrab-session-<id>.har` directly. Only successful captures with responses are emitted;
+in-progress, failed, and synthetic TLS CONNECT records in the frozen selection are skipped. An
+empty selection downloads a valid empty HAR. The download contains complete stored headers and
+bodies with no redaction, so treat the URL and file as sensitive. Disabling, process exit, or
+archiving the Session makes the link unavailable. This browser token is not an Agent Bearer
+credential. HAR JSON is streamed one capture entry at a time and has no `Content-Length`; a body or
+storage failure after HTTP 200 interrupts the download and leaves a partial file that must be
+discarded.
+
 ### `PUT /api/sessions/{id}`
 
 ```json
@@ -536,55 +572,6 @@ table column, its aligned cell is the same Unix-millisecond value encoded as a d
 the string-cell protocol remains unchanged. `column_index` is zero-based. A column error leaves that
 cell empty; a missing log has no row or `column_index`. IDs and rows are unordered. Unchanged logs
 appear in neither `rows` nor `exceptions`.
-
-### `POST /api/logs/export`
-
-Exports HAR 1.2:
-
-```json
-{
-  "format": "har",
-  "session_id": 3,
-  "log_ids": [1041, 1042]
-}
-```
-
-- `format` is required and currently only accepts `har`. Unsupported values return
-  `unsupported_export_format`; unknown fields return `bad_request`.
-- Omit `session_id` to select the active Session.
-- Omit `log_ids` to snapshot and export all eligible captures currently in the Session. Captures
-  added after the snapshot are not included.
-- An empty `log_ids` array returns a valid empty HAR.
-- Explicit IDs are deduplicated and entries are ordered by ascending log ID. Any missing explicit
-  ID fails the complete request with `404 log_not_found`; existing but ineligible IDs are skipped.
-- Eligibility requires `outcome: success` and a response. The synthetic `CONNECT / tls_mitm`
-  record is excluded; ordinary HTTP and `101` upgrade handshakes are included.
-
-The response is raw UTF-8 JSON rather than the standard API envelope:
-
-```text
-Content-Type: application/json; charset=utf-8
-Content-Disposition: attachment; filename="proxycrab-session-3.har"
-```
-
-ProxyCrab reads and validates the complete export before returning HTTP 200. There is no configured
-body/export size limit; a storage error fails the whole request with HTTP 500.
-
-Bodies are complete. gzip, br, deflate, zstd, and stacked encodings are decoded. Text/JSON is
-stored as text, binary response content uses standard `encoding: "base64"`, and binary request
-`postData` uses `_encoding: "base64"`. If decoding is unsupported or malformed, raw bytes are
-Base64-encoded and the entry's `_proxyCrab.requestBodyDecoded` or `responseBodyDecoded` is `false`.
-HAR body sizes retain the stored/compressed byte count while response `content.size` is the
-decoded/fallback byte count.
-
-The exporter parses repeated query parameters, Cookie/Set-Cookie, and redirects on a best-effort
-basis while preserving every stored header. `headersSize` and all detailed timing fields are `-1`;
-entry `time` is `updated_at - created_at`. `_proxyCrab` also includes log and Session IDs, request
-tags, stage, client source address, `createdAt`, and `updatedAt`. Interceptor source/history is not
-included.
-
-**Sensitive data:** nothing is redacted. Authorization, Cookie, Set-Cookie, and full body data may
-contain credentials or personal information.
 
 ### `GET /api/logs/{id}?session_id=3`
 

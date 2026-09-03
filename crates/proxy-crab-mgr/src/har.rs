@@ -1,8 +1,10 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, pin::Pin};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+use bytes::Bytes;
+use futures::{Stream, StreamExt};
 use proxy_crab_mitm::{
-    model::{CaptureDetail, HeaderValues},
+    model::{CaptureSummary, HeaderValues},
     storage::{BodySource, BodySourceData},
 };
 use serde::Serialize;
@@ -10,30 +12,15 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::io::AsyncReadExt;
 use url::Url;
 
-use crate::{dto::ManagerResult, http::body_reader};
+use crate::{
+    dto::{ManagerError, ManagerResult},
+    http::body_reader,
+};
 
 pub(crate) struct HarCapture {
-    pub detail: CaptureDetail,
+    pub summary: CaptureSummary,
     pub request_body: Option<BodySource>,
     pub response_body: Option<BodySource>,
-}
-
-#[derive(Serialize)]
-struct HarRoot {
-    log: HarLog,
-}
-
-#[derive(Serialize)]
-struct HarLog {
-    version: &'static str,
-    creator: HarCreator,
-    entries: Vec<HarEntry>,
-}
-
-#[derive(Serialize)]
-struct HarCreator {
-    name: &'static str,
-    version: &'static str,
 }
 
 #[derive(Serialize)]
@@ -157,28 +144,41 @@ struct LoadedBody {
     decode_failed: bool,
 }
 
-pub(crate) async fn serialize(captures: Vec<HarCapture>) -> ManagerResult<Vec<u8>> {
-    let mut entries = Vec::with_capacity(captures.len());
-    for capture in captures {
-        entries.push(entry(capture).await?);
-    }
-    serde_json::to_vec(&HarRoot {
-        log: HarLog {
-            version: "1.2",
-            creator: HarCreator {
-                name: "ProxyCrab",
-                version: env!("CARGO_PKG_VERSION"),
-            },
-            entries,
+pub(crate) type HarStream = Pin<Box<dyn Stream<Item = ManagerResult<Bytes>> + Send>>;
+
+pub(crate) fn stream(captures: Vec<HarCapture>) -> HarStream {
+    let prefix = futures::stream::once(async { Ok::<_, ManagerError>(envelope_prefix()) });
+    let entries = futures::stream::iter(captures.into_iter().enumerate()).then(
+        |(index, capture)| async move {
+            let entry = entry(capture).await?;
+            let serialized = serde_json::to_vec(&entry)
+                .map_err(|error| ManagerError::internal(error.to_string()))?;
+            if index == 0 {
+                Ok(Bytes::from(serialized))
+            } else {
+                let mut chunk = Vec::with_capacity(serialized.len() + 1);
+                chunk.push(b',');
+                chunk.extend_from_slice(&serialized);
+                Ok(Bytes::from(chunk))
+            }
         },
-    })
-    .map_err(|error| crate::dto::ManagerError::internal(error.to_string()))
+    );
+    let suffix = futures::stream::once(async { Ok::<_, ManagerError>(Bytes::from_static(b"]}}")) });
+    Box::pin(prefix.chain(entries).chain(suffix))
+}
+
+fn envelope_prefix() -> Bytes {
+    let version = serde_json::to_string(env!("CARGO_PKG_VERSION"))
+        .expect("the package version is a valid JSON string");
+    Bytes::from(format!(
+        r#"{{"log":{{"version":"1.2","creator":{{"name":"ProxyCrab","version":{version}}},"entries":["#
+    ))
 }
 
 async fn entry(capture: HarCapture) -> ManagerResult<HarEntry> {
     let request_body = load_body(capture.request_body).await?;
     let response_body = load_body(capture.response_body).await?;
-    let summary = capture.detail.summary;
+    let summary = capture.summary;
     let response = summary
         .response
         .expect("the Manager only passes captures with responses to HAR serialization");
@@ -462,50 +462,52 @@ mod tests {
     use std::io::Write;
 
     use flate2::{Compression, write::GzEncoder};
+    use futures::TryStreamExt;
     use proxy_crab_mitm::{
-        model::{
-            BodyPayload, CaptureDetail, CaptureOutcome, CaptureSummary, HeaderValues, RequestData,
-            ResponseData,
-        },
+        model::{CaptureOutcome, CaptureSummary, HeaderValues, RequestData, ResponseData},
         storage::{BodySource, BodySourceData},
     };
 
-    use super::{HarCapture, serialize};
+    use super::{HarCapture, stream};
 
-    fn capture(response_headers: HeaderValues) -> CaptureDetail {
-        CaptureDetail {
-            summary: CaptureSummary {
-                id: 7,
-                session_id: 3,
-                source: "127.0.0.1:4321".into(),
-                request: RequestData {
-                    method: "POST".into(),
-                    uri: "https://example.com/items?a=1&a=2".into(),
-                    version: "HTTP/1.1".into(),
-                    headers: HeaderValues::from([
-                        (
-                            "content-type".into(),
-                            vec!["application/octet-stream".into()],
-                        ),
-                        ("cookie".into(), vec!["sid=secret; theme=dark".into()]),
-                    ]),
-                    tags: [("team".into(), "network".into())].into(),
-                },
-                response: Some(ResponseData {
-                    status: 302,
-                    version: "HTTP/1.1".into(),
-                    headers: response_headers,
-                }),
-                outcome: CaptureOutcome::Success,
-                stage: "completed".into(),
-                error: None,
-                created_at: 1_700_000_000_000,
-                updated_at: 1_700_000_000_125,
+    async fn collect(captures: Vec<HarCapture>) -> Vec<u8> {
+        stream(captures)
+            .try_fold(Vec::new(), |mut output, chunk| async move {
+                output.extend_from_slice(&chunk);
+                Ok(output)
+            })
+            .await
+            .unwrap()
+    }
+
+    fn capture(response_headers: HeaderValues) -> CaptureSummary {
+        CaptureSummary {
+            id: 7,
+            session_id: 3,
+            source: "127.0.0.1:4321".into(),
+            request: RequestData {
+                method: "POST".into(),
+                uri: "https://example.com/items?a=1&a=2".into(),
+                version: "HTTP/1.1".into(),
+                headers: HeaderValues::from([
+                    (
+                        "content-type".into(),
+                        vec!["application/octet-stream".into()],
+                    ),
+                    ("cookie".into(), vec!["sid=secret; theme=dark".into()]),
+                ]),
+                tags: [("team".into(), "network".into())].into(),
             },
-            request_body: BodyPayload::Empty,
-            response_body: BodyPayload::Empty,
-            request_interceptors: Vec::new(),
-            response_interceptors: Vec::new(),
+            response: Some(ResponseData {
+                status: 302,
+                version: "HTTP/1.1".into(),
+                headers: response_headers,
+            }),
+            outcome: CaptureOutcome::Success,
+            stage: "completed".into(),
+            error: None,
+            created_at: 1_700_000_000_000,
+            updated_at: 1_700_000_000_125,
         }
     }
 
@@ -514,7 +516,7 @@ mod tests {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(b"decoded").unwrap();
         let compressed = encoder.finish().unwrap();
-        let detail = capture(HeaderValues::from([
+        let summary = capture(HeaderValues::from([
             (
                 "content-type".into(),
                 vec!["text/plain; charset=utf-8".into()],
@@ -527,8 +529,8 @@ mod tests {
             ),
         ]));
 
-        let bytes = serialize(vec![HarCapture {
-            detail,
+        let bytes = collect(vec![HarCapture {
+            summary,
             request_body: Some(BodySource {
                 data: BodySourceData::Bytes(vec![0, 1]),
                 path: None,
@@ -544,8 +546,7 @@ mod tests {
                 content_encodings: vec!["gzip".into()],
             }),
         }])
-        .await
-        .unwrap();
+        .await;
         let har: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let entry = &har["log"]["entries"][0];
 
@@ -574,15 +575,15 @@ mod tests {
 
     #[tokio::test]
     async fn falls_back_to_raw_base64_for_unknown_content_encoding() {
-        let detail = capture(HeaderValues::from([
+        let summary = capture(HeaderValues::from([
             (
                 "content-type".into(),
                 vec!["application/octet-stream".into()],
             ),
             ("content-encoding".into(), vec!["snappy".into()]),
         ]));
-        let bytes = serialize(vec![HarCapture {
-            detail,
+        let bytes = collect(vec![HarCapture {
+            summary,
             request_body: None,
             response_body: Some(BodySource {
                 data: BodySourceData::Bytes(vec![0, 255]),
@@ -592,13 +593,34 @@ mod tests {
                 content_encodings: vec!["snappy".into()],
             }),
         }])
-        .await
-        .unwrap();
+        .await;
         let har: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let entry = &har["log"]["entries"][0];
 
         assert_eq!(entry["response"]["content"]["text"], "AP8=");
         assert_eq!(entry["response"]["content"]["encoding"], "base64");
         assert_eq!(entry["_proxyCrab"]["responseBodyDecoded"], false);
+    }
+
+    #[tokio::test]
+    async fn emits_the_envelope_before_reading_entry_bodies() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut output = stream(vec![HarCapture {
+            summary: capture(HeaderValues::new()),
+            request_body: None,
+            response_body: Some(BodySource {
+                data: BodySourceData::File(directory.path().join("missing-body")),
+                path: None,
+                stored_size: 1,
+                content_type: Some("text/plain".into()),
+                content_encodings: Vec::new(),
+            }),
+        }]);
+
+        let prefix = output.try_next().await.unwrap().unwrap();
+        assert!(prefix.starts_with(br#"{"log":{"version":"1.2""#));
+
+        let error = output.try_next().await.unwrap_err();
+        assert_eq!(error.code, "body_read_failed");
     }
 }

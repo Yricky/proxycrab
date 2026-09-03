@@ -862,15 +862,12 @@ impl ProxyCrabManager for MitmManager {
                     .into_iter()
                     .map(|summary| {
                         let id = summary.id;
-                        let detail = runtime
-                            .capture(session_id, id)
-                            .map_err(map_error)?
-                            .ok_or_else(|| {
-                                ManagerError::new(
-                                    "log_not_found",
-                                    format!("log {id} disappeared during export"),
-                                )
-                            })?;
+                        if !runtime.has_capture(session_id, id).map_err(map_error)? {
+                            return Err(ManagerError::new(
+                                "log_not_found",
+                                format!("log {id} disappeared during export"),
+                            ));
+                        }
                         let request_body = runtime
                             .capture_body_source(session_id, id, BodySide::Request)
                             .map_err(|error| {
@@ -882,7 +879,7 @@ impl ProxyCrabManager for MitmManager {
                                 ManagerError::new("body_read_failed", error.to_string())
                             })?;
                         Ok(HarCapture {
-                            detail,
+                            summary,
                             request_body,
                             response_body,
                         })
@@ -890,11 +887,10 @@ impl ProxyCrabManager for MitmManager {
                     .collect::<ManagerResult<Vec<_>>>()
             })
             .await?;
-        let bytes = har::serialize(captures).await?;
         Ok(LogExport {
             session_id,
             filename: format!("proxycrab-session-{session_id}.har"),
-            bytes,
+            body: har::stream(captures),
         })
     }
 
@@ -1519,6 +1515,7 @@ fn map_session_archive_error(error: anyhow::Error) -> ManagerError {
 mod tests {
     use std::{collections::BTreeSet, sync::Arc};
 
+    use futures::TryStreamExt;
     use proxy_crab_mitm::{
         ProxyCrab,
         log_buffer::LogBuffer,
@@ -1540,6 +1537,17 @@ mod tests {
     use super::{
         MAX_BLOCKING_MANAGEMENT_TASKS, MitmManager, PreparedFilter, ProxyCrabManager, status_text,
     };
+
+    async fn collect_export(export: crate::dto::LogExport) -> Vec<u8> {
+        export
+            .body
+            .try_fold(Vec::new(), |mut output, chunk| async move {
+                output.extend_from_slice(&chunk);
+                Ok(output)
+            })
+            .await
+            .unwrap()
+    }
 
     #[test]
     fn response_status_text_uses_the_canonical_reason() {
@@ -2368,7 +2376,10 @@ mod tests {
             })
             .await
             .unwrap();
-        let har: serde_json::Value = serde_json::from_slice(&export.bytes).unwrap();
+        let session_id = export.session_id;
+        let filename = export.filename.clone();
+        let bytes = collect_export(export).await;
+        let har: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let ids = har["log"]["entries"]
             .as_array()
             .unwrap()
@@ -2378,11 +2389,8 @@ mod tests {
 
         assert_eq!(ids, vec![first, second]);
         assert_eq!(har["log"]["entries"][1]["response"]["status"], 101);
-        assert_eq!(export.session_id, session.id);
-        assert_eq!(
-            export.filename,
-            format!("proxycrab-session-{}.har", session.id)
-        );
+        assert_eq!(session_id, session.id);
+        assert_eq!(filename, format!("proxycrab-session-{}.har", session.id));
     }
 
     #[tokio::test]
@@ -2420,7 +2428,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let har: serde_json::Value = serde_json::from_slice(&export.bytes).unwrap();
+        let bytes = collect_export(export).await;
+        let har: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(har["log"]["entries"].as_array().unwrap().len(), 0);
     }
 }

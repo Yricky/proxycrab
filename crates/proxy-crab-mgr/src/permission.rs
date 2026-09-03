@@ -115,7 +115,9 @@ pub static API_ACTIONS: &[ApiAction] = &[
     action!("GET", "/api/session-shares/{id}", Allow),
     action!("POST", "/api/session-shares", Approval),
     action!("DELETE", "/api/session-shares/{id}", Approval),
-    action!("POST", "/api/logs/export", Allow),
+    action!("GET", "/api/session-har-shares/{id}", Allow),
+    action!("POST", "/api/session-har-shares", Approval),
+    action!("DELETE", "/api/session-har-shares/{id}", Approval),
     action!("POST", "/api/logs/ids", Allow),
     action!("POST", "/api/logs/views", Allow),
     action!("GET", "/api/logs/{id}/body", Allow),
@@ -167,6 +169,7 @@ pub const OBSOLETE_API_ACTION_IDS: &[&str] = &[
     "PUT /api/workspace",
     "PUT /api/config",
     "POST /api/ca",
+    "POST /api/logs/export",
 ];
 
 pub fn api_actions() -> &'static [ApiAction] {

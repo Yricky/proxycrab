@@ -178,6 +178,7 @@ export type HttpApiResource =
   | "archived_sessions"
   | "active_session"
   | "session_share"
+  | "session_har_share"
   | "session_view"
   | "column_scripts"
   | "filter_scripts"
@@ -236,6 +237,22 @@ export interface ActiveSession {
 export interface SessionShareState {
   session_id: number;
   enabled: boolean;
+  token?: string;
+}
+
+export type HarShareScope = "all" | "filtered";
+
+export interface EnableHarShareRequest {
+  session_id: number;
+  scope: HarShareScope;
+  log_ids: number[];
+}
+
+export interface HarShareState {
+  session_id: number;
+  enabled: boolean;
+  scope?: HarShareScope;
+  log_count: number;
   token?: string;
 }
 

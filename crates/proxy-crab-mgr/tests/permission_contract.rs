@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 65);
+    assert_eq!(actions.len(), 67);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -53,6 +53,7 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "GET /api/filter-scripts/{name}",
         "GET /api/interceptors",
         "GET /api/interceptors/{kind}/{name}",
+        "GET /api/session-har-shares/{id}",
         "GET /api/logs/{id}",
         "GET /api/logs/{id}/body",
         "GET /api/proxy/status",
@@ -65,7 +66,6 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "GET /api/sessions",
         "GET /api/system-logs",
         "POST /api/filter-scripts/{name}/debug",
-        "POST /api/logs/export",
         "POST /api/logs/ids",
         "POST /api/logs/views",
     ]);
@@ -81,6 +81,7 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "POST /api/proxy/start",
         "POST /api/proxy/stop",
         "POST /api/routing-scripts",
+        "POST /api/session-har-shares",
         "POST /api/session-shares",
         "POST /api/sessions",
         "PUT /api/active-session",
@@ -94,6 +95,7 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "PUT /api/sessions/{id}",
         "PUT /api/sessions/{id}/filter",
         "DELETE /api/session-shares/{id}",
+        "DELETE /api/session-har-shares/{id}",
     ]);
     let deny = BTreeSet::from([
         "DELETE /api/archived-sessions/{id}",
@@ -136,6 +138,25 @@ fn permission_lookup_uses_both_method_and_route_template() {
     assert!(find_api_action("PUT", "/api/config").is_none());
     assert!(find_api_action("PUT", "/api/workspace").is_none());
     assert!(find_api_action("GET", "/api/workspace").is_none());
+    assert_eq!(
+        find_api_action("POST", "/api/session-har-shares")
+            .unwrap()
+            .default_mode,
+        PermissionMode::Approval
+    );
+    assert_eq!(
+        find_api_action("GET", "/api/session-har-shares/{id}")
+            .unwrap()
+            .default_mode,
+        PermissionMode::Allow
+    );
+    assert_eq!(
+        find_api_action("DELETE", "/api/session-har-shares/{id}")
+            .unwrap()
+            .default_mode,
+        PermissionMode::Approval
+    );
+    assert!(find_api_action("POST", "/api/logs/export").is_none());
     assert_eq!(
         find_api_action("POST", "/api/session-shares")
             .unwrap()

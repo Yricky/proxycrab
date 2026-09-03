@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { sessionsStore } from "../stores/sessions";
 import { routingStore } from "../stores/routing";
 import { proxyStore } from "../stores/proxy";
@@ -27,6 +27,47 @@ const creating = ref(false);
 const editingId = ref<number | null>(null);
 const editName = ref("");
 const editDesc = ref("");
+
+/* ---- 编辑 popup 定位 ---- */
+const POPUP_WIDTH = 260;
+const POPUP_EDGE_MARGIN = 8;
+const POPUP_ARROW_GAP = 9;
+const editAnchor = ref<HTMLElement | null>(null);
+const popupEl = ref<HTMLElement | null>(null);
+const popupStyle = ref({ left: "0px", top: "0px" });
+const arrowTop = ref(0);
+
+function updatePopupPos(): void {
+  if (editingId.value === null) return;
+  const anchor = editAnchor.value;
+  const popup = popupEl.value;
+  if (!anchor || !popup) return;
+  const rect = anchor.getBoundingClientRect();
+  const centerY = rect.top + rect.height / 2;
+  const height = popup.offsetHeight;
+  const maxTop = Math.max(window.innerHeight - POPUP_EDGE_MARGIN - height, POPUP_EDGE_MARGIN);
+  const top = Math.min(Math.max(centerY - height / 2, POPUP_EDGE_MARGIN), maxTop);
+  const maxLeft = Math.max(window.innerWidth - POPUP_EDGE_MARGIN - POPUP_WIDTH, POPUP_EDGE_MARGIN);
+  const left = Math.min(rect.right + POPUP_ARROW_GAP, maxLeft);
+  popupStyle.value = { left: `${Math.round(left)}px`, top: `${Math.round(top)}px` };
+  arrowTop.value = Math.min(Math.max(centerY - top, 14), height - 14);
+}
+
+function closeEdit(): void {
+  editingId.value = null;
+  editAnchor.value = null;
+}
+
+function onDocMouseDown(e: MouseEvent): void {
+  if (editingId.value === null) return;
+  const popup = popupEl.value;
+  if (popup && popup.contains(e.target as Node)) return;
+  closeEdit();
+}
+
+function onWindowResize(): void {
+  updatePopupPos();
+}
 
 function formatActivityCount(count: number): string {
   return count > 99 ? "99+" : String(count);
@@ -88,10 +129,16 @@ async function createSession(): Promise<void> {
   appStore.toast("会话已创建", "success");
 }
 
-function startEdit(session: SessionMetadata): void {
+function startEdit(session: SessionMetadata, anchor: HTMLElement | null): void {
+  editAnchor.value = anchor;
   editingId.value = session.id;
   editName.value = session.name;
   editDesc.value = session.description ?? "";
+  void nextTick(updatePopupPos);
+}
+
+function onItemDblclick(event: MouseEvent, session: SessionMetadata): void {
+  startEdit(session, event.currentTarget as HTMLElement);
 }
 
 async function submitEdit(): Promise<void> {
@@ -104,7 +151,7 @@ async function submitEdit(): Promise<void> {
     editDesc.value.trim() || null,
   );
   if (updated) {
-    editingId.value = null;
+    closeEdit();
     appStore.toast("会话信息已更新", "success");
   }
 }
@@ -128,6 +175,8 @@ async function toggleActive(session: SessionMetadata): Promise<void> {
 }
 
 function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
+  // currentTarget 仅在事件分发期间有效，需在打开菜单前捕获
+  const anchor = event.currentTarget as HTMLElement;
   openContextMenu(event, [
     { label: "查看", icon: Io5Eye, action: () => sessionsStore.view(session.id) },
     {
@@ -135,7 +184,7 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
       icon: Io5Link,
       action: () => openSessionExportShare(session.id, session.name),
     },
-    { label: "编辑会话", icon: Io5Create, action: () => startEdit(session) },
+    { label: "编辑会话", icon: Io5Create, action: () => startEdit(session, anchor) },
     {
       label: sessionsStore.activeSessionId === session.id ? "取消活跃" : "设为活跃",
       icon: Io5RadioButtonOn,
@@ -156,7 +205,16 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
 
 onMounted(() => {
   void routingStore.refresh();
+  document.addEventListener("mousedown", onDocMouseDown);
+  window.addEventListener("resize", onWindowResize);
 });
+
+onUnmounted(() => {
+  document.removeEventListener("mousedown", onDocMouseDown);
+  window.removeEventListener("resize", onWindowResize);
+});
+
+watch(sidebarWidth, updatePopupPos);
 </script>
 
 <template>
@@ -217,7 +275,7 @@ onMounted(() => {
       </button>
     </div>
 
-    <div class="sb-list">
+    <div class="sb-list" @scroll.passive="updatePopupPos">
       <div
         v-for="session in sessionsStore.sessions"
         :key="session.id"
@@ -228,61 +286,34 @@ onMounted(() => {
         }"
         @click="sessionsStore.view(session.id)"
         @contextmenu="sessionMenu($event, session)"
-        @dblclick="startEdit(session)"
+        @dblclick="onItemDblclick($event, session)"
       >
-        <template v-if="editingId === session.id">
-          <div class="sb-edit" @click.stop @dblclick.stop>
-            <input
-              v-model="editName"
-              class="input sb-edit-name"
-              placeholder="会话名称"
-              autofocus
-              @keyup.enter="submitEdit"
-              @keyup.esc="editingId = null"
-            />
-            <input
-              v-model="editDesc"
-              class="input sb-edit-desc"
-              placeholder="描述（可选）"
-              @keyup.enter="submitEdit"
-              @keyup.esc="editingId = null"
-            />
-            <div class="sb-edit-actions">
-              <button class="btn" @click="editingId = null">取消</button>
-              <button class="btn primary" :disabled="!editName.trim()" @click="submitEdit">
-                保存
-              </button>
-            </div>
-          </div>
-        </template>
-        <template v-else>
-          <div class="sb-item-top">
-            <span class="sb-name" :title="session.name">{{ session.name }}</span>
+        <div class="sb-item-top">
+          <span class="sb-name" :title="session.name">{{ session.name }}</span>
+          <span
+            v-if="sessionsStore.activeSessionId === session.id"
+            class="sb-active"
+            :title="
+              proxyStore.activeNetlogCount(session.id) > 0
+                ? `活跃会话，${proxyStore.activeNetlogCount(session.id)} 条活跃连接`
+                : '活跃会话'
+            "
+          >
             <span
-              v-if="sessionsStore.activeSessionId === session.id"
-              class="sb-active"
-              :title="
-                proxyStore.activeNetlogCount(session.id) > 0
-                  ? `活跃会话，${proxyStore.activeNetlogCount(session.id)} 条活跃连接`
-                  : '活跃会话'
-              "
+              v-if="proxyStore.activeNetlogCount(session.id) > 0"
+              class="activity-badge session-activity-badge"
             >
-              <span
-                v-if="proxyStore.activeNetlogCount(session.id) > 0"
-                class="activity-badge session-activity-badge"
-              >
-                {{ formatActivityCount(proxyStore.activeNetlogCount(session.id)) }}
-              </span>
-              <Io5RadioButtonOn v-else :size="11" />活跃
+              {{ formatActivityCount(proxyStore.activeNetlogCount(session.id)) }}
             </span>
-          </div>
-          <div class="sb-item-meta">
-            <span>{{ formatRelativeTime(session.created_at) }}</span>
-            <span v-if="session.description" class="sb-desc" :title="session.description">
-              {{ session.description }}
-            </span>
-          </div>
-        </template>
+            <Io5RadioButtonOn v-else :size="11" />活跃
+          </span>
+        </div>
+        <div class="sb-item-meta">
+          <span>{{ formatRelativeTime(session.created_at) }}</span>
+          <span v-if="session.description" class="sb-desc" :title="session.description">
+            {{ session.description }}
+          </span>
+        </div>
       </div>
       <div v-if="!sessionsStore.loading && sessionsStore.sessions.length === 0" class="empty-hint">
         暂无会话，点击右上角 + 新建
@@ -292,6 +323,40 @@ onMounted(() => {
       <Io5Archive :size="14" />
       <span>已归档 Session</span>
     </button>
+
+    <Teleport to="body">
+      <div
+        v-if="editingId !== null"
+        ref="popupEl"
+        class="sb-edit-popup"
+        :style="popupStyle"
+        @dblclick.stop
+      >
+        <span class="sb-edit-arrow" :style="{ top: arrowTop + 'px' }">
+          <span class="sb-edit-arrow-tip"></span>
+        </span>
+        <input
+          v-model="editName"
+          class="input"
+          placeholder="会话名称"
+          autofocus
+          @keyup.enter="submitEdit"
+          @keyup.esc="closeEdit"
+        />
+        <input
+          v-model="editDesc"
+          class="input"
+          placeholder="描述（可选）"
+          @keyup.enter="submitEdit"
+          @keyup.esc="closeEdit"
+        />
+        <div class="sb-edit-actions">
+          <button class="btn primary" :disabled="!editName.trim()" @click="submitEdit">
+            保存
+          </button>
+        </div>
+      </div>
+    </Teleport>
   </aside>
 </template>
 
@@ -383,33 +448,43 @@ onMounted(() => {
   white-space: nowrap;
   font-family: var(--font-mono);
 }
-.sb-edit {
+.sb-edit-popup {
+  position: fixed;
+  width: 260px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 1px 0 2px;
+  gap: 6px;
+  padding: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popup);
+  z-index: 100000;
+}
+.sb-edit-arrow {
+  position: absolute;
+  right: 100%;
+  width: 0;
+  height: 0;
+  margin-top: -9px;
+  border-top: 9px solid transparent;
+  border-right: 9px solid var(--border-strong);
+  border-bottom: 9px solid transparent;
+}
+.sb-edit-arrow-tip {
+  position: absolute;
+  top: -9px;
+  left: 1px;
+  width: 0;
+  height: 0;
+  border-top: 9px solid transparent;
+  border-right: 9px solid var(--bg-elevated);
+  border-bottom: 9px solid transparent;
 }
 .sb-edit-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 2px;
-  margin-top: 1px;
-}
-.sb-edit-actions .btn {
-  padding: 1px 6px;
-  border-color: transparent;
-  background: transparent;
-  font-size: 11px;
-}
-.sb-edit-actions .btn.primary {
-  border-color: transparent;
-  background: transparent;
-  color: var(--accent);
-}
-.sb-edit-actions .btn.primary:hover:not(:disabled) {
-  border-color: transparent;
-  background: var(--bg-hover);
-  color: var(--accent-hover);
 }
 .sb-list {
   flex: 1;
@@ -508,29 +583,8 @@ onMounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sb-edit .input {
+.sb-edit-popup .input {
   width: 100%;
-  border-color: transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-}
-.sb-edit .input:hover {
-  border-color: var(--border);
-  background: var(--bg-panel);
-}
-.sb-edit .input:focus {
-  border-color: var(--accent);
-  background: var(--bg-panel);
-}
-.sb-edit-name {
-  height: 24px;
-  padding: 1px 3px;
-  font-weight: 500;
-}
-.sb-edit-desc {
-  height: 22px;
-  padding: 1px 3px;
-  color: var(--text-faint);
-  font-size: 11px;
+  box-sizing: border-box;
 }
 </style>

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSessionShareLinks } from "./session-share.ts";
+import { buildHarShareLinks, buildSessionShareLinks } from "./session-share.ts";
 
 test("share links prefer reachable non-loopback IPv4 addresses", () => {
   assert.deepEqual(
@@ -32,5 +32,16 @@ test("share links fall back to loopback when no external address exists", () => 
     [
       "http://127.0.0.1:18089/session?token=token",
     ],
+  );
+});
+
+test("HAR share links reuse address selection and target the download route", () => {
+  assert.deepEqual(
+    buildHarShareLinks(
+      ["127.0.0.1", "192.168.1.5", "192.168.1.5"],
+      18089,
+      "pcrab_har_a+b",
+    ),
+    ["http://192.168.1.5:18089/session.har?token=pcrab_har_a%2Bb"],
   );
 });
