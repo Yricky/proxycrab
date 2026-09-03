@@ -14,6 +14,7 @@ import {
   openColumnManager,
   openFilterManager,
   openJwt,
+  openQrCode,
   openRequestInterceptorManager,
   openResponseInterceptorManager,
   openRoutingManager,
@@ -37,6 +38,7 @@ import {
   Io5Moon,
   Io5Newspaper,
   Io5Play,
+  Io5QrCodeOutline,
   Io5RadioButtonOn,
   Io5Settings,
   Io5ShieldCheckmark,
@@ -279,6 +281,10 @@ onBeforeUnmount(() => {
           <button class="tb-menu-item" @click="runMenuAction(openJwt)">
             <Io5ShieldCheckmark :size="14" />
             <span>JWT 解码 / 验签</span>
+          </button>
+          <button class="tb-menu-item" @click="runMenuAction(openQrCode)">
+            <Io5QrCodeOutline :size="14" />
+            <span>二维码生成</span>
           </button>
         </div>
       </div>
