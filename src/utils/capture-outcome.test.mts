@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { isInactiveInProgress, isStaleByProxyRun } from "./capture-outcome.ts";
 
 test("in-progress records are stale whenever the proxy is not running", () => {
@@ -9,7 +8,7 @@ test("in-progress records are stale whenever the proxy is not running", () => {
     { status: "stopping" as const },
     { status: "failed" as const, message: "bind failed" },
   ]) {
-    assert.equal(isStaleByProxyRun("in_progress", 200, status), true);
+    expect(isStaleByProxyRun("in_progress", 200, status)).toBe(true);
   }
 });
 
@@ -22,20 +21,20 @@ test("a running proxy only invalidates records older than its start time", () =>
     active_netlog: {},
     active_bypass_count: 0,
   };
-  assert.equal(isStaleByProxyRun("in_progress", 199, status), true);
-  assert.equal(isStaleByProxyRun("in_progress", 200, status), false);
-  assert.equal(isStaleByProxyRun("in_progress", 201, status), false);
+  expect(isStaleByProxyRun("in_progress", 199, status)).toBe(true);
+  expect(isStaleByProxyRun("in_progress", 200, status)).toBe(false);
+  expect(isStaleByProxyRun("in_progress", 201, status)).toBe(false);
 });
 
 test("terminal outcomes are never reclassified as stale", () => {
   const status = { status: "stopped" as const };
   for (const outcome of ["success", "failed", "tunneled"] as const) {
-    assert.equal(isStaleByProxyRun(outcome, 0, status), false);
+    expect(isStaleByProxyRun(outcome, 0, status)).toBe(false);
   }
 });
 
 test("netlog activity comes only from exact status membership", () => {
-  assert.equal(isInactiveInProgress("in_progress", true), false);
-  assert.equal(isInactiveInProgress("in_progress", false), true);
-  assert.equal(isInactiveInProgress("success", false), false);
+  expect(isInactiveInProgress("in_progress", true)).toBe(false);
+  expect(isInactiveInProgress("in_progress", false)).toBe(true);
+  expect(isInactiveInProgress("success", false)).toBe(false);
 });

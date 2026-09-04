@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { LruKeys } from "./lru.ts";
 
 test("LRU touches keys and evicts the least recently used unprotected key", () => {
@@ -9,9 +8,9 @@ test("LRU touches keys and evicts the least recently used unprotected key", () =
   lru.touch(1);
   lru.touch(3);
 
-  assert.deepEqual(lru.evict(new Set()), [2]);
-  assert.equal(lru.has(1), true);
-  assert.equal(lru.has(3), true);
+  expect(lru.evict(new Set())).toEqual([2]);
+  expect(lru.has(1)).toBe(true);
+  expect(lru.has(3)).toBe(true);
 });
 
 test("LRU keeps protected keys and shrinks after protection ends", () => {
@@ -19,10 +18,10 @@ test("LRU keeps protected keys and shrinks after protection ends", () => {
   lru.touch(1);
   lru.touch(2);
 
-  assert.deepEqual(lru.evict(new Set([1, 2])), []);
-  assert.equal(lru.size, 2);
-  assert.deepEqual(lru.evict(new Set([2])), [1]);
-  assert.equal(lru.size, 1);
+  expect(lru.evict(new Set([1, 2]))).toEqual([]);
+  expect(lru.size).toBe(2);
+  expect(lru.evict(new Set([2]))).toEqual([1]);
+  expect(lru.size).toBe(1);
 });
 
 test("touching an existing key does not grow the cache", () => {
@@ -30,5 +29,5 @@ test("touching an existing key does not grow the cache", () => {
   lru.touch(1);
   lru.touch(1);
 
-  assert.equal(lru.size, 1);
+  expect(lru.size).toBe(1);
 });

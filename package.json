@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "test:unit": "node --experimental-strip-types --test src/utils/*.test.mts",
-    "test:column-groups": "node --experimental-strip-types --test src/utils/column-groups.test.mts",
+    "test:unit": "vitest run",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -26,6 +25,20 @@
     "@vitejs/plugin-vue": "^6.0.7",
     "typescript": "~6.0.3",
     "vite": "^8.0.16",
+    "vitest": "^4.1.11",
     "vue-tsc": "^3.3.5"
-  }
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12",
+      "onFail": "download"
+    },
+    "runtime": {
+      "name": "node",
+      "version": "26",
+      "onFail": "download"
+    }
+  },
+  "packageManager": "pnpm@12.3.2+sha512.82f9035314646eea981adec85c711a21ab5f3b05659b3f9ce9d270cbb93e8a0f614da17922bae097902e2b860ee8eb6d5c1a7e89299a16877c0c243f36b8e15b"
 }

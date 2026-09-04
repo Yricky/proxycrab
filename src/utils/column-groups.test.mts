@@ -1,6 +1,5 @@
-import assert from "node:assert/strict";
-import test from "node:test";
 import { reactive } from "vue";
+import { expect, test } from "vitest";
 
 import {
   columnGroupKey,
@@ -12,33 +11,32 @@ import {
 } from "./column-groups.ts";
 
 test("column keys distinguish built-ins and scripts", () => {
-  assert.equal(columnGroupKey({ kind: "uri" }), "uri");
-  assert.equal(
-    columnGroupKey({ kind: "script", script_name: "host" }),
+  expect(columnGroupKey({ kind: "uri" })).toBe("uri");
+  expect(columnGroupKey({ kind: "script", script_name: "host" })).toBe(
     "script:host",
   );
 });
 
 test("pagination cursors do not depend on response order", () => {
-  assert.equal(newestId([9, 12, 4, 11]), 12);
-  assert.equal(oldestId([9, 12, 4, 11]), 4);
-  assert.equal(newestId([]), undefined);
-  assert.equal(oldestId([]), undefined);
+  expect(newestId([9, 12, 4, 11])).toBe(12);
+  expect(oldestId([9, 12, 4, 11])).toBe(4);
+  expect(newestId([])).toBeUndefined();
+  expect(oldestId([])).toBeUndefined();
 });
 
 test("filter columns can be copied from Vue reactive state", () => {
   const state = reactive({
     column: { kind: "script" as const, script_name: "host" },
   });
-  assert.deepEqual(copyFilterColumn(state.column), {
+  expect(copyFilterColumn(state.column)).toEqual({
     kind: "script",
     script_name: "host",
   });
 });
 
 test("exact regex escapes metacharacters and handles empty values", () => {
-  assert.equal(exactColumnRegex("a.b+[x]"), String.raw`^a\.b\+\[x\]$`);
-  assert.equal(exactColumnRegex(""), "^$");
+  expect(exactColumnRegex("a.b+[x]")).toBe(String.raw`^a\.b\+\[x\]$`);
+  expect(exactColumnRegex("")).toBe("^$");
 });
 
 test("groups filter case-insensitively and sort by count", () => {
@@ -54,14 +52,11 @@ test("groups filter case-insensitively and sort by count", () => {
     "count",
     true,
   );
-  assert.deepEqual(
-    result.map(({ label, count }) => [label, count]),
-    [
-      ["post", 4],
-      ["GET", 2],
-      ["PATCH", 1],
-    ],
-  );
+  expect(result.map(({ label, count }) => [label, count])).toEqual([
+    ["post", 4],
+    ["GET", 2],
+    ["PATCH", 1],
+  ]);
 });
 
 test("groups include special rows and sort lexically in either direction", () => {
@@ -76,12 +71,17 @@ test("groups include special rows and sort lexically in either direction", () =>
     "value",
     false,
   );
-  assert.deepEqual(
-    ascending.filter((entry) => entry.kind === "value").map((entry) => entry.label),
-    ["a", "b"],
-  );
-  assert.equal(ascending.find((entry) => entry.kind === "empty")?.exactPattern, "^$");
-  assert.equal(ascending.find((entry) => entry.kind === "error")?.exactPattern, null);
+  expect(
+    ascending
+      .filter((entry) => entry.kind === "value")
+      .map((entry) => entry.label),
+  ).toEqual(["a", "b"]);
+  expect(
+    ascending.find((entry) => entry.kind === "empty")?.exactPattern,
+  ).toBe("^$");
+  expect(
+    ascending.find((entry) => entry.kind === "error")?.exactPattern,
+  ).toBeNull();
 
   const descending = filterAndSortGroups(
     new Map([
@@ -94,5 +94,5 @@ test("groups include special rows and sort lexically in either direction", () =>
     "value",
     true,
   );
-  assert.deepEqual(descending.map((entry) => entry.label), ["b", "a"]);
+  expect(descending.map((entry) => entry.label)).toEqual(["b", "a"]);
 });
