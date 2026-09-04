@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { copyText, setNativeClipboardWriter } from "./clipboard.ts";
 
 function legacyDocument(copyResult = true): {
@@ -30,16 +29,16 @@ function legacyDocument(copyResult = true): {
   };
   const document = {
     createElement(name: string) {
-      assert.equal(name, "textarea");
+      expect(name).toBe("textarea");
       return textarea;
     },
     body: {
       appendChild(node: unknown) {
-        assert.equal(node, textarea);
+        expect(node).toBe(textarea);
       },
     },
     execCommand(command: string) {
-      assert.equal(command, "copy");
+      expect(command).toBe("copy");
       return copyResult;
     },
   } as unknown as Document;
@@ -56,7 +55,7 @@ test("copyText prefers the Clipboard API", async () => {
 
   await copyText("secret", clipboard);
 
-  assert.equal(copied, "secret");
+  expect(copied).toBe("secret");
 });
 
 test("copyText prefers the configured native clipboard writer", async () => {
@@ -76,8 +75,8 @@ test("copyText prefers the configured native clipboard writer", async () => {
     setNativeClipboardWriter(undefined);
   }
 
-  assert.equal(nativeCopied, "secret");
-  assert.equal(browserCalled, false);
+  expect(nativeCopied).toBe("secret");
+  expect(browserCalled).toBe(false);
 });
 
 test("copyText falls back to execCommand outside a secure context", async () => {
@@ -85,16 +84,18 @@ test("copyText falls back to execCommand outside a secure context", async () => 
 
   await copyText("secret", undefined, legacy.document);
 
-  assert.equal(legacy.textarea.value, "secret");
-  assert.equal(legacy.textarea.focused, true);
-  assert.equal(legacy.textarea.selected, true);
-  assert.equal(legacy.textarea.removed, true);
+  expect(legacy.textarea.value).toBe("secret");
+  expect(legacy.textarea.focused).toBe(true);
+  expect(legacy.textarea.selected).toBe(true);
+  expect(legacy.textarea.removed).toBe(true);
 });
 
 test("copyText reports a failed legacy copy and still removes the textarea", async () => {
   const legacy = legacyDocument(false);
 
-  await assert.rejects(copyText("secret", undefined, legacy.document), /clipboard/i);
+  await expect(copyText("secret", undefined, legacy.document)).rejects.toThrow(
+    /clipboard/i,
+  );
 
-  assert.equal(legacy.textarea.removed, true);
+  expect(legacy.textarea.removed).toBe(true);
 });
