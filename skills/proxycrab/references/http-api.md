@@ -1058,6 +1058,8 @@ Routing and capture lifecycle details:
 - ProxyCrab allows at most 256 client connections.
 - Capture/bypass queries and management Lua evaluations allow at most eight concurrent tasks;
   additional tasks wait for capacity.
+- Filter/custom-column `entry.req.body` and `entry.resp.body` getters lazily read and cache effective
+  persisted bodies. In-progress bodies return `nil`; see `lua-api.md` for decoding and size limits.
 - CONNECT creates a provisional capture before the tunnel is acknowledged.
 - A TLS failure updates that CONNECT capture.
 - Successful TLS MITM retains the CONNECT row as a successful `tls_mitm` capture and stores decrypted

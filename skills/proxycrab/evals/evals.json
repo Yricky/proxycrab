@@ -196,6 +196,12 @@
       "prompt": "Check whether ProxyCrab Session 3 has an active HAR download share, then disable it without exposing or using its browser token as an Agent credential.",
       "expected_output": "The agent calls permission-controlled GET /api/session-har-shares/3, does not print any pcrab_har_ token, then calls DELETE /api/session-har-shares/3, handles approval or denial normally, and reports only that the frozen HAR share was disabled and its link immediately revoked.",
       "files": []
+    },
+    {
+      "id": 34,
+      "prompt": "Create a ProxyCrab filter script that finds POST requests to /api/orders whose persisted JSON request body has order_id equal to the filter input. Avoid unnecessary body reads and explain how in-progress and non-text bodies behave.",
+      "expected_output": "The agent writes valid Lua that checks method and URI before calling entry.req.body:as_json(), checks the returned value for nil, and compares order_id with the exact filter input. It explains that persisted body access is lazy, in-progress and non-text bodies return nil, decoded data is limited to 16 MiB, and normal filter script errors count as non-matches.",
+      "files": []
     }
   ]
 }

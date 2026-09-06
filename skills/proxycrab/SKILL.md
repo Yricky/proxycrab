@@ -264,6 +264,10 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
   `modifications` and `error`.
 - Request tags are capture-local metadata. Presence of `_crab_skip`, including an empty value,
   intentionally suppresses the upstream request after the complete request chain.
+- Filter and custom-column scripts can lazily read completed persisted bodies through
+  `entry.req.body:as_string()` / `as_json()` and the matching `entry.resp.body` methods. Check cheap
+  request/response metadata first because each matching capture may require body file I/O and
+  decompression. In-progress bodies return `nil`; decoded getter output is limited to 16 MiB.
 - `_crab_req_speed` and `_crab_resp_speed` pace the final outbound request and response bodies in
   bytes per second; `_crab_req_timeout` sets the upstream timeout in milliseconds (default 60000),
   and `_crab_resp_bodyframe_timeout` sets the idle milliseconds before each upstream response-body

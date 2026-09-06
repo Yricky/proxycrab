@@ -74,8 +74,8 @@ does not emit these conversion warnings.
 JSON nesting is limited to 128 containers. Encoding rejects `NaN` and infinities; decoding rejects
 numbers outside the finite `f64` range. JSON output is compact rather than pretty-printed.
 
-Interceptor body objects also use the same JSON representation through `body:as_json()` as
-documented below.
+Interceptor bodies and persisted capture bodies also use the same JSON representation through
+`body:as_json()` as documented below.
 
 ## Filter scripts
 
@@ -83,19 +83,24 @@ A global filter script receives the filter-bar input string as the Lua chunk's f
 
 ```lua
 local input = ...
-return entry.req.uri.host:find(input, 1, true) ~= nil
-   and entry.resp ~= nil
-   and entry.resp.status >= 500
+if entry.req.uri.host ~= "api.example.com" then
+  return false
+end
+local body = entry.req.body:as_string()
+return body ~= nil and body:find(input, 1, true) ~= nil
 ```
 
 The input is passed exactly, including leading and trailing whitespace. During normal list filtering, runtime errors, instruction exhaustion, and non-boolean results make that record a non-match without logging. The filter-script manager's debug action reports those errors directly.
+Check inexpensive metadata before reading a body because persisted body access performs lazy file
+I/O and may decompress up to 16 MiB for every evaluated capture.
 
 ## Custom columns
 
 A column returns `nil`, a string, number, or boolean. `nil` renders as an empty string. Tables, functions, and userdata are rejected.
 
 ```lua
-return entry.req.headers:get("x-trace-id")
+local body = entry.resp and entry.resp.body:as_json()
+return body and body.result or nil
 ```
 
 ## Read-only capture objects
@@ -112,12 +117,14 @@ Requests provide:
 - `version`
 - `uri`
 - `headers`
+- read-only `body`
 
 Responses provide:
 
 - `status`
 - `version`
 - `headers`
+- read-only `body`
 
 URI fields are `scheme`, `host`, `port`, `path`, and `query`.
 
@@ -129,6 +136,22 @@ local values = entry.req.headers:get_all("x-name") -- string array
 local all = entry.req.headers:all()                 -- name -> string array
 local tag = entry.req:get_tag("trace")             -- string or nil
 ```
+
+Persisted request and response bodies provide only `as_string()` and `as_json()`:
+
+```lua
+local request_text = entry.req.body:as_string()
+local response_json = entry.resp and entry.resp.body:as_json()
+```
+
+The first getter lazily loads the effective persisted body (the modified body when present,
+otherwise the original) and later getters for that capture side reuse the decoded bytes. Bodies on
+`in_progress` captures are unavailable and both getters return `nil`, even if a partial capture file
+already exists. The getters require a textual `Content-Type`; `as_string()` also requires valid
+UTF-8, while `as_json()` returns `nil` for malformed JSON. Empty text returns `""` / `nil`.
+gzip, br, deflate, and zstd are decoded first; unknown or malformed encodings return `nil` and
+decoded content over 16 MiB raises a Lua runtime error. Body replacement methods remain available
+only to request and response interceptors.
 
 ## Request interceptors
 
