@@ -84,7 +84,8 @@ emit conversion warnings.
 JSON nesting is limited to 128 containers. Encoding rejects `NaN` and infinities; decoding rejects
 numbers outside the finite `f64` range. Output is compact JSON, not pretty-printed.
 
-Interceptor body objects expose the same decoded JSON representation through `body:as_json()`.
+Interceptor bodies and persisted capture bodies expose the same decoded JSON representation through
+`body:as_json()`.
 
 ## Routing scripts
 
@@ -129,9 +130,11 @@ explicitly return a boolean.
 
 ```lua
 local input = ...
-return entry.req.uri.host:find(input, 1, true) ~= nil
-   and entry.resp ~= nil
-   and entry.resp.status >= 500
+if entry.req.uri.host ~= "api.example.com" then
+  return false
+end
+local body = entry.req.body:as_string()
+return body ~= nil and body:find(input, 1, true) ~= nil
 ```
 
 The input is exact, including leading and trailing whitespace. During normal log filtering,
@@ -143,13 +146,16 @@ fresh sandbox environment, instruction budget, and JSON warning count. Global as
 standard-library table changes never carry into the next capture or another script.
 
 Guard `entry.resp` before reading it because in-progress and failed captures might not have one.
+Check inexpensive metadata before reading a body because persisted body access performs lazy file
+I/O and may decompress up to 16 MiB for every evaluated capture.
 
 ## Custom-column scripts
 
 `entry` is the only ProxyCrab-specific global. Return `nil`, string, number, or boolean:
 
 ```lua
-return entry.req.headers:get("x-request-id")
+local body = entry.resp and entry.resp.body:as_json()
+return body and body.result or nil
 ```
 
 `nil` renders as an empty string. Tables, functions, threads, and userdata are rejected.
@@ -174,6 +180,7 @@ receives an isolated sandbox with no global state carried from an earlier row.
 | `entry.req.version` | string |
 | `entry.req.uri` | URI object |
 | `entry.req.headers` | read-only headers |
+| `entry.req.body` | read-only body |
 | `entry.req:get_tag(key)` | string or `nil` |
 
 ### Read-only response
@@ -183,6 +190,27 @@ receives an isolated sandbox with no global state carried from an earlier row.
 | `entry.resp.status` | integer |
 | `entry.resp.version` | string |
 | `entry.resp.headers` | read-only headers |
+| `entry.resp.body` | read-only body |
+
+### Read-only persisted body
+
+```lua
+local request_text = entry.req.body:as_string()
+local response_json = entry.resp and entry.resp.body:as_json()
+```
+
+- Only `as_string()` and `as_json()` are available; replacement methods remain interceptor-only.
+- The first getter lazily reads the effective persisted body: the modified body when present,
+  otherwise the original. Later getters for that capture side reuse the decoded bytes, including
+  across custom columns rendered together.
+- Bodies on `in_progress` captures are unavailable and both getters return `nil`, even if a partial
+  capture file exists.
+- Both getters require a textual `Content-Type`. `as_string()` returns `nil` for invalid UTF-8;
+  `as_json()` returns `nil` for malformed JSON. Empty text returns `""` / `nil`, respectively.
+- gzip, br, deflate, and zstd are decoded first. Unknown or malformed encodings return `nil`;
+  decoded content over 16 MiB raises a Lua runtime error.
+- A storage read failure raises a Lua runtime error. Normal filter evaluation treats it as a
+  non-match; custom-column rendering reports a cell error and renders an empty string.
 
 ### URI object
 

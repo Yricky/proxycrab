@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use proxy_crab_mitm::{
     ProxyCrab,
     asset::{Asset, AssetError, AssetUpload},
-    lua::{ColumnEvaluator, FilterEvaluator, evaluate_filter_named},
+    lua::{CaptureBodyAccess, ColumnEvaluator, FilterEvaluator},
     model::{
         AppConfig, BreakpointListFilter, BreakpointSummary, CaptureDetail, CaptureOutcome,
         CaptureSummary, Column, FilterColumn, FilterOption, HeaderValues, InterceptorKind,
@@ -272,6 +272,15 @@ impl MitmManager {
         }
     }
 
+    fn capture_body_access(runtime: &Arc<ProxyCrab>, item: &CaptureSummary) -> CaptureBodyAccess {
+        let runtime = runtime.clone();
+        let session_id = item.session_id;
+        let capture_id = item.id;
+        CaptureBodyAccess::new(move |side| {
+            runtime.capture_body_source(session_id, capture_id, side)
+        })
+    }
+
     fn prepare_filter(
         runtime: &ProxyCrab,
         filter: &SessionFilter,
@@ -319,14 +328,19 @@ impl MitmManager {
         }
     }
 
-    fn matches_filter(filter: &PreparedFilter, item: &CaptureSummary) -> bool {
+    fn matches_filter<F>(filter: &PreparedFilter, item: &CaptureSummary, body_access: F) -> bool
+    where
+        F: FnOnce() -> CaptureBodyAccess,
+    {
         match filter {
             PreparedFilter::All => true,
             PreparedFilter::Script { script, input } => {
                 let Ok(evaluator) = &script.evaluator else {
                     return false;
                 };
-                evaluator.evaluate(input, item).unwrap_or(false)
+                evaluator
+                    .evaluate_with_bodies(input, item, body_access())
+                    .unwrap_or(false)
             }
             PreparedFilter::Column {
                 column,
@@ -351,7 +365,7 @@ impl MitmManager {
                         let Ok(evaluator) = &script.evaluator else {
                             return false;
                         };
-                        let Ok(value) = evaluator.evaluate(item) else {
+                        let Ok(value) = evaluator.evaluate_with_bodies(item, body_access()) else {
                             return false;
                         };
                         value
@@ -364,14 +378,17 @@ impl MitmManager {
         }
     }
 
-    fn classify_log_id(
+    fn classify_log_id<F>(
         filter: &PreparedFilter,
         item: &CaptureSummary,
         active_ids: &BTreeSet<u64>,
+        body_access: F,
         matched_ids: &mut Vec<u64>,
         in_progress_ids: &mut Vec<u64>,
-    ) {
-        if Self::matches_filter(filter, item) {
+    ) where
+        F: FnOnce() -> CaptureBodyAccess,
+    {
+        if Self::matches_filter(filter, item, body_access) {
             matched_ids.push(item.id);
         }
         if item.outcome == CaptureOutcome::InProgress && active_ids.contains(&item.id) {
@@ -603,6 +620,7 @@ impl ProxyCrabManager for MitmManager {
                             &prepared,
                             item,
                             &active_ids,
+                            || Self::capture_body_access(&runtime, item),
                             &mut matched_ids,
                             &mut in_progress_ids,
                         );
@@ -619,6 +637,7 @@ impl ProxyCrabManager for MitmManager {
                         &prepared,
                         &item,
                         &active_ids,
+                        || Self::capture_body_access(&runtime, &item),
                         &mut matched_ids,
                         &mut in_progress_ids,
                     );
@@ -640,6 +659,7 @@ impl ProxyCrabManager for MitmManager {
                             &prepared,
                             &item,
                             &active_ids,
+                            || Self::capture_body_access(&runtime, &item),
                             &mut matched_ids,
                             &mut in_progress_ids,
                         );
@@ -724,6 +744,8 @@ impl ProxyCrabManager for MitmManager {
                     continue;
                 }
 
+                let bodies =
+                    (!scripts.is_empty()).then(|| Self::capture_body_access(&runtime, item));
                 let mut cells = Vec::with_capacity(columns.len());
                 for (column_index, column) in columns.iter().enumerate() {
                     if let Some(value) = Self::render_builtin_cell(column, item) {
@@ -737,9 +759,15 @@ impl ProxyCrabManager for MitmManager {
                         .get(script_name)
                         .expect("every script column is preloaded")
                     {
-                        Ok(evaluator) => {
-                            evaluator.evaluate(item).map_err(|error| error.to_string())
-                        }
+                        Ok(evaluator) => evaluator
+                            .evaluate_with_bodies(
+                                item,
+                                bodies
+                                    .as_ref()
+                                    .expect("script columns require body access")
+                                    .clone(),
+                            )
+                            .map_err(|error| error.to_string()),
                         Err(message) => Err(message.clone()),
                     };
                     match result {
@@ -1130,13 +1158,12 @@ impl ProxyCrabManager for MitmManager {
                 .ok_or_else(|| {
                     ManagerError::not_found(format!("log {} not found", request.log_id))
                 })?;
-            evaluate_filter_named(
-                &script.content,
-                &request.input,
-                &detail.summary,
-                &script.name,
-            )
-            .map_err(|error| ManagerError::bad_request(error.to_string()))
+            let evaluator = FilterEvaluator::new(&script.content, &script.name)
+                .map_err(|error| ManagerError::bad_request(error.to_string()))?;
+            let bodies = Self::capture_body_access(&runtime, &detail.summary);
+            evaluator
+                .evaluate_with_bodies(&request.input, &detail.summary, bodies)
+                .map_err(|error| ManagerError::bad_request(error.to_string()))
         })
         .await
     }
@@ -1519,6 +1546,7 @@ mod tests {
     use proxy_crab_mitm::{
         ProxyCrab,
         log_buffer::LogBuffer,
+        lua::CaptureBodyAccess,
         model::{
             CaptureOutcome, CaptureSummary, Column, FilterColumn, FilterOption, HeaderValues,
             InterceptorKind, RequestData, ResponseData, SessionFilter,
@@ -1531,7 +1559,7 @@ mod tests {
         CreateAgentsPresetRequest, DebugFilterScriptRequest, ExportLogsRequest,
         InterceptorCreateRequest, LogIdsRequest, LogViewItem, LogViewsRequest,
         ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ScriptRequest,
-        SessionInterceptorInput, UpdateAgentsPresetRequest, UpdateScriptRequest,
+        SessionInterceptorInput, SessionViewInput, UpdateAgentsPresetRequest, UpdateScriptRequest,
     };
 
     use super::{
@@ -1576,6 +1604,7 @@ mod tests {
             &PreparedFilter::All,
             &item,
             &BTreeSet::new(),
+            CaptureBodyAccess::unavailable,
             &mut matched,
             &mut in_progress,
         );
@@ -1586,6 +1615,7 @@ mod tests {
             &PreparedFilter::All,
             &item,
             &BTreeSet::from([7]),
+            CaptureBodyAccess::unavailable,
             &mut Vec::new(),
             &mut in_progress,
         );
@@ -1886,6 +1916,166 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, "bad_request");
+    }
+
+    #[tokio::test]
+    async fn historical_bodies_are_available_to_filter_and_column_scripts() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
+        let store =
+            CaptureStore::open(session.id, &runtime.workspace().session_dir(session.id)).unwrap();
+        let request = RequestData {
+            headers: HeaderValues::from([("content-type".into(), vec!["application/json".into()])]),
+            ..request("body")
+        };
+        let response = ResponseData {
+            status: 200,
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::from([("content-type".into(), vec!["text/plain".into()])]),
+        };
+        let completed = store.begin("127.0.0.1", &request, "request").unwrap();
+        store
+            .save_body(completed, BodySide::Request, false, br#"{"order_id":"42"}"#)
+            .unwrap();
+        store
+            .save_body(completed, BodySide::Response, false, b"original response")
+            .unwrap();
+        store
+            .save_body(completed, BodySide::Response, true, b"completed response")
+            .unwrap();
+        store.complete(completed, &response, &[]).unwrap();
+
+        let in_progress = store.begin("127.0.0.1", &request, "request").unwrap();
+        store
+            .save_body(
+                in_progress,
+                BodySide::Request,
+                false,
+                br#"{"order_id":"42"}"#,
+            )
+            .unwrap();
+        store.update_response(in_progress, &response).unwrap();
+        store
+            .save_body(in_progress, BodySide::Response, false, b"partial response")
+            .unwrap();
+
+        let manager = MitmManager::new(runtime);
+        manager
+            .create_filter_script(ScriptRequest {
+                name: "request-order".into(),
+                content: "local body = entry.req.body:as_json(); \
+                          return body ~= nil and body.order_id == ..."
+                    .into(),
+            })
+            .await
+            .unwrap();
+        let body_filter = SessionFilter {
+            option: Some(FilterOption::Script {
+                script_name: "request-order".into(),
+            }),
+            input: "42".into(),
+        };
+        assert_eq!(
+            manager
+                .log_ids(LogIdsRequest {
+                    session_id: Some(session.id),
+                    filter: Some(body_filter),
+                    ids: Some(vec![completed, in_progress]),
+                    min_id: None,
+                    max_id: None,
+                    limit: None,
+                })
+                .await
+                .unwrap()
+                .matched_ids,
+            vec![completed]
+        );
+        assert!(
+            manager
+                .debug_filter_script(
+                    "request-order".into(),
+                    DebugFilterScriptRequest {
+                        session_id: Some(session.id),
+                        log_id: completed,
+                        input: "42".into(),
+                    },
+                )
+                .await
+                .unwrap()
+        );
+
+        manager
+            .create_column_script(ScriptRequest {
+                name: "response-body".into(),
+                content: "return entry.resp.body:as_string() or 'unavailable'".into(),
+            })
+            .await
+            .unwrap();
+        let view = vec![Column::Script {
+            width: 100.0,
+            script_name: "response-body".into(),
+        }];
+        let payload = manager
+            .log_views(LogViewsRequest {
+                session_id: Some(session.id),
+                logs: vec![
+                    LogViewItem {
+                        id: completed,
+                        updated_at: None,
+                    },
+                    LogViewItem {
+                        id: in_progress,
+                        updated_at: None,
+                    },
+                ],
+                view: Some(SessionViewInput {
+                    columns: view.clone(),
+                }),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            payload
+                .rows
+                .iter()
+                .find(|row| row.id == completed)
+                .unwrap()
+                .cells,
+            vec!["completed response"]
+        );
+        assert_eq!(
+            payload
+                .rows
+                .iter()
+                .find(|row| row.id == in_progress)
+                .unwrap()
+                .cells,
+            vec!["unavailable"]
+        );
+        assert_eq!(
+            manager
+                .log_ids(LogIdsRequest {
+                    session_id: Some(session.id),
+                    filter: Some(SessionFilter {
+                        option: Some(FilterOption::Column {
+                            column: FilterColumn::Script {
+                                script_name: "response-body".into(),
+                            },
+                            regex: false,
+                        }),
+                        input: "completed".into(),
+                    }),
+                    ids: Some(vec![completed, in_progress]),
+                    min_id: None,
+                    max_id: None,
+                    limit: None,
+                })
+                .await
+                .unwrap()
+                .matched_ids,
+            vec![completed]
+        );
     }
 
     #[tokio::test]

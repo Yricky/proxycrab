@@ -4,7 +4,7 @@ use std::{
     io::Read,
     net::SocketAddr,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU32, Ordering},
     },
 };
@@ -19,10 +19,11 @@ use crate::{
     asset::{Asset, AssetStore},
     breakpoint::{BreakpointContext, BreakpointRegistry},
     model::{
-        CaptureSummary, HeaderValues, Modification, RequestData, RequestTags, ResponseData,
-        ScriptKind,
+        CaptureOutcome, CaptureSummary, HeaderValues, Modification, RequestData, RequestTags,
+        ResponseData, ScriptKind,
     },
     proxy::body::{DeferredBodyRead, DeferredBodyReader},
+    storage::{BodySide, BodySource, BodySourceData},
 };
 
 mod codec;
@@ -128,7 +129,16 @@ impl FilterEvaluator {
     }
 
     pub fn evaluate(&self, argument: &str, entry: &CaptureSummary) -> Result<bool> {
-        self.script.prepare(entry)?;
+        self.evaluate_with_bodies(argument, entry, CaptureBodyAccess::unavailable())
+    }
+
+    pub fn evaluate_with_bodies(
+        &self,
+        argument: &str,
+        entry: &CaptureSummary,
+        bodies: CaptureBodyAccess,
+    ) -> Result<bool> {
+        self.script.prepare(entry, bodies)?;
         let result = self.script.function.call::<Value>(argument);
         self.script.finish(entry.id);
         match result? {
@@ -150,7 +160,15 @@ impl ColumnEvaluator {
     }
 
     pub fn evaluate(&self, entry: &CaptureSummary) -> Result<String> {
-        self.script.prepare(entry)?;
+        self.evaluate_with_bodies(entry, CaptureBodyAccess::unavailable())
+    }
+
+    pub fn evaluate_with_bodies(
+        &self,
+        entry: &CaptureSummary,
+        bodies: CaptureBodyAccess,
+    ) -> Result<String> {
+        self.script.prepare(entry, bodies)?;
         let result = self.script.function.call::<Value>(());
         self.script.finish(entry.id);
         match result? {
@@ -219,11 +237,22 @@ impl ReusableScript {
         })
     }
 
-    fn prepare(&self, entry: &CaptureSummary) -> Result<()> {
+    fn prepare(&self, entry: &CaptureSummary, bodies: CaptureBodyAccess) -> Result<()> {
         self.lua.gc_restart();
         let _ = self.warnings.take();
         let environment = self.environment_factory.call::<Table>(self.lua.globals())?;
-        environment.set("entry", EntryView(entry.clone()))?;
+        let bodies = if entry.outcome == CaptureOutcome::InProgress {
+            CaptureBodyAccess::unavailable()
+        } else {
+            bodies
+        };
+        environment.set(
+            "entry",
+            EntryView {
+                entry: entry.clone(),
+                bodies,
+            },
+        )?;
         if !self.function.set_environment(environment)? {
             bail!("script function has no Lua environment");
         }
@@ -518,45 +547,159 @@ fn log_json_warnings(
     );
 }
 
+type BodySourceResolver = dyn Fn(BodySide) -> Result<Option<BodySource>> + Send + Sync + 'static;
+type CachedBody = Result<Option<Arc<[u8]>>, String>;
+
 #[derive(Clone)]
-struct EntryView(CaptureSummary);
+pub struct CaptureBodyAccess(Arc<CaptureBodyAccessInner>);
+
+struct CaptureBodyAccessInner {
+    resolver: Option<Arc<BodySourceResolver>>,
+    request: OnceLock<CachedBody>,
+    response: OnceLock<CachedBody>,
+}
+
+impl CaptureBodyAccess {
+    pub fn new<F>(resolver: F) -> Self
+    where
+        F: Fn(BodySide) -> Result<Option<BodySource>> + Send + Sync + 'static,
+    {
+        Self(Arc::new(CaptureBodyAccessInner {
+            resolver: Some(Arc::new(resolver)),
+            request: OnceLock::new(),
+            response: OnceLock::new(),
+        }))
+    }
+
+    pub fn unavailable() -> Self {
+        Self(Arc::new(CaptureBodyAccessInner {
+            resolver: None,
+            request: OnceLock::new(),
+            response: OnceLock::new(),
+        }))
+    }
+
+    fn text_bytes(&self, side: BodySide) -> mlua::Result<Option<Arc<[u8]>>> {
+        let cache = match side {
+            BodySide::Request => &self.0.request,
+            BodySide::Response => &self.0.response,
+        };
+        cache
+            .get_or_init(|| {
+                let Some(resolver) = &self.0.resolver else {
+                    return Ok(None);
+                };
+                let Some(source) = resolver(side).map_err(|error| error.to_string())? else {
+                    return Ok(None);
+                };
+                read_text_body_source(source)
+                    .map(|bytes| bytes.map(Arc::from))
+                    .map_err(|error| error.to_string())
+            })
+            .clone()
+            .map_err(LuaError::runtime)
+    }
+}
+
+#[derive(Clone)]
+struct EntryView {
+    entry: CaptureSummary,
+    bodies: CaptureBodyAccess,
+}
 
 impl UserData for EntryView {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get("id", |_, this| Ok(this.0.id));
-        fields.add_field_method_get("req", |_, this| Ok(ReadRequest(this.0.request.clone())));
+        fields.add_field_method_get("id", |_, this| Ok(this.entry.id));
+        fields.add_field_method_get("req", |_, this| {
+            Ok(ReadRequest {
+                request: this.entry.request.clone(),
+                body: ReadBody {
+                    access: this.bodies.clone(),
+                    side: BodySide::Request,
+                },
+            })
+        });
         fields.add_field_method_get("resp", |_, this| {
-            Ok(this.0.response.clone().map(ReadResponse))
+            Ok(this.entry.response.clone().map(|response| ReadResponse {
+                response,
+                body: ReadBody {
+                    access: this.bodies.clone(),
+                    side: BodySide::Response,
+                },
+            }))
         });
     }
 }
 
 #[derive(Clone)]
-struct ReadRequest(RequestData);
+struct ReadRequest {
+    request: RequestData,
+    body: ReadBody,
+}
 
 impl UserData for ReadRequest {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get("method", |_, this| Ok(this.0.method.clone()));
-        fields.add_field_method_get("version", |_, this| Ok(this.0.version.clone()));
-        fields.add_field_method_get("uri", |_, this| Ok(UriView::from(&this.0.uri)));
-        fields.add_field_method_get("headers", |_, this| Ok(ReadHeaders(this.0.headers.clone())));
+        fields.add_field_method_get("method", |_, this| Ok(this.request.method.clone()));
+        fields.add_field_method_get("version", |_, this| Ok(this.request.version.clone()));
+        fields.add_field_method_get("uri", |_, this| Ok(UriView::from(&this.request.uri)));
+        fields.add_field_method_get("headers", |_, this| {
+            Ok(ReadHeaders(this.request.headers.clone()))
+        });
+        fields.add_field_method_get("body", |_, this| Ok(this.body.clone()));
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("get_tag", |_, this, key: String| {
-            Ok(this.0.tags.get(&key).cloned())
+            Ok(this.request.tags.get(&key).cloned())
         });
     }
 }
 
 #[derive(Clone)]
-struct ReadResponse(ResponseData);
+struct ReadResponse {
+    response: ResponseData,
+    body: ReadBody,
+}
 
 impl UserData for ReadResponse {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get("status", |_, this| Ok(this.0.status));
-        fields.add_field_method_get("version", |_, this| Ok(this.0.version.clone()));
-        fields.add_field_method_get("headers", |_, this| Ok(ReadHeaders(this.0.headers.clone())));
+        fields.add_field_method_get("status", |_, this| Ok(this.response.status));
+        fields.add_field_method_get("version", |_, this| Ok(this.response.version.clone()));
+        fields.add_field_method_get("headers", |_, this| {
+            Ok(ReadHeaders(this.response.headers.clone()))
+        });
+        fields.add_field_method_get("body", |_, this| Ok(this.body.clone()));
+    }
+}
+
+#[derive(Clone)]
+struct ReadBody {
+    access: CaptureBodyAccess,
+    side: BodySide,
+}
+
+impl UserData for ReadBody {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("as_string", |lua, this, ()| {
+            let Some(bytes) = this.access.text_bytes(this.side)? else {
+                return Ok(Value::Nil);
+            };
+            match std::str::from_utf8(&bytes) {
+                Ok(_) => Ok(Value::String(lua.create_string(bytes.as_ref())?)),
+                Err(_) => Ok(Value::Nil),
+            }
+        });
+        methods.add_method("as_json", |lua, this, ()| {
+            let Some(bytes) = this.access.text_bytes(this.side)? else {
+                return Ok(Value::Nil);
+            };
+            let Ok(text) = lua.create_string(bytes.as_ref()) else {
+                return Ok(Value::Nil);
+            };
+            let json: Table = lua.globals().get("json")?;
+            let decode: Function = json.get("decode")?;
+            Ok(decode.call::<Value>(text).unwrap_or(Value::Nil))
+        });
     }
 }
 
@@ -1208,6 +1351,19 @@ fn effective_text_bytes(body: &MutableBody) -> mlua::Result<Option<Vec<u8>>> {
     }
 }
 
+fn read_text_body_source(source: BodySource) -> mlua::Result<Option<Vec<u8>>> {
+    if !is_textual(source.content_type.as_deref().unwrap_or_default()) {
+        return Ok(None);
+    }
+    match source.data {
+        BodySourceData::Bytes(bytes) => read_body_reader(
+            Box::new(std::io::Cursor::new(bytes)),
+            &source.content_encodings,
+        ),
+        BodySourceData::File(path) => read_body_file(&path, &source.content_encodings),
+    }
+}
+
 fn read_body_file(path: &std::path::Path, encodings: &[String]) -> mlua::Result<Option<Vec<u8>>> {
     read_body_reader(
         Box::new(File::open(path).map_err(LuaError::external)?),
@@ -1294,8 +1450,16 @@ fn remove_header(headers: &mut BTreeMap<String, Vec<String>>, name: &str) -> Opt
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Arc};
+    use std::{
+        io::Write,
+        net::SocketAddr,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
+    use flate2::{Compression, write::GzEncoder};
     use tracing_subscriber::prelude::*;
 
     use crate::{
@@ -1304,13 +1468,15 @@ mod tests {
             CaptureOutcome, CaptureSummary, HeaderValues, RequestData, RequestTags, ResponseData,
             ScriptKind,
         },
+        storage::{BodySide, BodySource, BodySourceData},
     };
 
     use super::{
-        BodyReplacement, ColumnEvaluator, FilterEvaluator, ModificationJournal,
-        ResponseScriptContext, SharedInterceptorState, evaluate_column, evaluate_column_named,
-        evaluate_filter, evaluate_filter_named, evaluate_routing, execute_request,
-        execute_request_with_state, execute_response, execute_response_with_state, validate_script,
+        BodyReplacement, CaptureBodyAccess, ColumnEvaluator, FilterEvaluator, LUA_BODY_LIMIT,
+        ModificationJournal, ResponseScriptContext, SharedInterceptorState, evaluate_column,
+        evaluate_column_named, evaluate_filter, evaluate_filter_named, evaluate_routing,
+        execute_request, execute_request_with_state, execute_response, execute_response_with_state,
+        validate_script,
     };
 
     fn entry() -> CaptureSummary {
@@ -1360,6 +1526,151 @@ mod tests {
         );
         assert!(
             evaluate_filter("return entry.req:get_tag('team') == 'checkout'", "", &entry).unwrap()
+        );
+    }
+
+    #[test]
+    fn historical_body_access_is_read_only_lazy_and_cached() {
+        let mut entry = entry();
+        entry.outcome = CaptureOutcome::Success;
+        entry.response = Some(ResponseData {
+            status: 200,
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::from([("content-type".into(), vec!["text/plain".into()])]),
+        });
+        let reads = Arc::new(AtomicUsize::new(0));
+        let reads_for_resolver = reads.clone();
+        let bodies = CaptureBodyAccess::new(move |side| {
+            reads_for_resolver.fetch_add(1, Ordering::Relaxed);
+            Ok(Some(match side {
+                BodySide::Request => BodySource {
+                    data: BodySourceData::Bytes(br#"{"order_id":"needle"}"#.to_vec()),
+                    path: None,
+                    stored_size: 21,
+                    content_type: Some("application/json".into()),
+                    content_encodings: Vec::new(),
+                },
+                BodySide::Response => BodySource {
+                    data: BodySourceData::Bytes(b"response".to_vec()),
+                    path: None,
+                    stored_size: 8,
+                    content_type: Some("text/plain".into()),
+                    content_encodings: Vec::new(),
+                },
+            }))
+        });
+
+        let filter = FilterEvaluator::new(
+            "local body = entry.req.body; local value = body:as_json(); \
+             return value.order_id == ... and body:as_string() ~= nil",
+            "body-filter",
+        )
+        .unwrap();
+        assert!(
+            filter
+                .evaluate_with_bodies("needle", &entry, bodies.clone())
+                .unwrap()
+        );
+        let column =
+            ColumnEvaluator::new("return entry.resp.body:as_string()", "body-column").unwrap();
+        assert_eq!(
+            column.evaluate_with_bodies(&entry, bodies.clone()).unwrap(),
+            "response"
+        );
+        assert_eq!(reads.load(Ordering::Relaxed), 2);
+
+        assert!(
+            ColumnEvaluator::new(
+                "entry.req.body:replace_with_string('changed'); return ''",
+                "read-only-body",
+            )
+            .unwrap()
+            .evaluate_with_bodies(&entry, bodies)
+            .is_err()
+        );
+        assert_eq!(
+            ColumnEvaluator::new(
+                "return entry.req.body:as_string() or 'unavailable'",
+                "unavailable-body",
+            )
+            .unwrap()
+            .evaluate_with_bodies(&entry, CaptureBodyAccess::unavailable())
+            .unwrap(),
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn historical_body_access_follows_content_encoding_and_size_rules() {
+        let mut entry = entry();
+        entry.outcome = CaptureOutcome::Success;
+        let evaluate = |source: &str, body: BodySource| {
+            ColumnEvaluator::new(source, "historical-body-rules")
+                .unwrap()
+                .evaluate_with_bodies(
+                    &entry,
+                    CaptureBodyAccess::new(move |_| Ok(Some(body.clone()))),
+                )
+        };
+
+        assert_eq!(
+            evaluate(
+                "return entry.req.body:as_string() == nil",
+                BodySource {
+                    data: BodySourceData::Bytes(b"binary".to_vec()),
+                    path: None,
+                    stored_size: 6,
+                    content_type: Some("application/octet-stream".into()),
+                    content_encodings: Vec::new(),
+                },
+            )
+            .unwrap(),
+            "true"
+        );
+        assert_eq!(
+            evaluate(
+                "return entry.req.body:as_json() == nil",
+                BodySource {
+                    data: BodySourceData::Bytes(b"not json".to_vec()),
+                    path: None,
+                    stored_size: 8,
+                    content_type: Some("text/plain".into()),
+                    content_encodings: Vec::new(),
+                },
+            )
+            .unwrap(),
+            "true"
+        );
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(b"decoded").unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert_eq!(
+            evaluate(
+                "return entry.req.body:as_string()",
+                BodySource {
+                    stored_size: compressed.len() as u64,
+                    data: BodySourceData::Bytes(compressed),
+                    path: None,
+                    content_type: Some("text/plain".into()),
+                    content_encodings: vec!["gzip".into()],
+                },
+            )
+            .unwrap(),
+            "decoded"
+        );
+        assert!(
+            evaluate(
+                "return entry.req.body:as_string()",
+                BodySource {
+                    data: BodySourceData::Bytes(vec![0; LUA_BODY_LIMIT as usize + 1]),
+                    path: None,
+                    stored_size: LUA_BODY_LIMIT + 1,
+                    content_type: Some("text/plain".into()),
+                    content_encodings: Vec::new(),
+                },
+            )
+            .is_err()
         );
     }
 

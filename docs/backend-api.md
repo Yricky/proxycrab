@@ -707,6 +707,10 @@ Within one log-ID or log-view query, each referenced filter or custom-column scr
 once and reuses one Lua VM. Every capture evaluation still receives a fresh sandbox environment,
 instruction budget, and JSON warning count, so globals and standard-library table changes do not
 carry between rows or scripts.
+Filter and custom-column scripts can lazily read the effective persisted request/response body via
+the read-only `entry.req.body` and `entry.resp.body` getters. Decoded bytes are cached per capture
+within the query, while bodies on `in_progress` captures remain unavailable to prevent matches on
+partial files. See `lua-api.md` for text, encoding, and size-limit semantics.
 
 Bypassed metadata is persisted in `<workspace>/bypass.db` without headers or bodies. Each row stores
 timestamps, source, method, URI, version, routing reason, outcome, optional HTTP status/error, and
