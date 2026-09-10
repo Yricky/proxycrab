@@ -265,11 +265,12 @@ Exactly one of:
 ```
 
 Text/JSON content is embedded only when its decoded representation is at most 64 KiB. `size` and
-`path` describe stored bytes, which may still be content-encoded. Active breakpoint string
-replacements use `path: null` until persisted. Retrieve body bytes through the raw endpoints below.
-An empty original request or response is represented as `empty` without creating a blob file. An
-explicitly modified empty body remains `empty` in detail but persists a zero-byte `.modified` blob.
-The raw body endpoint still returns a successful zero-byte stream for an empty original body.
+`path` describe the selected final source: original stored bytes may still be content-encoded,
+string replacements use `path: null`, and Asset replacements use the Asset path. Retrieve complete
+body bytes through the raw endpoints below. An empty original request or response is represented as
+`empty` without creating a blob file. An empty string replacement is also `empty` and is stored in
+capture metadata; ProxyCrab does not create `.modified` capture blobs. The raw body endpoint still
+returns a successful zero-byte stream.
 
 ### CaptureError
 
@@ -624,24 +625,45 @@ Each interceptor execution is:
   "script_hash": "lowercase-sha256",
   "content": "req.headers:set(\"x-debug\", \"1\")",
   "modifications": [
-    { "kind": "snapshot", "headers": { "host": ["example.com"] } },
+    {
+      "kind": "snapshot",
+      "request": {
+        "method": "GET",
+        "uri": "https://example.com/",
+        "version": "HTTP/1.1",
+        "headers": { "host": ["example.com"] },
+        "body": { "type": "original" }
+      },
+      "response": null
+    },
     { "kind": "header_set", "name": "x-debug", "value": "1" }
   ],
   "error": null
 }
 ```
 
-Other modification variants are `method_set` with `method`, `uri_set` with `uri`, `status_set` with
-`status`, `header_append`, `header_remove` with `values`, `body_replace_string` with `content`,
-`body_replace_file` with `path`, and `tag_set` with `key` and `value`. Multiple temporary executions
-may share the same phase and position; use `execution_id` and array order rather than treating
-position as unique.
+The first `snapshot` is present only when that execution changed Method, URI, Status, Headers, or
+Body. It contains the complete cumulative request state for request interceptors, or complete
+response state for response interceptors, as seen on entry. Snapshot bodies are `original`,
+`string` with complete `content`, or `asset` with `asset_id`; tags and the response interceptor's
+read-only request are not included. Other modification variants are `method_set` with `method`,
+`uri_set` with `uri`, `status_set` with `status`, `header_append`, `header_remove` with `values`,
+`body_replace_string` with `content`, `body_replace_asset` with `asset_id`, and `tag_set` with `key`
+and `value`. Multiple temporary executions may share the same phase and position; use
+`execution_id` and array order rather than treating position as unique.
 
 ### `GET /api/logs/{id}/body?session_id=3&side=request&max_size=16777216`
 
-Returns an unwrapped raw byte stream. `side` is required and must be `request` or `response`.
-`max_size` defaults to 16 MiB, has no server maximum, and always checks the original stored capture
-file before any decoding or recompression. Oversized bodies return 413 with the stored sizes:
+Returns the final Body constructed after interceptors as an unwrapped raw byte stream. The final
+source is the original network Blob, a complete replacement string, or an Asset. `blob/` contains
+only original network bodies; ProxyCrab does not create `.modified` files.
+
+Add `execution_id=17` to read the selected interceptor-entry snapshot body. The endpoint can
+resolve `original`, `string`, and `asset` sources; the desktop snapshot window intentionally shows
+only `asset_id` for Asset snapshots instead of fetching their bytes. `side` is required and must be
+`request` or `response`.
+`max_size` defaults to 16 MiB, has no server maximum, and checks the selected final Body source
+before any decoding or recompression. Oversized bodies return 413 with the stored sizes:
 
 ```json
 {
@@ -813,7 +835,7 @@ without an envelope and returns `Content-Type`, `Content-Length`, `Content-Dispo
 `X-ProxyCrab-Asset-SHA256`. If upload `Content-Type` is absent it defaults to
 `application/octet-stream`.
 
-IDs allow `[a-z0-9_./]`, up to 255 bytes total and 100 bytes per segment. They cannot start/end with
+IDs allow `[a-z0-9_./-]`, up to 255 bytes total and 100 bytes per segment. They cannot start/end with
 `/`, contain `//`, or use `.`, `..`, or `.metadata` as a complete segment. Errors are
 `invalid_asset_id` (400), `invalid_asset_format` (400), `asset_not_found` (404),
 `asset_already_exists` (409), `asset_path_conflict` (409), and `asset_store_failed` (500). Uploads

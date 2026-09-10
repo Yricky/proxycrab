@@ -278,7 +278,7 @@ pub(super) async fn handle_session_http_request(
         }
     };
     let raw_request_writer = match store
-        .create_body_writer(capture_id, BodySide::Request, false)
+        .create_body_writer(capture_id, BodySide::Request)
         .await
     {
         Ok(writer) => writer,
@@ -300,7 +300,6 @@ pub(super) async fn handle_session_http_request(
     let raw_request_reader = raw_request.reader();
     let mut request_replacement = None;
     let mut request_replacement_source = None;
-    let mut request_modifications = Vec::new();
     for (position, script) in interceptor_snapshot.request.iter().enumerate() {
         let state = SharedInterceptorState::new_request(
             request_data.method.clone(),
@@ -311,7 +310,8 @@ pub(super) async fn handle_session_http_request(
         state.set_body(request_replacement_source.clone());
         state.set_raw_body(raw_request_reader.clone());
         state.set_asset_store(runtime.asset_store());
-        let journal = ModificationJournal::new(request_data.headers.clone());
+        let journal =
+            ModificationJournal::for_request(&request_data, request_replacement_source.as_ref());
         let execution_id = match store.begin_interceptor_run(
             capture_id,
             &InterceptorRun {
@@ -401,7 +401,6 @@ pub(super) async fn handle_session_http_request(
                         }
                     }
                 }
-                request_modifications.extend(effects.modifications);
                 if let Some(error) = error {
                     note_script_error(&store, capture_id, &script.name, &error);
                     append_run_error(&mut run_error, error);
@@ -448,7 +447,11 @@ pub(super) async fn handle_session_http_request(
             );
         }
     }
-    if let Err(error) = store.update_request(capture_id, &request_data, &request_modifications) {
+    let request_final_body = request_replacement_source
+        .as_ref()
+        .map(BodyReplacement::source_type)
+        .unwrap_or_default();
+    if let Err(error) = store.update_request(capture_id, &request_data, &request_final_body) {
         fail_capture(
             &store,
             capture_id,
@@ -491,8 +494,8 @@ pub(super) async fn handle_session_http_request(
                 vec!["application/x-x509-ca-cert".into()],
             )]),
         };
-        let _ = store.save_body(capture_id, BodySide::Response, false, &bytes);
-        let _ = store.complete(capture_id, &response_data, &[]);
+        let _ = store.save_body(capture_id, BodySide::Response, &bytes);
+        let _ = store.complete(capture_id, &response_data, &BodySourceType::Original);
         return response_from_data(&response_data, bytes, false);
     }
 
@@ -524,25 +527,9 @@ pub(super) async fn handle_session_http_request(
     let (request_body, replacement_length, modified_request_done) = match request_replacement {
         Some(replacement) => {
             let length = replacement.length();
-            let writer = match store
-                .create_body_writer(capture_id, BodySide::Request, true)
-                .await
-            {
-                Ok(writer) => Some(writer),
-                Err(error) => {
-                    note_capture_error(
-                        &store,
-                        capture_id,
-                        ErrorStage::RequestBody,
-                        "modified_request_body_store_failed",
-                        &error.to_string(),
-                    );
-                    None
-                }
-            };
             let (body, done) = pump_body(
                 replacement.into_body(),
-                writer,
+                None,
                 None,
                 request_speed,
                 true,
@@ -627,7 +614,7 @@ pub(super) async fn handle_session_http_request(
                 }
             });
         }
-        let _ = store.complete(capture_id, &response_data, &[]);
+        let _ = store.complete(capture_id, &response_data, &BodySourceType::Original);
         return response_from_data(&response_data, Vec::new(), false);
     }
 
@@ -682,7 +669,8 @@ async fn finish_session_response(
         modified_request_done,
         tracker,
     } = context;
-    if let Err(error) = store.update_response(capture_id, &response_data) {
+    if let Err(error) = store.update_response(capture_id, &response_data, &BodySourceType::Original)
+    {
         fail_capture(
             &store,
             capture_id,
@@ -696,7 +684,7 @@ async fn finish_session_response(
         );
     }
     let raw_response_writer = match store
-        .create_body_writer(capture_id, BodySide::Response, false)
+        .create_body_writer(capture_id, BodySide::Response)
         .await
     {
         Ok(writer) => writer,
@@ -717,7 +705,6 @@ async fn finish_session_response(
     let raw_response = DeferredBody::new(raw_response_body, raw_response_writer, &tracker);
     let raw_response_reader = raw_response.reader();
 
-    let mut response_modifications = Vec::new();
     let mut response_replacement = None;
     let mut response_replacement_source = None;
     for (position, script) in scripts.iter().enumerate() {
@@ -729,7 +716,8 @@ async fn finish_session_response(
         state.set_body(response_replacement_source.clone());
         state.set_raw_body(raw_response_reader.clone());
         state.set_asset_store(runtime.asset_store());
-        let journal = ModificationJournal::new(response_data.headers.clone());
+        let journal =
+            ModificationJournal::for_response(&response_data, response_replacement_source.as_ref());
         let execution_id = match store.begin_interceptor_run(
             capture_id,
             &InterceptorRun {
@@ -820,7 +808,6 @@ async fn finish_session_response(
                         }
                     }
                 }
-                response_modifications.extend(effects.modifications);
                 if let Some(error) = error {
                     note_script_error(&store, capture_id, &script.name, &error);
                     append_run_error(&mut run_error, error);
@@ -869,7 +856,11 @@ async fn finish_session_response(
             );
         }
     }
-    if let Err(error) = store.update_response(capture_id, &response_data) {
+    let response_final_body = response_replacement_source
+        .as_ref()
+        .map(BodyReplacement::source_type)
+        .unwrap_or_default();
+    if let Err(error) = store.update_response(capture_id, &response_data, &response_final_body) {
         fail_capture(
             &store,
             capture_id,
@@ -901,25 +892,9 @@ async fn finish_session_response(
     let (replacement_response_body, modified_response_done) = match response_replacement {
         Some(replacement) => {
             let length = replacement.length();
-            let writer = match store
-                .create_body_writer(capture_id, BodySide::Response, true)
-                .await
-            {
-                Ok(writer) => Some(writer),
-                Err(error) => {
-                    note_capture_error(
-                        &store,
-                        capture_id,
-                        ErrorStage::ResponseBody,
-                        "modified_response_body_store_failed",
-                        &error.to_string(),
-                    );
-                    None
-                }
-            };
             let (body, done) = pump_body(
                 replacement.into_body(),
-                writer,
+                None,
                 None,
                 response_speed,
                 true,
@@ -932,7 +907,6 @@ async fn finish_session_response(
 
     let final_store = store.clone();
     let final_response = response_data.clone();
-    let final_modifications = response_modifications.clone();
     tracker.spawn(async move {
         let _activity = activity;
         let request_result = raw_request_done.await.ok();
@@ -1066,7 +1040,7 @@ async fn finish_session_response(
                 ),
                 PumpOutcome::OutputClosed => {}
             }
-            let _ = final_store.complete(capture_id, &final_response, &final_modifications);
+            let _ = final_store.complete(capture_id, &final_response, &response_final_body);
             return;
         }
         if let Some(error) = &response_result.storage_error {
@@ -1081,7 +1055,7 @@ async fn finish_session_response(
         }
         match &response_result.outcome {
             PumpOutcome::Complete => {
-                let _ = final_store.complete(capture_id, &final_response, &final_modifications);
+                let _ = final_store.complete(capture_id, &final_response, &response_final_body);
             }
             PumpOutcome::FrameTimeout => fail_capture(
                 &final_store,

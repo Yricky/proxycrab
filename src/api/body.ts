@@ -7,6 +7,7 @@ export type BodySide = "request" | "response";
 
 export type BodyTarget =
   | { kind: "log"; id: number; sessionId: number }
+  | { kind: "interceptor"; id: number; sessionId: number; executionId: number }
   | { kind: "breakpoint"; id: number };
 
 export interface LoadedBody {
@@ -40,7 +41,13 @@ export async function fetchBodyFromHttp(
   maxSize = DEFAULT_BODY_MAX_SIZE,
   authorization?: string,
 ): Promise<LoadedBody> {
-  return fetchBodyFromBase(apiBase(config), target, side, maxSize, authorization);
+  return fetchBodyFromBase(
+    apiBase(config),
+    target,
+    side,
+    maxSize,
+    authorization,
+  );
 }
 
 export async function fetchBodyFromBase(
@@ -52,17 +59,29 @@ export async function fetchBodyFromBase(
   apiPrefix = "/api",
   queryToken?: string,
 ): Promise<LoadedBody> {
-  if (!Number.isSafeInteger(maxSize) || maxSize <= 0 || maxSize > UI_BODY_MAX_SIZE) {
-    throw new BodyFetchError({ code: "bad_request", message: "无效的 Body 大小限制" });
+  if (
+    !Number.isSafeInteger(maxSize) ||
+    maxSize <= 0 ||
+    maxSize > UI_BODY_MAX_SIZE
+  ) {
+    throw new BodyFetchError({
+      code: "bad_request",
+      message: "无效的 Body 大小限制",
+    });
   }
   const path =
-    target.kind === "log"
-      ? `${apiPrefix}/logs/${target.id}/body`
-      : `${apiPrefix}/breakpoints/${target.id}/body`;
+    target.kind === "breakpoint"
+      ? `${apiPrefix}/breakpoints/${target.id}/body`
+      : `${apiPrefix}/logs/${target.id}/body`;
   const url = new URL(path, base);
   url.searchParams.set("side", side);
   url.searchParams.set("max_size", String(maxSize));
-  if (target.kind === "log") url.searchParams.set("session_id", String(target.sessionId));
+  if (target.kind !== "breakpoint") {
+    url.searchParams.set("session_id", String(target.sessionId));
+  }
+  if (target.kind === "interceptor") {
+    url.searchParams.set("execution_id", String(target.executionId));
+  }
   if (queryToken !== undefined) url.searchParams.append("token", queryToken);
 
   const response = await fetch(url, {
@@ -86,6 +105,7 @@ export async function fetchBodyFromBase(
   return {
     bytes: new Uint8Array(buffer),
     decodedSize: buffer.byteLength,
-    contentType: response.headers.get("content-type") ?? "application/octet-stream",
+    contentType:
+      response.headers.get("content-type") ?? "application/octet-stream",
   };
 }

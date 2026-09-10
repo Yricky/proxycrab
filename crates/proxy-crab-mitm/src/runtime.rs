@@ -374,6 +374,18 @@ impl ProxyCrab {
             .body_source(id, side)
     }
 
+    pub fn interceptor_snapshot_body_source(
+        &self,
+        session_id: u64,
+        capture_id: u64,
+        execution_id: u64,
+        side: BodySide,
+    ) -> Result<Option<BodySource>> {
+        self.pin_capture_store(session_id)?
+            .store
+            .interceptor_snapshot_body_source(capture_id, execution_id, side)
+    }
+
     pub fn breakpoint_body_source(&self, id: u64, side: BodySide) -> Result<Option<BodySource>> {
         let live = self.breakpoints.detail(id)?;
         let mut source =

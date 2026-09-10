@@ -144,8 +144,9 @@ local request_text = entry.req.body:as_string()
 local response_json = entry.resp and entry.resp.body:as_json()
 ```
 
-The first getter lazily loads the effective persisted body (the modified body when present,
-otherwise the original) and later getters for that capture side reuse the decoded bytes. Bodies on
+The first getter lazily loads the persisted final Body source recorded on the capture (original
+network bytes, a complete string replacement, or an Asset), and later getters for that capture side
+reuse the decoded bytes. Bodies on
 `in_progress` captures are unavailable and both getters return `nil`, even if a partial capture file
 already exists. The getters require a textual `Content-Type`; `as_string()` also requires valid
 UTF-8, while `as_json()` returns `nil` for malformed JSON. Empty text returns `""` / `nil`.

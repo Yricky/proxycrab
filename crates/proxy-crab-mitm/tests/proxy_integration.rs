@@ -847,16 +847,13 @@ async fn response_replacement_does_not_wait_for_the_raw_upstream_body() {
         .session_dir(session.id)
         .join("blob")
         .join(format!("{}-response.body", capture.id));
-    let modified_path = runtime
-        .workspace()
-        .session_dir(session.id)
-        .join("blob")
-        .join(format!("{}-response.body.modified", capture.id));
+    let modified_path = raw_path.with_extension("body.modified");
     assert_eq!(tokio::fs::read(raw_path).await.unwrap(), b"helloworld");
-    assert_eq!(
-        tokio::fs::read(modified_path).await.unwrap(),
-        b"replacement"
-    );
+    assert!(!modified_path.exists());
+    assert!(matches!(
+        runtime.capture(session.id, capture.id).unwrap().unwrap().response_body,
+        BodyPayload::Text { content, .. } if content == "replacement"
+    ));
     runtime.stop_proxy().await.unwrap();
 }
 
@@ -931,13 +928,17 @@ async fn request_replacement_is_sent_while_the_raw_client_body_keeps_draining() 
         .session_dir(session.id)
         .join("blob")
         .join(format!("{}-request.body", capture.id));
-    let modified_path = runtime
-        .workspace()
-        .session_dir(session.id)
-        .join("blob")
-        .join(format!("{}-request.body.modified", capture.id));
+    let modified_path = raw_path.with_extension("body.modified");
     assert_eq!(tokio::fs::read(raw_path).await.unwrap(), b"helloworld");
-    assert_eq!(tokio::fs::read(modified_path).await.unwrap(), b"pong");
+    assert!(!modified_path.exists());
+    assert!(matches!(
+        runtime
+            .capture_body_source(session.id, capture.id, BodySide::Request)
+            .unwrap()
+            .unwrap()
+            .data,
+        BodySourceData::Bytes(bytes) if bytes == b"pong"
+    ));
 
     runtime.stop_proxy().await.unwrap();
 }
@@ -1106,16 +1107,13 @@ async fn response_replacement_survives_a_raw_body_frame_timeout() {
         .session_dir(session.id)
         .join("blob")
         .join(format!("{}-response.body", capture.id));
-    let modified_path = runtime
-        .workspace()
-        .session_dir(session.id)
-        .join("blob")
-        .join(format!("{}-response.body.modified", capture.id));
+    let modified_path = raw_path.with_extension("body.modified");
     assert_eq!(tokio::fs::read(raw_path).await.unwrap(), b"hello");
-    assert_eq!(
-        tokio::fs::read(modified_path).await.unwrap(),
-        b"replacement"
-    );
+    assert!(!modified_path.exists());
+    assert!(matches!(
+        runtime.capture(session.id, capture.id).unwrap().unwrap().response_body,
+        BodyPayload::Text { content, .. } if content == "replacement"
+    ));
 
     runtime.stop_proxy().await.unwrap();
     upstream.abort();
@@ -1426,16 +1424,13 @@ async fn request_interceptors_read_raw_json_and_observe_prior_replacement() {
         .session_dir(session.id)
         .join("blob")
         .join(format!("{}-request.body", capture.id));
-    let modified_path = runtime
-        .workspace()
-        .session_dir(session.id)
-        .join("blob")
-        .join(format!("{}-request.body.modified", capture.id));
+    let modified_path = raw_path.with_extension("body.modified");
     assert_eq!(tokio::fs::read(raw_path).await.unwrap(), body);
-    assert_eq!(
-        tokio::fs::read(modified_path).await.unwrap(),
-        br#"{"replacement":true}"#
-    );
+    assert!(!modified_path.exists());
+    assert!(matches!(
+        runtime.capture(session.id, capture.id).unwrap().unwrap().request_body,
+        BodyPayload::Json { content, .. } if content == serde_json::json!({"replacement": true})
+    ));
 
     runtime.stop_proxy().await.unwrap();
     upstream.abort();

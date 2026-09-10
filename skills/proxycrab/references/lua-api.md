@@ -200,9 +200,9 @@ local response_json = entry.resp and entry.resp.body:as_json()
 ```
 
 - Only `as_string()` and `as_json()` are available; replacement methods remain interceptor-only.
-- The first getter lazily reads the effective persisted body: the modified body when present,
-  otherwise the original. Later getters for that capture side reuse the decoded bytes, including
-  across custom columns rendered together.
+- The first getter lazily reads the persisted final Body source recorded on the capture: original
+  network bytes, a complete string replacement, or an Asset. Later getters for that capture side
+  reuse the decoded bytes, including across custom columns rendered together.
 - Bodies on `in_progress` captures are unavailable and both getters return `nil`, even if a partial
   capture file exists.
 - Both getters require a textual `Content-Type`. `as_string()` returns `nil` for invalid UTF-8;
@@ -419,7 +419,9 @@ Each executed script records:
 - historical name;
 - lowercase SHA-256 of exact source;
 - exact source content;
-- the initial header snapshot and ordered method/URI/status/header/body/tag mutations;
+- when the script changes Method, URI, Status, Headers, or Body, the complete request/response state
+  seen on entry, followed by ordered method/URI/status/header/body/tag mutations; Tag-only and
+  unchanged executions do not record this state snapshot;
 - an optional runtime error.
 - execution ID, saved/temporary origin, and completion state.
 

@@ -22,6 +22,7 @@ import ArchivedSessionsWindow from "./ArchivedSessionsWindow.vue";
 import ApprovalWindow from "./ApprovalWindow.vue";
 import BrowserWindow from "./BrowserWindow.vue";
 import SessionExportShareWindow from "./SessionExportShareWindow.vue";
+import InterceptorSnapshotWindow from "./InterceptorSnapshotWindow.vue";
 
 /** 内置浏览器窗口：同一 URL 复用已有窗口。 */
 export function openBrowser(url: string): void {
@@ -64,7 +65,10 @@ export function openBreakpointList(
   });
 }
 
-export function openBreakpointDetail(breakpointId: number, captureId: number): void {
+export function openBreakpointDetail(
+  breakpointId: number,
+  captureId: number,
+): void {
   windowsStore.open(`breakpoint-${breakpointId}`, {
     title: `#${captureId} — 断点详情`,
     component: LogDetailWindow,
@@ -85,7 +89,9 @@ export function openScriptEditor(kind: InterceptorKind, name: string): void {
   });
   // Fresh windows pick the script via initialName; already-open ones react to this event.
   window.dispatchEvent(
-    new CustomEvent("proxycrab-focus-script", { detail: { scope: kind, name } }),
+    new CustomEvent("proxycrab-focus-script", {
+      detail: { scope: kind, name },
+    }),
   );
 }
 
@@ -103,6 +109,23 @@ export function openReadonlyViewer(
     width: 720,
     height: 520,
   });
+}
+
+export function openInterceptorSnapshot(
+  sessionId: number,
+  logId: number,
+  execution: InterceptorExecution,
+): void {
+  windowsStore.open(
+    `interceptor-snapshot-${sessionId}-${logId}-${execution.execution_id}`,
+    {
+      title: `${execution.name} — 进入拦截器前的快照`,
+      component: InterceptorSnapshotWindow,
+      props: { sessionId, logId, execution },
+      width: 820,
+      height: 600,
+    },
+  );
 }
 
 export function openScriptSnapshot(
@@ -191,7 +214,10 @@ export function openArchivedSessions(): void {
   });
 }
 
-export function openSessionExportShare(sessionId: number, sessionName: string): void {
+export function openSessionExportShare(
+  sessionId: number,
+  sessionName: string,
+): void {
   windowsStore.open(`session-export-share-${sessionId}`, {
     title: `导出和分享 — ${sessionName}`,
     component: SessionExportShareWindow,

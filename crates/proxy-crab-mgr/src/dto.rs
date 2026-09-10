@@ -124,6 +124,7 @@ pub struct BodyQuery {
     pub session_id: Option<u64>,
     pub side: String,
     pub max_size: Option<u64>,
+    pub execution_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

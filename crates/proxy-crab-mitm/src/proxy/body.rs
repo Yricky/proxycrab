@@ -842,7 +842,7 @@ mod tests {
         };
         let id = store.begin("test", &request, "request").unwrap();
         let writer = store
-            .create_body_writer(id, BodySide::Request, false)
+            .create_body_writer(id, BodySide::Request)
             .await
             .unwrap();
         let path = writer.path().to_path_buf();
@@ -879,7 +879,7 @@ mod tests {
         };
         let id = store.begin("test", &request, "request").unwrap();
         let writer = store
-            .create_body_writer(id, BodySide::Request, false)
+            .create_body_writer(id, BodySide::Request)
             .await
             .unwrap();
         let mut trailers = HeaderMap::new();
