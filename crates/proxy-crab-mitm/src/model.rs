@@ -275,20 +275,83 @@ pub enum BodyPayload {
     },
 }
 
+/// Where a request/response Body comes from: the original network bytes, an inline replacement
+/// string, or a workspace Asset. Shared by the final Body after interceptors and by the Body
+/// captured in interceptor-entry snapshots.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BodySourceType {
+    Original,
+    String { content: String },
+    Asset { asset_id: String },
+}
+
+impl Default for BodySourceType {
+    fn default() -> Self {
+        Self::Original
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CaptureModifications {
+    pub final_body: BodySourceType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RequestInterceptorSnapshot {
+    pub method: String,
+    pub uri: String,
+    pub version: String,
+    pub headers: HeaderValues,
+    pub body: BodySourceType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResponseInterceptorSnapshot {
+    pub status: u16,
+    pub version: String,
+    pub headers: HeaderValues,
+    pub body: BodySourceType,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Modification {
-    Snapshot { headers: HeaderValues },
-    MethodSet { method: String },
-    UriSet { uri: String },
-    StatusSet { status: u16 },
-    HeaderAppend { name: String, value: String },
-    HeaderSet { name: String, value: String },
-    HeaderRemove { name: String, values: Vec<String> },
-    BodyReplaceString { content: String },
-    BodyReplaceFile { path: String },
-    BodyReplaceAsset { asset_id: String },
-    TagSet { key: String, value: String },
+    Snapshot {
+        request: Option<RequestInterceptorSnapshot>,
+        response: Option<ResponseInterceptorSnapshot>,
+    },
+    MethodSet {
+        method: String,
+    },
+    UriSet {
+        uri: String,
+    },
+    StatusSet {
+        status: u16,
+    },
+    HeaderAppend {
+        name: String,
+        value: String,
+    },
+    HeaderSet {
+        name: String,
+        value: String,
+    },
+    HeaderRemove {
+        name: String,
+        values: Vec<String>,
+    },
+    BodyReplaceString {
+        content: String,
+    },
+    BodyReplaceAsset {
+        asset_id: String,
+    },
+    TagSet {
+        key: String,
+        value: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -415,7 +478,7 @@ pub struct SystemLogEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_columns, AppConfig, Column, FilterColumn, FilterOption};
+    use super::{AppConfig, Column, FilterColumn, FilterOption, default_columns};
 
     #[test]
     fn legacy_api_host_is_ignored_and_not_serialized() {
@@ -462,8 +525,11 @@ mod tests {
             serde_json::from_value::<Vec<Column>>(serde_json::to_value(&columns).unwrap()).unwrap(),
             columns
         );
-        assert!(default_columns()
-            .iter()
-            .all(|column| !matches!(column, Column::CreatedAt { .. } | Column::UpdatedAt { .. })));
+        assert!(
+            default_columns().iter().all(|column| !matches!(
+                column,
+                Column::CreatedAt { .. } | Column::UpdatedAt { .. }
+            ))
+        );
     }
 }

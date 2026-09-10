@@ -263,7 +263,18 @@ impl BreakpointRegistry {
         }
 
         let context = &active.context;
-        let journal = ModificationJournal::new(context.state.headers());
+        let journal = match context.phase {
+            InterceptorKind::Request => {
+                ModificationJournal::for_current_request(&context.request, &context.state)
+            }
+            InterceptorKind::Response => ModificationJournal::for_current_response(
+                context
+                    .response
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("response breakpoint is missing response state"))?,
+                &context.state,
+            ),
+        };
         let (_, error) = match context.phase {
             InterceptorKind::Request => execute_request_with_state(
                 content,
@@ -414,7 +425,7 @@ mod tests {
             request.headers.clone(),
             request.tags.clone(),
         );
-        let journal = ModificationJournal::new(request.headers.clone());
+        let journal = ModificationJournal::for_request(&request, None);
         let source = "breakpoint(1000)";
         let parent_execution_id = store
             .begin_interceptor_run(

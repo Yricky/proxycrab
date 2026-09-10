@@ -13,10 +13,12 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use tokio::io::AsyncWriteExt;
 
 use crate::{
+    asset::AssetStore,
     model::{
-        BodyPayload, CaptureDetail, CaptureError, CaptureOutcome, CaptureSummary, ErrorStage,
-        HeaderValues, InterceptorExecution, InterceptorExecutionOrigin, InterceptorKind,
-        InterceptorRun, Modification, RequestData, RequestTags, ResponseData,
+        BodyPayload, BodySourceType, CaptureDetail, CaptureError, CaptureModifications,
+        CaptureOutcome, CaptureSummary, ErrorStage, HeaderValues, InterceptorExecution,
+        InterceptorExecutionOrigin, InterceptorKind, InterceptorRun, Modification, RequestData,
+        RequestTags, ResponseData,
     },
     workspace::now_millis,
 };
@@ -89,6 +91,7 @@ pub struct CaptureStore {
     session_id: u64,
     connection: Arc<Mutex<Connection>>,
     blob_directory: PathBuf,
+    workspace_root: PathBuf,
 }
 
 impl CaptureStore {
@@ -101,10 +104,16 @@ impl CaptureStore {
             "PRAGMA foreign_keys = ON;
              PRAGMA synchronous = NORMAL;",
         )?;
+        let workspace_root = session_directory
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| anyhow!("session directory is outside a workspace"))?
+            .to_path_buf();
         let store = Self {
             session_id,
             connection: Arc::new(Mutex::new(connection)),
             blob_directory,
+            workspace_root,
         };
         store.initialize()?;
         Ok(store)
@@ -148,12 +157,13 @@ impl CaptureStore {
         &self,
         id: u64,
         request: &RequestData,
-        _modifications: &[Modification],
+        final_body: &BodySourceType,
     ) -> Result<()> {
         self.connection()?.execute(
             "UPDATE captures SET
                 method=?2, uri=?3, req_version=?4, req_headers=?5, req_tags=?6,
-                stage='request', updated_at=MAX(updated_at + 1, ?7)
+                req_modifications=?7,
+                stage='request', updated_at=MAX(updated_at + 1, ?8)
              WHERE id=?1",
             params![
                 id as i64,
@@ -162,6 +172,9 @@ impl CaptureStore {
                 request.version,
                 serde_json::to_string(&request.headers)?,
                 serde_json::to_string(&request.tags)?,
+                serde_json::to_string(&CaptureModifications {
+                    final_body: final_body.clone(),
+                })?,
                 now_millis() as i64,
             ],
         )?;
@@ -176,17 +189,26 @@ impl CaptureStore {
         Ok(())
     }
 
-    pub fn update_response(&self, id: u64, response: &ResponseData) -> Result<()> {
+    pub fn update_response(
+        &self,
+        id: u64,
+        response: &ResponseData,
+        final_body: &BodySourceType,
+    ) -> Result<()> {
         self.connection()?.execute(
             "UPDATE captures SET
                 resp_status=?2, resp_version=?3, resp_headers=?4,
-                stage='response', updated_at=MAX(updated_at + 1, ?5)
+                resp_modifications=?5,
+                stage='response', updated_at=MAX(updated_at + 1, ?6)
              WHERE id=?1",
             params![
                 id as i64,
                 response.status,
                 response.version,
                 serde_json::to_string(&response.headers)?,
+                serde_json::to_string(&CaptureModifications {
+                    final_body: final_body.clone(),
+                })?,
                 now_millis() as i64,
             ],
         )?;
@@ -197,19 +219,23 @@ impl CaptureStore {
         &self,
         id: u64,
         response: &ResponseData,
-        _modifications: &[Modification],
+        final_body: &BodySourceType,
     ) -> Result<()> {
         self.connection()?.execute(
             "UPDATE captures SET
                 resp_status=?2, resp_version=?3, resp_headers=?4,
+                resp_modifications=?5,
                 outcome='success', stage='completed',
-                updated_at=MAX(updated_at + 1, ?5)
+                updated_at=MAX(updated_at + 1, ?6)
              WHERE id=?1",
             params![
                 id as i64,
                 response.status,
                 response.version,
                 serde_json::to_string(&response.headers)?,
+                serde_json::to_string(&CaptureModifications {
+                    final_body: final_body.clone(),
+                })?,
                 now_millis() as i64,
             ],
         )?;
@@ -273,23 +299,21 @@ impl CaptureStore {
         self.connection()?
             .execute("DELETE FROM captures WHERE id=?1", params![id as i64])?;
         for side in [BodySide::Request, BodySide::Response] {
-            for modified in [false, true] {
-                let path = self.body_path(id, side, modified);
-                if let Err(error) = fs::remove_file(path)
-                    && error.kind() != std::io::ErrorKind::NotFound
-                {
-                    return Err(error.into());
-                }
+            let path = self.body_path(id, side);
+            if let Err(error) = fs::remove_file(path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(error.into());
             }
         }
         Ok(())
     }
 
-    pub fn save_body(&self, id: u64, side: BodySide, modified: bool, bytes: &[u8]) -> Result<()> {
-        if bytes.is_empty() && !modified {
+    pub fn save_body(&self, id: u64, side: BodySide, bytes: &[u8]) -> Result<()> {
+        if bytes.is_empty() {
             return self.touch(id);
         }
-        fs::write(self.body_path(id, side, modified), bytes)?;
+        fs::write(self.body_path(id, side), bytes)?;
         self.touch(id)
     }
 
@@ -297,14 +321,9 @@ impl CaptureStore {
         &self,
         id: u64,
         side: BodySide,
-        modified: bool,
     ) -> Result<CaptureBodyWriter> {
-        let path = self.body_path(id, side, modified);
-        let writer = if modified {
-            Some(tokio::fs::File::create(&path).await?)
-        } else {
-            None
-        };
+        let path = self.body_path(id, side);
+        let writer = None;
         Ok(CaptureBodyWriter {
             store: self.clone(),
             id,
@@ -321,55 +340,148 @@ impl CaptureStore {
         Ok(())
     }
 
+    pub fn interceptor_snapshot_body_source(
+        &self,
+        capture_id: u64,
+        execution_id: u64,
+        side: BodySide,
+    ) -> Result<Option<BodySource>> {
+        let row = self
+            .connection()?
+            .query_row(
+                "SELECT capture_id, modifications
+                 FROM capture_interceptor_runs WHERE id=?1 AND capture_id=?2",
+                params![execution_id as i64, capture_id as i64],
+                |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        let Some((_capture_id, modifications)) = row else {
+            return Ok(None);
+        };
+        let modifications: Vec<Modification> = serde_json::from_str(&modifications)?;
+        let snapshot = modifications
+            .into_iter()
+            .find_map(|modification| match modification {
+                Modification::Snapshot { request, response } => Some((request, response)),
+                _ => None,
+            });
+        let Some((request, response)) = snapshot else {
+            return Ok(None);
+        };
+        let (headers, body) = match side {
+            BodySide::Request => {
+                let Some(snapshot) = request else {
+                    return Ok(None);
+                };
+                (snapshot.headers, snapshot.body)
+            }
+            BodySide::Response => {
+                let Some(snapshot) = response else {
+                    return Ok(None);
+                };
+                (snapshot.headers, snapshot.body)
+            }
+        };
+        self.body_source_for(capture_id, side, &headers, &body)
+            .map(Some)
+    }
+
     pub fn body_source(&self, id: u64, side: BodySide) -> Result<Option<BodySource>> {
         let row = self
             .connection()?
             .query_row(
-                "SELECT req_headers, resp_status, resp_headers FROM captures WHERE id=?1",
+                "SELECT req_headers, resp_status, resp_headers,
+                        req_modifications, resp_modifications
+                 FROM captures WHERE id=?1",
                 params![id as i64],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, Option<u16>>(1)?,
                         row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((request_headers, response_status, response_headers)) = row else {
+        let Some((
+            request_headers,
+            response_status,
+            response_headers,
+            request_state,
+            response_state,
+        )) = row
+        else {
             return Ok(None);
         };
-        let headers = match side {
-            BodySide::Request => serde_json::from_str::<HeaderValues>(&request_headers)?,
+        let (headers, state) = match side {
+            BodySide::Request => (
+                serde_json::from_str::<HeaderValues>(&request_headers)?,
+                request_state,
+            ),
             BodySide::Response => {
                 if response_status.is_none() {
                     return Ok(None);
                 }
-                serde_json::from_str::<HeaderValues>(response_headers.as_deref().unwrap_or("{}"))?
+                (
+                    serde_json::from_str::<HeaderValues>(
+                        response_headers.as_deref().unwrap_or("{}"),
+                    )?,
+                    response_state,
+                )
             }
         };
-        let modified = self.body_path(id, side, true).exists();
-        let path = self.body_path(id, side, modified);
-        let metadata = match fs::metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Some(BodySource {
-                    data: BodySourceData::Bytes(Vec::new()),
-                    path: None,
-                    stored_size: 0,
-                    content_type: first_header(&headers, "content-type").map(str::to_owned),
-                    content_encodings: content_encodings(&headers),
-                }));
+        let modifications: CaptureModifications = serde_json::from_str(&state)?;
+        self.body_source_for(id, side, &headers, &modifications.final_body)
+            .map(Some)
+    }
+
+    fn body_source_for(
+        &self,
+        id: u64,
+        side: BodySide,
+        headers: &HeaderValues,
+        source: &BodySourceType,
+    ) -> Result<BodySource> {
+        let (data, path, stored_size) = match source {
+            BodySourceType::Original => {
+                let path = self.body_path(id, side);
+                match fs::metadata(&path) {
+                    Ok(metadata) => (
+                        BodySourceData::File(path.clone()),
+                        Some(path.to_string_lossy().into_owned()),
+                        metadata.len(),
+                    ),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        (BodySourceData::Bytes(Vec::new()), None, 0)
+                    }
+                    Err(error) => return Err(error.into()),
+                }
             }
-            Err(error) => return Err(error.into()),
+            BodySourceType::String { content } => (
+                BodySourceData::Bytes(content.as_bytes().to_vec()),
+                None,
+                content.len() as u64,
+            ),
+            BodySourceType::Asset { asset_id } => {
+                let asset = AssetStore::open(&self.workspace_root)?
+                    .get(asset_id)?
+                    .ok_or_else(|| anyhow!("capture body asset {asset_id} not found"))?;
+                (
+                    BodySourceData::File(asset.path().to_path_buf()),
+                    Some(asset.path().to_string_lossy().into_owned()),
+                    asset.metadata.size,
+                )
+            }
         };
-        Ok(Some(BodySource {
-            data: BodySourceData::File(path.clone()),
-            path: Some(path.to_string_lossy().into_owned()),
-            stored_size: metadata.len(),
-            content_type: first_header(&headers, "content-type").map(str::to_owned),
-            content_encodings: content_encodings(&headers),
-        }))
+        Ok(BodySource {
+            data,
+            path,
+            stored_size,
+            content_type: first_header(headers, "content-type").map(str::to_owned),
+            content_encodings: content_encodings(headers),
+        })
     }
 
     pub fn begin_interceptor_run(&self, id: u64, run: &InterceptorRun) -> Result<u64> {
@@ -554,23 +666,21 @@ impl CaptureStore {
             return Ok(None);
         };
         let request_body = self
-            .read_body(
-                id,
-                BodySide::Request,
+            .read_body_source(
+                self.body_source(id, BodySide::Request).ok().flatten(),
                 &summary.request.headers,
-                self.body_path(id, BodySide::Request, true).exists(),
             )
             .unwrap_or(BodyPayload::Empty);
+        let response_headers = summary
+            .response
+            .as_ref()
+            .map(|response| &response.headers)
+            .cloned()
+            .unwrap_or_default();
         let response_body = self
-            .read_body(
-                id,
-                BodySide::Response,
-                summary
-                    .response
-                    .as_ref()
-                    .map(|response| &response.headers)
-                    .unwrap_or(&HeaderValues::new()),
-                self.body_path(id, BodySide::Response, true).exists(),
+            .read_body_source(
+                self.body_source(id, BodySide::Response).ok().flatten(),
+                &response_headers,
             )
             .unwrap_or(BodyPayload::Empty);
         Ok(Some(CaptureDetail {
@@ -619,8 +729,8 @@ impl CaptureStore {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 req_tags TEXT NOT NULL DEFAULT '{}',
-                req_modifications TEXT NOT NULL DEFAULT '[]',
-                resp_modifications TEXT NOT NULL DEFAULT '[]'
+                req_modifications TEXT NOT NULL DEFAULT '{\"final_body\":{\"type\":\"original\"}}',
+                resp_modifications TEXT NOT NULL DEFAULT '{\"final_body\":{\"type\":\"original\"}}'
             );
             CREATE INDEX IF NOT EXISTS captures_created_at ON captures(created_at);
             CREATE TABLE IF NOT EXISTS interceptor_script_contents (
@@ -751,52 +861,49 @@ impl CaptureStore {
         })
     }
 
-    fn body_path(&self, id: u64, side: BodySide, modified: bool) -> PathBuf {
+    fn body_path(&self, id: u64, side: BodySide) -> PathBuf {
         let side = match side {
             BodySide::Request => "request",
             BodySide::Response => "response",
         };
-        let suffix = if modified { ".modified" } else { "" };
-        self.blob_directory
-            .join(format!("{id}-{side}.body{suffix}"))
+        self.blob_directory.join(format!("{id}-{side}.body"))
     }
 
-    fn read_body(
+    fn read_body_source(
         &self,
-        id: u64,
-        side: BodySide,
+        source: Option<BodySource>,
         headers: &HeaderValues,
-        modified: bool,
     ) -> Result<BodyPayload> {
-        let path = self.body_path(id, side, modified);
-        let metadata = match fs::metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(BodyPayload::Empty);
-            }
-            Err(error) => return Err(error.into()),
+        let Some(source) = source else {
+            return Ok(BodyPayload::Empty);
         };
-        if metadata.len() > BODY_DETAIL_LIMIT {
+        if source.stored_size > BODY_DETAIL_LIMIT {
             return Ok(BodyPayload::Large {
-                size: metadata.len(),
-                path: Some(path.to_string_lossy().into_owned()),
+                size: source.stored_size,
+                path: source.path,
             });
         }
-        let mut bytes = fs::read(&path)?;
-        let encodings = content_encodings(headers);
-        if !encodings.is_empty() {
-            bytes = match decode_body(&bytes, &encodings.join(","), BODY_DETAIL_LIMIT) {
+        let mut bytes = match source.data {
+            BodySourceData::File(path) => fs::read(path)?,
+            BodySourceData::Bytes(bytes) => bytes,
+        };
+        if !source.content_encodings.is_empty() {
+            bytes = match decode_body(
+                &bytes,
+                &source.content_encodings.join(","),
+                BODY_DETAIL_LIMIT,
+            ) {
                 Ok(bytes) => bytes,
                 Err(DecodeBodyError::TooLarge) => {
                     return Ok(BodyPayload::Large {
-                        size: metadata.len(),
-                        path: Some(path.to_string_lossy().into_owned()),
+                        size: source.stored_size,
+                        path: source.path,
                     });
                 }
                 Err(DecodeBodyError::Failed) => {
                     return Ok(BodyPayload::Binary {
-                        size: metadata.len(),
-                        path: Some(path.to_string_lossy().into_owned()),
+                        size: source.stored_size,
+                        path: source.path,
                     });
                 }
             };
@@ -804,8 +911,8 @@ impl CaptureStore {
         Ok(body_payload(
             &bytes,
             headers,
-            metadata.len(),
-            Some(path.to_string_lossy().into_owned()),
+            source.stored_size,
+            source.path,
         ))
     }
 }
@@ -983,9 +1090,9 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::model::{
-        BodyPayload, CaptureError, CaptureOutcome, ErrorStage, HeaderValues,
-        InterceptorExecutionOrigin, InterceptorKind, InterceptorRun, RequestData,
-        script_content_hash,
+        BodyPayload, BodySourceType, CaptureError, CaptureOutcome, ErrorStage, HeaderValues,
+        InterceptorExecutionOrigin, InterceptorKind, InterceptorRun, Modification, RequestData,
+        RequestInterceptorSnapshot, script_content_hash,
     };
 
     use super::{BodySide, BodySourceData, CaptureStore, decode_body};
@@ -998,6 +1105,51 @@ mod tests {
             headers: HeaderValues::new(),
             tags: Default::default(),
         }
+    }
+
+    #[test]
+    fn reads_interceptor_snapshot_string_body_by_execution_id() {
+        let root = tempdir().unwrap();
+        let session = root.path().join("sessions/7");
+        let store = CaptureStore::open(7, &session).unwrap();
+        let id = store
+            .begin("127.0.0.1", &request("https://example.com"), "request")
+            .unwrap();
+        let run = InterceptorRun {
+            phase: InterceptorKind::Request,
+            position: 0,
+            origin: InterceptorExecutionOrigin::Saved,
+            name: "rewrite".into(),
+            script_hash: script_content_hash("req.body = 'next'"),
+            content: "req.body = 'next'".into(),
+            modifications: vec![Modification::Snapshot {
+                request: Some(RequestInterceptorSnapshot {
+                    method: "POST".into(),
+                    uri: "https://example.com".into(),
+                    version: "HTTP/1.1".into(),
+                    headers: HeaderValues::new(),
+                    body: BodySourceType::String {
+                        content: "previous".into(),
+                    },
+                }),
+                response: None,
+            }],
+            error: None,
+            completed: true,
+        };
+        let execution_id = store.begin_interceptor_run(id, &run).unwrap();
+
+        let source = store
+            .interceptor_snapshot_body_source(id, execution_id, BodySide::Request)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(source.data, BodySourceData::Bytes(bytes) if bytes == b"previous"));
+        assert!(
+            store
+                .interceptor_snapshot_body_source(id, execution_id, BodySide::Response)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1088,7 +1240,7 @@ mod tests {
 
         let small_id = store.begin("127.0.0.1", &request, "request").unwrap();
         store
-            .save_body(small_id, BodySide::Request, false, &vec![b'a'; 64 * 1024])
+            .save_body(small_id, BodySide::Request, &vec![b'a'; 64 * 1024])
             .unwrap();
         let small = store.get(small_id).unwrap().unwrap();
         assert!(matches!(
@@ -1099,12 +1251,7 @@ mod tests {
 
         let large_id = store.begin("127.0.0.1", &request, "request").unwrap();
         store
-            .save_body(
-                large_id,
-                BodySide::Request,
-                false,
-                &vec![b'a'; 64 * 1024 + 1],
-            )
+            .save_body(large_id, BodySide::Request, &vec![b'a'; 64 * 1024 + 1])
             .unwrap();
         let large = store.get(large_id).unwrap().unwrap();
         assert!(matches!(
@@ -1156,9 +1303,7 @@ mod tests {
             .unwrap();
         let before = store.get(id).unwrap().unwrap().summary.updated_at;
 
-        store
-            .save_body(id, BodySide::Request, false, b"body")
-            .unwrap();
+        store.save_body(id, BodySide::Request, b"body").unwrap();
         let after = store.get(id).unwrap().unwrap().summary.updated_at;
 
         assert!(after > before);
@@ -1171,10 +1316,10 @@ mod tests {
         let id = store
             .begin("127.0.0.1", &request("http://example.com"), "request")
             .unwrap();
-        let path = store.body_path(id, BodySide::Request, false);
+        let path = store.body_path(id, BodySide::Request);
 
         store
-            .create_body_writer(id, BodySide::Request, false)
+            .create_body_writer(id, BodySide::Request)
             .await
             .unwrap()
             .finish()
@@ -1186,26 +1331,6 @@ mod tests {
         assert_eq!(source.path, None);
         assert_eq!(source.stored_size, 0);
         assert!(matches!(source.data, BodySourceData::Bytes(bytes) if bytes.is_empty()));
-    }
-
-    #[tokio::test]
-    async fn empty_modified_body_writer_still_creates_a_file() {
-        let root = tempdir().unwrap();
-        let store = CaptureStore::open(7, root.path()).unwrap();
-        let id = store
-            .begin("127.0.0.1", &request("http://example.com"), "request")
-            .unwrap();
-        let path = store.body_path(id, BodySide::Request, true);
-
-        store
-            .create_body_writer(id, BodySide::Request, true)
-            .await
-            .unwrap()
-            .finish()
-            .await
-            .unwrap();
-
-        assert_eq!(std::fs::metadata(path).unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -1223,10 +1348,11 @@ mod tests {
                     version: "HTTP/1.1".into(),
                     headers: HeaderValues::new(),
                 },
+                &BodySourceType::Original,
             )
             .unwrap();
         let mut writer = store
-            .create_body_writer(id, BodySide::Response, false)
+            .create_body_writer(id, BodySide::Response)
             .await
             .unwrap();
         let chunk = vec![b'x'; 1024 * 1024];
@@ -1249,7 +1375,7 @@ mod tests {
             .insert("content-type".into(), vec!["text/plain".into()]);
         let id = store.begin("127.0.0.1", &request, "request").unwrap();
         let mut writer = store
-            .create_body_writer(id, BodySide::Request, false)
+            .create_body_writer(id, BodySide::Request)
             .await
             .unwrap();
 

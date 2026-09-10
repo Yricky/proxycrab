@@ -19,8 +19,9 @@ use crate::{
     asset::{Asset, AssetStore},
     breakpoint::{BreakpointContext, BreakpointRegistry},
     model::{
-        CaptureOutcome, CaptureSummary, HeaderValues, Modification, RequestData, RequestTags,
-        ResponseData, ScriptKind,
+        BodySourceType, CaptureOutcome, CaptureSummary, HeaderValues, Modification, RequestData,
+        RequestInterceptorSnapshot, RequestTags, ResponseData, ResponseInterceptorSnapshot,
+        ScriptKind,
     },
     proxy::body::{DeferredBodyRead, DeferredBodyReader},
     storage::{BodySide, BodySource, BodySourceData},
@@ -36,6 +37,19 @@ const ANONYMOUS_SCRIPT_NAME: &str = "<anonymous>";
 pub enum BodyReplacement {
     String(String),
     Asset(Asset),
+}
+
+impl BodyReplacement {
+    pub fn source_type(&self) -> BodySourceType {
+        match self {
+            Self::String(content) => BodySourceType::String {
+                content: content.clone(),
+            },
+            Self::Asset(asset) => BodySourceType::Asset {
+                asset_id: asset.metadata.id.clone(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -320,7 +334,7 @@ pub fn execute_request_lenient_named(
         request.headers.clone(),
         request.tags.clone(),
     );
-    let journal = ModificationJournal::new(request.headers.clone());
+    let journal = ModificationJournal::for_request(request, None);
     execute_request_with_state(
         source,
         request,
@@ -411,7 +425,7 @@ pub fn execute_response_lenient_named_with_tags(
         response.headers.clone(),
         request_tags.clone(),
     );
-    let journal = ModificationJournal::new(response.headers.clone());
+    let journal = ModificationJournal::for_response(response, None);
     execute_response_with_state(
         source,
         ResponseScriptContext {
@@ -945,27 +959,102 @@ impl SharedInterceptorState {
     }
 }
 
+struct ModificationJournalState {
+    initial_snapshot: Modification,
+    modifications: Vec<Modification>,
+    snapshot_recorded: bool,
+}
+
 #[derive(Clone)]
-pub(crate) struct ModificationJournal(Arc<Mutex<Vec<Modification>>>);
+pub(crate) struct ModificationJournal(Arc<Mutex<ModificationJournalState>>);
 
 impl ModificationJournal {
-    pub(crate) fn new(headers: HeaderValues) -> Self {
-        Self(Arc::new(Mutex::new(vec![Modification::Snapshot {
-            headers,
-        }])))
+    pub(crate) fn for_request(request: &RequestData, body: Option<&BodyReplacement>) -> Self {
+        Self::new(Modification::Snapshot {
+            request: Some(RequestInterceptorSnapshot {
+                method: request.method.clone(),
+                uri: request.uri.clone(),
+                version: request.version.clone(),
+                headers: request.headers.clone(),
+                body: body.map(BodyReplacement::source_type).unwrap_or_default(),
+            }),
+            response: None,
+        })
+    }
+
+    pub(crate) fn for_response(response: &ResponseData, body: Option<&BodyReplacement>) -> Self {
+        Self::new(Modification::Snapshot {
+            request: None,
+            response: Some(ResponseInterceptorSnapshot {
+                status: response.status,
+                version: response.version.clone(),
+                headers: response.headers.clone(),
+                body: body.map(BodyReplacement::source_type).unwrap_or_default(),
+            }),
+        })
+    }
+
+    pub(crate) fn for_current_request(
+        request: &RequestData,
+        state: &SharedInterceptorState,
+    ) -> Self {
+        Self::for_request(
+            &RequestData {
+                method: state
+                    .method()
+                    .expect("request Lua state always has a method"),
+                uri: state.uri().expect("request Lua state always has a URI"),
+                version: request.version.clone(),
+                headers: state.headers(),
+                tags: RequestTags::new(),
+            },
+            state.body().as_ref(),
+        )
+    }
+
+    pub(crate) fn for_current_response(
+        response: &ResponseData,
+        state: &SharedInterceptorState,
+    ) -> Self {
+        Self::for_response(
+            &ResponseData {
+                status: state
+                    .status()
+                    .expect("response Lua state always has a status"),
+                version: response.version.clone(),
+                headers: state.headers(),
+            },
+            state.body().as_ref(),
+        )
+    }
+
+    fn new(initial_snapshot: Modification) -> Self {
+        Self(Arc::new(Mutex::new(ModificationJournalState {
+            initial_snapshot,
+            modifications: Vec::new(),
+            snapshot_recorded: false,
+        })))
     }
 
     fn push(&self, modification: Modification) {
-        self.0
+        let records_snapshot = !matches!(modification, Modification::TagSet { .. });
+        let mut state = self
+            .0
             .lock()
-            .expect("Lua modification journal lock poisoned")
-            .push(modification);
+            .expect("Lua modification journal lock poisoned");
+        if records_snapshot && !state.snapshot_recorded {
+            let snapshot = state.initial_snapshot.clone();
+            state.modifications.insert(0, snapshot);
+            state.snapshot_recorded = true;
+        }
+        state.modifications.push(modification);
     }
 
     pub(crate) fn snapshot(&self) -> Vec<Modification> {
         self.0
             .lock()
             .expect("Lua modification journal lock poisoned")
+            .modifications
             .clone()
     }
 }
@@ -1815,8 +1904,14 @@ mod tests {
         assert_eq!(effects.modifications.len(), 8);
         assert!(matches!(
             &effects.modifications[0],
-            crate::model::Modification::Snapshot { headers }
-                if headers["x-test"] == vec!["old"]
+            crate::model::Modification::Snapshot {
+                request: Some(snapshot),
+                response: None,
+            } if snapshot.method == "GET"
+                && snapshot.uri == "https://example.com/path?q=1"
+                && snapshot.version == "HTTP/1.1"
+                && snapshot.headers["x-test"] == vec!["old"]
+                && snapshot.body == crate::model::BodySourceType::Original
         ));
     }
 
@@ -1849,7 +1944,7 @@ mod tests {
             RequestTags::new(),
         );
         state.set_asset_store(store.clone());
-        let journal = ModificationJournal::new(state.headers());
+        let journal = ModificationJournal::for_current_request(&request, &state);
         let run = |source: &str, state: SharedInterceptorState, journal: ModificationJournal| {
             execute_request_with_state(source, &request, state, journal, "body-getters", None, None)
                 .unwrap()
@@ -1929,7 +2024,7 @@ mod tests {
             response.headers.clone(),
             request.tags.clone(),
         );
-        let journal = ModificationJournal::new(response.headers.clone());
+        let journal = ModificationJournal::for_response(&response, None);
         let (effects, error) = execute_response_with_state(
             "assert(req.method == 'GET'); \
              assert(req.version == 'HTTP/1.1'); \

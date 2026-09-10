@@ -964,7 +964,14 @@ async fn log_body(
 ) -> Result<Response, ApiError> {
     let side = parse_body_side(&query.side)?;
     validate_body_query(&query)?;
-    let source = manager.log_body_source(query.session_id, id, side).await?;
+    let source = match query.execution_id {
+        Some(execution_id) => {
+            manager
+                .interceptor_snapshot_body_source(query.session_id, id, execution_id, side)
+                .await?
+        }
+        None => manager.log_body_source(query.session_id, id, side).await?,
+    };
     body_response(source, &headers, query.max_size)
         .await
         .map_err(ApiError)
@@ -2091,7 +2098,7 @@ mod tests {
         };
         let id = store.begin("127.0.0.1", &request, "request").unwrap();
         store
-            .save_body(id, BodySide::Request, false, b"captured bytes")
+            .save_body(id, BodySide::Request, b"captured bytes")
             .unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
 

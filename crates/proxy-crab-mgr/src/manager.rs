@@ -90,6 +90,13 @@ pub trait ProxyCrabManager: Send + Sync {
         id: u64,
         side: BodySide,
     ) -> ManagerResult<BodySource>;
+    async fn interceptor_snapshot_body_source(
+        &self,
+        session_id: Option<u64>,
+        capture_id: u64,
+        execution_id: u64,
+        side: BodySide,
+    ) -> ManagerResult<BodySource>;
     async fn breakpoints(&self, query: BreakpointQuery) -> ManagerResult<Vec<BreakpointSummary>>;
     async fn breakpoint(&self, id: u64) -> ManagerResult<BreakpointDetailPayload>;
     async fn breakpoint_body_source(&self, id: u64, side: BodySide) -> ManagerResult<BodySource>;
@@ -960,6 +967,29 @@ impl ProxyCrabManager for MitmManager {
         .await
     }
 
+    async fn interceptor_snapshot_body_source(
+        &self,
+        session_id: Option<u64>,
+        capture_id: u64,
+        execution_id: u64,
+        side: BodySide,
+    ) -> ManagerResult<BodySource> {
+        let session_id = self.session_id(session_id)?;
+        let runtime = self.runtime.clone();
+        self.run_blocking("interceptor snapshot body source", move || {
+            runtime
+                .interceptor_snapshot_body_source(session_id, capture_id, execution_id, side)
+                .map_err(|error| ManagerError::new("body_read_failed", error.to_string()))?
+                .ok_or_else(|| {
+                    ManagerError::new(
+                        "snapshot_body_not_found",
+                        format!("interceptor execution {execution_id} snapshot body not found"),
+                    )
+                })
+        })
+        .await
+    }
+
     async fn breakpoints(&self, query: BreakpointQuery) -> ManagerResult<Vec<BreakpointSummary>> {
         let session_id = self.session_id(query.session_id)?;
         Ok(self.runtime.breakpoints(&BreakpointListFilter {
@@ -1548,8 +1578,8 @@ mod tests {
         log_buffer::LogBuffer,
         lua::CaptureBodyAccess,
         model::{
-            CaptureOutcome, CaptureSummary, Column, FilterColumn, FilterOption, HeaderValues,
-            InterceptorKind, RequestData, ResponseData, SessionFilter,
+            BodySourceType, CaptureOutcome, CaptureSummary, Column, FilterColumn, FilterOption,
+            HeaderValues, InterceptorKind, RequestData, ResponseData, SessionFilter,
         },
         storage::{BodySide, CaptureStore},
     };
@@ -1936,28 +1966,30 @@ mod tests {
         };
         let completed = store.begin("127.0.0.1", &request, "request").unwrap();
         store
-            .save_body(completed, BodySide::Request, false, br#"{"order_id":"42"}"#)
+            .save_body(completed, BodySide::Request, br#"{"order_id":"42"}"#)
             .unwrap();
         store
-            .save_body(completed, BodySide::Response, false, b"original response")
+            .save_body(completed, BodySide::Response, b"original response")
             .unwrap();
         store
-            .save_body(completed, BodySide::Response, true, b"completed response")
+            .complete(
+                completed,
+                &response,
+                &BodySourceType::String {
+                    content: "completed response".into(),
+                },
+            )
             .unwrap();
-        store.complete(completed, &response, &[]).unwrap();
 
         let in_progress = store.begin("127.0.0.1", &request, "request").unwrap();
         store
-            .save_body(
-                in_progress,
-                BodySide::Request,
-                false,
-                br#"{"order_id":"42"}"#,
-            )
+            .save_body(in_progress, BodySide::Request, br#"{"order_id":"42"}"#)
             .unwrap();
-        store.update_response(in_progress, &response).unwrap();
         store
-            .save_body(in_progress, BodySide::Response, false, b"partial response")
+            .update_response(in_progress, &response, &BodySourceType::Original)
+            .unwrap();
+        store
+            .save_body(in_progress, BodySide::Response, b"partial response")
             .unwrap();
 
         let manager = MitmManager::new(runtime);
@@ -2522,9 +2554,11 @@ mod tests {
             headers: HeaderValues::from([("content-type".into(), vec!["text/plain".into()])]),
         };
         store
-            .save_body(first, BodySide::Response, false, b"first response")
+            .save_body(first, BodySide::Response, b"first response")
             .unwrap();
-        store.complete(first, &response, &[]).unwrap();
+        store
+            .complete(first, &response, &BodySourceType::Original)
+            .unwrap();
         let failed = store
             .begin("127.0.0.1", &request("failed"), "request")
             .unwrap();
@@ -2549,7 +2583,7 @@ mod tests {
                     version: "HTTP/1.1".into(),
                     headers: HeaderValues::new(),
                 },
-                &[],
+                &BodySourceType::Original,
             )
             .unwrap();
         let mut connect = request("connect");

@@ -71,9 +71,7 @@
       "id": 12,
       "prompt": "Create a ProxyCrab request interceptor named pace-debug-traffic using the supplied Lua fixture, attach it to the active Session without changing the response chain, and verify on a new capture that request speed is 1024 B/s, response speed is 2048 B/s, upstream timeout is 120000 ms, and response body-frame timeout is 30000 ms. Do not treat the tags as HTTP headers.",
       "expected_output": "The agent saves valid Lua with _crab_req_speed=1024, _crab_resp_speed=2048, _crab_req_timeout=120000, and _crab_resp_bodyframe_timeout=30000, preserves the existing response chain, and cites the new capture tags plus tag_set history without claiming any special tag was sent upstream.",
-      "files": [
-        "evals/fixtures/test-traffic-limits.lua"
-      ]
+      "files": ["evals/fixtures/test-traffic-limits.lua"]
     },
     {
       "id": 14,
@@ -85,9 +83,7 @@
       "id": 15,
       "prompt": "Create a ProxyCrab request interceptor named allow-self-signed-test using the supplied Lua fixture, attach it to the active Session without changing the response chain, and verify on a new capture for self-signed.test that the insecure TLS policy was selected. Do not send the special tag as an HTTP header.",
       "expected_output": "The agent saves narrowly matched Lua with _crab_tls_insecure=true, preserves the existing response chain, warns that upstream server authentication is disabled for the matched HTTPS requests, and cites a new capture's tag plus tag_set history without claiming the tag was sent upstream.",
-      "files": [
-        "evals/fixtures/test-tls-insecure.lua"
-      ]
+      "files": ["evals/fixtures/test-tls-insecure.lua"]
     },
     {
       "id": 16,
@@ -128,7 +124,7 @@
     {
       "id": 22,
       "prompt": "Save the complete response body for log 42 with a 32 MiB safety limit. The capture is Brotli encoded but this HTTP client accepts only gzip and deflate.",
-      "expected_output": "The agent uses body-get.mjs with max-size 33554432 and an output path, relies on server Accept-Encoding negotiation, and explains that max-size checks the original stored capture file while the client receives the negotiated decoded body without exposing its bytes.",
+      "expected_output": "The agent uses body-get.mjs with max-size 33554432 and an output path, relies on server Accept-Encoding negotiation, and explains that max-size checks the selected stored Body source before decoding while the client receives the negotiated decoded body without exposing its bytes.",
       "files": []
     },
     {
@@ -201,6 +197,12 @@
       "id": 34,
       "prompt": "Create a ProxyCrab filter script that finds POST requests to /api/orders whose persisted JSON request body has order_id equal to the filter input. Avoid unnecessary body reads and explain how in-progress and non-text bodies behave.",
       "expected_output": "The agent writes valid Lua that checks method and URI before calling entry.req.body:as_json(), checks the returned value for nil, and compares order_id with the exact filter input. It explains that persisted body access is lazy, in-progress and non-text bodies return nil, decoded data is limited to 16 MiB, and normal filter script errors count as non-matches.",
+      "files": []
+    },
+    {
+      "id": 35,
+      "prompt": "Save the request Body that ProxyCrab execution 17 saw on entry for log 42 in Session 3 to /tmp/proxycrab-before-interceptor.bin, allowing at most 16 MiB, without printing the Body.",
+      "expected_output": "The agent uses body-get.mjs with session 3, log 42, execution 17, request side, max-size 16777216, and the requested output file. It reports the path and stored size without printing bytes, and does not confuse the interceptor-entry snapshot with the capture's final Body.",
       "files": []
     }
   ]

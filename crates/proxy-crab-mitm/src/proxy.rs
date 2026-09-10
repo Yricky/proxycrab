@@ -41,9 +41,9 @@ use crate::{
         execute_response_with_state,
     },
     model::{
-        CaptureError, ErrorStage, HeaderValues, InterceptorExecutionOrigin, InterceptorKind,
-        InterceptorRun, ProxyStatus, RequestData, RequestTags, ResponseData, ScriptKind,
-        SessionInterceptor, SessionMetadata, script_content_hash,
+        BodySourceType, CaptureError, ErrorStage, HeaderValues, InterceptorExecutionOrigin,
+        InterceptorKind, InterceptorRun, ProxyStatus, RequestData, RequestTags, ResponseData,
+        ScriptKind, SessionInterceptor, SessionMetadata, script_content_hash,
     },
     runtime::SessionPin,
     storage::{BodySide, CaptureStore},

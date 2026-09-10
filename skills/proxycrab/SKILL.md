@@ -257,9 +257,10 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
   binary or oversized bytes;
   always set a deliberate stored-file maximum and output path because bodies can contain
   credentials or personal data. The body endpoint negotiates a browser-safe response encoding from
-  `Accept-Encoding`; the limit remains based on the original capture file.
-- An empty original request or response has no capture blob file. An explicitly modified empty body
-  still persists its zero-byte `.modified` blob.
+  `Accept-Encoding`; the limit applies to the selected final or interceptor-snapshot Body source.
+- An empty original request or response has no capture blob file. Final interceptor Body strings
+  are stored in capture metadata and Assets remain in `assets/`; ProxyCrab does not create
+  `.modified` capture blobs.
 - Interceptor mutations applied before a Lua runtime error remain applied. Inspect both
   `modifications` and `error`.
 - Request tags are capture-local metadata. Presence of `_crab_skip`, including an empty value,

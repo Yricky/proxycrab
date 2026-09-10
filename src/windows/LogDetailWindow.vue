@@ -14,8 +14,17 @@ import { proxyStore } from "../stores/proxy";
 import { isInactiveInProgress } from "../utils/capture-outcome";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import BodyViewer from "../components/BodyViewer.vue";
-import { Io5Checkmark, Io5ChevronDown, Io5Copy, Io5Warning } from "vue-icons-plus/io5";
-import { openModificationValue, openScriptSnapshot } from "./launcher";
+import {
+  Io5Checkmark,
+  Io5ChevronDown,
+  Io5Copy,
+  Io5Warning,
+} from "vue-icons-plus/io5";
+import {
+  openInterceptorSnapshot,
+  openModificationValue,
+  openScriptSnapshot,
+} from "./launcher";
 import { openDropdownMenu } from "../stores/dialog";
 import { fullCurl } from "../utils/curl";
 import { copyText as writeClipboardText } from "../utils/clipboard";
@@ -78,7 +87,10 @@ async function load(silent = false): Promise<void> {
     } else if (props.sessionId !== undefined && props.logId !== undefined) {
       detail.value = await backend.getLog(props.sessionId, props.logId);
     } else if (detail.value) {
-      detail.value = await backend.getLog(detail.value.session_id, detail.value.id);
+      detail.value = await backend.getLog(
+        detail.value.session_id,
+        detail.value.id,
+      );
     }
   } catch (error) {
     if (
@@ -89,7 +101,10 @@ async function load(silent = false): Promise<void> {
     ) {
       breakpoint.value = null;
       try {
-        detail.value = await backend.getLog(detail.value.session_id, detail.value.id);
+        detail.value = await backend.getLog(
+          detail.value.session_id,
+          detail.value.id,
+        );
       } catch {
         // Keep the last live snapshot while the resumed request finishes persisting.
       }
@@ -186,7 +201,10 @@ function scheduleAutoRefresh(): void {
 
 function handleWindowFocus(): void {
   if (props.breakpointId !== undefined) {
-    if (!stale.value && (breakpoint.value || detail.value?.outcome === "in_progress")) {
+    if (
+      !stale.value &&
+      (breakpoint.value || detail.value?.outcome === "in_progress")
+    ) {
       void load(true);
     }
     return;
@@ -201,10 +219,7 @@ function handleWindowBlur(): void {
 }
 
 // 请求仍在进行且窗口聚焦时持续轮询，完成或失焦后停止
-watch(
-  [() => detail.value?.outcome, stale],
-  () => scheduleAutoRefresh(),
-);
+watch([() => detail.value?.outcome, stale], () => scheduleAutoRefresh());
 
 watch(active, (current, previous) => {
   if (previous && !current && detail.value?.outcome === "in_progress") {
@@ -233,7 +248,8 @@ onBeforeUnmount(() => {
   window.removeEventListener("focus", handleWindowFocus);
   window.removeEventListener("blur", handleWindowBlur);
   if (copiedTimer !== undefined) window.clearTimeout(copiedTimer);
-  if (breakpointRefreshTimer !== undefined) window.clearInterval(breakpointRefreshTimer);
+  if (breakpointRefreshTimer !== undefined)
+    window.clearInterval(breakpointRefreshTimer);
 });
 
 // ---------- tabs ----------
@@ -387,7 +403,8 @@ function parseUrlSegments(uri: string): UrlSegment[] | null {
   const authority = /^(\[[^\]]+\]|[^\s:/?#]+)(?::(\d{1,5}))?$/.exec(uri);
   if (authority) {
     const segments: UrlSegment[] = [{ text: authority[1], cls: "url-host" }];
-    if (authority[2]) segments.push({ text: `:${authority[2]}`, cls: "url-path" });
+    if (authority[2])
+      segments.push({ text: `:${authority[2]}`, cls: "url-path" });
     return segments;
   }
   return null;
@@ -467,7 +484,7 @@ const modificationKindLabels: Record<string, string> = {
   header_set: "设置头",
   header_remove: "删除头",
   body_replace_string: "替换 Body 为字符串",
-  body_replace_file: "替换 Body 为文件",
+  body_replace_asset: "替换 Body 为 Asset",
   tag_set: "设置 Tag",
 };
 
@@ -492,12 +509,14 @@ function modificationDetail(mod: Modification): string {
         : mod.name;
     case "body_replace_string":
       return mod.content;
-    case "body_replace_file":
-      return mod.path;
+    case "body_replace_asset":
+      return mod.asset_id;
     case "tag_set":
       return `${mod.key}: ${mod.value}`;
     case "snapshot":
-      return `${Object.keys(mod.headers).length} 个请求头`;
+      return mod.request
+        ? `${Object.keys(mod.request.headers).length} 个请求头`
+        : `${Object.keys(mod.response?.headers ?? {}).length} 个响应头`;
   }
 }
 
@@ -525,7 +544,11 @@ function modificationRows(execution: InterceptorExecution): ModRow[] {
   });
 }
 
-function openModDetail(execution: InterceptorExecution, index: number, row: ModRow): void {
+function openModDetail(
+  execution: InterceptorExecution,
+  index: number,
+  row: ModRow,
+): void {
   if (!row.truncated || !detail.value) return;
   openModificationValue(
     `${detail.value.session_id}-${detail.value.id}-${execution.execution_id}-${index}`,
@@ -534,9 +557,25 @@ function openModDetail(execution: InterceptorExecution, index: number, row: ModR
   );
 }
 
+function executionSnapshot(
+  execution: InterceptorExecution,
+): Extract<Modification, { kind: "snapshot" }> | null {
+  return (
+    execution.modifications.find(
+      (mod): mod is Extract<Modification, { kind: "snapshot" }> =>
+        mod.kind === "snapshot",
+    ) ?? null
+  );
+}
+
 function openExecution(execution: InterceptorExecution): void {
   if (!detail.value) return;
   openScriptSnapshot(detail.value.session_id, detail.value.id, execution);
+}
+
+function openSnapshot(execution: InterceptorExecution): void {
+  if (!detail.value || !executionSnapshot(execution)) return;
+  openInterceptorSnapshot(detail.value.session_id, detail.value.id, execution);
 }
 
 function headerCount(headers: HeaderItem[]): string {
@@ -559,35 +598,57 @@ function headerCount(headers: HeaderItem[]): string {
       <header class="summary">
         <div class="summary-line">
           <span>{{ detail.request.version }}</span>
-          <span class="outcome-chip" :class="stale ? 'o-stale' : 'o-' + detail.outcome">
+          <span
+            class="outcome-chip"
+            :class="stale ? 'o-stale' : 'o-' + detail.outcome"
+          >
             <span class="o-dot" />{{ outcomeLabel(detail.outcome) }}
           </span>
-          <span class="method-chip" :class="methodClass">{{ detail.request.method }}</span>
-          <span v-if="detail.response" class="status-chip mono" :class="statusClass(detail.response.status)">
+          <span class="method-chip" :class="methodClass">{{
+            detail.request.method
+          }}</span>
+          <span
+            v-if="detail.response"
+            class="status-chip mono"
+            :class="statusClass(detail.response.status)"
+          >
             {{ detail.response.status }} {{ detail.response.status_text }}
           </span>
           <span class="meta-item">
-            <span class="meta-label">来源</span>{{ detail.source_addr ?? "未知" }}
+            <span class="meta-label">来源</span
+            >{{ detail.source_addr ?? "未知" }}
           </span>
           <span class="meta-item">
             <span class="meta-label">阶段</span>{{ detail.stage }}
           </span>
           <span v-if="loading" class="refreshing text-faint">刷新中…</span>
           <span class="summary-spacer" />
-          <button class="btn icon copy-menu-button" title="复制" @click="openCopyMenu">
-            <Io5Checkmark v-if="copiedKey === 'url' || copiedKey === 'curl'" :size="14" class="text-success" />
+          <button
+            class="btn icon copy-menu-button"
+            title="复制"
+            @click="openCopyMenu"
+          >
+            <Io5Checkmark
+              v-if="copiedKey === 'url' || copiedKey === 'curl'"
+              :size="14"
+              class="text-success"
+            />
             <Io5Copy v-else :size="14" />
             <Io5ChevronDown :size="10" />
           </button>
         </div>
         <div class="url mono" :title="detail.request.uri">
-          <span v-for="(seg, i) in urlSegments" :key="i" :class="seg.cls">{{ seg.text }}</span>
+          <span v-for="(seg, i) in urlSegments" :key="i" :class="seg.cls">{{
+            seg.text
+          }}</span>
         </div>
         <!-- 错误横幅 -->
         <div v-if="detail.error" class="error-banner">
           <Io5Warning :size="14" class="error-icon" />
           <div class="error-body">
-            <div class="error-head mono">{{ detail.error.stage }} · {{ detail.error.kind }}</div>
+            <div class="error-head mono">
+              {{ detail.error.stage }} · {{ detail.error.kind }}
+            </div>
             <div class="error-message mono">{{ detail.error.message }}</div>
           </div>
         </div>
@@ -595,11 +656,18 @@ function headerCount(headers: HeaderItem[]): string {
       <section v-if="breakpoint" class="breakpoint-panel">
         <div class="breakpoint-actions">
           <span class="breakpoint-state">
-            断点等待中 · {{ breakpoint.interceptor_name }} · 剩余 {{ remainingLabel() }}
+            断点等待中 · {{ breakpoint.interceptor_name }} · 剩余
+            {{ remainingLabel() }}
           </span>
           <span class="summary-spacer" />
-          <input v-model.number="extensionSeconds" class="input extension-input mono" type="number" min="0" step="1"
-            aria-label="延长秒数" />
+          <input
+            v-model.number="extensionSeconds"
+            class="input extension-input mono"
+            type="number"
+            min="0"
+            step="1"
+            aria-label="延长秒数"
+          />
           <span class="extension-unit">秒</span>
           <button class="btn" :disabled="extending" @click="extendBreakpoint">
             {{ extending ? "延长中…" : "延长" }}
@@ -607,7 +675,11 @@ function headerCount(headers: HeaderItem[]): string {
           <button class="btn" @click="scriptPanelOpen = !scriptPanelOpen">
             {{ scriptPanelOpen ? "收起临时脚本" : "执行临时脚本" }}
           </button>
-          <button class="btn primary" :disabled="releasing" @click="releaseBreakpoint">
+          <button
+            class="btn primary"
+            :disabled="releasing"
+            @click="releaseBreakpoint"
+          >
             {{ releasing ? "放行中…" : "放行" }}
           </button>
         </div>
@@ -617,7 +689,11 @@ function headerCount(headers: HeaderItem[]): string {
           </div>
           <div class="temporary-footer">
             <span>能力与当前阶段一致；临时脚本中不可再次调用 breakpoint()</span>
-            <button class="btn primary" :disabled="executingScript" @click="executeTemporaryScript">
+            <button
+              class="btn primary"
+              :disabled="executingScript"
+              @click="executeTemporaryScript"
+            >
               {{ executingScript ? "执行中…" : "应用修改（保持断点）" }}
             </button>
           </div>
@@ -626,8 +702,14 @@ function headerCount(headers: HeaderItem[]): string {
 
       <!-- Tab 栏 -->
       <nav class="tab-bar">
-        <button v-for="tab in tabs" :key="tab.key" class="tab-btn" :class="{ active: activeTab === tab.key }"
-          :disabled="tab.disabled" @click="activeTab = tab.key">
+        <button
+          v-for="tab in tabs"
+          :key="tab.key"
+          class="tab-btn"
+          :class="{ active: activeTab === tab.key }"
+          :disabled="tab.disabled"
+          @click="activeTab = tab.key"
+        >
           {{ tab.label }}
           <span v-if="tab.count" class="tab-count">{{ tab.count }}</span>
         </button>
@@ -635,10 +717,14 @@ function headerCount(headers: HeaderItem[]): string {
 
       <!-- 请求 -->
       <div v-show="activeTab === 'request'" class="tab-page">
-        <div class="pane-top" :style="{ width: `calc(${leftRatio * 100}% - 3px)` }">
+        <div
+          class="pane-top"
+          :style="{ width: `calc(${leftRatio * 100}% - 3px)` }"
+        >
           <section v-if="queryParams.length > 0" class="card">
             <div class="card-title">
-              Query 参数 <span class="count-badge">{{ queryParams.length }}</span>
+              Query 参数
+              <span class="count-badge">{{ queryParams.length }}</span>
             </div>
             <table class="kv-table">
               <tbody>
@@ -652,7 +738,10 @@ function headerCount(headers: HeaderItem[]): string {
 
           <section class="card">
             <div class="card-title">
-              请求头 <span class="count-badge">{{ headerCount(detail.request.headers) }}</span>
+              请求头
+              <span class="count-badge">{{
+                headerCount(detail.request.headers)
+              }}</span>
             </div>
             <table v-if="detail.request.headers.length > 0" class="kv-table">
               <tbody>
@@ -666,20 +755,38 @@ function headerCount(headers: HeaderItem[]): string {
           </section>
         </div>
 
-        <div class="splitter" title="拖动调整区域大小" @pointerdown="startSplit" />
+        <div
+          class="splitter"
+          title="拖动调整区域大小"
+          @pointerdown="startSplit"
+        />
 
-        <BodyViewer label="请求体" :body="detail.request.body" :headers="detail.request.headers" side="request"
-          :target="bodyTarget" :revision="bodyRevision" />
+        <BodyViewer
+          label="请求体"
+          :body="detail.request.body"
+          :headers="detail.request.headers"
+          side="request"
+          :target="bodyTarget"
+          :revision="bodyRevision"
+        />
       </div>
 
       <!-- 响应 -->
       <div v-show="activeTab === 'response'" class="tab-page">
         <template v-if="detail.response">
-          <div class="pane-top" :style="{ width: `calc(${leftRatio * 100}% - 3px)` }">
+          <div
+            class="pane-top"
+            :style="{ width: `calc(${leftRatio * 100}% - 3px)` }"
+          >
             <section class="card">
               <div class="card-title">
-                响应头 <span class="count-badge">{{ headerCount(detail.response.headers) }}</span>
-                <span class="card-title-extra mono">{{ detail.response.version }}</span>
+                响应头
+                <span class="count-badge">{{
+                  headerCount(detail.response.headers)
+                }}</span>
+                <span class="card-title-extra mono">{{
+                  detail.response.version
+                }}</span>
               </div>
               <table v-if="detail.response.headers.length > 0" class="kv-table">
                 <tbody>
@@ -693,68 +800,168 @@ function headerCount(headers: HeaderItem[]): string {
             </section>
           </div>
 
-          <div class="splitter" title="拖动调整区域大小" @pointerdown="startSplit" />
+          <div
+            class="splitter"
+            title="拖动调整区域大小"
+            @pointerdown="startSplit"
+          />
 
-          <BodyViewer label="响应体" :body="detail.response.body" :headers="detail.response.headers" side="response"
-            :target="bodyTarget" :revision="bodyRevision" />
+          <BodyViewer
+            label="响应体"
+            :body="detail.response.body"
+            :headers="detail.response.headers"
+            side="response"
+            :target="bodyTarget"
+            :revision="bodyRevision"
+          />
         </template>
       </div>
 
       <!-- 拦截器执行记录 -->
       <div v-show="activeTab === 'modifications'" class="tab-page">
         <div class="pane-top full">
-          <section v-if="detail.request_interceptors.length > 0" class="execution-section">
+          <section
+            v-if="detail.request_interceptors.length > 0"
+            class="execution-section"
+          >
             <div class="execution-section-title">请求拦截器</div>
-            <article v-for="execution in detail.request_interceptors" :key="execution.execution_id"
-              class="card execution-card">
-              <button class="execution-head" @click="openExecution(execution)">
-                <span class="execution-order">#{{ execution.position + 1 }}</span>
+            <article
+              v-for="execution in detail.request_interceptors"
+              :key="execution.execution_id"
+              class="card execution-card"
+            >
+              <div class="execution-head">
+                <span class="execution-order"
+                  >#{{ execution.position + 1 }}</span
+                >
                 <span class="execution-name mono">{{ execution.name }}</span>
-                <span v-if="execution.origin === 'temporary'" class="execution-origin">临时</span>
-                <span v-else-if="!execution.completed" class="execution-origin waiting">暂停中</span>
-                <span class="execution-hash mono">{{ execution.script_hash.slice(0, 12) }}</span>
-                <span class="execution-open">查看历史脚本</span>
-              </button>
+                <span
+                  v-if="execution.origin === 'temporary'"
+                  class="execution-origin"
+                  >临时</span
+                >
+                <span
+                  v-else-if="!execution.completed"
+                  class="execution-origin waiting"
+                  >暂停中</span
+                >
+                <span class="execution-hash mono">{{
+                  execution.script_hash.slice(0, 12)
+                }}</span>
+                <span class="execution-actions">
+                  <button
+                    class="execution-open"
+                    @click="openExecution(execution)"
+                  >
+                    查看历史脚本
+                  </button>
+                  <button
+                    v-if="executionSnapshot(execution)"
+                    class="execution-open"
+                    @click="openSnapshot(execution)"
+                  >
+                    查看进入拦截器前的快照
+                  </button>
+                </span>
+              </div>
               <div v-if="execution.error" class="execution-error mono">
                 {{ execution.error }}
               </div>
-              <div v-if="visibleModifications(execution).length === 0" class="execution-no-change">
+              <div
+                v-if="visibleModifications(execution).length === 0"
+                class="execution-no-change"
+              >
                 已执行，未产生修改
               </div>
               <ul v-else class="mod-list">
-                <li v-for="(row, i) in modificationRows(execution)" :key="i" class="mod-item">
-                  <span class="mod-badge">{{ modificationLabel(row.mod) }}</span>
-                  <span class="mod-detail mono" :class="{ clickable: row.truncated }"
+                <li
+                  v-for="(row, i) in modificationRows(execution)"
+                  :key="i"
+                  class="mod-item"
+                >
+                  <span class="mod-badge">{{
+                    modificationLabel(row.mod)
+                  }}</span>
+                  <span
+                    class="mod-detail mono"
+                    :class="{ clickable: row.truncated }"
                     :title="row.truncated ? '点击查看完整内容' : undefined"
-                    @click="openModDetail(execution, i, row)">{{ row.text }}</span>
+                    @click="openModDetail(execution, i, row)"
+                    >{{ row.text }}</span
+                  >
                 </li>
               </ul>
             </article>
           </section>
-          <section v-if="detail.response_interceptors.length > 0" class="execution-section">
+          <section
+            v-if="detail.response_interceptors.length > 0"
+            class="execution-section"
+          >
             <div class="execution-section-title">响应拦截器</div>
-            <article v-for="execution in detail.response_interceptors" :key="execution.execution_id"
-              class="card execution-card">
-              <button class="execution-head" @click="openExecution(execution)">
-                <span class="execution-order">#{{ execution.position + 1 }}</span>
+            <article
+              v-for="execution in detail.response_interceptors"
+              :key="execution.execution_id"
+              class="card execution-card"
+            >
+              <div class="execution-head">
+                <span class="execution-order"
+                  >#{{ execution.position + 1 }}</span
+                >
                 <span class="execution-name mono">{{ execution.name }}</span>
-                <span v-if="execution.origin === 'temporary'" class="execution-origin">临时</span>
-                <span v-else-if="!execution.completed" class="execution-origin waiting">暂停中</span>
-                <span class="execution-hash mono">{{ execution.script_hash.slice(0, 12) }}</span>
-                <span class="execution-open">查看历史脚本</span>
-              </button>
+                <span
+                  v-if="execution.origin === 'temporary'"
+                  class="execution-origin"
+                  >临时</span
+                >
+                <span
+                  v-else-if="!execution.completed"
+                  class="execution-origin waiting"
+                  >暂停中</span
+                >
+                <span class="execution-hash mono">{{
+                  execution.script_hash.slice(0, 12)
+                }}</span>
+                <span class="execution-actions">
+                  <button
+                    class="execution-open"
+                    @click="openExecution(execution)"
+                  >
+                    查看历史脚本
+                  </button>
+                  <button
+                    v-if="executionSnapshot(execution)"
+                    class="execution-open"
+                    @click="openSnapshot(execution)"
+                  >
+                    查看进入拦截器前的快照
+                  </button>
+                </span>
+              </div>
               <div v-if="execution.error" class="execution-error mono">
                 {{ execution.error }}
               </div>
-              <div v-if="visibleModifications(execution).length === 0" class="execution-no-change">
+              <div
+                v-if="visibleModifications(execution).length === 0"
+                class="execution-no-change"
+              >
                 已执行，未产生修改
               </div>
               <ul v-else class="mod-list">
-                <li v-for="(row, i) in modificationRows(execution)" :key="i" class="mod-item">
-                  <span class="mod-badge">{{ modificationLabel(row.mod) }}</span>
-                  <span class="mod-detail mono" :class="{ clickable: row.truncated }"
+                <li
+                  v-for="(row, i) in modificationRows(execution)"
+                  :key="i"
+                  class="mod-item"
+                >
+                  <span class="mod-badge">{{
+                    modificationLabel(row.mod)
+                  }}</span>
+                  <span
+                    class="mod-detail mono"
+                    :class="{ clickable: row.truncated }"
                     :title="row.truncated ? '点击查看完整内容' : undefined"
-                    @click="openModDetail(execution, i, row)">{{ row.text }}</span>
+                    @click="openModDetail(execution, i, row)"
+                    >{{ row.text }}</span
+                  >
                 </li>
               </ul>
             </article>
@@ -1226,7 +1433,7 @@ function headerCount(headers: HeaderItem[]): string {
   border-collapse: collapse;
 }
 
-.kv-table tr+tr {
+.kv-table tr + tr {
   border-top: 1px solid var(--border);
 }
 
@@ -1281,12 +1488,7 @@ function headerCount(headers: HeaderItem[]): string {
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   background: var(--bg-app);
   color: var(--text);
-  cursor: pointer;
   text-align: left;
-}
-
-.execution-head:hover {
-  background: var(--bg-hover);
 }
 
 .execution-order {
@@ -1323,10 +1525,24 @@ function headerCount(headers: HeaderItem[]): string {
   color: var(--warning);
 }
 
-.execution-open {
+.execution-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin-left: auto;
+}
+
+.execution-open {
+  border: 0;
+  padding: 0;
+  background: transparent;
   color: var(--accent);
+  cursor: pointer;
   font-size: 10px;
+}
+
+.execution-open:hover {
+  text-decoration: underline;
 }
 
 .execution-error {

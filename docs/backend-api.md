@@ -237,7 +237,7 @@ stored bytes without the JSON envelope and sets `Content-Type`, `Content-Length`
 provided. Reusing an ID returns `409 asset_already_exists`; a file/directory hierarchy collision
 returns `409 asset_path_conflict`.
 
-IDs allow only lowercase ASCII letters, digits, `_`, `.`, and `/`. They cannot start or end with
+IDs allow only lowercase ASCII letters, digits, `_`, `-`, `.`, and `/`. They cannot start or end with
 `/`, contain `//`, or contain `.`, `..`, or `.metadata` as a complete path segment. The total limit
 is 255 bytes and each segment is limited to 100 bytes. Invalid IDs return
 `400 invalid_asset_id`; unsupported `format` values return `400 invalid_asset_format`; missing
@@ -472,20 +472,27 @@ values and HTTP requests retain normal verification behavior. Verified and insec
 connections use separate pools. Bypass, raw CONNECT, Upgrade/WebSocket, the local CA endpoint, and
 proxy-generated errors retain their existing unpaced behavior.
 
-Log detail embeds decoded text/JSON only through 64 KiB. Every non-empty body includes the stored
-byte size and selected absolute capture path; compressed bodies therefore report their compressed
-file size. `GET /api/logs/{id}/body?session_id=1&side=request&max_size=16777216`
-negotiates its response from `Accept-Encoding` and always applies `max_size` to the original stored
-file before decoding or recompressing it. If the client accepts every captured content encoding,
-the original bytes and encoding stack are preserved. Otherwise ProxyCrab streams one decode pass
-and falls back in fixed `gzip`, `deflate`, then identity order; nonzero q weights do not reorder that
-preference, while `q=0` forbids an encoding. Responses include `Vary: Accept-Encoding`.
-An empty original request or response has no blob file. An explicitly modified empty body still
-persists its zero-byte `.modified` blob. Raw body endpoints continue to return a successful
-zero-byte stream for empty originals.
+Log detail embeds decoded text/JSON only through 64 KiB. `captures.req_modifications` and
+`resp_modifications` each store a `final_body` source: `original`, `string` with complete `content`,
+or `asset` with `asset_id`. This is the complete Body constructed after interceptors and attempted
+for outbound delivery, not the number of bytes delivered before a network interruption. The
+`blob/` directory stores only original network request and response bodies; ProxyCrab never creates
+`.modified` files.
+
+`GET /api/logs/{id}/body?session_id=1&side=request&max_size=16777216` resolves that final source and
+negotiates its response from `Accept-Encoding`. `max_size` applies to the selected stored file or
+replacement size before decoding or recompressing. If the client accepts every captured content
+encoding, the original bytes and encoding stack are preserved. Otherwise ProxyCrab streams one
+decode pass and falls back in fixed `gzip`, `deflate`, then identity order; nonzero q weights do not
+reorder that preference, while `q=0` forbids an encoding. Responses include
+`Vary: Accept-Encoding`. An empty original request or response has no blob file and the endpoint
+returns a successful zero-byte stream.
+
 The default stored-file limit is 16 MiB and there is no server maximum. Transcoded and identity
-responses omit decoded `Content-Length`; original responses retain the stored length. Active
-breakpoints expose the same contract at
+responses omit decoded `Content-Length`; original responses retain the stored length. Adding
+`execution_id` reads the selected `original`, `string`, or `asset` interceptor-entry snapshot Body
+for that log. The desktop snapshot window intentionally displays only the Asset ID for Asset
+snapshots. Active breakpoints expose the same final-body contract at
 `GET /api/breakpoints/{id}/body` and include current replacements for the paused phase.
 
 ## Session table views
@@ -629,7 +636,14 @@ selected Session and snapshots the name and exact UTF-8 content of every enabled
 The response stage uses the same snapshot even if the Session, chain, or source files change in the
 meantime. Missing and disabled nodes are skipped.
 
-Executed content is stored in the Session capture database by lowercase SHA-256. `interceptor_script_contents` stores one copy of each unique source, while `capture_interceptor_runs` links captures to ordered executions and per-script modifications.
+Executed content is stored in the Session capture database by lowercase SHA-256.
+`interceptor_script_contents` stores one copy of each unique source, while
+`capture_interceptor_runs` links captures to ordered executions and per-script modifications. An
+execution that changes Method, URI, Status, Headers, or Body starts its modifications with a full
+entry snapshot. Request snapshots contain Method, URI, Version, Headers, and Body; response
+snapshots contain Status, Version, Headers, and Body. Tags and the response script's read-only
+request are excluded. Snapshot Body sources are `original`, complete `string`, or `asset_id`.
+Executions with no modifications or only Tag changes do not store a snapshot.
 
 ## Active interceptor breakpoints
 
@@ -733,7 +747,12 @@ the centralized, ordered migration chain before any stores are used and atomical
 label after each successful version. Every migration function documents that version's storage
 model changes; newer unsupported labels are rejected instead of being opened.
 Schema v2 changes Session capture databases from rollback journals to WAL without changing their
-logical tables or blob layout.
+logical tables or blob layout. Schema v3 removes legacy header-only execution snapshots and
+`body_replace_file`, records final Body sources in the capture rows, and imports every legacy
+`.modified` file into `assets/mig/<session-id>/`. The original filename is preferred as the Asset
+ID; collisions append `-1`, `-2`, and so on until creation succeeds. The database reference is
+written before the old file is deleted, and a failed Session migration does not advance the
+workspace version.
 An active ID that references a missing Session is cleared and persisted when the workspace opens.
 
 Each workspace has an independent generated CA. Missing or corrupt CA files are regenerated with a warning, the per-host certificate cache is bounded, and the CA private key is restricted to owner-only permissions on macOS/Unix. Regeneration is serialized with proxy start/stop and rejected while the proxy is running.

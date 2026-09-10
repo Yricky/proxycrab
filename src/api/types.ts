@@ -130,8 +130,32 @@ export type BodyPayload =
   | { type: "binary"; size: number; path: string | null }
   | { type: "large"; size: number; path: string | null };
 
+export type BodySourceType =
+  | { type: "original" }
+  | { type: "string"; content: string }
+  | { type: "asset"; asset_id: string };
+
+export interface RequestInterceptorSnapshot {
+  method: string;
+  uri: string;
+  version: string;
+  headers: Record<string, string[]>;
+  body: BodySourceType;
+}
+
+export interface ResponseInterceptorSnapshot {
+  status: number;
+  version: string;
+  headers: Record<string, string[]>;
+  body: BodySourceType;
+}
+
 export type Modification =
-  | { kind: "snapshot"; headers: Record<string, string[]> }
+  | {
+      kind: "snapshot";
+      request: RequestInterceptorSnapshot | null;
+      response: ResponseInterceptorSnapshot | null;
+    }
   | { kind: "method_set"; method: string }
   | { kind: "uri_set"; uri: string }
   | { kind: "status_set"; status: number }
@@ -139,7 +163,7 @@ export type Modification =
   | { kind: "header_set"; name: string; value: string }
   | { kind: "header_remove"; name: string; values: string[] }
   | { kind: "body_replace_string"; content: string }
-  | { kind: "body_replace_file"; path: string }
+  | { kind: "body_replace_asset"; asset_id: string }
   | { kind: "tag_set"; key: string; value: string };
 
 export type InterceptorExecutionOrigin = "saved" | "temporary";
