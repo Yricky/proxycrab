@@ -25,6 +25,8 @@ const props = defineProps<{
   side: BodySide;
   target: BodyTarget;
   revision?: number;
+  /** body.size 未知（如拦截器快照）时置为 true，体积在加载后按实际结果显示。 */
+  unknownSize?: boolean;
 }>();
 
 const backend = useBackend();
@@ -120,8 +122,16 @@ const previewKind = computed(() => {
 const storedSize = computed(() =>
   props.body.type === "empty" ? 0 : props.body.size,
 );
+const sizeKnown = computed(
+  () =>
+    !props.unknownSize ||
+    reportedStoredSize.value !== null ||
+    loaded.value !== null,
+);
 const effectiveStoredSize = computed(
-  () => reportedStoredSize.value ?? storedSize.value,
+  () =>
+    reportedStoredSize.value ??
+    (props.unknownSize ? (loaded.value?.decodedSize ?? 0) : storedSize.value),
 );
 const path = computed(() =>
   props.body.type === "empty" ? null : props.body.path,
@@ -273,7 +283,7 @@ watch(
     error.value = null;
     revokeObjectUrl();
     if (props.body.type !== "empty") {
-      if (storedSize.value > DEFAULT_BODY_MAX_SIZE) {
+      if (!props.unknownSize && storedSize.value > DEFAULT_BODY_MAX_SIZE) {
         reportedStoredSize.value = storedSize.value;
       } else {
         void load();
@@ -294,8 +304,8 @@ onBeforeUnmount(() => {
   <section class="body-viewer">
     <div class="body-head">
       <span>{{ label }}</span>
-      <span v-if="body.type !== 'empty'" class="size-note">
-        实际体积 {{ formatBytes(storedSize) }}
+      <span v-if="body.type !== 'empty' && sizeKnown" class="size-note">
+        实际体积 {{ formatBytes(effectiveStoredSize) }}
       </span>
       <span class="body-actions">
         <template v-if="loaded && previewKind === 'text'">

@@ -128,19 +128,6 @@ export function openInterceptorSnapshot(
   );
 }
 
-export function openScriptSnapshot(
-  sessionId: number,
-  logId: number,
-  execution: InterceptorExecution,
-): void {
-  openReadonlyViewer(
-    `script-snapshot-${sessionId}-${logId}-${execution.execution_id}`,
-    `${execution.name} — 历史脚本`,
-    execution.content,
-    "lua",
-  );
-}
-
 export function openModificationValue(
   id: string,
   label: string,

@@ -5,8 +5,8 @@ import type {
   BreakpointSummary,
   HeaderItem,
   InterceptorExecution,
+  InterceptorModification,
   LogDetail,
-  Modification,
 } from "../api/types";
 import { BackendError } from "../api/backend-error";
 import { appStore, reportError } from "../stores/app";
@@ -23,11 +23,15 @@ import {
 import {
   openInterceptorSnapshot,
   openModificationValue,
-  openScriptSnapshot,
+  openReadonlyViewer,
 } from "./launcher";
 import { openDropdownMenu } from "../stores/dialog";
 import { fullCurl } from "../utils/curl";
 import { copyText as writeClipboardText } from "../utils/clipboard";
+import {
+  urlSegments as buildUrlSegments,
+  type UrlSegment,
+} from "../utils/url-segments";
 import type { BodyTarget } from "../api/body";
 
 const props = defineProps<{
@@ -350,70 +354,10 @@ function statusClass(status: number): string {
   return "s-other";
 }
 
-// URL 分段着色
-interface UrlSegment {
-  text: string;
-  cls: string;
-}
-
-// 按原始文本拆分 query（保留编码，不做重编码），逐对着色
-function querySegments(search: string): UrlSegment[] {
-  const hasQuestion = search.startsWith("?");
-  const raw = hasQuestion ? search.slice(1) : search;
-  const pairs = raw.split("&");
-  const segments: UrlSegment[] = [];
-  if (hasQuestion) segments.push({ text: "?", cls: "url-query-sep" });
-  pairs.forEach((pair, i) => {
-    if (i > 0) segments.push({ text: "&", cls: "url-query-sep" });
-    const eq = pair.indexOf("=");
-    if (eq >= 0) {
-      segments.push({ text: pair.slice(0, eq), cls: "url-query-key" });
-      segments.push({ text: "=", cls: "url-query-eq" });
-      segments.push({ text: pair.slice(eq + 1), cls: "url-query-value" });
-    } else {
-      segments.push({ text: pair, cls: "url-query-key" });
-    }
-  });
-  return segments;
-}
-
-// 只有带显式 scheme（scheme://）的 URI 才交给 URL 解析器。HTTPS CONNECT 请求的
-// URI 是裸 authority（如 internal-api-lark-api-usttp.larksuite.com:443），
-// new URL 会把 host 误解析成 scheme、把 port 当成 opaque path，
-// 导致显示成 internal-api-lark-api-usttp.larksuite.com://443。
-function parseUrlSegments(uri: string): UrlSegment[] | null {
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(uri)) {
-    try {
-      const url = new URL(uri);
-      const segments: UrlSegment[] = [
-        { text: `${url.protocol}//`, cls: "url-scheme" },
-        { text: url.host, cls: "url-host" },
-      ];
-      const path = url.pathname;
-      if (path && path !== "/") segments.push({ text: path, cls: "url-path" });
-      else if (path) segments.push({ text: path, cls: "url-scheme" });
-      if (url.search) segments.push(...querySegments(url.search));
-      if (url.hash) segments.push({ text: url.hash, cls: "url-query" });
-      return segments;
-    } catch {
-      return null;
-    }
-  }
-  // 裸 authority（CONNECT 目标）：host、host:port 或 [ipv6]:port
-  const authority = /^(\[[^\]]+\]|[^\s:/?#]+)(?::(\d{1,5}))?$/.exec(uri);
-  if (authority) {
-    const segments: UrlSegment[] = [{ text: authority[1], cls: "url-host" }];
-    if (authority[2])
-      segments.push({ text: `:${authority[2]}`, cls: "url-path" });
-    return segments;
-  }
-  return null;
-}
-
 const urlSegments = computed<UrlSegment[]>(() => {
   const uri = detail.value?.request.uri;
   if (!uri) return [];
-  return parseUrlSegments(uri) ?? [{ text: uri, cls: "url-path" }];
+  return buildUrlSegments(uri);
 });
 
 // ---------- copy ----------
@@ -476,7 +420,6 @@ const queryParams = computed<QueryParam[]>(() => {
 // ---------- modifications ----------
 
 const modificationKindLabels: Record<string, string> = {
-  snapshot: "执行快照",
   method_set: "设置 Method",
   uri_set: "设置 URI",
   status_set: "设置状态码",
@@ -488,11 +431,11 @@ const modificationKindLabels: Record<string, string> = {
   tag_set: "设置 Tag",
 };
 
-function modificationLabel(mod: Modification): string {
+function modificationLabel(mod: InterceptorModification): string {
   return modificationKindLabels[mod.kind] ?? mod.kind;
 }
 
-function modificationDetail(mod: Modification): string {
+function modificationDetail(mod: InterceptorModification): string {
   switch (mod.kind) {
     case "method_set":
       return mod.method;
@@ -513,27 +456,19 @@ function modificationDetail(mod: Modification): string {
       return mod.asset_id;
     case "tag_set":
       return `${mod.key}: ${mod.value}`;
-    case "snapshot":
-      return mod.request
-        ? `${Object.keys(mod.request.headers).length} 个请求头`
-        : `${Object.keys(mod.response?.headers ?? {}).length} 个响应头`;
   }
-}
-
-function visibleModifications(execution: InterceptorExecution): Modification[] {
-  return execution.modifications.filter((mod) => mod.kind !== "snapshot");
 }
 
 const MOD_DETAIL_LIMIT = 200;
 
 interface ModRow {
-  mod: Modification;
+  mod: InterceptorModification;
   text: string;
   truncated: boolean;
 }
 
 function modificationRows(execution: InterceptorExecution): ModRow[] {
-  return visibleModifications(execution).map((mod) => {
+  return execution.modifications.map((mod) => {
     const full = modificationDetail(mod);
     const truncated = full.length > MOD_DETAIL_LIMIT;
     return {
@@ -557,24 +492,28 @@ function openModDetail(
   );
 }
 
-function executionSnapshot(
-  execution: InterceptorExecution,
-): Extract<Modification, { kind: "snapshot" }> | null {
-  return (
-    execution.modifications.find(
-      (mod): mod is Extract<Modification, { kind: "snapshot" }> =>
-        mod.kind === "snapshot",
-    ) ?? null
-  );
-}
-
-function openExecution(execution: InterceptorExecution): void {
+async function openExecution(execution: InterceptorExecution): Promise<void> {
   if (!detail.value) return;
-  openScriptSnapshot(detail.value.session_id, detail.value.id, execution);
+  const { session_id: sessionId, id } = detail.value;
+  try {
+    const { content } = await backend.getInterceptorContent(
+      sessionId,
+      id,
+      execution.execution_id,
+    );
+    openReadonlyViewer(
+      `script-snapshot-${sessionId}-${id}-${execution.execution_id}`,
+      `${execution.name} — 历史脚本`,
+      content,
+      "lua",
+    );
+  } catch (error) {
+    reportError(error, "加载历史脚本失败");
+  }
 }
 
 function openSnapshot(execution: InterceptorExecution): void {
-  if (!detail.value || !executionSnapshot(execution)) return;
+  if (!detail.value || !execution.has_snapshot) return;
   openInterceptorSnapshot(detail.value.session_id, detail.value.id, execution);
 }
 
@@ -856,7 +795,7 @@ function headerCount(headers: HeaderItem[]): string {
                     查看历史脚本
                   </button>
                   <button
-                    v-if="executionSnapshot(execution)"
+                    v-if="execution.has_snapshot"
                     class="execution-open"
                     @click="openSnapshot(execution)"
                   >
@@ -868,7 +807,7 @@ function headerCount(headers: HeaderItem[]): string {
                 {{ execution.error }}
               </div>
               <div
-                v-if="visibleModifications(execution).length === 0"
+                v-if="execution.modifications.length === 0"
                 class="execution-no-change"
               >
                 已执行，未产生修改
@@ -929,7 +868,7 @@ function headerCount(headers: HeaderItem[]): string {
                     查看历史脚本
                   </button>
                   <button
-                    v-if="executionSnapshot(execution)"
+                    v-if="execution.has_snapshot"
                     class="execution-open"
                     @click="openSnapshot(execution)"
                   >
@@ -941,7 +880,7 @@ function headerCount(headers: HeaderItem[]): string {
                 {{ execution.error }}
               </div>
               <div
-                v-if="visibleModifications(execution).length === 0"
+                v-if="execution.modifications.length === 0"
                 class="execution-no-change"
               >
                 已执行，未产生修改

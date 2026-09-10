@@ -11,8 +11,9 @@ use proxy_crab_mitm::{
     model::{
         AppConfig, BreakpointListFilter, BreakpointSummary, CaptureDetail, CaptureOutcome,
         CaptureSummary, Column, FilterColumn, FilterOption, HeaderValues, InterceptorKind,
-        ProxyStatus, Script, ScriptKind, SessionFilter, SessionInterceptor, SessionInterceptors,
-        SessionMetadata, SystemLogEntry, TemporaryExecutionResult,
+        InterceptorScriptContent, InterceptorSnapshot, ProxyStatus, Script, ScriptKind,
+        SessionFilter, SessionInterceptor, SessionInterceptors, SessionMetadata, SystemLogEntry,
+        TemporaryExecutionResult,
     },
     storage::{BodySide, BodySource},
 };
@@ -97,6 +98,18 @@ pub trait ProxyCrabManager: Send + Sync {
         execution_id: u64,
         side: BodySide,
     ) -> ManagerResult<BodySource>;
+    async fn interceptor_script_content(
+        &self,
+        session_id: Option<u64>,
+        capture_id: u64,
+        execution_id: u64,
+    ) -> ManagerResult<InterceptorScriptContent>;
+    async fn interceptor_snapshot(
+        &self,
+        session_id: Option<u64>,
+        capture_id: u64,
+        execution_id: u64,
+    ) -> ManagerResult<InterceptorSnapshot>;
     async fn breakpoints(&self, query: BreakpointQuery) -> ManagerResult<Vec<BreakpointSummary>>;
     async fn breakpoint(&self, id: u64) -> ManagerResult<BreakpointDetailPayload>;
     async fn breakpoint_body_source(&self, id: u64, side: BodySide) -> ManagerResult<BodySource>;
@@ -984,6 +997,50 @@ impl ProxyCrabManager for MitmManager {
                     ManagerError::new(
                         "snapshot_body_not_found",
                         format!("interceptor execution {execution_id} snapshot body not found"),
+                    )
+                })
+        })
+        .await
+    }
+
+    async fn interceptor_script_content(
+        &self,
+        session_id: Option<u64>,
+        capture_id: u64,
+        execution_id: u64,
+    ) -> ManagerResult<InterceptorScriptContent> {
+        let session_id = self.session_id(session_id)?;
+        let runtime = self.runtime.clone();
+        self.run_blocking("interceptor script content", move || {
+            runtime
+                .interceptor_script_content(session_id, capture_id, execution_id)
+                .map_err(map_error)?
+                .ok_or_else(|| {
+                    ManagerError::new(
+                        "execution_not_found",
+                        format!("interceptor execution {execution_id} not found"),
+                    )
+                })
+        })
+        .await
+    }
+
+    async fn interceptor_snapshot(
+        &self,
+        session_id: Option<u64>,
+        capture_id: u64,
+        execution_id: u64,
+    ) -> ManagerResult<InterceptorSnapshot> {
+        let session_id = self.session_id(session_id)?;
+        let runtime = self.runtime.clone();
+        self.run_blocking("interceptor snapshot", move || {
+            runtime
+                .interceptor_snapshot(session_id, capture_id, execution_id)
+                .map_err(map_error)?
+                .ok_or_else(|| {
+                    ManagerError::new(
+                        "snapshot_not_found",
+                        format!("interceptor execution {execution_id} has no snapshot"),
                     )
                 })
         })

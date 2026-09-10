@@ -16,8 +16,8 @@ use crate::{
     },
     model::{
         BreakpointListFilter, BreakpointSummary, CaptureError, ErrorStage, InterceptorExecution,
-        InterceptorExecutionOrigin, InterceptorKind, InterceptorRun, RequestData, ResponseData,
-        TemporaryExecutionResult, script_content_hash,
+        InterceptorExecutionOrigin, InterceptorKind, InterceptorRun, Modification, RequestData,
+        ResponseData, TemporaryExecutionResult, script_content_hash,
     },
     storage::CaptureStore,
     workspace::now_millis,
@@ -302,6 +302,14 @@ impl BreakpointRegistry {
             )?,
         };
         let modifications = journal.snapshot();
+        let has_snapshot = modifications
+            .iter()
+            .any(|modification| matches!(modification, Modification::Snapshot { .. }));
+        let public_modifications = modifications
+            .iter()
+            .filter(|modification| !matches!(modification, Modification::Snapshot { .. }))
+            .cloned()
+            .collect();
         let script_hash = script_content_hash(content);
         let run = InterceptorRun {
             origin: InterceptorExecutionOrigin::Temporary,
@@ -340,8 +348,8 @@ impl BreakpointRegistry {
                 position: context.position,
                 name: run.name,
                 script_hash,
-                content: content.into(),
-                modifications,
+                has_snapshot,
+                modifications: public_modifications,
                 error,
             },
             breakpoint: active.summary(Instant::now()),

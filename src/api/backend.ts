@@ -17,8 +17,10 @@ import type {
   ExecuteTemporaryScriptRequest,
   ExtendBreakpointRequest,
   InterceptorCreateRequest,
+  InterceptorContent,
   InterceptorKind,
   InterceptorLibraryList,
+  InterceptorSnapshotPayload,
   InterceptorUpdateRequest,
   HttpServiceStatus,
   HttpApiChange,
@@ -139,6 +141,16 @@ export interface Backend {
   getLogViews(request: LogViewsRequest): Promise<LogViewsPayload>;
   validateFilterRegex(pattern: string): Promise<string | null>;
   getLog(sessionId: number | null, id: number): Promise<LogDetail>;
+  getInterceptorContent(
+    sessionId: number | null,
+    id: number,
+    executionId: number,
+  ): Promise<InterceptorContent>;
+  getInterceptorSnapshot(
+    sessionId: number | null,
+    id: number,
+    executionId: number,
+  ): Promise<InterceptorSnapshotPayload>;
   listBreakpoints(query: BreakpointQuery): Promise<BreakpointSummary[]>;
   getBreakpoint(id: number): Promise<BreakpointDetailPayload>;
   extendBreakpoint(

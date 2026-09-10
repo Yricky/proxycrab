@@ -41,19 +41,20 @@ function formatBytes(bytes: number): string {
 
 // 格式化器与高亮格式匹配：目前仅 json 有格式化器，失败回退原文。
 const prettyContent = computed(() => {
-  if (language.value !== "json") return props.content;
+  const raw = props.content ?? "";
+  if (language.value !== "json") return raw;
   try {
-    return JSON.stringify(JSON.parse(props.content), null, 2);
+    return JSON.stringify(JSON.parse(raw), null, 2);
   } catch {
-    return props.content;
+    return raw;
   }
 });
 
 // 与 pretty 开关解耦，否则切到「原文」后按钮会消失。
-const formattable = computed(() => prettyContent.value !== props.content);
+const formattable = computed(() => prettyContent.value !== (props.content ?? ""));
 
 const displayContent = computed(() =>
-  pretty.value ? prettyContent.value : props.content,
+  pretty.value ? prettyContent.value : (props.content ?? ""),
 );
 
 const sizeLabel = computed(() =>

@@ -418,10 +418,11 @@ Each executed script records:
 - phase and zero-based chain position;
 - historical name;
 - lowercase SHA-256 of exact source;
-- exact source content;
+- exact source content, readable through the interceptor content endpoint;
 - when the script changes Method, URI, Status, Headers, or Body, the complete request/response state
-  seen on entry, followed by ordered method/URI/status/header/body/tag mutations; Tag-only and
-  unchanged executions do not record this state snapshot;
+  seen on entry, followed by ordered method/URI/status/header/body/tag mutations, readable through
+  the interceptor snapshot endpoint; Tag-only and unchanged executions do not record this state
+  snapshot;
 - an optional runtime error.
 - execution ID, saved/temporary origin, and completion state.
 

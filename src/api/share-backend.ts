@@ -3,6 +3,7 @@ import { BackendError } from "./backend-error";
 import { fetchBodyFromBase } from "./body";
 import type {
   AppConfig,
+  InterceptorSnapshotPayload,
   LogDetail,
   ManagerError,
   ProxyStatus,
@@ -97,7 +98,7 @@ export function createShareBackend(
     },
     host: undefined,
     fetchBody: (target, side, maxSize) => {
-      if (target.kind !== "log") return unsupported("fetch breakpoint body")();
+      if (target.kind === "breakpoint") return unsupported("fetch breakpoint body")();
       return fetchBodyFromBase(
         baseUrl,
         target,
@@ -170,6 +171,40 @@ export function createShareBackend(
     validateFilterRegex: (pattern) =>
       call("/share-api/validate-filter-regex", json({ pattern })),
     getLog: (_sessionId, id) => call<LogDetail>(`/share-api/logs/${id}`),
+    getInterceptorContent: async (_sessionId, id, executionId) => {
+      const url = new URL(
+        `/share-api/logs/${id}/interceptors/${executionId}/content`,
+        baseUrl,
+      );
+      url.searchParams.append("token", token);
+      let response: Response;
+      try {
+        response = await fetch(url, { referrerPolicy: "no-referrer" });
+      } catch (cause) {
+        throw new BackendError({ code: "network_error", message: String(cause) });
+      }
+      if (!response.ok) {
+        let error: ManagerError = {
+          code: `http_${response.status}`,
+          message: `HTTP ${response.status}`,
+        };
+        try {
+          const payload = (await response.json()) as { error?: ManagerError };
+          if (payload.error) error = payload.error;
+        } catch {
+          // Keep the status-derived fallback when the server did not return JSON.
+        }
+        throw new BackendError(error);
+      }
+      return {
+        hash: response.headers.get("x-proxycrab-script-sha256") ?? "",
+        content: await response.text(),
+      };
+    },
+    getInterceptorSnapshot: (_sessionId, id, executionId) =>
+      call<InterceptorSnapshotPayload>(
+        `/share-api/logs/${id}/interceptors/${executionId}/snapshot`,
+      ),
     getSessionView: () => call("/share-api/session-view"),
     listColumnScripts: () => call<Script[]>("/share-api/column-scripts"),
     listFilterScripts: () => call<Script[]>("/share-api/filter-scripts"),

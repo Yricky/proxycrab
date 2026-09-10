@@ -25,7 +25,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::{StreamExt, stream};
-use proxy_crab_mitm::model::{InterceptorKind, SessionFilter};
+use proxy_crab_mitm::model::{InterceptorKind, InterceptorScriptContent, SessionFilter};
 use proxy_crab_mitm::storage::{BodySide, BodySource, BodySourceData};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -295,6 +295,14 @@ fn router_with_changes_and_extra(
         .route("/api/logs/ids", post(log_ids))
         .route("/api/logs/views", post(log_views))
         .route("/api/logs/{id}/body", get(log_body))
+        .route(
+            "/api/logs/{id}/interceptors/{execution_id}/content",
+            get(log_interceptor_content),
+        )
+        .route(
+            "/api/logs/{id}/interceptors/{execution_id}/snapshot",
+            get(log_interceptor_snapshot),
+        )
         .route("/api/logs/{id}", get(log))
         .route("/api/breakpoints", get(breakpoints))
         .route("/api/breakpoints/{id}/body", get(breakpoint_body))
@@ -977,6 +985,44 @@ async fn log_body(
         .map_err(ApiError)
 }
 
+async fn log_interceptor_content(
+    State(manager): State<ManagerState>,
+    ApiPath((id, execution_id)): ApiPath<(u64, u64)>,
+    ApiQuery(query): ApiQuery<SessionQuery>,
+) -> Result<Response, ApiError> {
+    let InterceptorScriptContent { hash, content } = manager
+        .interceptor_script_content(query.session_id, id, execution_id)
+        .await?;
+    let length = content.len();
+    let mut response = Response::new(Body::from(content));
+    let headers = response.headers_mut();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    headers.insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&length.to_string()).expect("usize is always a valid Content-Length"),
+    );
+    headers.insert(
+        "x-proxycrab-script-sha256",
+        HeaderValue::from_str(&hash).expect("SHA-256 hex is a safe header value"),
+    );
+    Ok(response)
+}
+
+async fn log_interceptor_snapshot(
+    State(manager): State<ManagerState>,
+    ApiPath((id, execution_id)): ApiPath<(u64, u64)>,
+    ApiQuery(query): ApiQuery<SessionQuery>,
+) -> ApiResult {
+    success(
+        manager
+            .interceptor_snapshot(query.session_id, id, execution_id)
+            .await?,
+    )
+}
+
 async fn breakpoints(
     State(manager): State<ManagerState>,
     ApiQuery(query): ApiQuery<BreakpointQuery>,
@@ -1648,7 +1694,11 @@ mod tests {
     };
     use proxy_crab_mitm::{ProxyCrab, log_buffer::LogBuffer};
     use proxy_crab_mitm::{
-        model::{HeaderValues, RequestData},
+        model::{
+            BodySourceType, HeaderValues, InterceptorExecutionOrigin, InterceptorKind,
+            InterceptorRun, Modification, RequestData, RequestInterceptorSnapshot,
+            script_content_hash,
+        },
         storage::{BodySide, BodySource, BodySourceData, CaptureStore},
     };
     use serde_json::Value;
@@ -2120,6 +2170,115 @@ mod tests {
         assert_eq!(response.headers()["x-proxycrab-body-size"], "14");
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(body.as_ref(), b"captured bytes");
+    }
+
+    #[tokio::test]
+    async fn interceptor_content_and_snapshot_have_dedicated_routes() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
+        let session_dir = runtime
+            .workspace()
+            .root()
+            .join("sessions")
+            .join(session.id.to_string());
+        let store = CaptureStore::open(session.id, &session_dir).unwrap();
+        let request = RequestData {
+            method: "GET".into(),
+            uri: "https://example.com/snapshot".into(),
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+            tags: Default::default(),
+        };
+        let id = store.begin("127.0.0.1", &request, "request").unwrap();
+        let source = "req.headers:set('x-debug', '1')";
+        let run = InterceptorRun {
+            origin: InterceptorExecutionOrigin::Saved,
+            completed: true,
+            phase: InterceptorKind::Request,
+            position: 0,
+            name: "debug".into(),
+            script_hash: script_content_hash(source),
+            content: source.into(),
+            modifications: vec![
+                Modification::Snapshot {
+                    request: Some(RequestInterceptorSnapshot {
+                        method: "GET".into(),
+                        uri: "https://example.com/snapshot".into(),
+                        version: "HTTP/1.1".into(),
+                        headers: HeaderValues::new(),
+                        body: BodySourceType::Original,
+                    }),
+                    response: None,
+                },
+                Modification::HeaderSet {
+                    name: "x-debug".into(),
+                    value: "1".into(),
+                },
+            ],
+            error: None,
+        };
+        let execution_id = store.begin_interceptor_run(id, &run).unwrap();
+
+        let app = router(MitmManager::new(runtime), allow_all());
+
+        let detail = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/logs/{id}?session_id={}", session.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(detail.status(), axum::http::StatusCode::OK);
+        let detail = to_bytes(detail.into_body(), usize::MAX).await.unwrap();
+        let detail: Value = serde_json::from_slice(&detail).unwrap();
+        let execution = &detail["data"]["request_interceptors"][0];
+        assert_eq!(execution["has_snapshot"], Value::Bool(true));
+        assert!(execution.get("content").is_none());
+        assert_eq!(execution["modifications"].as_array().unwrap().len(), 1);
+        assert_eq!(execution["modifications"][0]["kind"], "header_set");
+
+        let content = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/logs/{id}/interceptors/{execution_id}/content?session_id={}",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(content.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            content.headers()["x-proxycrab-script-sha256"],
+            script_content_hash(source)
+        );
+        let content = to_bytes(content.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(content.as_ref(), source.as_bytes());
+
+        let snapshot = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/logs/{id}/interceptors/{execution_id}/snapshot?session_id={}",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(snapshot.status(), axum::http::StatusCode::OK);
+        let snapshot = to_bytes(snapshot.into_body(), usize::MAX).await.unwrap();
+        let snapshot: Value = serde_json::from_slice(&snapshot).unwrap();
+        assert_eq!(snapshot["data"]["request"]["method"], "GET");
+        assert_eq!(snapshot["data"]["request"]["body"]["type"], "original");
     }
 
     #[test]

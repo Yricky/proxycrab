@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useBackend } from "../api";
+import type { BodyTarget } from "../api/body";
 import type {
+  BodyPayload,
   HeaderItem,
   InterceptorExecution,
-  Modification,
-  RequestInterceptorSnapshot,
-  ResponseInterceptorSnapshot,
+  InterceptorSnapshotPayload,
 } from "../api/types";
 import BodyViewer from "../components/BodyViewer.vue";
-import MonacoEditor from "../components/MonacoEditor.vue";
+import { urlSegments as buildUrlSegments } from "../utils/url-segments";
 
 const props = defineProps<{
   sessionId: number;
@@ -16,225 +17,410 @@ const props = defineProps<{
   execution: InterceptorExecution;
 }>();
 
-type SnapshotModification = Extract<Modification, { kind: "snapshot" }>;
+const backend = useBackend();
+const snapshot = ref<InterceptorSnapshotPayload | null>(null);
+const loading = ref(true);
+const loadError = ref<string | null>(null);
 
-const snapshot = computed<SnapshotModification | null>(
-  () =>
-    props.execution.modifications.find(
-      (mod): mod is SnapshotModification => mod.kind === "snapshot",
-    ) ?? null,
-);
-const request = computed<RequestInterceptorSnapshot | null>(
-  () => snapshot.value?.request ?? null,
-);
-const response = computed<ResponseInterceptorSnapshot | null>(
-  () => snapshot.value?.response ?? null,
-);
+async function load(): Promise<void> {
+  loading.value = true;
+  loadError.value = null;
+  try {
+    snapshot.value = await backend.getInterceptorSnapshot(
+      props.sessionId,
+      props.logId,
+      props.execution.execution_id,
+    );
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(load);
+
+const request = computed(() => snapshot.value?.request ?? null);
+const response = computed(() => snapshot.value?.response ?? null);
+const state = computed(() => request.value ?? response.value);
 const side = computed<"request" | "response">(() =>
   request.value ? "request" : "response",
 );
-const state = computed(() => request.value ?? response.value);
 const headers = computed<HeaderItem[]>(() =>
   Object.entries(state.value?.headers ?? {}).flatMap(([name, values]) =>
     values.map((value) => ({ name, value })),
   ),
 );
-const body = computed(() => state.value?.body ?? null);
-const contentType = computed(
-  () =>
-    headers.value.find((item) => item.name.toLowerCase() === "content-type")
-      ?.value ?? "",
+const bodySource = computed(() => state.value?.body ?? null);
+const assetId = computed(() =>
+  bodySource.value?.type === "asset" ? bodySource.value.asset_id : null,
 );
-const language = computed(() => {
-  const media = contentType.value.toLowerCase();
-  if (media.includes("json")) return "json";
-  if (media.includes("html")) return "html";
-  if (media.includes("xml")) return "xml";
-  if (media.includes("javascript")) return "javascript";
-  if (media.includes("css")) return "css";
-  return "plaintext";
+// 快照 Body 一律通过 Body 接口按 execution_id 读取（原始文件 / 字符串 / 资产
+// 均由后端解析），体积在加载后按实际结果显示。
+const snapshotBody: BodyPayload = { type: "binary", size: 0, path: null };
+const bodyTarget = computed<BodyTarget>(() => ({
+  kind: "interceptor",
+  id: props.logId,
+  sessionId: props.sessionId,
+  executionId: props.execution.execution_id,
+}));
+const bodyPending = computed(
+  () => bodySource.value?.type === "original" && !props.execution.completed,
+);
+
+const methodClass = computed(() => {
+  switch (request.value?.method.toUpperCase()) {
+    case "GET":
+      return "m-get";
+    case "POST":
+      return "m-post";
+    case "PUT":
+      return "m-put";
+    case "PATCH":
+      return "m-patch";
+    case "DELETE":
+      return "m-delete";
+    default:
+      return "m-other";
+  }
 });
+
+function statusClass(status: number): string {
+  if (status >= 200 && status < 300) return "s-2xx";
+  if (status >= 300 && status < 400) return "s-3xx";
+  if (status >= 400 && status < 500) return "s-4xx";
+  if (status >= 500) return "s-5xx";
+  return "s-other";
+}
+
+const urlSegments = computed(() =>
+  request.value ? buildUrlSegments(request.value.uri) : [],
+);
 </script>
 
 <template>
   <div class="snapshot-window">
-    <div v-if="!state || !body" class="empty">该执行记录没有完整快照</div>
+    <div v-if="loading" class="state-hint">加载中…</div>
+    <div v-else-if="loadError" class="state-hint state-error">
+      <p>加载失败：{{ loadError }}</p>
+    </div>
+    <div v-else-if="!state" class="state-hint">该执行记录没有完整快照</div>
     <template v-else>
-      <section class="summary card">
-        <template v-if="request">
-          <span class="method">{{ request.method }}</span>
-          <span class="mono primary">{{ request.uri }}</span>
-          <span class="mono muted">{{ request.version }}</span>
-        </template>
-        <template v-else-if="response">
-          <span class="status mono">{{ response.status }}</span>
-          <span class="mono muted">{{ response.version }}</span>
-        </template>
-      </section>
-
-      <section class="headers card">
-        <h3>Headers</h3>
-        <table v-if="headers.length">
-          <tbody>
-            <tr
-              v-for="(header, index) in headers"
-              :key="`${header.name}-${index}`"
-            >
-              <th class="mono">{{ header.name }}</th>
-              <td class="mono">{{ header.value }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <div v-else class="empty small">无 Headers</div>
-      </section>
-
-      <section class="body card">
-        <h3>Body</h3>
-        <div v-if="body.type === 'asset'" class="asset-id">
-          <span>Asset ID</span><code>{{ body.asset_id }}</code>
+      <header class="summary">
+        <div class="summary-line">
+          <span v-if="request" class="method-chip" :class="methodClass">
+            {{ request.method }}
+          </span>
+          <span
+            v-else-if="response"
+            class="status-chip mono"
+            :class="statusClass(response.status)"
+          >
+            {{ response.status }}
+          </span>
+          <span class="meta-item mono">{{ state.version }}</span>
+          <span v-if="assetId" class="meta-item asset-meta" :title="assetId">
+            <span class="meta-label">Body 资产</span>{{ assetId }}
+          </span>
         </div>
-        <div v-else-if="body.type === 'string'" class="editor">
-          <MonacoEditor
-            :model-value="body.content"
-            :language="language"
-            :readonly="true"
-          />
+        <div v-if="request" class="url mono" :title="request.uri">
+          <span v-for="(seg, i) in urlSegments" :key="i" :class="seg.cls">{{
+            seg.text
+          }}</span>
         </div>
-        <div v-else-if="!execution.completed" class="empty">
+      </header>
+
+      <div class="content">
+        <section class="card headers-card">
+          <div class="card-title">
+            Headers
+            <span v-if="headers.length" class="count-badge">{{
+              headers.length
+            }}</span>
+          </div>
+          <div class="headers-scroll">
+            <table v-if="headers.length" class="kv-table">
+              <tbody>
+                <tr v-for="(header, index) in headers" :key="index">
+                  <td class="mono kv-name">{{ header.name }}</td>
+                  <td class="mono kv-value">{{ header.value }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-else class="empty-hint">无 Headers</div>
+          </div>
+        </section>
+
+        <div v-if="bodyPending" class="card body-card state-hint">
           Body 尚未捕获完成
         </div>
         <BodyViewer
           v-else
+          class="body-panel"
           label="快照 Body"
-          :body="{ type: 'binary', size: 1, path: null }"
+          :body="snapshotBody"
           :headers="headers"
           :side="side"
-          :target="{
-            kind: 'interceptor',
-            id: logId,
-            sessionId,
-            executionId: execution.execution_id,
-          }"
+          :target="bodyTarget"
+          unknown-size
         />
-      </section>
+      </div>
     </template>
   </div>
 </template>
 
 <style scoped>
 .snapshot-window {
-  display: grid;
-  grid-template-rows: auto minmax(120px, 0.7fr) minmax(180px, 1.3fr);
-  gap: 10px;
   height: 100%;
-  padding: 10px;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+  user-select: text;
 }
 
-.card {
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-panel);
+.state-hint {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  color: var(--text-faint);
+  font-size: 12px;
 }
+
+.state-error p {
+  margin: 0;
+  color: var(--danger);
+  word-break: break-all;
+  padding: 0 16px;
+}
+
+/* ---------- 摘要栏（与请求详情一致） ---------- */
 
 .summary {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 11px;
+  flex: none;
+  padding: 6px 12px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
 }
 
-.method,
-.status {
+.summary-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.method-chip {
   flex: none;
-  color: var(--accent);
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  height: 16px;
+  color: #fff;
+}
+
+.m-get {
+  background: var(--success);
+}
+
+.m-post {
+  background: var(--accent);
+}
+
+.m-put {
+  background: var(--warning);
+}
+
+.m-patch {
+  background: #8b5cf6;
+}
+
+.m-delete {
+  background: var(--danger);
+}
+
+.m-other {
+  background: var(--text-faint);
+}
+
+.status-chip {
+  flex: none;
+  font-size: 10px;
   font-weight: 700;
 }
 
-.primary {
+.s-2xx {
+  color: var(--success);
+}
+
+.s-3xx {
+  color: var(--accent);
+}
+
+.s-4xx {
+  color: var(--warning);
+}
+
+.s-5xx {
+  color: var(--danger);
+}
+
+.s-other {
+  color: var(--text-secondary);
+}
+
+.meta-item {
+  font-size: 11px;
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+.meta-label {
+  color: var(--text-faint);
+  font-family: var(--font-ui);
+  margin-right: 6px;
+}
+
+.asset-meta {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.muted {
-  margin-left: auto;
-  color: var(--text-secondary);
+.url {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-all;
 }
 
-.headers,
-.body {
-  display: flex;
+.url-scheme {
+  color: var(--text-faint);
+}
+
+.url-host {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.url-path {
+  color: var(--text);
+}
+
+.url-query {
+  color: var(--warning);
+}
+
+.url-query-key {
+  color: var(--warning);
+}
+
+.url-query-eq {
+  color: var(--text-faint);
+}
+
+.url-query-value {
+  color: var(--accent);
+}
+
+.url-query-sep {
+  color: var(--text-faint);
+}
+
+/* ---------- 内容区：Headers + Body ---------- */
+
+.content {
+  flex: 1;
   min-height: 0;
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  overflow: hidden;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.headers-card {
+  flex: none;
+  width: min(320px, 40%);
+  display: flex;
   flex-direction: column;
 }
 
-h3 {
+.card-title {
   flex: none;
-  margin: 0;
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
   font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-app);
 }
 
-table {
+.count-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--bg-active);
+}
+
+.headers-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.kv-table {
   width: 100%;
   border-collapse: collapse;
-  overflow: auto;
+}
+
+.kv-table tr + tr {
+  border-top: 1px solid var(--border);
+}
+
+.kv-table tr:hover {
+  background: var(--bg-hover);
+}
+
+.kv-table td {
+  padding: 4px 10px;
+  vertical-align: top;
   font-size: 11px;
 }
 
-.headers > table {
-  display: block;
-  overflow: auto;
-}
-
-th,
-td {
-  padding: 5px 9px;
-  border-bottom: 1px solid var(--border-subtle);
-  text-align: left;
-  vertical-align: top;
-  word-break: break-all;
-}
-
-th {
-  width: 180px;
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-.editor {
-  min-height: 0;
-  flex: 1;
-}
-
-.asset-id {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 14px;
-  color: var(--text-secondary);
-}
-
-.asset-id code {
+.kv-name {
   color: var(--text);
+  white-space: nowrap;
+  width: 1%;
+  padding-right: 16px;
+}
+
+.kv-value {
+  color: var(--success);
   word-break: break-all;
 }
 
-.empty {
-  display: grid;
-  place-items: center;
-  min-height: 80px;
-  color: var(--text-faint);
-  font-size: 12px;
+.body-card {
+  flex: 1;
+  min-width: 0;
 }
 
-.empty.small {
-  min-height: 50px;
+.body-panel {
+  flex: 1;
+  min-width: 0;
 }
 </style>
