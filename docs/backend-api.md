@@ -193,6 +193,7 @@ browser UI.
 | `/api/logs/views` | `POST` batch incremental table-view rendering |
 | `/api/logs/{id}` | `GET` complete log detail |
 | `/api/logs/{id}/body` | `GET` raw stored or streaming-decoded request/response body |
+| `/api/logs/{id}/interceptors/{execution_id}/content`, `/snapshot` | `GET` one execution's executed source or entry snapshot |
 | `/api/breakpoints` | `GET` active breakpoints for one Session |
 | `/api/breakpoints/{id}` | `GET` live detail at the paused interceptor |
 | `/api/breakpoints/{id}/body` | `GET` raw stored or streaming-decoded live body |
@@ -453,7 +454,11 @@ response bodies can contain credentials or personal data; treat the file as sens
 plus `created_at`, `updated_at`, request `tags`, and ordered `request_interceptors` /
 `response_interceptors` execution arrays. Every execution contains a unique `execution_id`,
 `origin` (`saved` or `temporary`), `completed`, the historical script name, phase, zero-based
-position, SHA-256 hash, exact source content, its own modifications, and an optional runtime error.
+position, SHA-256 hash, `has_snapshot`, its own non-snapshot modifications, and an optional runtime
+error. The exact source and the entry snapshot are not embedded: `GET
+/api/logs/{id}/interceptors/{execution_id}/content` returns the UTF-8 source as `text/plain` with an
+`X-ProxyCrab-Script-SHA256` header, and `GET /api/logs/{id}/interceptors/{execution_id}/snapshot`
+returns the captured request/response state (`404 snapshot_not_found` when `has_snapshot` is false).
 Request-line changes use `method_set` with `method` and `uri_set` with `uri`, status changes use
 `status_set` with `status`, and tag changes use `tag_set` with `key` and `value`. Scripts that
 executed without changes are still present.
@@ -643,7 +648,8 @@ execution that changes Method, URI, Status, Headers, or Body starts its modifica
 entry snapshot. Request snapshots contain Method, URI, Version, Headers, and Body; response
 snapshots contain Status, Version, Headers, and Body. Tags and the response script's read-only
 request are excluded. Snapshot Body sources are `original`, complete `string`, or `asset_id`.
-Executions with no modifications or only Tag changes do not store a snapshot.
+Executions with no modifications or only Tag changes do not store a snapshot. Log detail omits that
+snapshot entry and the HTTP API exposes it only through the dedicated snapshot endpoint.
 
 ## Active interceptor breakpoints
 

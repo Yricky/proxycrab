@@ -19,6 +19,7 @@ import type {
   IdentityPermissions,
   InterceptorCreateRequest,
   InterceptorKind,
+  InterceptorSnapshotPayload,
   InterceptorUpdateRequest,
   LogDetail,
   LogIdsRequest,
@@ -223,6 +224,45 @@ export function createHttpBackend(
       call("/ui-api/validate-filter-regex", json("POST", { pattern })),
     getLog: (sessionId: number | null, id: number) =>
       call<LogDetail>(query(`/api/logs/${id}`, { session_id: sessionId })),
+    getInterceptorContent: async (sessionId, id, executionId) => {
+      const url = new URL(
+        query(`/api/logs/${id}/interceptors/${executionId}/content`, {
+          session_id: sessionId,
+        }),
+        baseUrl,
+      );
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          headers: { Authorization: authorization(token) },
+        });
+      } catch (cause) {
+        throw new BackendError({ code: "network_error", message: String(cause) });
+      }
+      if (!response.ok) {
+        let error: ManagerError = {
+          code: `http_${response.status}`,
+          message: `HTTP ${response.status}`,
+        };
+        try {
+          const payload = (await response.json()) as ApiEnvelope<unknown>;
+          if (payload.error) error = payload.error;
+        } catch {
+          // Keep the status-derived fallback when the server did not return JSON.
+        }
+        throw new BackendError(error);
+      }
+      return {
+        hash: response.headers.get("x-proxycrab-script-sha256") ?? "",
+        content: await response.text(),
+      };
+    },
+    getInterceptorSnapshot: (sessionId, id, executionId) =>
+      call<InterceptorSnapshotPayload>(
+        query(`/api/logs/${id}/interceptors/${executionId}/snapshot`, {
+          session_id: sessionId,
+        }),
+      ),
     listBreakpoints: (requestValue: BreakpointQuery) =>
       call(query("/api/breakpoints", requestValue as unknown as Record<string, unknown>)),
     getBreakpoint: (id: number) => call(`/api/breakpoints/${id}`),

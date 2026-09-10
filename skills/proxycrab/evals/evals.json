@@ -16,13 +16,13 @@
     {
       "id": 3,
       "prompt": "Create a ProxyCrab request interceptor named add-agent-debug-header that sets x-agent-debug: 1, attach it to the active Session without removing existing response interceptors, and verify on a newly captured request that it executed.",
-      "expected_output": "The agent saves valid Lua, preserves the response chain, atomically updates both chains, and cites a new capture's historical source and header_set modification as verification.",
+      "expected_output": "The agent saves valid Lua, preserves the response chain, atomically updates both chains, reads the new capture's historical source through the interceptor content endpoint, and cites the header_set modification as verification.",
       "files": []
     },
     {
       "id": 4,
       "prompt": "Create a ProxyCrab request interceptor named add-codec-metadata that JSON-serializes {source = \"agent\", enabled = true}, URL-safe Base64 encodes it without padding, and sets the result as x-agent-metadata. Attach it to the active Session without changing the response chain, then verify it on a newly captured request.",
-      "expected_output": "The agent uses json.encode and base64.url_encode(value, false) in valid Lua, preserves both existing chains except for the requested request interceptor addition, and cites a new capture's historical source plus the x-agent-metadata header_set modification as verification.",
+      "expected_output": "The agent uses json.encode and base64.url_encode(value, false) in valid Lua, preserves both existing chains except for the requested request interceptor addition, and verifies the new capture through its historical source (interceptor content endpoint) plus the x-agent-metadata header_set modification.",
       "files": []
     },
     {
@@ -203,6 +203,12 @@
       "id": 35,
       "prompt": "Save the request Body that ProxyCrab execution 17 saw on entry for log 42 in Session 3 to /tmp/proxycrab-before-interceptor.bin, allowing at most 16 MiB, without printing the Body.",
       "expected_output": "The agent uses body-get.mjs with session 3, log 42, execution 17, request side, max-size 16777216, and the requested output file. It reports the path and stored size without printing bytes, and does not confuse the interceptor-entry snapshot with the capture's final Body.",
+      "files": []
+    },
+    {
+      "id": 36,
+      "prompt": "For ProxyCrab log 42 in Session 3, read the exact source that request interceptor execution 17 ran and inspect the request and response state it saw on entry, without reading the capture's final Body.",
+      "expected_output": "The agent uses interceptor-get.mjs with session 3, log 42, execution 17, --what content to read the executed source and --what snapshot to read the entry snapshot that has_snapshot advertises. It does not treat that snapshot as the capture's final Body and does not expect embedded content or a snapshot entry in GET /api/logs/42.",
       "files": []
     }
   ]

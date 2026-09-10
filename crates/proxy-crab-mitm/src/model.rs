@@ -314,6 +314,20 @@ pub struct ResponseInterceptorSnapshot {
     pub body: BodySourceType,
 }
 
+/// The complete request and/or response state captured on entry to one interceptor execution.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InterceptorSnapshot {
+    pub request: Option<RequestInterceptorSnapshot>,
+    pub response: Option<ResponseInterceptorSnapshot>,
+}
+
+/// The exact source executed by one interceptor execution, with its stored SHA-256.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InterceptorScriptContent {
+    pub hash: String,
+    pub content: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Modification {
@@ -370,7 +384,7 @@ pub struct InterceptorExecution {
     pub position: usize,
     pub name: String,
     pub script_hash: String,
-    pub content: String,
+    pub has_snapshot: bool,
     pub modifications: Vec<Modification>,
     pub error: Option<String>,
 }

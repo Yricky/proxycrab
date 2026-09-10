@@ -6,17 +6,21 @@ use std::{
 
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Extension, Path, Query, Request, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
-        header::{CACHE_CONTROL, REFERRER_POLICY},
+        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, REFERRER_POLICY},
     },
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use proxy_crab_mitm::{model::Script, storage::BodySide};
+use proxy_crab_mitm::{
+    model::{InterceptorScriptContent, Script},
+    storage::BodySide,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -241,6 +245,14 @@ pub fn router(manager: Arc<dyn ProxyCrabManager>, shares: Arc<SessionShareServic
         .route("/share-api/logs/views", post(log_views))
         .route("/share-api/logs/{id}", get(log))
         .route("/share-api/logs/{id}/body", get(log_body))
+        .route(
+            "/share-api/logs/{id}/interceptors/{execution_id}/content",
+            get(log_interceptor_content),
+        )
+        .route(
+            "/share-api/logs/{id}/interceptors/{execution_id}/snapshot",
+            get(log_interceptor_snapshot),
+        )
         .route("/share-api/column-scripts", get(column_scripts))
         .route("/share-api/filter-scripts", get(filter_scripts))
         .route(
@@ -432,6 +444,46 @@ async fn log_body(
     body_response(source, &headers, query.max_size)
         .await
         .map_err(ShareApiError)
+}
+
+async fn log_interceptor_content(
+    State(state): State<Arc<ShareState>>,
+    Extension(scope): Extension<ShareScope>,
+    Path((id, execution_id)): Path<(u64, u64)>,
+) -> Result<Response, ShareApiError> {
+    let InterceptorScriptContent { hash, content } = state
+        .manager
+        .interceptor_script_content(Some(scope.session_id), id, execution_id)
+        .await?;
+    let length = content.len();
+    let mut response = Response::new(Body::from(content));
+    let headers = response.headers_mut();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    headers.insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&length.to_string()).expect("usize is always a valid Content-Length"),
+    );
+    headers.insert(
+        "x-proxycrab-script-sha256",
+        HeaderValue::from_str(&hash).expect("SHA-256 hex is a safe header value"),
+    );
+    Ok(response)
+}
+
+async fn log_interceptor_snapshot(
+    State(state): State<Arc<ShareState>>,
+    Extension(scope): Extension<ShareScope>,
+    Path((id, execution_id)): Path<(u64, u64)>,
+) -> Result<Json<serde_json::Value>, ShareApiError> {
+    success(
+        state
+            .manager
+            .interceptor_snapshot(Some(scope.session_id), id, execution_id)
+            .await?,
+    )
 }
 
 async fn column_scripts(

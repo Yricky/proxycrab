@@ -1254,7 +1254,15 @@ async fn session_interceptor_chain_executes_and_records_source() {
     let detail = runtime.capture(session.id, capture.id).unwrap().unwrap();
     assert_eq!(detail.request_interceptors.len(), 1);
     assert_eq!(detail.request_interceptors[0].name, "session-header");
-    assert_eq!(detail.request_interceptors[0].content, source);
+    let content = runtime
+        .interceptor_script_content(
+            session.id,
+            capture.id,
+            detail.request_interceptors[0].execution_id,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(content.content, source);
 
     runtime.stop_proxy().await.unwrap();
     upstream.abort();

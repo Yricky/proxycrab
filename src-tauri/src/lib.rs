@@ -28,8 +28,9 @@ use proxy_crab_mitm::{
     ProxyCrab,
     log_buffer::{BufferLayer, LogBuffer},
     model::{
-        AppConfig, BreakpointSummary, InterceptorKind, ProxyStatus, Script, SessionFilter,
-        SessionMetadata, SystemLogEntry, TemporaryExecutionResult,
+        AppConfig, BreakpointSummary, InterceptorKind, InterceptorScriptContent,
+        InterceptorSnapshot, ProxyStatus, Script, SessionFilter, SessionMetadata, SystemLogEntry,
+        TemporaryExecutionResult,
     },
 };
 use tauri::{
@@ -330,6 +331,32 @@ async fn get_log(
     id: u64,
 ) -> Result<LogDetail, ManagerError> {
     state.manager().log(session_id, id).await
+}
+
+#[tauri::command]
+async fn get_interceptor_content(
+    state: State<'_, BackendState>,
+    session_id: Option<u64>,
+    id: u64,
+    execution_id: u64,
+) -> Result<InterceptorScriptContent, ManagerError> {
+    state
+        .manager()
+        .interceptor_script_content(session_id, id, execution_id)
+        .await
+}
+
+#[tauri::command]
+async fn get_interceptor_snapshot(
+    state: State<'_, BackendState>,
+    session_id: Option<u64>,
+    id: u64,
+    execution_id: u64,
+) -> Result<InterceptorSnapshot, ManagerError> {
+    state
+        .manager()
+        .interceptor_snapshot(session_id, id, execution_id)
+        .await
 }
 
 #[tauri::command]
@@ -1013,6 +1040,8 @@ pub fn run() {
             get_log_views,
             validate_filter_regex,
             get_log,
+            get_interceptor_content,
+            get_interceptor_snapshot,
             list_breakpoints,
             get_breakpoint,
             extend_breakpoint,

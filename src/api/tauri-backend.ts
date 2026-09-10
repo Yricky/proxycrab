@@ -19,7 +19,9 @@ import type {
   EnableHarShareRequest,
   HarShareState,
   InterceptorCreateRequest,
+  InterceptorContent,
   InterceptorKind,
+  InterceptorSnapshotPayload,
   InterceptorUpdateRequest,
   HttpServiceStatus,
   IdentityPermissions,
@@ -151,6 +153,14 @@ export function createTauriBackend(): Backend {
       call("validate_filter_regex", { pattern }),
     getLog: (sessionId: number | null, id: number) =>
       call<LogDetail>("get_log", { sessionId, id }),
+    getInterceptorContent: (sessionId: number | null, id: number, executionId: number) =>
+      call<InterceptorContent>("get_interceptor_content", { sessionId, id, executionId }),
+    getInterceptorSnapshot: (sessionId: number | null, id: number, executionId: number) =>
+      call<InterceptorSnapshotPayload>("get_interceptor_snapshot", {
+        sessionId,
+        id,
+        executionId,
+      }),
     listBreakpoints: (query: BreakpointQuery) => call("list_breakpoints", { query }),
     getBreakpoint: (id: number) => call("get_breakpoint", { id }),
     extendBreakpoint: (id: number, request: ExtendBreakpointRequest) =>

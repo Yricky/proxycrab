@@ -71,6 +71,7 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
 | Read active Agent instructions | `scripts/agents-get.mjs` |
 | Find existing traffic | `scripts/session-list.mjs`, then `scripts/log-query.mjs` |
 | Inspect one capture | `scripts/log-get.mjs` |
+| Read an interceptor execution's source or entry snapshot | `scripts/interceptor-get.mjs` |
 | Save a complete request/response body | `scripts/body-get.mjs` |
 | Upload an immutable workspace Asset | `scripts/asset-upload.mjs` |
 | Wait for a new matching capture | `scripts/log-wait.mjs` |
@@ -135,8 +136,10 @@ skill directory.
    - `outcome`, `stage`, and `error` identify transport and proxy failures.
    - Request URI, headers, and body describe what was sent.
    - Response status, headers, and body describe what came back.
-   - `request_interceptors` and `response_interceptors` preserve exact executed source, order,
-     modifications, hashes, and runtime errors.
+   - `request_interceptors` and `response_interceptors` preserve execution order, hashes,
+     non-snapshot modifications, and runtime errors. `log-get.mjs` does not embed the executed
+     source or the entry snapshot; read them with `interceptor-get.mjs` using the capture ID and the
+     execution's `execution_id` when `has_snapshot` is true.
    - An absent response can be normal for `in_progress`, a tunnel, or a failed exchange; interpret it
      with `outcome`, `stage`, and `error`. If current activity matters, read `ProxyStatus`: a netlog
      ID is active only when it appears under its Session ID in `running.active_netlog`. Do not infer
@@ -213,7 +216,9 @@ node <skill-dir>/scripts/session-interceptors-set.mjs \
 ```
 
 Do not claim that an interceptor worked merely because it saved successfully. Capture a new request
-and verify the historical execution and modifications in `log-get.mjs` output.
+and verify the historical execution and modifications with `log-get.mjs`, then read the executed
+source with `interceptor-get.mjs --what content` and the entry snapshot with
+`interceptor-get.mjs --what snapshot` when `has_snapshot` is true.
 
 When an interceptor is paused, list active breakpoints before acting:
 

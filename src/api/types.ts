@@ -150,6 +150,18 @@ export interface ResponseInterceptorSnapshot {
   body: BodySourceType;
 }
 
+/** Returned by the dedicated interceptor snapshot endpoint. Exactly one side is present. */
+export interface InterceptorSnapshotPayload {
+  request: RequestInterceptorSnapshot | null;
+  response: ResponseInterceptorSnapshot | null;
+}
+
+/** Returned by the dedicated interceptor script content endpoint. */
+export interface InterceptorContent {
+  hash: string;
+  content: string;
+}
+
 export type Modification =
   | {
       kind: "snapshot";
@@ -165,6 +177,9 @@ export type Modification =
   | { kind: "body_replace_string"; content: string }
   | { kind: "body_replace_asset"; asset_id: string }
   | { kind: "tag_set"; key: string; value: string };
+
+/** Log detail omits the snapshot entry; fetch it from the snapshot endpoint instead. */
+export type InterceptorModification = Exclude<Modification, { kind: "snapshot" }>;
 
 export type InterceptorExecutionOrigin = "saved" | "temporary";
 
@@ -395,8 +410,8 @@ export interface InterceptorExecution {
   position: number;
   name: string;
   script_hash: string;
-  content: string;
-  modifications: Modification[];
+  has_snapshot: boolean;
+  modifications: InterceptorModification[];
   error: string | null;
 }
 

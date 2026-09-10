@@ -16,10 +16,10 @@ use crate::{
     model::{
         AppConfig, BodyPayload, BreakpointDetail, BreakpointListFilter, BreakpointSummary,
         CaptureDetail, CaptureSummary, Column, FilterColumn, FilterOption, InterceptorKind,
-        InterceptorLibraryItem, MAX_SESSION_INTERCEPTORS_PER_KIND, ProxyStatus,
-        ResolvedSessionInterceptor, ResolvedSessionInterceptors, Script, ScriptKind, SessionFilter,
-        SessionInterceptors, SessionMetadata, SessionView, SystemLogEntry,
-        TemporaryExecutionResult,
+        InterceptorLibraryItem, InterceptorScriptContent, InterceptorSnapshot,
+        MAX_SESSION_INTERCEPTORS_PER_KIND, ProxyStatus, ResolvedSessionInterceptor,
+        ResolvedSessionInterceptors, Script, ScriptKind, SessionFilter, SessionInterceptors,
+        SessionMetadata, SessionView, SystemLogEntry, TemporaryExecutionResult,
     },
     proxy::{ProxyController, UpstreamClient},
     storage::{
@@ -384,6 +384,28 @@ impl ProxyCrab {
         self.pin_capture_store(session_id)?
             .store
             .interceptor_snapshot_body_source(capture_id, execution_id, side)
+    }
+
+    pub fn interceptor_snapshot(
+        &self,
+        session_id: u64,
+        capture_id: u64,
+        execution_id: u64,
+    ) -> Result<Option<InterceptorSnapshot>> {
+        self.pin_capture_store(session_id)?
+            .store
+            .interceptor_snapshot(capture_id, execution_id)
+    }
+
+    pub fn interceptor_script_content(
+        &self,
+        session_id: u64,
+        capture_id: u64,
+        execution_id: u64,
+    ) -> Result<Option<InterceptorScriptContent>> {
+        self.pin_capture_store(session_id)?
+            .store
+            .interceptor_script_content(capture_id, execution_id)
     }
 
     pub fn breakpoint_body_source(&self, id: u64, side: BodySide) -> Result<Option<BodySource>> {

@@ -17,8 +17,8 @@ use crate::{
     model::{
         BodyPayload, BodySourceType, CaptureDetail, CaptureError, CaptureModifications,
         CaptureOutcome, CaptureSummary, ErrorStage, HeaderValues, InterceptorExecution,
-        InterceptorExecutionOrigin, InterceptorKind, InterceptorRun, Modification, RequestData,
-        RequestTags, ResponseData,
+        InterceptorExecutionOrigin, InterceptorKind, InterceptorRun, InterceptorScriptContent,
+        InterceptorSnapshot, Modification, RequestData, RequestTags, ResponseData,
     },
     workspace::now_millis,
 };
@@ -340,43 +340,76 @@ impl CaptureStore {
         Ok(())
     }
 
+    pub fn interceptor_snapshot(
+        &self,
+        capture_id: u64,
+        execution_id: u64,
+    ) -> Result<Option<InterceptorSnapshot>> {
+        let row = self
+            .connection()?
+            .query_row(
+                "SELECT modifications
+                 FROM capture_interceptor_runs WHERE id=?1 AND capture_id=?2",
+                params![execution_id as i64, capture_id as i64],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(modifications) = row else {
+            return Ok(None);
+        };
+        let modifications: Vec<Modification> = serde_json::from_str(&modifications)?;
+        Ok(modifications
+            .into_iter()
+            .find_map(|modification| match modification {
+                Modification::Snapshot { request, response } => {
+                    Some(InterceptorSnapshot { request, response })
+                }
+                _ => None,
+            }))
+    }
+
+    pub fn interceptor_script_content(
+        &self,
+        capture_id: u64,
+        execution_id: u64,
+    ) -> Result<Option<InterceptorScriptContent>> {
+        Ok(self
+            .connection()?
+            .query_row(
+                "SELECT runs.script_hash, contents.content
+                 FROM capture_interceptor_runs AS runs
+                 JOIN interceptor_script_contents AS contents
+                   ON contents.hash = runs.script_hash
+                 WHERE runs.id=?1 AND runs.capture_id=?2",
+                params![execution_id as i64, capture_id as i64],
+                |row| {
+                    Ok(InterceptorScriptContent {
+                        hash: row.get(0)?,
+                        content: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     pub fn interceptor_snapshot_body_source(
         &self,
         capture_id: u64,
         execution_id: u64,
         side: BodySide,
     ) -> Result<Option<BodySource>> {
-        let row = self
-            .connection()?
-            .query_row(
-                "SELECT capture_id, modifications
-                 FROM capture_interceptor_runs WHERE id=?1 AND capture_id=?2",
-                params![execution_id as i64, capture_id as i64],
-                |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, String>(1)?)),
-            )
-            .optional()?;
-        let Some((_capture_id, modifications)) = row else {
-            return Ok(None);
-        };
-        let modifications: Vec<Modification> = serde_json::from_str(&modifications)?;
-        let snapshot = modifications
-            .into_iter()
-            .find_map(|modification| match modification {
-                Modification::Snapshot { request, response } => Some((request, response)),
-                _ => None,
-            });
-        let Some((request, response)) = snapshot else {
+        let Some(snapshot) = self.interceptor_snapshot(capture_id, execution_id)? else {
             return Ok(None);
         };
         let (headers, body) = match side {
             BodySide::Request => {
-                let Some(snapshot) = request else {
+                let Some(snapshot) = snapshot.request else {
                     return Ok(None);
                 };
                 (snapshot.headers, snapshot.body)
             }
             BodySide::Response => {
-                let Some(snapshot) = response else {
+                let Some(snapshot) = snapshot.response else {
                     return Ok(None);
                 };
                 (snapshot.headers, snapshot.body)
@@ -774,17 +807,21 @@ impl CaptureStore {
     ) -> Result<Vec<InterceptorExecution>> {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
-            "SELECT runs.id, runs.origin, runs.completed, runs.position, runs.name,
-                    runs.script_hash, contents.content, runs.modifications, runs.error
-             FROM capture_interceptor_runs AS runs
-             JOIN interceptor_script_contents AS contents
-               ON contents.hash = runs.script_hash
-             WHERE runs.capture_id=?1 AND runs.phase=?2
-             ORDER BY runs.id ASC",
+            "SELECT id, origin, completed, position, name, script_hash, modifications, error
+             FROM capture_interceptor_runs
+             WHERE capture_id=?1 AND phase=?2
+             ORDER BY id ASC",
         )?;
         let executions =
             statement.query_map(params![id as i64, interceptor_phase_name(phase)], |row| {
-                let modifications: String = row.get(7)?;
+                let modifications: String = row.get(6)?;
+                let mut modifications: Vec<Modification> =
+                    serde_json::from_str(&modifications).unwrap_or_default();
+                let has_snapshot = modifications
+                    .iter()
+                    .any(|modification| matches!(modification, Modification::Snapshot { .. }));
+                modifications
+                    .retain(|modification| !matches!(modification, Modification::Snapshot { .. }));
                 Ok(InterceptorExecution {
                     execution_id: row.get::<_, i64>(0)? as u64,
                     origin: parse_interceptor_origin(&row.get::<_, String>(1)?),
@@ -793,9 +830,9 @@ impl CaptureStore {
                     position: row.get::<_, i64>(3)? as usize,
                     name: row.get(4)?,
                     script_hash: row.get(5)?,
-                    content: row.get(6)?,
-                    modifications: serde_json::from_str(&modifications).unwrap_or_default(),
-                    error: row.get(8)?,
+                    has_snapshot,
+                    modifications,
+                    error: row.get(7)?,
                 })
             })?;
         executions
@@ -1150,6 +1187,22 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        let snapshot = store
+            .interceptor_snapshot(id, execution_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot.request.expect("request snapshot").method, "POST");
+        assert!(snapshot.response.is_none());
+        let detail = store.get(id).unwrap().unwrap();
+        let execution = &detail.request_interceptors[0];
+        assert!(execution.has_snapshot);
+        assert!(execution.modifications.is_empty());
+        assert!(
+            store
+                .interceptor_script_content(id, execution_id)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
@@ -1437,7 +1490,13 @@ mod tests {
         assert_eq!(detail.summary.request.tags["team"], "checkout");
         assert_eq!(detail.request_interceptors.len(), 3);
         assert_eq!(detail.request_interceptors[0].name, "first");
-        assert_eq!(detail.request_interceptors[0].content, source);
+        assert!(!detail.request_interceptors[0].has_snapshot);
+        let stored = store
+            .interceptor_script_content(id, detail.request_interceptors[0].execution_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.hash, hash);
+        assert_eq!(stored.content, source);
         assert_eq!(
             detail.request_interceptors[0].origin,
             InterceptorExecutionOrigin::Saved
@@ -1523,7 +1582,12 @@ mod tests {
         assert!(detail.summary.request.tags.is_empty());
         assert_eq!(detail.request_interceptors.len(), 1);
         assert_eq!(detail.request_interceptors[0].name, "legacy");
-        assert_eq!(detail.request_interceptors[0].content, source);
+        let stored = store
+            .interceptor_script_content(1, detail.request_interceptors[0].execution_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.hash, hash);
+        assert_eq!(stored.content, source);
         assert_eq!(
             detail.request_interceptors[0].origin,
             InterceptorExecutionOrigin::Saved

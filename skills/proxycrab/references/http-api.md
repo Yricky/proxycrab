@@ -623,34 +623,55 @@ Each interceptor execution is:
   "position": 0,
   "name": "add-debug-header",
   "script_hash": "lowercase-sha256",
-  "content": "req.headers:set(\"x-debug\", \"1\")",
+  "has_snapshot": true,
   "modifications": [
-    {
-      "kind": "snapshot",
-      "request": {
-        "method": "GET",
-        "uri": "https://example.com/",
-        "version": "HTTP/1.1",
-        "headers": { "host": ["example.com"] },
-        "body": { "type": "original" }
-      },
-      "response": null
-    },
     { "kind": "header_set", "name": "x-debug", "value": "1" }
   ],
   "error": null
 }
 ```
 
-The first `snapshot` is present only when that execution changed Method, URI, Status, Headers, or
-Body. It contains the complete cumulative request state for request interceptors, or complete
-response state for response interceptors, as seen on entry. Snapshot bodies are `original`,
-`string` with complete `content`, or `asset` with `asset_id`; tags and the response interceptor's
-read-only request are not included. Other modification variants are `method_set` with `method`,
-`uri_set` with `uri`, `status_set` with `status`, `header_append`, `header_remove` with `values`,
-`body_replace_string` with `content`, `body_replace_asset` with `asset_id`, and `tag_set` with `key`
-and `value`. Multiple temporary executions may share the same phase and position; use
-`execution_id` and array order rather than treating position as unique.
+The exact executed Lua source is not embedded. Read it from
+`GET /api/logs/{id}/interceptors/{execution_id}/content`. The entry snapshot is also not embedded:
+`has_snapshot` is `true` only when that execution changed Method, URI, Status, Headers, or Body,
+and the complete entry state is available at
+`GET /api/logs/{id}/interceptors/{execution_id}/snapshot`. Modification variants are `method_set`
+with `method`, `uri_set` with `uri`, `status_set` with `status`, `header_append`, `header_set`,
+`header_remove` with `values`, `body_replace_string` with `content`, `body_replace_asset` with
+`asset_id`, and `tag_set` with `key` and `value`. Multiple temporary executions may share the same
+phase and position; use `execution_id` and array order rather than treating position as unique.
+
+### `GET /api/logs/{id}/interceptors/{execution_id}/content?session_id=3`
+
+Returns the exact UTF-8 source executed by that interceptor execution as an unwrapped
+`text/plain; charset=utf-8` stream. The `X-ProxyCrab-Script-SHA256` response header carries the
+lowercase SHA-256 that also appears as the execution's `script_hash`. A missing execution returns
+404 `execution_not_found`.
+
+### `GET /api/logs/{id}/interceptors/{execution_id}/snapshot?session_id=3`
+
+Returns the entry snapshot captured for that execution:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "request": {
+      "method": "GET",
+      "uri": "https://example.com/",
+      "version": "HTTP/1.1",
+      "headers": { "host": ["example.com"] },
+      "body": { "type": "original" }
+    },
+    "response": null
+  }
+}
+```
+
+The absent side is `null`. Snapshot bodies are `original`, `string` with complete `content`, or
+`asset` with `asset_id`; tags and the response interceptor's read-only request are not included.
+When `has_snapshot` is false or the execution does not exist the endpoint returns 404
+`snapshot_not_found`.
 
 ### `GET /api/logs/{id}/body?session_id=3&side=request&max_size=16777216`
 
