@@ -32,6 +32,7 @@ import {
   urlSegments as buildUrlSegments,
   type UrlSegment,
 } from "../utils/url-segments";
+import SegmentedUrl from "../components/SegmentedUrl.vue";
 import type { BodyTarget } from "../api/body";
 
 const props = defineProps<{
@@ -576,11 +577,11 @@ function headerCount(headers: HeaderItem[]): string {
             <Io5ChevronDown :size="10" />
           </button>
         </div>
-        <div class="url mono" :title="detail.request.uri">
-          <span v-for="(seg, i) in urlSegments" :key="i" :class="seg.cls">{{
-            seg.text
-          }}</span>
-        </div>
+        <SegmentedUrl
+          class="url"
+          :segments="urlSegments"
+          :title="detail.request.uri"
+        />
         <!-- 错误横幅 -->
         <div v-if="detail.error" class="error-banner">
           <Io5Warning :size="14" class="error-icon" />
@@ -1074,45 +1075,9 @@ function headerCount(headers: HeaderItem[]): string {
   background: var(--text-faint);
 }
 
-/* URL 分段着色 */
+/* URL 分段着色见 SegmentedUrl 组件 */
 .url {
   margin-top: 4px;
-  font-size: 12px;
-  line-height: 1.4;
-  word-break: break-all;
-}
-
-.url-scheme {
-  color: var(--text-faint);
-}
-
-.url-host {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.url-path {
-  color: var(--text);
-}
-
-.url-query {
-  color: var(--warning);
-}
-
-.url-query-key {
-  color: var(--warning);
-}
-
-.url-query-eq {
-  color: var(--text-faint);
-}
-
-.url-query-value {
-  color: var(--accent);
-}
-
-.url-query-sep {
-  color: var(--text-faint);
 }
 
 .meta-item {

@@ -9,6 +9,7 @@ import type {
   InterceptorSnapshotPayload,
 } from "../api/types";
 import BodyViewer from "../components/BodyViewer.vue";
+import SegmentedUrl from "../components/SegmentedUrl.vue";
 import { urlSegments as buildUrlSegments } from "../utils/url-segments";
 
 const props = defineProps<{
@@ -123,11 +124,12 @@ const urlSegments = computed(() =>
             <span class="meta-label">Body 资产</span>{{ assetId }}
           </span>
         </div>
-        <div v-if="request" class="url mono" :title="request.uri">
-          <span v-for="(seg, i) in urlSegments" :key="i" :class="seg.cls">{{
-            seg.text
-          }}</span>
-        </div>
+        <SegmentedUrl
+          v-if="request"
+          class="url"
+          :segments="urlSegments"
+          :title="request.uri"
+        />
       </header>
 
       <div class="content">
@@ -293,42 +295,6 @@ const urlSegments = computed(() =>
 
 .url {
   margin-top: 4px;
-  font-size: 12px;
-  line-height: 1.4;
-  word-break: break-all;
-}
-
-.url-scheme {
-  color: var(--text-faint);
-}
-
-.url-host {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.url-path {
-  color: var(--text);
-}
-
-.url-query {
-  color: var(--warning);
-}
-
-.url-query-key {
-  color: var(--warning);
-}
-
-.url-query-eq {
-  color: var(--text-faint);
-}
-
-.url-query-value {
-  color: var(--accent);
-}
-
-.url-query-sep {
-  color: var(--text-faint);
 }
 
 /* ---------- 内容区：Headers + Body ---------- */

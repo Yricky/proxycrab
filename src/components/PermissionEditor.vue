@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, type Component } from "vue";
+import { Io5Ban, Io5Checkmark, Io5HandLeft } from "vue-icons-plus/io5";
 import type { ApiActionView, PermissionMode } from "../api/types";
 import {
   ACTION_LABELS,
@@ -10,7 +11,6 @@ import {
   functionGroupOf,
   impactGroupOf,
 } from "../utils/permission-meta";
-import CustomSelect, { type CustomSelectOption } from "./CustomSelect.vue";
 
 const MIXED = "mixed";
 const props = defineProps<{
@@ -24,22 +24,23 @@ const emit = defineEmits<{
   "update:modelValue": [value: Record<string, PermissionMode>];
 }>();
 
-const allModeOptions: CustomSelectOption[] = [
-  { value: "allow", label: "允许", description: "直接执行" },
-  { value: "approval", label: "审批", description: "桌面确认后执行" },
-  { value: "deny", label: "阻止", description: "直接拒绝" },
+interface ModeOption {
+  value: PermissionMode;
+  label: string;
+  description: string;
+  icon: Component;
+}
+
+const ALL_MODES: ModeOption[] = [
+  { value: "allow", label: "允许", description: "直接执行", icon: Io5Checkmark },
+  { value: "approval", label: "审批", description: "桌面确认后执行", icon: Io5HandLeft },
+  { value: "deny", label: "阻止", description: "直接拒绝", icon: Io5Ban },
 ];
-const modeOptions = computed(() =>
-  allModeOptions.filter((option) =>
-    (props.allowedModes ?? ["allow", "approval", "deny"]).includes(
-      option.value as PermissionMode,
-    ),
+const modes = computed(() =>
+  ALL_MODES.filter((option) =>
+    (props.allowedModes ?? ["allow", "approval", "deny"]).includes(option.value),
   ),
 );
-const groupOptions = computed<CustomSelectOption[]>(() => [
-  { value: MIXED, label: "混合", disabled: true },
-  ...modeOptions.value,
-]);
 
 interface ActionGroup {
   key: string;
@@ -76,22 +77,21 @@ function groupMode(actions: ApiActionView[]): PermissionMode | typeof MIXED {
     : MIXED;
 }
 
-function updateAction(actionId: string, mode: string): void {
+function actionMode(action: ApiActionView): PermissionMode {
+  return props.modelValue[action.id] ?? action.default_mode;
+}
+
+function updateAction(actionId: string, mode: PermissionMode): void {
   emit("update:modelValue", {
     ...props.modelValue,
-    [actionId]: mode as PermissionMode,
+    [actionId]: mode,
   });
 }
 
-function updateGroup(actions: ApiActionView[], mode: string): void {
-  if (mode === MIXED) return;
+function updateGroup(actions: ApiActionView[], mode: PermissionMode): void {
   const next = { ...props.modelValue };
-  for (const action of actions) next[action.id] = mode as PermissionMode;
+  for (const action of actions) next[action.id] = mode;
   emit("update:modelValue", next);
-}
-
-function modeClass(mode: PermissionMode | typeof MIXED): string {
-  return `mode-${mode}`;
 }
 </script>
 
@@ -103,15 +103,25 @@ function modeClass(mode: PermissionMode | typeof MIXED): string {
           <strong>{{ group.label }}</strong>
           <span>{{ group.actions.length }} 项</span>
         </div>
-        <CustomSelect
-          class="mode-select group-mode"
-          :class="modeClass(groupMode(group.actions))"
-          :model-value="groupMode(group.actions)"
-          :options="groupOptions"
-          :disabled="disabled"
+        <div
+          class="mode-group"
+          role="group"
           :aria-label="`${group.label}整组权限`"
-          @update:model-value="updateGroup(group.actions, $event)"
-        />
+        >
+          <button
+            v-for="mode in modes"
+            :key="mode.value"
+            type="button"
+            class="mode-btn"
+            :class="[`m-${mode.value}`, { active: groupMode(group.actions) === mode.value }]"
+            :title="`${mode.label}：${mode.description}（应用到整组）`"
+            :aria-pressed="groupMode(group.actions) === mode.value"
+            :disabled="disabled"
+            @click="updateGroup(group.actions, mode.value)"
+          >
+            <component :is="mode.icon" :size="12" />
+          </button>
+        </div>
       </header>
       <div
         v-for="action in group.actions"
@@ -123,15 +133,25 @@ function modeClass(mode: PermissionMode | typeof MIXED): string {
           <span>{{ actionLabel(action) }}</span>
           <code>{{ action.route_template }}</code>
         </div>
-        <CustomSelect
-          class="mode-select"
-          :class="modeClass(modelValue[action.id] ?? action.default_mode)"
-          :model-value="modelValue[action.id] ?? action.default_mode"
-          :options="modeOptions"
-          :disabled="disabled"
+        <div
+          class="mode-group"
+          role="group"
           :aria-label="`${actionLabel(action)}权限`"
-          @update:model-value="updateAction(action.id, $event)"
-        />
+        >
+          <button
+            v-for="mode in modes"
+            :key="mode.value"
+            type="button"
+            class="mode-btn"
+            :class="[`m-${mode.value}`, { active: actionMode(action) === mode.value }]"
+            :title="`${mode.label}：${mode.description}`"
+            :aria-pressed="actionMode(action) === mode.value"
+            :disabled="disabled"
+            @click="updateAction(action.id, mode.value)"
+          >
+            <component :is="mode.icon" :size="12" />
+          </button>
+        </div>
       </div>
     </section>
   </div>
@@ -144,22 +164,21 @@ function modeClass(mode: PermissionMode | typeof MIXED): string {
 .group-header > div { display: flex; align-items: baseline; gap: 7px; }
 .group-header strong { font-size: 12px; }
 .group-header span { color: var(--text-faint); font-size: 10px; }
-.permission-row { min-height: 42px; display: grid; grid-template-columns: 58px minmax(0, 1fr) 126px; align-items: center; gap: 10px; padding: 5px 0 5px 8px; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.permission-row { min-height: 42px; display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 5px 0 5px 8px; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
 .permission-row:hover { background: var(--bg-hover); }
 .method { font-size: 10px; font-weight: 700; color: var(--text-secondary); }
 .action-copy { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
 .action-copy > span { flex: none; font-size: 12px; }
 .action-copy code { min-width: 0; overflow: hidden; color: var(--text-faint); font: 10px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; user-select: text; }
-.mode-select { width: 126px; justify-self: end; }
-.group-mode { width: 126px; }
-.mode-allow { --mode-color: var(--success); }
-.mode-approval { --mode-color: var(--warning); }
-.mode-deny { --mode-color: var(--danger); }
-.mode-mixed { --mode-color: var(--text-faint); }
-.mode-select :deep(.select-trigger) { border-left: 3px solid var(--mode-color); }
+.mode-group { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-panel); justify-self: end; }
+.mode-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 18px; border: 0; border-radius: 999px; background: transparent; color: var(--text-faint); cursor: pointer; }
+.mode-btn:hover:not(:disabled):not(.active) { color: var(--text); background: var(--bg-hover); }
+.mode-btn.active.m-allow { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+.mode-btn.active.m-approval { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+.mode-btn.active.m-deny { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.mode-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 @media (max-width: 680px) {
-  .permission-row { grid-template-columns: 52px minmax(0, 1fr) 112px; }
-  .mode-select, .group-mode { width: 112px; }
+  .permission-row { grid-template-columns: 52px minmax(0, 1fr) auto; }
   .action-copy { display: block; }
   .action-copy code { display: block; margin-top: 2px; }
 }
