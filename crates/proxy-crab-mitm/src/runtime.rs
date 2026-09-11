@@ -295,7 +295,7 @@ impl ProxyCrab {
         {
             bail!("session {session_id} not found");
         }
-        let store = CaptureStore::open(session_id, &self.workspace.session_dir(session_id))?;
+        let store = CaptureStore::open(session_id, self.workspace.root())?;
         self.stores
             .lock()
             .expect("capture stores lock poisoned")

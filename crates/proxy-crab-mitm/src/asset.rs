@@ -1,5 +1,5 @@
 use std::{
-    io::{ErrorKind, Read, Write},
+    io::ErrorKind,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -100,88 +100,6 @@ impl AssetStore {
         }
     }
 
-    pub(crate) fn import_file_with_suffix(
-        &self,
-        preferred_id: &str,
-        source: &Path,
-        content_type: String,
-        created_at: u64,
-    ) -> Result<AssetMetadata, AssetError> {
-        let mut suffix = 0_u64;
-        loop {
-            let id = if suffix == 0 {
-                preferred_id.to_owned()
-            } else {
-                format!("{preferred_id}-{suffix}")
-            };
-            validate_asset_id(&id)?;
-            match self.ensure_available(&id) {
-                Ok(()) => {}
-                Err(AssetError::AlreadyExists(_)) => {
-                    suffix += 1;
-                    continue;
-                }
-                Err(error) => return Err(error),
-            }
-            let asset_path = self.asset_path(&id);
-            let metadata_path = self.metadata_path(&id);
-            create_parent(&asset_path, &id)?;
-            create_parent(&metadata_path, &id)?;
-            let mut destination = match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&asset_path)
-            {
-                Ok(file) => file,
-                Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                    suffix += 1;
-                    continue;
-                }
-                Err(error) => return Err(error.into()),
-            };
-            let copy_result = (|| -> std::io::Result<(u64, String)> {
-                let mut source = std::fs::File::open(source)?;
-                let mut hasher = Sha256::new();
-                let mut size = 0_u64;
-                let mut buffer = [0_u8; 64 * 1024];
-                loop {
-                    let read = source.read(&mut buffer)?;
-                    if read == 0 {
-                        break;
-                    }
-                    destination.write_all(&buffer[..read])?;
-                    hasher.update(&buffer[..read]);
-                    size += read as u64;
-                }
-                destination.sync_all()?;
-                Ok((size, format!("{:x}", hasher.finalize())))
-            })();
-            let (size, sha256) = match copy_result {
-                Ok(result) => result,
-                Err(error) => {
-                    drop(destination);
-                    let _ = std::fs::remove_file(&asset_path);
-                    return Err(error.into());
-                }
-            };
-            let metadata = AssetMetadata {
-                id: id.clone(),
-                size,
-                content_type: content_type.clone(),
-                sha256,
-                created_at,
-            };
-            let result = serde_json::to_vec_pretty(&metadata)
-                .map_err(AssetError::from)
-                .and_then(|content| std::fs::write(&metadata_path, content).map_err(Into::into));
-            if let Err(error) = result {
-                let _ = std::fs::remove_file(&asset_path);
-                return Err(error);
-            }
-            return Ok(metadata);
-        }
-    }
-
     pub async fn begin_upload(
         &self,
         id: &str,
@@ -212,7 +130,7 @@ impl AssetStore {
         })
     }
 
-    fn ensure_available(&self, id: &str) -> Result<(), AssetError> {
+    pub(crate) fn ensure_available(&self, id: &str) -> Result<(), AssetError> {
         let asset_path = self.asset_path(id);
         let metadata_path = self.metadata_path(id);
         if asset_path.is_dir() {
@@ -232,11 +150,11 @@ impl AssetStore {
         Ok(())
     }
 
-    fn asset_path(&self, id: &str) -> PathBuf {
+    pub(crate) fn asset_path(&self, id: &str) -> PathBuf {
         self.assets.join(id)
     }
 
-    fn metadata_path(&self, id: &str) -> PathBuf {
+    pub(crate) fn metadata_path(&self, id: &str) -> PathBuf {
         let relative = Path::new(id);
         let filename = format!(
             "{}.json",
@@ -369,7 +287,7 @@ pub fn validate_asset_id(id: &str) -> Result<(), AssetError> {
     Ok(())
 }
 
-fn create_parent(path: &Path, id: &str) -> Result<(), AssetError> {
+pub(crate) fn create_parent(path: &Path, id: &str) -> Result<(), AssetError> {
     let Some(parent) = path.parent() else {
         return Ok(());
     };
