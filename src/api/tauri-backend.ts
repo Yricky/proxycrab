@@ -8,6 +8,7 @@ import type {
   ActiveSession,
   ApiActionView,
   AppConfig,
+  AssetMetadata,
   CreatedApiKey,
   CreateAgentsPresetRequest,
   BreakpointQuery,
@@ -34,6 +35,8 @@ import type {
   PermissionIdentitySummary,
   ReplaceSessionInterceptorsRequest,
   ReplaceSessionViewRequest,
+  ReplayRequestPayload,
+  ReplayResult,
   ResolveApprovalRequest,
   RoutingSelection,
   SessionShareState,
@@ -153,6 +156,9 @@ export function createTauriBackend(): Backend {
       call("validate_filter_regex", { pattern }),
     getLog: (sessionId: number | null, id: number) =>
       call<LogDetail>("get_log", { sessionId, id }),
+    replay: (sessionId: number, request: ReplayRequestPayload) =>
+      call<ReplayResult>("replay", { sessionId, request }),
+    listAssets: () => call<AssetMetadata[]>("list_assets"),
     getInterceptorContent: (sessionId: number | null, id: number, executionId: number) =>
       call<InterceptorContent>("get_interceptor_content", { sessionId, id, executionId }),
     getInterceptorSnapshot: (sessionId: number | null, id: number, executionId: number) =>

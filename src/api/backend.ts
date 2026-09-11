@@ -3,6 +3,7 @@ import type {
   ApiActionView,
   AgentsPresetState,
   AppConfig,
+  AssetMetadata,
   BreakpointDetailPayload,
   BreakpointQuery,
   BreakpointSummary,
@@ -36,6 +37,8 @@ import type {
   PermissionIdentitySummary,
   ReplaceSessionInterceptorsRequest,
   ReplaceSessionViewRequest,
+  ReplayRequestPayload,
+  ReplayResult,
   ResolveApprovalRequest,
   RoutingSelection,
   Script,
@@ -141,6 +144,11 @@ export interface Backend {
   getLogViews(request: LogViewsRequest): Promise<LogViewsPayload>;
   validateFilterRegex(pattern: string): Promise<string | null>;
   getLog(sessionId: number | null, id: number): Promise<LogDetail>;
+  replay(
+    sessionId: number,
+    request: ReplayRequestPayload,
+  ): Promise<ReplayResult>;
+  listAssets(): Promise<AssetMetadata[]>;
   getInterceptorContent(
     sessionId: number | null,
     id: number,

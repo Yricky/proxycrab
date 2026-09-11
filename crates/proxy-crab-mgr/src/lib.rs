@@ -11,3 +11,4 @@ pub mod session_share;
 pub mod skill_install;
 
 pub use manager::{MitmManager, ProxyCrabManager};
+pub use proxy_crab_mitm::asset;

@@ -15,6 +15,7 @@ import {
   openFilterManager,
   openJwt,
   openQrCode,
+  openReplay,
   openRequestInterceptorManager,
   openResponseInterceptorManager,
   openRoutingManager,
@@ -41,6 +42,7 @@ import {
   Io5QrCodeOutline,
   Io5RadioButtonOn,
   Io5Settings,
+  Io5SendOutline,
   Io5ShieldCheckmark,
   Io5Stop,
   Io5Flash,
@@ -281,6 +283,10 @@ onBeforeUnmount(() => {
           <button class="tb-menu-item" @click="runMenuAction(openJwt)">
             <Io5ShieldCheckmark :size="14" />
             <span>JWT 解码 / 验签</span>
+          </button>
+          <button class="tb-menu-item" @click="runMenuAction(() => openReplay())">
+            <Io5SendOutline :size="14" />
+            <span>发送请求</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openQrCode)">
             <Io5QrCodeOutline :size="14" />

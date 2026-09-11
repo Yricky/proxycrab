@@ -71,6 +71,7 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
 | Read active Agent instructions | `scripts/agents-get.mjs` |
 | Find existing traffic | `scripts/session-list.mjs`, then `scripts/log-query.mjs` |
 | Inspect one capture | `scripts/log-get.mjs` |
+| Replay a request through a Session (source `ProxyCrabRequest`) | `scripts/replay-send.mjs` |
 | Read an interceptor execution's source or entry snapshot | `scripts/interceptor-get.mjs` |
 | Save a complete request/response body | `scripts/body-get.mjs` |
 | Upload an immutable workspace Asset | `scripts/asset-upload.mjs` |

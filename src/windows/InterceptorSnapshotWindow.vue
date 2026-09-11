@@ -11,6 +11,19 @@ import type {
 import BodyViewer from "../components/BodyViewer.vue";
 import SegmentedUrl from "../components/SegmentedUrl.vue";
 import { urlSegments as buildUrlSegments } from "../utils/url-segments";
+import { prefillFromSnapshot } from "../utils/replay";
+import { openReplay } from "./launcher";
+import { Io5SendOutline } from "vue-icons-plus/io5";
+
+function replaySnapshot(): void {
+  if (!snapshot.value) return;
+  const draft = prefillFromSnapshot(
+    props.sessionId,
+    props.logId,
+    snapshot.value,
+  );
+  if (draft) openReplay(draft);
+}
 
 const props = defineProps<{
   sessionId: number;
@@ -123,6 +136,15 @@ const urlSegments = computed(() =>
           <span v-if="assetId" class="meta-item asset-meta" :title="assetId">
             <span class="meta-label">Body 资产</span>{{ assetId }}
           </span>
+          <span class="summary-spacer" />
+          <button
+            v-if="request"
+            class="btn icon"
+            title="重放此快照请求"
+            @click="replaySnapshot"
+          >
+            <Io5SendOutline :size="14" />
+          </button>
         </div>
         <SegmentedUrl
           v-if="request"
@@ -212,6 +234,10 @@ const urlSegments = computed(() =>
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.summary-spacer {
+  flex: 1;
 }
 
 .method-chip {

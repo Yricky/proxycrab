@@ -42,9 +42,9 @@ use crate::{
         DebugFilterScriptRequest, DeleteBypassRequest, ExecuteTemporaryScriptRequest,
         ExtendBreakpointRequest, HttpApiChange, HttpApiResource, InterceptorCreateRequest,
         InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError, ManagerResult,
-        ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, RoutingSelection,
-        ScriptRequest, SessionQuery, SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest,
-        default_body_max_size,
+        ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ReplayRequestPayload,
+        RoutingSelection, ScriptRequest, SessionQuery, SystemLogsQuery, UpdateScriptRequest,
+        UpdateSessionRequest, default_body_max_size,
     },
     har_share::{EnableHarShareRequest, HarShareService},
     manager::ProxyCrabManager,
@@ -263,7 +263,9 @@ fn router_with_changes_and_extra(
 ) -> Router {
     Router::new()
         .route("/api/agents.md", get(agents_markdown))
+        .route("/api/assets", get(assets))
         .route("/api/assets/{*asset_id}", get(asset).post(upload_asset))
+        .route("/api/replay", post(replay))
         .route("/api/config", get(get_config))
         .route("/api/proxy/status", get(proxy_status))
         .route("/api/proxy/start", post(start_proxy))
@@ -715,7 +717,28 @@ fn session_id_from_query(query: Option<&str>) -> Option<u64> {
     query?
         .split('&')
         .filter_map(|part| part.split_once('='))
-        .find_map(|(key, value)| (key == "session_id").then(|| value.parse().ok()).flatten())
+        .find_map(|(key, value)| {
+            (key == "session_id" || key == "session")
+                .then(|| value.parse().ok())
+                .flatten()
+        })
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplayQuery {
+    session: u64,
+}
+
+async fn assets(State(manager): State<ManagerState>) -> ApiResult {
+    success(manager.assets().await?)
+}
+
+async fn replay(
+    State(manager): State<ManagerState>,
+    ApiQuery(query): ApiQuery<ReplayQuery>,
+    Json(request): Json<ReplayRequestPayload>,
+) -> ApiResult {
+    success(manager.replay(query.session, request).await?)
 }
 
 async fn get_config(State(manager): State<ManagerState>) -> ApiResult {
@@ -3292,5 +3315,95 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn replay_route_validates_input_and_reports_guards() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
+        let app = router(MitmManager::new(runtime), allow_all());
+
+        // 缺少 ?session= → 4xx
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/replay")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"method":"GET","url":"http://127.0.0.1:1/x"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(response.status().is_client_error());
+
+        // 代理未运行 → proxy_not_running
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/replay?session={}", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"method":"GET","url":"http://127.0.0.1:1/x"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "proxy_not_running");
+
+        // 不支持的 charset → bad_request
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/replay?session={}", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"method":"GET","url":"http://127.0.0.1:1/x","body":{"type":"text","text":"a","charset":"gbk"}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "bad_request");
+    }
+
+    #[tokio::test]
+    async fn assets_route_lists_metadata() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let mut upload = runtime
+            .begin_asset_upload("fixtures/a.json".into(), "application/json".into())
+            .await
+            .unwrap();
+        upload.write(b"{}").await.unwrap();
+        upload.finish().await.unwrap();
+        let app = router(MitmManager::new(runtime), allow_all());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/assets")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"][0]["id"], "fixtures/a.json");
+        assert_eq!(body["data"][0]["content_type"], "application/json");
     }
 }

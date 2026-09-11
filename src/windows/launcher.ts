@@ -23,6 +23,8 @@ import ApprovalWindow from "./ApprovalWindow.vue";
 import BrowserWindow from "./BrowserWindow.vue";
 import SessionExportShareWindow from "./SessionExportShareWindow.vue";
 import InterceptorSnapshotWindow from "./InterceptorSnapshotWindow.vue";
+import ReplayWindow from "./ReplayWindow.vue";
+import type { ReplayDraft } from "../utils/replay";
 
 /** 内置浏览器窗口：同一 URL 复用已有窗口。 */
 export function openBrowser(url: string): void {
@@ -37,6 +39,16 @@ export function openBrowser(url: string): void {
     component: BrowserWindow,
     props: { url },
     width: 960,
+    height: 640,
+  });
+}
+
+export function openReplay(prefill?: ReplayDraft): void {
+  windowsStore.open(`replay-${crypto.randomUUID()}`, {
+    title: "发送请求",
+    component: ReplayWindow,
+    props: { prefill },
+    width: 920,
     height: 640,
   });
 }

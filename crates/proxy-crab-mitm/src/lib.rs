@@ -13,4 +13,5 @@ pub mod runtime;
 pub mod storage;
 pub mod workspace;
 
+pub use proxy::replay::{ReplayBody, ReplayError, ReplayRequest};
 pub use runtime::ProxyCrab;

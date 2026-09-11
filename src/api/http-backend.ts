@@ -4,6 +4,7 @@ import { fetchBodyFromBase } from "./body";
 import type {
   ActiveSession,
   ApiActionView,
+  AssetMetadata,
   BreakpointQuery,
   BypassQuery,
   CreatedApiKey,
@@ -30,6 +31,8 @@ import type {
   PermissionIdentitySummary,
   ReplaceSessionInterceptorsRequest,
   ReplaceSessionViewRequest,
+  ReplayRequestPayload,
+  ReplayResult,
   ResolveApprovalRequest,
   RoutingSelection,
   SessionShareState,
@@ -224,6 +227,9 @@ export function createHttpBackend(
       call("/ui-api/validate-filter-regex", json("POST", { pattern })),
     getLog: (sessionId: number | null, id: number) =>
       call<LogDetail>(query(`/api/logs/${id}`, { session_id: sessionId })),
+    replay: (sessionId: number, request: ReplayRequestPayload) =>
+      call<ReplayResult>(`/api/replay?session=${sessionId}`, json("POST", request)),
+    listAssets: () => call<AssetMetadata[]>("/api/assets"),
     getInterceptorContent: async (sessionId, id, executionId) => {
       const url = new URL(
         query(`/api/logs/${id}/interceptors/${executionId}/content`, {
