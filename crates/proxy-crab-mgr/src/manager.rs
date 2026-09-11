@@ -5,7 +5,7 @@ use std::{
 
 use async_trait::async_trait;
 use proxy_crab_mitm::{
-    ProxyCrab,
+    ProxyCrab, ReplayBody, ReplayError, ReplayRequest,
     asset::{Asset, AssetError, AssetUpload},
     lua::{CaptureBodyAccess, ColumnEvaluator, FilterEvaluator},
     model::{
@@ -29,9 +29,10 @@ use crate::{
         InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogExport, LogIdsPayload,
         LogIdsRequest, LogViewException, LogViewRow, LogViewsPayload, LogViewsRequest,
         ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest,
-        RequestDetail, ResponseDetail, RoutingSelection, ScriptRequest, SessionInterceptorItem,
-        SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery, UpdateAgentsPresetRequest,
-        UpdateScriptRequest, UpdateSessionRequest,
+        ReplayBodyPayload, ReplayRequestPayload, ReplayResult, RequestDetail, ResponseDetail,
+        RoutingSelection, ScriptRequest, SessionInterceptorItem, SessionInterceptorsPayload,
+        SessionViewPayload, SystemLogsQuery, UpdateAgentsPresetRequest, UpdateScriptRequest,
+        UpdateSessionRequest,
     },
     har::{self, HarCapture},
 };
@@ -85,6 +86,12 @@ pub trait ProxyCrabManager: Send + Sync {
     async fn log_views(&self, request: LogViewsRequest) -> ManagerResult<LogViewsPayload>;
     async fn export_logs(&self, request: ExportLogsRequest) -> ManagerResult<LogExport>;
     async fn log(&self, session_id: Option<u64>, id: u64) -> ManagerResult<LogDetail>;
+    async fn replay(
+        &self,
+        session_id: u64,
+        request: ReplayRequestPayload,
+    ) -> ManagerResult<ReplayResult>;
+    async fn assets(&self) -> ManagerResult<Vec<proxy_crab_mitm::asset::AssetMetadata>>;
     async fn log_body_source(
         &self,
         session_id: Option<u64>,
@@ -940,6 +947,80 @@ impl ProxyCrabManager for MitmManager {
             filename: format!("proxycrab-session-{session_id}.har"),
             body: har::stream(captures),
         })
+    }
+
+    async fn replay(
+        &self,
+        session_id: u64,
+        request: ReplayRequestPayload,
+    ) -> ManagerResult<ReplayResult> {
+        let body = match request.body {
+            None => None,
+            Some(ReplayBodyPayload::Text { text, charset }) => match charset.as_deref() {
+                None | Some("utf8") => Some(ReplayBody::Text { text }),
+                Some(other) => {
+                    return Err(ManagerError::bad_request(format!(
+                        "unsupported charset: {other}"
+                    )));
+                }
+            },
+            Some(ReplayBodyPayload::BodyRef {
+                session_id,
+                log_id,
+                side,
+            }) => {
+                let side = match side.as_str() {
+                    "request" => BodySide::Request,
+                    "response" => BodySide::Response,
+                    other => {
+                        return Err(ManagerError::bad_request(format!(
+                            "invalid body side: {other}"
+                        )));
+                    }
+                };
+                Some(ReplayBody::BodyRef {
+                    session_id,
+                    log_id,
+                    side,
+                })
+            }
+            Some(ReplayBodyPayload::Asset { asset_id }) => Some(ReplayBody::Asset { asset_id }),
+        };
+        let log_id = self
+            .runtime
+            .replay(
+                session_id,
+                ReplayRequest {
+                    method: request.method,
+                    url: request.url,
+                    headers: request.headers,
+                    body,
+                },
+            )
+            .await
+            .map_err(|error| match error {
+                ReplayError::SessionNotFound => {
+                    ManagerError::not_found(format!("session {session_id} not found or archived"))
+                }
+                ReplayError::ProxyNotRunning => {
+                    ManagerError::new("proxy_not_running", "proxy is not running")
+                }
+                ReplayError::BodyNotFound => {
+                    ManagerError::not_found("referenced capture body not found")
+                }
+                ReplayError::AssetNotFound => ManagerError::not_found("referenced asset not found"),
+                ReplayError::Invalid(message) => ManagerError::bad_request(message),
+                ReplayError::Internal(error) => {
+                    ManagerError::new("replay_failed", error.to_string())
+                }
+            })?;
+        Ok(ReplayResult { log_id })
+    }
+
+    async fn assets(&self) -> ManagerResult<Vec<proxy_crab_mitm::asset::AssetMetadata>> {
+        self.runtime
+            .assets()
+            .map_err(|error| ManagerError::new("asset_store_failed", error.to_string()))
     }
 
     async fn log(&self, session_id: Option<u64>, id: u64) -> ManagerResult<LogDetail> {

@@ -13,7 +13,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::{Request, Response, Version, server::conn::http1, service::service_fn};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use proxy_crab_mitm::{
-    ProxyCrab,
+    ProxyCrab, ReplayBody, ReplayError, ReplayRequest,
     bypass::BypassOutcome,
     log_buffer::LogBuffer,
     model::{
@@ -2685,4 +2685,187 @@ async fn serves_ca_over_http2_without_recording_the_local_request() {
     );
     assert!(runtime.bypass_entries(10, None).unwrap().is_empty());
     runtime.stop_proxy().await.unwrap();
+}
+
+// ---------- replay ----------
+
+async fn wait_capture_success(runtime: &ProxyCrab, session_id: u64, id: u64) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(detail) = runtime.capture(session_id, id).unwrap() {
+                if detail.summary.outcome == CaptureOutcome::Success {
+                    return;
+                }
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("replay capture did not complete in time");
+}
+
+#[tokio::test]
+async fn replay_records_capture_with_proxycrab_source() {
+    let (_app_data, runtime, _proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, _upstream) = fixed_http_upstream().await;
+
+    let log_id = runtime
+        .replay(
+            session.id,
+            ReplayRequest {
+                method: "POST".into(),
+                url: format!("http://127.0.0.1:{upstream_port}/replay-target?a=1"),
+                headers: vec![
+                    ("content-type".into(), "text/plain".into()),
+                    ("x-replay".into(), "yes".into()),
+                ],
+                body: Some(ReplayBody::Text {
+                    text: "hello replay".into(),
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    wait_capture_success(&runtime, session.id, log_id).await;
+
+    let detail = runtime.capture(session.id, log_id).unwrap().unwrap();
+    assert_eq!(detail.summary.source, "ProxyCrabRequest");
+    assert_eq!(detail.summary.request.method, "POST");
+    assert_eq!(
+        detail.summary.request.uri,
+        format!("http://127.0.0.1:{upstream_port}/replay-target?a=1")
+    );
+    assert_eq!(
+        detail.summary.request.headers.get("x-replay").unwrap(),
+        &vec!["yes".to_string()]
+    );
+    assert_eq!(detail.summary.response.unwrap().status, 200);
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn replay_passes_through_session_interceptors() {
+    let (_app_data, runtime, _proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, _upstream) = fixed_http_upstream().await;
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "mark-replay".into(),
+                content: "req.headers:set('x-intercepted', '1')".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "mark-replay".into(),
+                    enabled: true,
+                }],
+                response: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let log_id = runtime
+        .replay(
+            session.id,
+            ReplayRequest {
+                method: "GET".into(),
+                url: format!("http://127.0.0.1:{upstream_port}/intercepted"),
+                headers: Vec::new(),
+                body: None,
+            },
+        )
+        .await
+        .unwrap();
+    wait_capture_success(&runtime, session.id, log_id).await;
+
+    let detail = runtime.capture(session.id, log_id).unwrap().unwrap();
+    assert_eq!(
+        detail.summary.request.headers.get("x-intercepted").unwrap(),
+        &vec!["1".to_string()]
+    );
+    assert_eq!(detail.request_interceptors.len(), 1);
+    assert_eq!(detail.request_interceptors[0].name, "mark-replay");
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn replay_body_ref_reuses_stored_capture_body() {
+    let (_app_data, runtime, _proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, _upstream) = fixed_http_upstream().await;
+    let first_id = runtime
+        .replay(
+            session.id,
+            ReplayRequest {
+                method: "POST".into(),
+                url: format!("http://127.0.0.1:{upstream_port}/first"),
+                headers: vec![("content-type".into(), "application/octet-stream".into())],
+                body: Some(ReplayBody::Text {
+                    text: "stored-body".into(),
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    wait_capture_success(&runtime, session.id, first_id).await;
+
+    let second_id = runtime
+        .replay(
+            session.id,
+            ReplayRequest {
+                method: "POST".into(),
+                url: format!("http://127.0.0.1:{upstream_port}/second"),
+                headers: vec![("content-type".into(), "application/octet-stream".into())],
+                body: Some(ReplayBody::BodyRef {
+                    session_id: session.id,
+                    log_id: first_id,
+                    side: BodySide::Request,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    wait_capture_success(&runtime, session.id, second_id).await;
+
+    let source = runtime
+        .capture_body_source(session.id, second_id, BodySide::Request)
+        .unwrap()
+        .unwrap();
+    let bytes = match source.data {
+        BodySourceData::Bytes(bytes) => bytes,
+        BodySourceData::File(path) => std::fs::read(path).unwrap(),
+    };
+    assert_eq!(bytes, b"stored-body");
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn replay_requires_running_proxy_and_live_session() {
+    let (_app_data, runtime, _proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let archived = runtime.create_session(None, None).unwrap();
+    runtime.archive_session(archived.id).await.unwrap();
+    runtime.stop_proxy().await.unwrap();
+
+    let request = ReplayRequest {
+        method: "GET".into(),
+        url: "http://127.0.0.1:1/never".into(),
+        headers: Vec::new(),
+        body: None,
+    };
+    assert!(matches!(
+        runtime.replay(session.id, request.clone()).await,
+        Err(ReplayError::ProxyNotRunning)
+    ));
+    assert!(matches!(
+        runtime.replay(archived.id, request).await,
+        Err(ReplayError::SessionNotFound)
+    ));
 }

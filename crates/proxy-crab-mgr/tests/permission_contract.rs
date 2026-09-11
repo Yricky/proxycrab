@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 69);
+    assert_eq!(actions.len(), 71);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -41,6 +41,7 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "GET /api/active-session",
         "GET /api/agents.md",
         "GET /api/archived-sessions",
+        "GET /api/assets",
         "GET /api/assets/{*asset_id}",
         "GET /api/breakpoints",
         "GET /api/breakpoints/{id}",
@@ -70,6 +71,7 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "POST /api/filter-scripts/{name}/debug",
         "POST /api/logs/ids",
         "POST /api/logs/views",
+        "POST /api/replay",
     ]);
     let approval = BTreeSet::from([
         "POST /api/archived-sessions/{id}/restore",

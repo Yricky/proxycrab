@@ -71,7 +71,9 @@
       "id": 12,
       "prompt": "Create a ProxyCrab request interceptor named pace-debug-traffic using the supplied Lua fixture, attach it to the active Session without changing the response chain, and verify on a new capture that request speed is 1024 B/s, response speed is 2048 B/s, upstream timeout is 120000 ms, and response body-frame timeout is 30000 ms. Do not treat the tags as HTTP headers.",
       "expected_output": "The agent saves valid Lua with _crab_req_speed=1024, _crab_resp_speed=2048, _crab_req_timeout=120000, and _crab_resp_bodyframe_timeout=30000, preserves the existing response chain, and cites the new capture tags plus tag_set history without claiming any special tag was sent upstream.",
-      "files": ["evals/fixtures/test-traffic-limits.lua"]
+      "files": [
+        "evals/fixtures/test-traffic-limits.lua"
+      ]
     },
     {
       "id": 14,
@@ -83,7 +85,9 @@
       "id": 15,
       "prompt": "Create a ProxyCrab request interceptor named allow-self-signed-test using the supplied Lua fixture, attach it to the active Session without changing the response chain, and verify on a new capture for self-signed.test that the insecure TLS policy was selected. Do not send the special tag as an HTTP header.",
       "expected_output": "The agent saves narrowly matched Lua with _crab_tls_insecure=true, preserves the existing response chain, warns that upstream server authentication is disabled for the matched HTTPS requests, and cites a new capture's tag plus tag_set history without claiming the tag was sent upstream.",
-      "files": ["evals/fixtures/test-tls-insecure.lua"]
+      "files": [
+        "evals/fixtures/test-tls-insecure.lua"
+      ]
     },
     {
       "id": 16,
@@ -209,6 +213,12 @@
       "id": 36,
       "prompt": "For ProxyCrab log 42 in Session 3, read the exact source that request interceptor execution 17 ran and inspect the request and response state it saw on entry, without reading the capture's final Body.",
       "expected_output": "The agent uses interceptor-get.mjs with session 3, log 42, execution 17, --what content to read the executed source and --what snapshot to read the entry snapshot that has_snapshot advertises. It does not treat that snapshot as the capture's final Body and does not expect embedded content or a snapshot entry in GET /api/logs/42.",
+      "files": []
+    },
+    {
+      "id": 37,
+      "prompt": "Use ProxyCrab to replay the request from an existing captured log into the active Session with an added x-debug: 1 header, then confirm the new capture exists with source ProxyCrabRequest and report its log id.",
+      "expected_output": "The agent reads the source capture, replays it via the replay endpoint/script with body_ref (or text for textual bodies) plus the extra header, waits for the new capture, verifies its source is ProxyCrabRequest and the x-debug header is present, and cites the new log id without fabricating response evidence.",
       "files": []
     }
   ]

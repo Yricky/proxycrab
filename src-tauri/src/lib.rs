@@ -15,9 +15,9 @@ use proxy_crab_mgr::{
         InterceptorCreateRequest, InterceptorDetail, InterceptorLibraryList,
         InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest, LogViewsPayload,
         LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
-        ReplaceSessionViewRequest, RoutingSelection, ScriptRequest, SessionInterceptorsPayload,
-        SessionViewPayload, SystemLogsQuery, UpdateAgentsPresetRequest, UpdateScriptRequest,
-        UpdateSessionRequest,
+        ReplaceSessionViewRequest, ReplayRequestPayload, ReplayResult, RoutingSelection,
+        ScriptRequest, SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery,
+        UpdateAgentsPresetRequest, UpdateScriptRequest, UpdateSessionRequest,
     },
     har_share::{EnableHarShareRequest, HarShareService, HarShareState},
     http::{HttpServerHandle, start_http_server_with_routes},
@@ -322,6 +322,22 @@ fn filter_regex_error(pattern: &str) -> Option<String> {
     regex::Regex::new(pattern)
         .err()
         .map(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn replay(
+    state: State<'_, BackendState>,
+    session_id: u64,
+    request: ReplayRequestPayload,
+) -> Result<ReplayResult, ManagerError> {
+    state.manager().replay(session_id, request).await
+}
+
+#[tauri::command]
+async fn list_assets(
+    state: State<'_, BackendState>,
+) -> Result<Vec<proxy_crab_mgr::asset::AssetMetadata>, ManagerError> {
+    state.manager().assets().await
 }
 
 #[tauri::command]
@@ -1040,6 +1056,8 @@ pub fn run() {
             get_log_views,
             validate_filter_regex,
             get_log,
+            replay,
+            list_assets,
             get_interceptor_content,
             get_interceptor_snapshot,
             list_breakpoints,

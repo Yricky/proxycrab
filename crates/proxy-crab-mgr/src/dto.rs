@@ -460,3 +460,36 @@ pub type ProxyStatusResponse = ProxyStatus;
 pub type SessionsResponse = Vec<SessionMetadata>;
 pub type ScriptsResponse = Vec<Script>;
 pub type SystemLogsResponse = Vec<SystemLogEntry>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReplayRequestPayload {
+    pub method: String,
+    pub url: String,
+    #[serde(default)]
+    pub headers: Vec<(String, String)>,
+    #[serde(default)]
+    pub body: Option<ReplayBodyPayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReplayBodyPayload {
+    Text {
+        text: String,
+        #[serde(default)]
+        charset: Option<String>,
+    },
+    BodyRef {
+        session_id: u64,
+        log_id: u64,
+        side: String,
+    },
+    Asset {
+        asset_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReplayResult {
+    pub log_id: u64,
+}

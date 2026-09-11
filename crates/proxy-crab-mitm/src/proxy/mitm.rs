@@ -55,7 +55,7 @@ async fn prepare_body_replacement(
 pub(super) async fn process_connect<C>(
     client: C,
     authority: hyper::http::uri::Authority,
-    source: SocketAddr,
+    source: TrafficSource,
     pin: SessionPin,
     mut capture: ConnectCapture,
     cancellation: CancellationToken,
@@ -162,7 +162,7 @@ pub(super) async fn process_connect<C>(
 async fn serve_mitm_tls<C>(
     tls: C,
     authority: hyper::http::uri::Authority,
-    source: SocketAddr,
+    source: TrafficSource,
     pin: SessionPin,
     cancellation: CancellationToken,
     tracker: TaskGroup,
@@ -174,7 +174,7 @@ async fn serve_mitm_tls<C>(
     let session_id = pin.session_id();
     let _connection_pin = pin;
     let service_cancellation = cancellation.clone();
-    let service = service_fn(move |mut request| {
+    let service = service_fn(move |mut request: Request<Incoming>| {
         inject_https_authority(&mut request, &authority);
         let local_ca = is_ca_download(&request_data(&request));
         let runtime = runtime.clone();
@@ -184,6 +184,10 @@ async fn serve_mitm_tls<C>(
             if local_ca {
                 return Ok::<_, Infallible>(certificate_response(&runtime));
             }
+            let request = request.map(|body| {
+                body.map_err(|error| Box::new(error) as BoxError)
+                    .boxed_unsync()
+            });
             Ok::<_, Infallible>(
                 handle_session_http_request(
                     request,
@@ -192,6 +196,7 @@ async fn serve_mitm_tls<C>(
                     session_id,
                     cancellation,
                     tracker,
+                    None,
                 )
                 .await,
             )
@@ -233,13 +238,14 @@ async fn serve_mitm_tls<C>(
     }
 }
 
-pub(super) async fn handle_session_http_request(
-    mut request: Request<Incoming>,
-    source: SocketAddr,
+pub(crate) async fn handle_session_http_request(
+    mut request: Request<ProxyBody>,
+    source: TrafficSource,
     runtime: Arc<ProxyCrab>,
     session_id: u64,
     cancellation: CancellationToken,
     tracker: TaskGroup,
+    capture_id_tx: Option<tokio::sync::oneshot::Sender<u64>>,
 ) -> Response<ProxyBody> {
     let pin = match runtime.pin_session(session_id) {
         Ok(pin) => pin,
@@ -266,7 +272,7 @@ pub(super) async fn handle_session_http_request(
         tags: Default::default(),
     };
     let (capture_id, activity) = match tracker.begin_capture(&store, || {
-        store.begin(&source.to_string(), &request_data, "request")
+        store.begin(&source.label(), &request_data, "request")
     }) {
         Ok(record) => record,
         Err(error) => {
@@ -277,6 +283,9 @@ pub(super) async fn handle_session_http_request(
             );
         }
     };
+    if let Some(tx) = capture_id_tx {
+        let _ = tx.send(capture_id);
+    }
     let raw_request_writer = match store
         .create_body_writer(capture_id, BodySide::Request)
         .await

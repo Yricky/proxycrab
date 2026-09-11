@@ -96,8 +96,10 @@ macro_rules! action {
 
 pub static API_ACTIONS: &[ApiAction] = &[
     action!("GET", "/api/agents.md", Allow),
+    action!("GET", "/api/assets", Allow),
     action!("GET", "/api/assets/{*asset_id}", Allow),
     action!("POST", "/api/assets/{*asset_id}", Approval),
+    action!("POST", "/api/replay", Allow),
     action!("GET", "/api/config", Allow),
     action!("GET", "/api/proxy/status", Allow),
     action!("POST", "/api/proxy/start", Approval),

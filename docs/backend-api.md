@@ -188,7 +188,9 @@ browser UI.
 | `/api/session-shares/{id}` | `GET` current state (default: `allow`); `DELETE` disable immediately (default: `approval`) |
 | `/api/session-har-shares` | `POST` idempotently enable a frozen HAR download link (default: `approval`) |
 | `/api/session-har-shares/{id}` | `GET` current state (default: `allow`); `DELETE` disable immediately (default: `approval`) |
+| `/api/assets` | `GET` list every Asset's metadata sorted by id |
 | `/api/assets/{id}` | `POST` immutable raw upload; `GET` metadata or raw bytes with `format=raw` |
+| `/api/replay?session={id}` | `POST` send a fully specified request through one Session's pipeline (source `ProxyCrabRequest`) |
 | `/api/logs/ids` | `POST` bounded/filterable log ID query |
 | `/api/logs/views` | `POST` batch incremental table-view rendering |
 | `/api/logs/{id}` | `GET` complete log detail |
@@ -231,6 +233,9 @@ with the normal envelope and metadata:
   }
 }
 ```
+
+`GET /api/assets` lists every Asset's metadata (`id`, `size`, `content_type`, `sha256`,
+`created_at`) sorted by id inside the normal envelope; build trees from the `/`-separated ids.
 
 `GET /api/assets/{id}` returns the same metadata. `GET /api/assets/{id}?format=raw` streams the
 stored bytes without the JSON envelope and sets `Content-Type`, `Content-Length`,
@@ -499,6 +504,17 @@ responses omit decoded `Content-Length`; original responses retain the stored le
 for that log. The desktop snapshot window intentionally displays only the Asset ID for Asset
 snapshots. Active breakpoints expose the same final-body contract at
 `GET /api/breakpoints/{id}/body` and include current replacements for the paused phase.
+
+### Replay a request
+
+`POST /api/replay?session=1` sends a fully specified request through the target Session's
+interceptor pipeline and outbound chain, recording it as a normal capture whose source is
+`ProxyCrabRequest`. The proxy must be running (`proxy_not_running` otherwise). The response
+`{ "log_id": 12 }` returns as soon as the capture is created, without waiting for the upstream
+exchange. Request body: `method`, absolute `url`, ordered `headers` pairs (sent as-is, including
+`content-length`), and an optional `body` of `{ "type": "text", "text", "charset": "utf8" }`,
+`{ "type": "body_ref", "session_id", "log_id", "side": "request" | "response" }` (reuse a
+stored capture blob body), or `{ "type": "asset", "asset_id" }` (reuse a workspace Asset).
 
 ## Session table views
 

@@ -53,6 +53,7 @@ use crate::{
 pub(crate) mod body;
 mod bypass;
 mod mitm;
+pub mod replay;
 mod upstream;
 
 use body::{
@@ -419,7 +420,7 @@ struct TaskGroupState {
 }
 
 #[derive(Clone)]
-struct ConnectionGeneration {
+pub(crate) struct ConnectionGeneration {
     cancellation: CancellationToken,
     tasks: TaskGroup,
 }
@@ -597,6 +598,23 @@ impl TaskGroup {
     }
 }
 
+impl ProxyController {
+    /// 重放复用当前连接代的任务组/取消令牌/活动跟踪；代理未运行返回 None。
+    pub(crate) fn replay_generation(&self) -> Option<ConnectionGeneration> {
+        if !matches!(
+            &*self.status.read().expect("proxy status lock poisoned"),
+            ProxyStatus::Running { .. }
+        ) {
+            return None;
+        }
+        let registry = self
+            .connections
+            .lock()
+            .expect("proxy connections lock poisoned");
+        registry.as_ref().map(|registry| registry.current())
+    }
+}
+
 impl Default for ProxyController {
     fn default() -> Self {
         Self::new()
@@ -711,6 +729,21 @@ async fn handle_proxy_request(
     .await)
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TrafficSource {
+    Client(SocketAddr),
+    Replay,
+}
+
+impl TrafficSource {
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Client(address) => address.to_string(),
+            Self::Replay => "ProxyCrabRequest".to_string(),
+        }
+    }
+}
+
 enum RouteDecision {
     Session(SessionMetadata),
     Bypass(&'static str),
@@ -810,7 +843,8 @@ fn handle_connect(
             );
         }
     };
-    let capture = match begin_connect_capture(&tracker, &pin, source, &request_data) {
+    let traffic = TrafficSource::Client(source);
+    let capture = match begin_connect_capture(&tracker, &pin, traffic, &request_data) {
         Ok(capture) => capture,
         Err(error) => {
             tracing::error!("failed to persist CONNECT request: {error}");
@@ -831,7 +865,7 @@ fn handle_connect(
                 mitm::process_connect(
                     TokioIo::new(upgraded),
                     authority,
-                    source,
+                    traffic,
                     pin,
                     capture,
                     cancellation,
@@ -873,13 +907,18 @@ async fn handle_http_request(
             .await
         }
         RouteDecision::Session(session) => {
+            let request = request.map(|body| {
+                body.map_err(|error| Box::new(error) as BoxError)
+                    .boxed_unsync()
+            });
             mitm::handle_session_http_request(
                 request,
-                source,
+                TrafficSource::Client(source),
                 runtime,
                 session.id,
                 cancellation,
                 tracker,
+                None,
             )
             .await
         }
@@ -1043,13 +1082,12 @@ fn routing_authority(request: &RequestData) -> String {
 fn begin_connect_capture(
     tracker: &TaskGroup,
     pin: &SessionPin,
-    source: SocketAddr,
+    source: TrafficSource,
     request: &RequestData,
 ) -> Result<ConnectCapture> {
     let store = pin.store().clone();
-    let (id, activity) = tracker.begin_capture(&store, || {
-        store.begin(&source.to_string(), request, "connect")
-    })?;
+    let (id, activity) =
+        tracker.begin_capture(&store, || store.begin(&source.label(), request, "connect"))?;
     Ok(ConnectCapture {
         store,
         id,
@@ -1101,7 +1139,7 @@ fn note_capture_error(store: &CaptureStore, id: u64, stage: ErrorStage, kind: &s
     tracing::warn!("{kind}: {message}");
 }
 
-fn is_upgrade_request(request: &Request<Incoming>) -> bool {
+fn is_upgrade_request<B>(request: &Request<B>) -> bool {
     request.headers().contains_key(UPGRADE)
         || request
             .headers()

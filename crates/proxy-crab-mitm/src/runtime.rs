@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{
-    asset::{Asset, AssetError, AssetStore, AssetUpload},
+    asset::{Asset, AssetError, AssetMetadata, AssetStore, AssetUpload},
     breakpoint::BreakpointRegistry,
     bypass::{BypassEntry, BypassStore},
     ca::CertificateAuthority,
@@ -100,12 +100,20 @@ impl ProxyCrab {
         }))
     }
 
+    pub(crate) fn proxy_controller(&self) -> &ProxyController {
+        &self.proxy
+    }
+
     pub fn workspace(&self) -> &Arc<Workspace> {
         &self.workspace
     }
 
     pub fn asset(&self, id: &str) -> Result<Option<Asset>, AssetError> {
         self.assets.get(id)
+    }
+
+    pub fn assets(&self) -> Result<Vec<AssetMetadata>, AssetError> {
+        self.assets.list()
     }
 
     pub(crate) fn asset_store(&self) -> AssetStore {

@@ -100,6 +100,32 @@ impl AssetStore {
         }
     }
 
+    /// 列出全部 asset 元数据（以 .metadata 目录为准），按 id 排序。
+    pub fn list(&self) -> Result<Vec<AssetMetadata>, AssetError> {
+        fn walk(dir: &Path, out: &mut Vec<AssetMetadata>) -> Result<(), AssetError> {
+            let entries = match std::fs::read_dir(dir) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error.into()),
+            };
+            for entry in entries {
+                let path = entry?.path();
+                if path.is_dir() {
+                    walk(&path, out)?;
+                } else if path.extension().is_some_and(|ext| ext == "json") {
+                    // 仅 metadata 文件参与列举；跳过 .DS_Store 等系统杂项文件
+                    let bytes = std::fs::read(&path)?;
+                    out.push(serde_json::from_slice(&bytes)?);
+                }
+            }
+            Ok(())
+        }
+        let mut result = Vec::new();
+        walk(&self.metadata, &mut result)?;
+        result.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(result)
+    }
+
     pub async fn begin_upload(
         &self,
         id: &str,
@@ -317,6 +343,27 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[tokio::test]
+    async fn lists_asset_metadata_sorted_by_id() {
+        let root = TempDir::new().unwrap();
+        let store = AssetStore::open(root.path()).unwrap();
+        assert!(store.list().unwrap().is_empty());
+        let upload = store
+            .begin_upload("c.json", "application/json".into())
+            .await
+            .unwrap();
+        let second = upload.finish().await.unwrap();
+        let mut upload = store
+            .begin_upload("a/b.txt", "text/plain".into())
+            .await
+            .unwrap();
+        upload.write(b"hi").await.unwrap();
+        let first = upload.finish().await.unwrap();
+        // 目录中的非 metadata 杂项文件（如 .DS_Store）不影响列举
+        std::fs::write(root.path().join("assets/.metadata/.DS_Store"), b"junk").unwrap();
+        assert_eq!(store.list().unwrap(), vec![first, second]);
+    }
 
     #[test]
     fn validates_asset_ids() {

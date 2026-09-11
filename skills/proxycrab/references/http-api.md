@@ -714,6 +714,32 @@ Missing/not-yet-produced bodies return `body_not_found`; unreadable files return
 `body_read_failed`; an original encoding that cannot be decoded for fallback returns
 `body_decode_failed`.
 
+### Replaying a request: `POST /api/replay?session=3`
+
+Sends a fully specified request through the target Session's interceptor pipeline and outbound
+chain, recording it as a normal capture whose source is `ProxyCrabRequest`. The proxy must be
+running. The response returns as soon as the capture is created — it does not wait for the
+upstream exchange to finish.
+
+```json
+{
+  "method": "POST",
+  "url": "https://example.com/api?x=1",
+  "headers": [["content-type", "application/json"]],
+  "body": { "type": "text", "text": "{\"a\":1}", "charset": "utf8" }
+}
+```
+
+- `headers` is an ordered array of `[name, value]` pairs; duplicates are preserved and sent
+  as-is (including `content-length` — the caller is responsible for consistency).
+- `body` is optional (omit for no body) and is one of:
+  - `{ "type": "text", "text": "...", "charset": "utf8" }` — only `utf8` is supported.
+  - `{ "type": "body_ref", "session_id": 1, "log_id": 2, "side": "request" | "response" }` —
+    reuse the stored blob body of an existing capture.
+  - `{ "type": "asset", "asset_id": "dir/file.bin" }` — reuse a workspace asset.
+- Success: `{ "ok": true, "data": { "log_id": 12 } }`. Errors: `not_found` (session/body/asset),
+  `proxy_not_running`, `bad_request` (validation), `replay_failed`.
+
 ## Session views
 
 ### `GET /api/session-view?session_id=3`
@@ -829,8 +855,10 @@ routing-debug endpoint.
 
 ## Workspace Assets
 
-Assets are immutable files shared across the active workspace. They have no list, update, or delete
-endpoint. Upload with a raw request body:
+Assets are immutable files shared across the active workspace. They have no update or delete
+endpoint. `GET /api/assets` lists every asset's metadata (`id`, `size`, `content_type`,
+`sha256`, `created_at`) sorted by id inside the normal envelope; build trees from the
+`/`-separated ids. Upload with a raw request body:
 
 ```text
 POST /api/assets/fixtures/example.json

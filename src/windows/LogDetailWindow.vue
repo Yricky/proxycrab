@@ -18,15 +18,18 @@ import {
   Io5Checkmark,
   Io5ChevronDown,
   Io5Copy,
+  Io5SendOutline,
   Io5Warning,
 } from "vue-icons-plus/io5";
 import {
   openInterceptorSnapshot,
   openModificationValue,
   openReadonlyViewer,
+  openReplay,
 } from "./launcher";
 import { openDropdownMenu } from "../stores/dialog";
 import { fullCurl } from "../utils/curl";
+import { prefillFromLog } from "../utils/replay";
 import { copyText as writeClipboardText } from "../utils/clipboard";
 import {
   urlSegments as buildUrlSegments,
@@ -363,6 +366,10 @@ const urlSegments = computed<UrlSegment[]>(() => {
 
 // ---------- copy ----------
 
+function replayCurrent(): void {
+  if (detail.value) openReplay(prefillFromLog(detail.value));
+}
+
 const copiedKey = ref<string | null>(null);
 let copiedTimer: number | undefined;
 
@@ -563,6 +570,9 @@ function headerCount(headers: HeaderItem[]): string {
           </span>
           <span v-if="loading" class="refreshing text-faint">刷新中…</span>
           <span class="summary-spacer" />
+          <button class="btn icon" title="重放此请求" @click="replayCurrent">
+            <Io5SendOutline :size="14" />
+          </button>
           <button
             class="btn icon copy-menu-button"
             title="复制"

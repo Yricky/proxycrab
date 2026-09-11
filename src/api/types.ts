@@ -587,3 +587,32 @@ export interface ResolveApprovalRequest {
   decision: ApprovalDecision;
   duration_seconds: number | null;
 }
+
+export type ReplayBodyPayload =
+  | { type: "text"; text: string; charset?: "utf8" }
+  | {
+      type: "body_ref";
+      session_id: number;
+      log_id: number;
+      side: "request" | "response";
+    }
+  | { type: "asset"; asset_id: string };
+
+export interface ReplayRequestPayload {
+  method: string;
+  url: string;
+  headers: Array<[string, string]>;
+  body?: ReplayBodyPayload;
+}
+
+export interface ReplayResult {
+  log_id: number;
+}
+
+export interface AssetMetadata {
+  id: string;
+  size: number;
+  content_type: string;
+  sha256: string;
+  created_at: number;
+}
