@@ -20,7 +20,7 @@ use crate::{
         InterceptorExecutionOrigin, InterceptorKind, InterceptorRun, InterceptorScriptContent,
         InterceptorSnapshot, Modification, RequestData, RequestTags, ResponseData,
     },
-    workspace::now_millis,
+    workspace::{SESSIONS_DIRECTORY, now_millis},
 };
 
 pub(crate) const BODY_DETAIL_LIMIT: u64 = 64 * 1024;
@@ -90,30 +90,27 @@ impl CaptureBodyWriter {
 pub struct CaptureStore {
     session_id: u64,
     connection: Arc<Mutex<Connection>>,
-    blob_directory: PathBuf,
+    session_directory: PathBuf,
     workspace_root: PathBuf,
 }
 
 impl CaptureStore {
-    pub fn open(session_id: u64, session_directory: &Path) -> Result<Self> {
-        let blob_directory = session_directory.join("blob");
-        fs::create_dir_all(&blob_directory)?;
+    pub fn open(session_id: u64, workspace_root: &Path) -> Result<Self> {
+        let session_directory = workspace_root
+            .join(SESSIONS_DIRECTORY)
+            .join(session_id.to_string());
+        fs::create_dir_all(session_directory.join("blob"))?;
         let connection = Connection::open(session_directory.join("captures.db"))?;
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch(
             "PRAGMA foreign_keys = ON;
              PRAGMA synchronous = NORMAL;",
         )?;
-        let workspace_root = session_directory
-            .parent()
-            .and_then(Path::parent)
-            .ok_or_else(|| anyhow!("session directory is outside a workspace"))?
-            .to_path_buf();
         let store = Self {
             session_id,
             connection: Arc::new(Mutex::new(connection)),
-            blob_directory,
-            workspace_root,
+            session_directory,
+            workspace_root: workspace_root.to_path_buf(),
         };
         store.initialize()?;
         Ok(store)
@@ -903,7 +900,9 @@ impl CaptureStore {
             BodySide::Request => "request",
             BodySide::Response => "response",
         };
-        self.blob_directory.join(format!("{id}-{side}.body"))
+        self.session_directory
+            .join("blob")
+            .join(format!("{id}-{side}.body"))
     }
 
     fn read_body_source(
@@ -1147,8 +1146,7 @@ mod tests {
     #[test]
     fn reads_interceptor_snapshot_string_body_by_execution_id() {
         let root = tempdir().unwrap();
-        let session = root.path().join("sessions/7");
-        let store = CaptureStore::open(7, &session).unwrap();
+        let store = CaptureStore::open(7, root.path()).unwrap();
         let id = store
             .begin("127.0.0.1", &request("https://example.com"), "request")
             .unwrap();
@@ -1577,7 +1575,7 @@ mod tests {
         drop(connection);
 
         crate::migration::migrate_workspace(root.path()).unwrap();
-        let store = CaptureStore::open(7, &session).unwrap();
+        let store = CaptureStore::open(1, root.path()).unwrap();
         let detail = store.get(1).unwrap().unwrap();
         assert!(detail.summary.request.tags.is_empty());
         assert_eq!(detail.request_interceptors.len(), 1);

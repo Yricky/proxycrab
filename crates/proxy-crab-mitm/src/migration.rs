@@ -1,11 +1,17 @@
-use std::{fs, path::Path, time::Duration};
+use std::{
+    fs,
+    io::{ErrorKind, Read, Write},
+    path::Path,
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
-    asset::AssetStore,
+    asset::{AssetError, AssetMetadata, AssetStore, create_parent, validate_asset_id},
     model::{BodySourceType, CaptureModifications, HeaderValues},
     workspace::{read_json, write_json_atomic},
 };
@@ -291,7 +297,8 @@ fn migrate_final_body(
                 .file_name()
                 .expect("modified body path has a filename")
                 .to_string_lossy();
-            let metadata = assets.import_file_with_suffix(
+            let metadata = import_migration_asset(
+                &assets,
                 &format!("mig/{session_id}/{filename}"),
                 &modified,
                 content_type,
@@ -318,6 +325,90 @@ fn migrate_final_body(
         fs::remove_file(modified)?;
     }
     Ok(())
+}
+
+/// Imports a legacy modified body blob as an immutable asset, appending `-N`
+/// to the preferred id until it is free. Only used by the v2 to v3 migration.
+fn import_migration_asset(
+    assets: &AssetStore,
+    preferred_id: &str,
+    source: &Path,
+    content_type: String,
+    created_at: u64,
+) -> std::result::Result<AssetMetadata, AssetError> {
+    let mut suffix = 0_u64;
+    loop {
+        let id = if suffix == 0 {
+            preferred_id.to_owned()
+        } else {
+            format!("{preferred_id}-{suffix}")
+        };
+        validate_asset_id(&id)?;
+        match assets.ensure_available(&id) {
+            Ok(()) => {}
+            Err(AssetError::AlreadyExists(_)) => {
+                suffix += 1;
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+        let asset_path = assets.asset_path(&id);
+        let metadata_path = assets.metadata_path(&id);
+        create_parent(&asset_path, &id)?;
+        create_parent(&metadata_path, &id)?;
+        let mut destination = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&asset_path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                suffix += 1;
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let copy_result = (|| -> std::io::Result<(u64, String)> {
+            let mut source = std::fs::File::open(source)?;
+            let mut hasher = Sha256::new();
+            let mut size = 0_u64;
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                let read = source.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                destination.write_all(&buffer[..read])?;
+                hasher.update(&buffer[..read]);
+                size += read as u64;
+            }
+            destination.sync_all()?;
+            Ok((size, format!("{:x}", hasher.finalize())))
+        })();
+        let (size, sha256) = match copy_result {
+            Ok(result) => result,
+            Err(error) => {
+                drop(destination);
+                let _ = std::fs::remove_file(&asset_path);
+                return Err(error.into());
+            }
+        };
+        let metadata = AssetMetadata {
+            id: id.clone(),
+            size,
+            content_type: content_type.clone(),
+            sha256,
+            created_at,
+        };
+        let result = serde_json::to_vec_pretty(&metadata)
+            .map_err(AssetError::from)
+            .and_then(|content| std::fs::write(&metadata_path, content).map_err(Into::into));
+        if let Err(error) = result {
+            let _ = std::fs::remove_file(&asset_path);
+            return Err(error);
+        }
+        return Ok(metadata);
+    }
 }
 
 fn session_directories(root: &Path) -> [std::path::PathBuf; 2] {

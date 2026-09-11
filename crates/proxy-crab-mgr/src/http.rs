@@ -2130,12 +2130,7 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
-        let session_dir = runtime
-            .workspace()
-            .root()
-            .join("sessions")
-            .join(session.id.to_string());
-        let store = CaptureStore::open(session.id, &session_dir).unwrap();
+        let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let request = RequestData {
             method: "POST".into(),
             uri: "https://example.com/body".into(),
@@ -2177,12 +2172,7 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
-        let session_dir = runtime
-            .workspace()
-            .root()
-            .join("sessions")
-            .join(session.id.to_string());
-        let store = CaptureStore::open(session.id, &session_dir).unwrap();
+        let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let request = RequestData {
             method: "GET".into(),
             uri: "https://example.com/snapshot".into(),

@@ -1763,8 +1763,7 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
-        let store =
-            CaptureStore::open(session.id, &runtime.workspace().session_dir(session.id)).unwrap();
+        let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let first = store
             .begin("127.0.0.1", &request("first"), "request")
             .unwrap();
@@ -1895,8 +1894,7 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
-        let store =
-            CaptureStore::open(session.id, &runtime.workspace().session_dir(session.id)).unwrap();
+        let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let first = store
             .begin("127.0.0.1", &request("first"), "request")
             .unwrap();
@@ -2010,8 +2008,7 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
-        let store =
-            CaptureStore::open(session.id, &runtime.workspace().session_dir(session.id)).unwrap();
+        let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let request = RequestData {
             headers: HeaderValues::from([("content-type".into(), vec!["application/json".into()])]),
             ..request("body")
@@ -2172,8 +2169,7 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
-        let store =
-            CaptureStore::open(session.id, &runtime.workspace().session_dir(session.id)).unwrap();
+        let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let first = store
             .begin("127.0.0.1", &request("First"), "request")
             .unwrap();
@@ -2596,12 +2592,7 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime.create_session(None, None).unwrap();
-        let session_dir = runtime
-            .workspace()
-            .root()
-            .join("sessions")
-            .join(session.id.to_string());
-        let store = CaptureStore::open(session.id, &session_dir).unwrap();
+        let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let first = store
             .begin("127.0.0.1", &request("first"), "request")
             .unwrap();

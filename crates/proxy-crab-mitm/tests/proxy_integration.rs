@@ -2433,11 +2433,9 @@ async fn lifecycle_preserves_preexisting_in_progress_outcomes() {
     let app_data = tempdir().unwrap();
     let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
     let session = runtime.create_session(None, None).unwrap();
-    let capture_store = proxy_crab_mitm::storage::CaptureStore::open(
-        session.id,
-        &runtime.workspace().session_dir(session.id),
-    )
-    .unwrap();
+    let capture_store =
+        proxy_crab_mitm::storage::CaptureStore::open(session.id, runtime.workspace().root())
+            .unwrap();
     let capture_id = capture_store
         .begin(
             "127.0.0.1",
