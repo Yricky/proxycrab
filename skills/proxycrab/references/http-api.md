@@ -1147,6 +1147,10 @@ Routing and capture lifecycle details:
   upstream HTTPS certificate-chain and hostname verification. The tag is persisted but never sent as
   a header; verified and insecure requests use isolated connection pools. Restrict it to controlled
   test hosts.
+- A captured request whose final request-interceptor tag `_crab_upstream_http_version` is exactly
+  `HTTP/1.1` or `HTTP/2` forces that protocol only on the ProxyCrab-to-upstream hop. Forced HTTP/2
+  is strict and does not fall back to HTTP/1.1. Invalid values warn and preserve default behavior;
+  the tag is persisted but never sent as a header or substituted for the captured client version.
 - `updated_at` is a monotonic Unix-millisecond version of the complete capture. Metadata and body
   writes advance it even within the same wall-clock millisecond.
 - Interceptor changes made before a runtime error remain applied and are recorded.

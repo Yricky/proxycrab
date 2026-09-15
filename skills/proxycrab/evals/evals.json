@@ -220,6 +220,14 @@
       "prompt": "Use ProxyCrab to replay the request from an existing captured log into the active Session with an added x-debug: 1 header, then confirm the new capture exists with source ProxyCrabRequest and report its log id.",
       "expected_output": "The agent reads the source capture, replays it via the replay endpoint/script with body_ref (or text for textual bodies) plus the extra header, waits for the new capture, verifies its source is ProxyCrabRequest and the x-debug header is present, and cites the new log id without fabricating response evidence.",
       "files": []
+    },
+    {
+      "id": 38,
+      "prompt": "Create a ProxyCrab request interceptor named local-rsbuild-http1 using the supplied Lua fixture, attach it to the active Session without changing the response chain, and verify on a new HTTP/2 browser capture that the rewritten local upstream uses HTTP/1.1. Do not disable browser HTTP/2 or send the special tag as a header.",
+      "expected_output": "The agent saves narrowly matched Lua that rewrites app.example.test to http://127.0.0.1:3001, updates Host, and sets _crab_upstream_http_version=HTTP/1.1; it preserves the response chain and verifies a new capture retains request.version HTTP/2 plus the tag and tag_set history without claiming the tag is an HTTP header.",
+      "files": [
+        "evals/fixtures/test-upstream-http-version.lua"
+      ]
     }
   ]
 }

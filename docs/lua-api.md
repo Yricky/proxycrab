@@ -178,7 +178,7 @@ it explicitly.
 sent to the server. After all request interceptors finish, the presence of `_crab_skip` skips the
 upstream request, creates an empty HTTP/1.1 200 response, and continues through response interceptors.
 
-Five additional proxy-local tags control ordinary captured HTTP/HTTPS traffic:
+Six additional proxy-local tags control captured HTTP/HTTPS traffic:
 
 | Tag | Unit | Behavior |
 | --- | --- | --- |
@@ -187,10 +187,11 @@ Five additional proxy-local tags control ordinary captured HTTP/HTTPS traffic:
 | `_crab_req_timeout` | milliseconds | Upstream operation timeout; defaults to `60000` |
 | `_crab_resp_bodyframe_timeout` | milliseconds | Idle timeout from response headers to the first upstream body frame and between later frames; unset by default |
 | `_crab_tls_insecure` | exact string `true` | Disable upstream HTTPS certificate-chain and hostname verification |
+| `_crab_upstream_http_version` | `HTTP/1.1` or `HTTP/2` | Force the HTTP version used from ProxyCrab to the upstream server |
 
-Values must match ASCII `[0-9]+`, fit in `u64`, and be greater than zero. Leading zeroes are
-accepted. Invalid final values are ignored with a Rust `warn`; they do not fail the interceptor or
-capture. Request speed and timeout use the values after the complete request interceptor chain.
+The four speed/timeout values must match ASCII `[0-9]+`, fit in `u64`, and be greater than zero.
+Leading zeroes are accepted. Invalid final values are ignored with a Rust `warn`; they do not fail
+the interceptor or capture. Request speed and timeout use the values after the complete request interceptor chain.
 Response speed and response-frame timeout use the values after the complete response interceptor
 chain, so either phase may set or overwrite them. Breakpoint temporary scripts participate in the
 same final-value behavior.
@@ -199,6 +200,14 @@ insecure TLS policy only when its final value is exactly `true`; any other prese
 with a warning. It has no effect on HTTP. Verified and insecure HTTPS requests use separate
 connection pools, including Upgrade/WebSocket requests, so an untagged request cannot reuse a TLS
 connection established under the insecure policy. Use it only for controlled test systems.
+
+`_crab_upstream_http_version` is also resolved after the complete request interceptor chain. Only
+the exact values `HTTP/1.1` and `HTTP/2` are accepted; any other present value is ignored with a
+warning and keeps the default behavior of selecting the upstream protocol from the captured request.
+The override affects only the ProxyCrab-to-upstream hop, including Upgrade/WebSocket requests. It
+does not change the captured request version or the HTTP version used between the client and
+ProxyCrab. Forced `HTTP/2` is strict: HTTPS advertises only `h2` through ALPN and fails if the server
+does not negotiate it; cleartext HTTP uses direct h2c prior knowledge without an HTTP/1.1 fallback.
 
 Speed limits are independent per capture and direction. They pace the final outbound body bytes
 without an initial or catch-up burst; headers, HTTP framing, and TLS overhead are not counted.
@@ -212,8 +221,9 @@ a capture warning; the replacement and successful outcome are retained.
 The speed and timeout tags do not apply to bypass traffic, raw CONNECT tunnels, Upgrade/WebSocket,
 the local `proxy.crab/ca.crt` response, or proxy-generated error responses. With `_crab_skip`,
 request speed and timeout are unused, while `_crab_resp_speed` still applies to the final synthetic
-response after response interceptors. All special tags remain persisted capture metadata and are
-never emitted as HTTP headers.
+response after response interceptors. The upstream-version override applies to Upgrade/WebSocket but
+not bypass traffic, raw CONNECT tunnels, the local CA response, or proxy-generated errors. All
+special tags remain persisted capture metadata and are never emitted as HTTP headers.
 
 ## Response interceptors
 

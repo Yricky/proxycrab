@@ -299,10 +299,11 @@ The final request tags also support these proxy-local traffic controls:
 | `_crab_req_timeout` | milliseconds | Bound connection, TLS, paced upload, and response-header wait; default `60000` |
 | `_crab_resp_bodyframe_timeout` | milliseconds | Idle timeout before each upstream response-body frame; unset by default |
 | `_crab_tls_insecure` | exact string `true` | Disable upstream HTTPS certificate-chain and hostname verification |
+| `_crab_upstream_http_version` | `HTTP/1.1` or `HTTP/2` | Force the HTTP version used from ProxyCrab to the upstream server |
 
-Values must contain only ASCII digits, fit in `u64`, and be greater than zero; leading zeroes are
-valid. An invalid final value is ignored and written to the Rust warning log. Request speed and
-timeout are resolved after request interceptors; response speed and response-frame timeout are
+The four speed/timeout values must contain only ASCII digits, fit in `u64`, and be greater than zero;
+leading zeroes are valid. An invalid final value is ignored and written to the Rust warning log.
+Request speed and timeout are resolved after request interceptors; response speed and response-frame timeout are
 resolved after response interceptors, including temporary breakpoint scripts. Limits are independent per capture and
 direction, count only final outbound body bytes, send no initial or catch-up burst, and do not alter
 headers. The response-frame timeout resets after every upstream body frame. It terminates a normal
@@ -315,9 +316,18 @@ does apply to HTTPS Upgrade/WebSocket. Insecure and verified HTTPS traffic use s
 pools, so later untagged requests cannot reuse an insecure TLS connection. Restrict this tag to a
 controlled test host because it removes upstream server authentication.
 
+`_crab_upstream_http_version` is resolved after request interceptors and accepts only the exact final
+strings `HTTP/1.1` and `HTTP/2`. It controls only the ProxyCrab-to-upstream hop, including
+Upgrade/WebSocket, without changing `req.version`, captured client metadata, or request headers.
+Forced `HTTP/2` is strict: HTTPS uses H2-only ALPN and cleartext HTTP uses h2c prior knowledge, with
+no HTTP/1.1 fallback. Any other present value is ignored with a Rust warning and keeps the default
+upstream selection.
+
 The speed/timeout controls exclude bypass, raw CONNECT, Upgrade/WebSocket, `proxy.crab/ca.crt`, and
 proxy-generated errors. `_crab_skip` makes request speed/timeout irrelevant, but response speed can
-pace a synthetic body created by response interceptors.
+pace a synthetic body created by response interceptors. The upstream-version override applies to
+Upgrade/WebSocket but excludes bypass, raw CONNECT, the local CA response, and proxy-generated
+errors.
 
 ## Response interceptors
 

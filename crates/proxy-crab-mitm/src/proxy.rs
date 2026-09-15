@@ -73,6 +73,7 @@ const CRAB_RESP_SPEED_TAG: &str = "_crab_resp_speed";
 const CRAB_RESP_BODYFRAME_TIMEOUT_TAG: &str = "_crab_resp_bodyframe_timeout";
 const CRAB_REQ_TIMEOUT_TAG: &str = "_crab_req_timeout";
 const CRAB_TLS_INSECURE_TAG: &str = "_crab_tls_insecure";
+const CRAB_UPSTREAM_HTTP_VERSION_TAG: &str = "_crab_upstream_http_version";
 
 #[derive(Debug, Clone)]
 struct InterceptorSnapshot {
@@ -1232,7 +1233,11 @@ mod tests {
     };
     use tokio::time::{Instant, sleep};
 
-    use super::mitm::{parse_positive_decimal, parse_tls_insecure_tag, response_from_data};
+    use super::mitm::{
+        parse_positive_decimal, parse_tls_insecure_tag, parse_upstream_http_version_tag,
+        response_from_data,
+    };
+    use super::upstream::UpstreamHttpVersion;
     use super::{
         PacedBody, ProxyController, headers_to_values, normalize_tls_error, remove_header_value,
         strip_hop_by_hop_headers, values_to_headers, version_name,
@@ -1361,6 +1366,27 @@ mod tests {
 
         for invalid in ["", "false", "TRUE", "True", "1", " true", "true "] {
             assert_eq!(parse_tls_insecure_tag(Some(invalid)), Err(()), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn parses_upstream_http_version_tag_as_strict_enum() {
+        assert_eq!(parse_upstream_http_version_tag(None), Ok(None));
+        assert_eq!(
+            parse_upstream_http_version_tag(Some("HTTP/1.1")),
+            Ok(Some(UpstreamHttpVersion::Http1))
+        );
+        assert_eq!(
+            parse_upstream_http_version_tag(Some("HTTP/2")),
+            Ok(Some(UpstreamHttpVersion::Http2))
+        );
+
+        for invalid in ["", "http/1.1", "HTTP/1", "HTTP/2.0", "HTTP/3"] {
+            assert_eq!(
+                parse_upstream_http_version_tag(Some(invalid)),
+                Err(()),
+                "{invalid}"
+            );
         }
     }
 

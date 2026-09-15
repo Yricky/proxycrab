@@ -142,7 +142,7 @@ pub(super) async fn handle_bypass_http(
     };
     let mut upstream_response = match runtime
         .upstream_client()
-        .send(upstream_request, false, cancellation.clone())
+        .send(upstream_request, false, None, cancellation.clone())
         .await
     {
         Ok(response) => response,

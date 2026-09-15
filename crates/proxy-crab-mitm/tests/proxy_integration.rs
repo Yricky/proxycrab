@@ -2575,6 +2575,106 @@ async fn tls_insecure_tag_allows_self_signed_upstream_without_weakening_default_
 }
 
 #[tokio::test]
+async fn upstream_http_version_tag_downgrades_browser_http2_to_local_http1() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let session = runtime.create_session(None, None).unwrap();
+    let (upstream_port, upstream_request, upstream) = recording_http_upstream().await;
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "local-http1-upstream".into(),
+                content: format!(
+                    "req.uri = 'http://127.0.0.1:{upstream_port}/app.js'; req:set_tag('_crab_upstream_http_version', 'HTTP/1.1')"
+                ),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "local-http1-upstream".into(),
+                    enabled: true,
+                }],
+                response: vec![],
+            },
+        )
+        .unwrap();
+
+    let mut roots = RootCertStore::empty();
+    for certificate in rustls_pemfile::certs(&mut Cursor::new(runtime.certificate_pem())) {
+        roots.add(certificate.unwrap()).unwrap();
+    }
+    let mut config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    config.alpn_protocols = vec![b"h2".to_vec()];
+    let connector = TlsConnector::from(Arc::new(config));
+    let stream = connect_tunnel(proxy_port).await;
+    let tls = connector
+        .connect(ServerName::try_from("proxy.crab").unwrap(), stream)
+        .await
+        .unwrap();
+    let (mut sender, connection) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
+        .handshake(TokioIo::new(tls))
+        .await
+        .unwrap();
+    let connection = tokio::spawn(connection);
+    let request = Request::builder()
+        .uri("https://proxy.crab/app.js")
+        .version(Version::HTTP_2)
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+
+    let response = sender.send_request(request).await.unwrap();
+    assert_eq!(response.version(), Version::HTTP_2);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        Bytes::from_static(b"ok")
+    );
+    drop(sender);
+    connection.abort();
+
+    let upstream_request = timeout(Duration::from_secs(2), upstream_request)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        upstream_request.starts_with("GET /app.js HTTP/1.1\r\n"),
+        "{upstream_request}"
+    );
+    assert!(!upstream_request.contains("_crab_upstream_http_version"));
+
+    let capture = timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(capture) = runtime
+                .list_captures(session.id, 20, None)
+                .unwrap()
+                .into_iter()
+                .find(|capture| {
+                    capture
+                        .request
+                        .tags
+                        .get("_crab_upstream_http_version")
+                        .is_some_and(|value| value == "HTTP/1.1")
+                })
+            {
+                break capture;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(capture.request.version, "HTTP/2");
+
+    runtime.stop_proxy().await.unwrap();
+    upstream.await.unwrap();
+}
+
+#[tokio::test]
 async fn trusted_ca_serves_certificate_and_untrusted_ca_is_diagnostic() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let session = runtime.create_session(None, None).unwrap();

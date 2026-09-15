@@ -1,3 +1,4 @@
+use super::upstream::UpstreamHttpVersion;
 use super::*;
 
 enum PreparedBodyReplacement {
@@ -533,6 +534,7 @@ pub(crate) async fn handle_session_http_request(
     }
 
     let tls_insecure = tls_insecure_from_tags(&request_data.tags, capture_id);
+    let upstream_http_version = upstream_http_version_from_tags(&request_data.tags, capture_id);
     let (request_body, replacement_length, modified_request_done) = match request_replacement {
         Some(replacement) => {
             let length = replacement.length();
@@ -572,9 +574,12 @@ pub(crate) async fn handle_session_http_request(
     };
     let mut upstream_response = match timeout(
         upstream_timeout,
-        runtime
-            .upstream_client()
-            .send(upstream_request, tls_insecure, cancellation.clone()),
+        runtime.upstream_client().send(
+            upstream_request,
+            tls_insecure,
+            upstream_http_version,
+            cancellation.clone(),
+        ),
     )
     .await
     {
@@ -1357,6 +1362,17 @@ pub(super) fn parse_tls_insecure_tag(value: Option<&str>) -> Result<bool, ()> {
     }
 }
 
+pub(super) fn parse_upstream_http_version_tag(
+    value: Option<&str>,
+) -> Result<Option<UpstreamHttpVersion>, ()> {
+    match value {
+        None => Ok(None),
+        Some("HTTP/1.1") => Ok(Some(UpstreamHttpVersion::Http1)),
+        Some("HTTP/2") => Ok(Some(UpstreamHttpVersion::Http2)),
+        Some(_) => Err(()),
+    }
+}
+
 fn tls_insecure_from_tags(tags: &RequestTags, capture_id: u64) -> bool {
     match parse_tls_insecure_tag(tags.get(CRAB_TLS_INSECURE_TAG).map(String::as_str)) {
         Ok(value) => value,
@@ -1367,6 +1383,25 @@ fn tls_insecure_from_tags(tags: &RequestTags, capture_id: u64) -> bool {
                 "ignoring invalid special tag value"
             );
             false
+        }
+    }
+}
+
+fn upstream_http_version_from_tags(
+    tags: &RequestTags,
+    capture_id: u64,
+) -> Option<UpstreamHttpVersion> {
+    match parse_upstream_http_version_tag(
+        tags.get(CRAB_UPSTREAM_HTTP_VERSION_TAG).map(String::as_str),
+    ) {
+        Ok(value) => value,
+        Err(()) => {
+            tracing::warn!(
+                capture_id,
+                tag = CRAB_UPSTREAM_HTTP_VERSION_TAG,
+                "ignoring invalid special tag value"
+            );
+            None
         }
     }
 }

@@ -75,6 +75,13 @@ hostname verification, so record the tag as evidence, warn about the loss of ser
 and never apply it broadly or to production traffic. Untagged requests remain on an isolated verified
 connection pool.
 
+When an intercepted browser request uses HTTP/2 but a rewritten local development upstream supports
+only cleartext HTTP/1.1, set `_crab_upstream_http_version` to exact `HTTP/1.1` in the same narrowly
+matched request interceptor. This preserves browser-to-ProxyCrab HTTP/2 while forcing only the local
+upstream hop. Confirm the tag in capture history and the original `entry.req.version`; do not treat
+the tag as an HTTP header. Use exact `HTTP/2` only when the upstream is known to support strict H2 or
+h2c because it deliberately disables HTTP/1.1 fallback.
+
 ## Handle bodies accurately
 
 `text` and `json` bodies embed decoded content only through 64 KiB. Every non-empty persisted body

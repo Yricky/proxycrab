@@ -31,15 +31,26 @@ use super::{CONNECT_TIMEOUT, ProxyBody};
 type PooledHttp1Client = Client<HttpsConnector<HttpConnector>, ProxyBody>;
 type H2Sender = hyper::client::conn::http2::SendRequest<ProxyBody>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UpstreamHttpVersion {
+    Http1,
+    Http2,
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct H2PoolKey {
     scheme: String,
     authority: String,
     tls_insecure: bool,
+    allow_http1_fallback: bool,
 }
 
 impl H2PoolKey {
-    fn from_request(request: &Request<ProxyBody>, tls_insecure: bool) -> Result<Self> {
+    fn from_request(
+        request: &Request<ProxyBody>,
+        tls_insecure: bool,
+        allow_http1_fallback: bool,
+    ) -> Result<Self> {
         let uri = request.uri();
         Ok(Self {
             scheme: uri
@@ -52,6 +63,7 @@ impl H2PoolKey {
                 .as_str()
                 .to_owned(),
             tls_insecure,
+            allow_http1_fallback,
         })
     }
 }
@@ -96,19 +108,38 @@ impl UpstreamClient {
 
     pub(crate) async fn send(
         &self,
-        request: Request<ProxyBody>,
+        mut request: Request<ProxyBody>,
         tls_insecure: bool,
+        http_version: Option<UpstreamHttpVersion>,
         cancellation: CancellationToken,
     ) -> Result<Response<Incoming>> {
+        match http_version {
+            Some(UpstreamHttpVersion::Http1) => *request.version_mut() = Version::HTTP_11,
+            Some(UpstreamHttpVersion::Http2) => *request.version_mut() = Version::HTTP_2,
+            None => {}
+        }
         let tls_insecure = tls_insecure && request.uri().scheme_str() == Some("https");
         if request.headers().contains_key(UPGRADE) {
-            return send_dedicated(request, tls_insecure, cancellation).await;
+            return send_dedicated(request, tls_insecure, http_version, cancellation).await;
         }
-        if request.version() == Version::HTTP_2 {
-            return self.send_http2(request, tls_insecure, cancellation).await;
+        match http_version {
+            Some(UpstreamHttpVersion::Http1) => {
+                self.send_pooled_http1(request, tls_insecure, cancellation)
+                    .await
+            }
+            Some(UpstreamHttpVersion::Http2) => {
+                self.send_http2(request, tls_insecure, false, cancellation)
+                    .await
+            }
+            None if request.version() == Version::HTTP_2 => {
+                self.send_http2(request, tls_insecure, true, cancellation)
+                    .await
+            }
+            None => {
+                self.send_pooled_http1(request, tls_insecure, cancellation)
+                    .await
+            }
         }
-        self.send_pooled_http1(request, tls_insecure, cancellation)
-            .await
     }
 
     async fn send_pooled_http1(
@@ -133,17 +164,21 @@ impl UpstreamClient {
         &self,
         request: Request<ProxyBody>,
         tls_insecure: bool,
+        allow_http1_fallback: bool,
         cancellation: CancellationToken,
     ) -> Result<Response<Incoming>> {
-        let key = H2PoolKey::from_request(&request, tls_insecure)?;
+        let key = H2PoolKey::from_request(&request, tls_insecure, allow_http1_fallback)?;
         let origin = self.h2.origin(key).await;
         let mut state = origin.lock().await;
 
         if matches!(&*state, H2PoolState::Http1) {
             drop(state);
-            return self
-                .send_pooled_http1(request, tls_insecure, cancellation)
-                .await;
+            if allow_http1_fallback {
+                return self
+                    .send_pooled_http1(request, tls_insecure, cancellation)
+                    .await;
+            }
+            bail!("upstream did not negotiate HTTP/2");
         }
         if let H2PoolState::Http2(sender) = &*state
             && !sender.is_closed()
@@ -165,7 +200,11 @@ impl UpstreamClient {
 
         if https {
             let mut config = client_config(tls_insecure);
-            config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+            config.alpn_protocols = if allow_http1_fallback {
+                vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+            } else {
+                vec![b"h2".to_vec()]
+            };
             let connector = TlsConnector::from(Arc::new(config));
             let server_name = ServerName::try_from(host.to_string())
                 .map_err(|error| anyhow!("invalid TLS server name: {error}"))?;
@@ -175,10 +214,12 @@ impl UpstreamClient {
                 *state = H2PoolState::Http2(sender.clone());
                 drop(state);
                 send_with_h2_sender(sender, request, cancellation).await
-            } else {
+            } else if allow_http1_fallback {
                 *state = H2PoolState::Http1;
                 drop(state);
                 send_http1_on_io(tls, request, cancellation).await
+            } else {
+                bail!("upstream did not negotiate HTTP/2")
             }
         } else {
             let sender = establish_h2(stream, cancellation.clone()).await?;
@@ -264,6 +305,7 @@ impl ServerCertVerifier for InsecureServerCertVerifier {
 async fn send_dedicated(
     request: Request<ProxyBody>,
     tls_insecure: bool,
+    http_version: Option<UpstreamHttpVersion>,
     cancellation: CancellationToken,
 ) -> Result<Response<Incoming>> {
     let uri = request.uri().clone();
@@ -277,15 +319,31 @@ async fn send_dedicated(
         .context("upstream connect timeout")??;
     if https {
         let mut config = client_config(tls_insecure);
-        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        config.alpn_protocols = match http_version {
+            Some(UpstreamHttpVersion::Http1) => vec![b"http/1.1".to_vec()],
+            Some(UpstreamHttpVersion::Http2) => vec![b"h2".to_vec()],
+            None => vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+        };
         let connector = TlsConnector::from(Arc::new(config));
         let server_name = ServerName::try_from(host.to_string())
             .map_err(|error| anyhow!("invalid TLS server name: {error}"))?;
         let tls = connector.connect(server_name, stream).await?;
-        let use_http2 = tls.get_ref().1.alpn_protocol() == Some(b"h2");
+        let negotiated_http2 = tls.get_ref().1.alpn_protocol() == Some(b"h2");
+        if http_version == Some(UpstreamHttpVersion::Http2) && !negotiated_http2 {
+            bail!("upstream did not negotiate HTTP/2");
+        }
+        let use_http2 = match http_version {
+            Some(UpstreamHttpVersion::Http1) => false,
+            Some(UpstreamHttpVersion::Http2) => true,
+            None => negotiated_http2,
+        };
         send_on_io(tls, request, use_http2, cancellation).await
     } else {
-        let use_http2 = request.version() == Version::HTTP_2;
+        let use_http2 = match http_version {
+            Some(UpstreamHttpVersion::Http1) => false,
+            Some(UpstreamHttpVersion::Http2) => true,
+            None => request.version() == Version::HTTP_2,
+        };
         send_on_io(stream, request, use_http2, cancellation).await
     }
 }
@@ -420,7 +478,7 @@ mod tests {
     use tokio_rustls::TlsAcceptor;
     use tokio_util::sync::CancellationToken;
 
-    use super::{H2PoolKey, H2PoolState, UpstreamClient};
+    use super::{H2PoolKey, H2PoolState, UpstreamClient, UpstreamHttpVersion};
     use crate::proxy::boxed_full;
 
     #[tokio::test]
@@ -457,7 +515,7 @@ mod tests {
                 .body(boxed_full(Bytes::new()))
                 .unwrap();
             let response = client
-                .send(request, false, CancellationToken::new())
+                .send(request, false, None, CancellationToken::new())
                 .await
                 .unwrap();
             assert_eq!(
@@ -469,6 +527,81 @@ mod tests {
         assert_eq!(accepted.load(Ordering::Relaxed), 1);
         let _ = stop_tx.send(());
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn http1_override_sets_exact_version() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            request
+        });
+        let request = Request::builder()
+            .uri(format!("http://{address}/downgraded"))
+            .version(hyper::Version::HTTP_10)
+            .body(boxed_full(Bytes::new()))
+            .unwrap();
+
+        let response = UpstreamClient::new()
+            .send(
+                request,
+                false,
+                Some(UpstreamHttpVersion::Http1),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let request = server.await.unwrap();
+        assert!(request.starts_with(b"GET /downgraded HTTP/1.1\r\n"));
+    }
+
+    #[tokio::test]
+    async fn http2_override_upgrades_http1_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (version_tx, mut version_rx) = mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let service = service_fn(move |request: Request<hyper::body::Incoming>| {
+                let _ = version_tx.send(request.version());
+                async { Ok::<_, Infallible>(Response::new(Full::new(Bytes::new()))) }
+            });
+            let _ = http2::Builder::new(TokioExecutor::new())
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+        });
+        let request = Request::builder()
+            .uri(format!("http://{address}/upgraded"))
+            .version(hyper::Version::HTTP_11)
+            .body(boxed_full(Bytes::new()))
+            .unwrap();
+
+        let response = UpstreamClient::new()
+            .send(
+                request,
+                false,
+                Some(UpstreamHttpVersion::Http2),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(version_rx.recv().await.unwrap(), hyper::Version::HTTP_2);
+        server.abort();
     }
 
     #[tokio::test]
@@ -503,12 +636,18 @@ mod tests {
 
         let request = Request::builder()
             .uri(format!("https://{address}/upgrade"))
+            .version(hyper::Version::HTTP_2)
             .header(CONNECTION, "upgrade")
             .header(UPGRADE, "websocket")
             .body(boxed_full(Bytes::new()))
             .unwrap();
         let response = UpstreamClient::new()
-            .send(request, true, CancellationToken::new())
+            .send(
+                request,
+                true,
+                Some(UpstreamHttpVersion::Http1),
+                CancellationToken::new(),
+            )
             .await
             .unwrap();
 
@@ -606,7 +745,9 @@ mod tests {
                 .header(HOST, address.to_string())
                 .body(boxed_full(Bytes::new()))
                 .unwrap();
-            client.send(request, true, CancellationToken::new()).await
+            client
+                .send(request, true, None, CancellationToken::new())
+                .await
         };
         let (first, second) = tokio::join!(send(client.clone()), send(client.clone()));
 
@@ -623,6 +764,7 @@ mod tests {
                 scheme: "https".to_owned(),
                 authority: address.to_string(),
                 tls_insecure: true,
+                allow_http1_fallback: true,
             })
             .await;
         timeout(Duration::from_secs(1), async {
@@ -714,7 +856,7 @@ mod tests {
                 .body(boxed_full(Bytes::new()))
                 .unwrap();
             let response = client
-                .send(request, true, CancellationToken::new())
+                .send(request, true, None, CancellationToken::new())
                 .await
                 .unwrap();
 
@@ -724,6 +866,25 @@ mod tests {
         }
 
         assert_eq!(accepted.load(Ordering::Relaxed), 2);
+
+        let request = Request::builder()
+            .uri(format!("https://{address}/strict-h2"))
+            .version(hyper::Version::HTTP_2)
+            .body(boxed_full(Bytes::new()))
+            .unwrap();
+        assert!(
+            client
+                .send(
+                    request,
+                    true,
+                    Some(UpstreamHttpVersion::Http2),
+                    CancellationToken::new(),
+                )
+                .await
+                .is_err(),
+            "forced HTTP/2 must not fall back to HTTP/1.1"
+        );
+
         drop(client);
         let _ = stop_tx.send(());
         server.await.unwrap();

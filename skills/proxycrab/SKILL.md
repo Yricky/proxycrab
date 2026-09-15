@@ -296,6 +296,11 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
   has no effect on HTTP or transparent bypass, never becomes a header, and uses a pool isolated from
   verified traffic. Use it only for a narrowly matched controlled test host and explicitly warn the
   user about the reduced transport authentication.
+- `_crab_upstream_http_version` accepts only exact `HTTP/1.1` and `HTTP/2` values after request
+  interceptors and forces only the ProxyCrab-to-upstream hop, including Upgrade/WebSocket. It never
+  changes the captured client protocol or becomes a header. Forced HTTP/2 is strict and does not
+  fall back to HTTP/1.1; invalid values warn and preserve default selection. It does not apply to
+  bypass, raw CONNECT, the local CA endpoint, or proxy-generated errors.
 - Keep user-created debugging state unless the user asks for cleanup. Automatic restoration is not
   required.
 - Expect Session, filter, column, and interceptor changes to appear in the desktop UI. If the UI
