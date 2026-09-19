@@ -77,17 +77,20 @@ pub(crate) struct ResponseScriptContext<'a> {
 
 pub fn validate_script(kind: ScriptKind, source: &str) -> Result<()> {
     let (lua, _) = safe_lua()?;
+    // `@` 前缀让 Lua 将 chunk 名视为文件名，错误消息直接显示 `xxx.lua:行号`
+    // 而非内部的 `[string "xxx.lua"]` 包装格式。
+    let name = match kind {
+        ScriptKind::Column => "@column.lua",
+        ScriptKind::Filter => "@filter.lua",
+        ScriptKind::Routing => "@routing.lua",
+        ScriptKind::RequestInterceptor => "@request-interceptor.lua",
+        ScriptKind::ResponseInterceptor => "@response-interceptor.lua",
+    };
     lua.load(source)
-        .set_name(match kind {
-            ScriptKind::Column => "column.lua",
-            ScriptKind::Filter => "filter.lua",
-            ScriptKind::Routing => "routing.lua",
-            ScriptKind::RequestInterceptor => "request-interceptor.lua",
-            ScriptKind::ResponseInterceptor => "response-interceptor.lua",
-        })
+        .set_name(name)
         .into_function()
         .map(|_| ())
-        .map_err(Into::into)
+        .map_err(|error| crate::error::Error::InvalidScript(error.to_string()).into())
 }
 
 pub fn evaluate_routing(

@@ -8,7 +8,7 @@ use std::{
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use proxy_crab_mgr::{
-    dto::ManagerError,
+    dto::{ErrorCode, ManagerError},
     permission::{ManagementCredential, OBSOLETE_API_ACTION_IDS, PermissionMode, api_actions},
 };
 use proxy_crab_mitm::workspace::now_millis;
@@ -425,7 +425,7 @@ fn known_action_ids() -> BTreeSet<String> {
 
 fn invalid_api_key() -> ManagerError {
     ManagerError::new(
-        "invalid_api_key",
+        ErrorCode::InvalidApiKey,
         "Authorization must contain a valid Bearer API key",
     )
 }
@@ -616,7 +616,7 @@ mod tests {
             .authenticate(&ManagementCredential::Bearer(created.api_key.clone()))
             .err()
             .unwrap();
-        assert_eq!(error.code, "invalid_api_key");
+        assert_eq!(error.code, ErrorCode::InvalidApiKey);
     }
 
     #[test]
@@ -662,7 +662,7 @@ mod tests {
         assert_eq!(created.identity.name, "agent");
         assert_eq!(
             store.create_api_key("agent".into()).unwrap_err().code,
-            "conflict"
+            ErrorCode::Conflict
         );
         store.delete_api_key(&created.identity.id).unwrap();
         assert_eq!(store.identities().unwrap().len(), 1);

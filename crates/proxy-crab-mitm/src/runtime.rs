@@ -11,6 +11,7 @@ use crate::{
     breakpoint::BreakpointRegistry,
     bypass::{BypassEntry, BypassStore},
     ca::CertificateAuthority,
+    error::Error,
     log_buffer::LogBuffer,
     lua::BodyReplacement,
     model::{
@@ -175,14 +176,14 @@ impl ProxyCrab {
         self.proxy
             .mutate_sessions(|| {
                 if self.active_session_id() == Some(id) {
-                    bail!("active session {id} cannot be archived");
+                    bail!(Error::ActiveSessionArchive(id));
                 }
                 let pins = self
                     .session_pins
                     .lock()
                     .expect("session pins lock poisoned");
                 if pins.get(&id).copied().unwrap_or_default() != 0 {
-                    bail!("session {id} has requests in progress");
+                    bail!(Error::SessionRequestsInProgress(id));
                 }
                 self.stores
                     .lock()
@@ -301,7 +302,7 @@ impl ProxyCrab {
             .iter()
             .any(|session| session.id == session_id)
         {
-            bail!("session {session_id} not found");
+            bail!(Error::SessionNotFound(session_id));
         }
         let store = CaptureStore::open(session_id, self.workspace.root())?;
         self.stores
@@ -463,7 +464,7 @@ impl ProxyCrab {
         let live = self.breakpoints.detail(id)?;
         let mut capture = self
             .capture(live.summary.session_id, live.summary.capture_id)?
-            .ok_or_else(|| anyhow::anyhow!("capture {} not found", live.summary.capture_id))?;
+            .ok_or(Error::CaptureNotFound(live.summary.capture_id))?;
         let headers = live.context.state.headers();
         let tags = live.context.state.tags();
         capture.summary.request.tags = tags;
@@ -657,7 +658,9 @@ impl ProxyCrab {
     ) -> Result<SessionView> {
         for column in &view.columns {
             if !column.width().is_finite() || column.width() <= 0.0 {
-                bail!("column width must be positive");
+                bail!(Error::InvalidArgument(
+                    "column width must be positive".into()
+                ));
             }
             if let Column::Script { script_name, .. } = column {
                 self.workspace.get_script(ScriptKind::Column, script_name)?;
@@ -906,7 +909,7 @@ impl ProxyCrab {
             self.proxy_status(),
             ProxyStatus::Stopped | ProxyStatus::Failed { .. }
         ) {
-            bail!("proxy must be stopped before regenerating the CA");
+            bail!(Error::ProxyMustBeStopped);
         }
         Ok(())
     }
@@ -1070,14 +1073,18 @@ fn replace_filter_reference(filter: &mut SessionFilter, kind: ScriptKind, name: 
 fn validate_session_interceptors(value: &SessionInterceptors) -> Result<()> {
     for (label, entries) in [("request", &value.request), ("response", &value.response)] {
         if entries.len() > MAX_SESSION_INTERCEPTORS_PER_KIND {
-            bail!("{label} interceptor chain cannot contain more than 12 entries");
+            bail!(Error::InvalidArgument(format!(
+                "{label} interceptor chain cannot contain more than 12 entries"
+            )));
         }
         let mut names = HashSet::new();
         if entries
             .iter()
             .any(|entry| !names.insert(entry.name.as_str()))
         {
-            bail!("{label} interceptor chain contains duplicate scripts");
+            bail!(Error::InvalidArgument(format!(
+                "{label} interceptor chain contains duplicate scripts"
+            )));
         }
     }
     Ok(())

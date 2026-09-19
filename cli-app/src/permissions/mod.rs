@@ -5,7 +5,7 @@ use std::{path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use proxy_crab_mgr::{
-    dto::ManagerError,
+    dto::{ErrorCode, ManagerError},
     permission::{
         ApiAction, ManagementCredential, PermissionAction, PermissionDenied, PermissionManager,
         PermissionMode, api_actions,
@@ -115,12 +115,15 @@ impl PermissionManager for CliPermissionService {
         }
         let identity = match self.store.authenticate(&action.credential) {
             Ok(identity) => identity,
-            Err(error) if error.code == "invalid_api_key" => {
+            Err(error) if error.code == ErrorCode::InvalidApiKey => {
                 tracing::warn!(
                     action = action.action.id,
                     "management API credential rejected"
                 );
-                return Some(PermissionDenied::unauthorized(error.code, error.message));
+                return Some(PermissionDenied::unauthorized(
+                    error.code.as_str(),
+                    error.message,
+                ));
             }
             Err(error) => {
                 tracing::error!(

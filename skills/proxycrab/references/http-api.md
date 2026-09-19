@@ -420,8 +420,9 @@ updated `SessionMetadata`.
 ### `POST /api/sessions/{id}/archive`
 
 Moves an inactive Session and all of its data to `sessions_archived/<id>` and returns its
-`SessionMetadata`. The active Session cannot be archived. A Session with pinned in-progress
-requests returns `409 conflict`; archive is otherwise allowed while the proxy runs. Archived
+`SessionMetadata`. The active Session cannot be archived. The active Session and a Session with
+pinned in-progress requests return `409 session_in_use`; archive is otherwise allowed while the
+proxy runs. Archived
 Sessions are excluded from every existing Session, log, view, interceptor, and export endpoint.
 
 ### `GET /api/archived-sessions`
@@ -702,8 +703,9 @@ ProxyCrab negotiates the response from `Accept-Encoding`. If every captured cont
 accepted, including through `*`, it streams the original bytes and preserves the complete captured
 `Content-Encoding` stack and stored `Content-Length`. A specific `q=0` prohibition overrides `*`.
 Otherwise ProxyCrab decodes gzip, br, deflate, zstd, or stacked encodings and chooses the first
-allowed output from the fixed `gzip`, `deflate`, identity fallback chain. Nonzero q weights do not
-change that order; malformed entries are ignored. Missing or empty `Accept-Encoding` selects
+allowed output from the fixed `gzip`, `deflate`, identity fallback chain. Unlisted `identity`
+follows `*`: `*;q=0` forbids identity exactly like `identity;q=0` (RFC 9110 §12.5.3). Nonzero q
+weights do not change that order; malformed entries are ignored. Missing or empty `Accept-Encoding` selects
 identity. If no output is allowed, the endpoint returns `406 not_acceptable_encoding`.
 
 Transcoded and identity responses omit `Content-Length`; gzip and deflate responses set their
@@ -1102,8 +1104,14 @@ HTTP status mapping:
 | `not_found` | 404 | Missing endpoint, Session, log, or script |
 | `log_not_found` | 404 | Missing capture for a body request |
 | `body_not_found` | 404 | Requested side has not produced a body file |
+| `execution_not_found` | 404 | Missing interceptor execution for a content request |
+| `snapshot_not_found` | 404 | Missing interceptor execution or snapshot |
+| `snapshot_body_not_found` | 404 | Missing snapshot body for an interceptor execution |
 | `not_acceptable_encoding` | 406 | `Accept-Encoding` prohibits the original and every fallback encoding |
-| `conflict` | 409 | State conflict, including no active Session or archiving an active/in-use Session |
+| `conflict` | 409 | State conflict, including no active Session or other state conflicts |
+| `session_in_use` | 409 | Archiving the active Session or one with pinned in-progress requests |
+| `proxy_running` | 409 | Proxy start requested while it is already running or changing state |
+| `proxy_not_running` | 409 | Replay or another proxy-dependent operation while the proxy is stopped |
 | `body_too_large` | 413 | Stored body exceeds `max_size`; includes both sizes |
 | `body_decode_failed` | 422 | Original encoding cannot be decoded for a negotiated fallback |
 | `internal_error` | 500 | Storage, runtime, I/O, or other internal failure |

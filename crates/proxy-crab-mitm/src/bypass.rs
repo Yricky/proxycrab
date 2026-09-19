@@ -161,7 +161,7 @@ impl BypassStore {
             ],
         )?;
         if changed == 0 {
-            bail!("bypass entry {id} not found");
+            bail!(crate::error::Error::BypassEntryNotFound(id));
         }
         Ok(())
     }
@@ -217,7 +217,7 @@ impl BypassStore {
             )
             .optional()?;
         if let Some(id) = active {
-            bail!("bypass entry {id} is still in progress");
+            bail!(crate::error::Error::BypassEntryInProgress(id as u64));
         }
         let deleted = transaction.execute(
             &format!("DELETE FROM bypass_entries WHERE id IN ({placeholders})"),

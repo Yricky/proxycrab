@@ -6,10 +6,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use fs2::FileExt;
 use serde::{Serialize, de::DeserializeOwned};
 
+use crate::error::Error;
 use crate::model::{
     AppConfig, Script, ScriptKind, SessionInterceptors, SessionMetadata, SessionView,
 };
@@ -140,7 +141,7 @@ impl Workspace {
         if let Some(id) = session_id
             && !sessions.iter().any(|session| session.id == id)
         {
-            bail!("session {id} not found");
+            return Err(Error::SessionNotFound(id).into());
         }
         self.update_config(|config| config.active_session_id = session_id)?;
         Ok(session_id)
@@ -154,7 +155,7 @@ impl Workspace {
         if let Some(id) = next.active_session_id
             && !sessions.iter().any(|session| session.id == id)
         {
-            bail!("session {id} not found");
+            return Err(Error::SessionNotFound(id).into());
         }
         self.update_config(|config| *config = next)
     }
@@ -236,7 +237,7 @@ impl Workspace {
         let index = sessions
             .iter()
             .position(|session| session.id == id)
-            .ok_or_else(|| anyhow!("session {id} not found"))?;
+            .ok_or(Error::SessionNotFound(id))?;
         let mut next = sessions[index].clone();
         if let Some(name) = name {
             next.name = name;
@@ -257,9 +258,9 @@ impl Workspace {
         let index = sessions
             .iter()
             .position(|session| session.id == id)
-            .ok_or_else(|| anyhow!("session {id} not found"))?;
+            .ok_or(Error::SessionNotFound(id))?;
         if self.active_session_id() == Some(id) {
-            bail!("active session {id} cannot be archived");
+            return Err(Error::ActiveSessionArchive(id).into());
         }
         let mut archived_sessions = self
             .archived_sessions
@@ -268,7 +269,7 @@ impl Workspace {
         let directory = self.session_dir(id);
         let archived = self.archived_session_dir(id);
         if archived.exists() {
-            bail!("archived session {id} already exists");
+            return Err(Error::ArchivedSessionAlreadyExists(id).into());
         }
         fs::rename(&directory, &archived)?;
         let session = sessions.remove(index);
@@ -289,10 +290,10 @@ impl Workspace {
         let index = archived_sessions
             .iter()
             .position(|session| session.id == id)
-            .ok_or_else(|| anyhow!("archived session {id} not found"))?;
+            .ok_or(Error::ArchivedSessionNotFound(id))?;
         let directory = self.session_dir(id);
         if directory.exists() {
-            bail!("session {id} already exists");
+            return Err(Error::SessionAlreadyExists(id).into());
         }
         fs::rename(self.archived_session_dir(id), &directory)?;
         let session = archived_sessions.remove(index);
@@ -309,7 +310,7 @@ impl Workspace {
         let index = archived_sessions
             .iter()
             .position(|session| session.id == id)
-            .ok_or_else(|| anyhow!("archived session {id} not found"))?;
+            .ok_or(Error::ArchivedSessionNotFound(id))?;
         let directory = self.archived_session_dir(id);
         let deleted = self
             .root
@@ -385,7 +386,7 @@ impl Workspace {
         if self.sessions().iter().any(|session| session.id == id) {
             Ok(())
         } else {
-            bail!("session {id} not found")
+            Err(Error::SessionNotFound(id).into())
         }
     }
 
@@ -414,10 +415,18 @@ impl Workspace {
     pub fn get_script(&self, kind: ScriptKind, name: &str) -> Result<Script> {
         validate_script_name(name)?;
         let path = self.script_dir(kind).join(format!("{name}.lua"));
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(Error::ScriptNotFound(name.to_string()).into());
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to read script {name}"));
+            }
+        };
         Ok(Script {
             name: name.to_string(),
-            content: fs::read_to_string(path)
-                .with_context(|| format!("script {name} not found"))?,
+            content,
         })
     }
 
@@ -425,15 +434,20 @@ impl Workspace {
         validate_script_name(&script.name)?;
         let path = self.script_dir(kind).join(format!("{}.lua", script.name));
         if !overwrite && path.exists() {
-            bail!("script {} already exists", script.name);
+            return Err(Error::ScriptAlreadyExists(script.name.clone()).into());
         }
         write_text_atomic(&path, &script.content)
     }
 
     pub fn delete_script(&self, kind: ScriptKind, name: &str) -> Result<()> {
         validate_script_name(name)?;
-        fs::remove_file(self.script_dir(kind).join(format!("{name}.lua")))
-            .with_context(|| format!("script {name} not found"))
+        match fs::remove_file(self.script_dir(kind).join(format!("{name}.lua"))) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Err(Error::ScriptNotFound(name.to_string()).into())
+            }
+            Err(error) => Err(error).with_context(|| format!("failed to delete script {name}")),
+        }
     }
 
     fn script_dir(&self, kind: ScriptKind) -> PathBuf {
@@ -457,7 +471,7 @@ fn validate_script_name(name: &str) -> Result<()> {
         || name == "."
         || name == ".."
     {
-        bail!("invalid script name");
+        return Err(Error::InvalidScriptName.into());
     }
     Ok(())
 }

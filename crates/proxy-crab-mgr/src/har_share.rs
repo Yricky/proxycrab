@@ -273,11 +273,7 @@ impl IntoResponse for HarShareError {
             )
                 .into_response(),
             Self::Manager(error) => {
-                let status = match error.code.as_str() {
-                    "not_found" | "log_not_found" => StatusCode::NOT_FOUND,
-                    "bad_request" => StatusCode::BAD_REQUEST,
-                    _ => StatusCode::INTERNAL_SERVER_ERROR,
-                };
+                let status = error.code.http_status();
                 (status, axum::Json(json!({ "ok": false, "error": error }))).into_response()
             }
         }
@@ -297,7 +293,7 @@ mod tests {
 
     use crate::{
         MitmManager,
-        dto::{ActiveSession, CreateSessionRequest},
+        dto::{ActiveSession, CreateSessionRequest, ErrorCode},
     };
 
     async fn manager_and_session() -> (tempfile::TempDir, Arc<dyn ProxyCrabManager>, u64) {
@@ -494,6 +490,6 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(error.code, "not_found");
+        assert_eq!(error.code, ErrorCode::NotFound);
     }
 }

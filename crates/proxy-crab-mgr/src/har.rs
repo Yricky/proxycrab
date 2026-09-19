@@ -257,10 +257,9 @@ async fn load_body(source: Option<BodySource>) -> ManagerResult<LoadedBody> {
         .unwrap_or_else(|| "application/octet-stream".into());
     let mut raw_reader = body_reader(&source, false).await?;
     let mut raw = Vec::new();
-    raw_reader
-        .read_to_end(&mut raw)
-        .await
-        .map_err(|error| crate::dto::ManagerError::new("body_read_failed", error.to_string()))?;
+    raw_reader.read_to_end(&mut raw).await.map_err(|error| {
+        crate::dto::ManagerError::new(crate::dto::ErrorCode::BodyReadFailed, error.to_string())
+    })?;
     if source.content_encodings.is_empty() {
         return Ok(LoadedBody {
             bytes: raw,
@@ -281,7 +280,10 @@ async fn load_body(source: Option<BodySource>) -> ManagerResult<LoadedBody> {
         let mut reader = body_reader(&decoded_source, true).await?;
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await.map_err(|error| {
-            crate::dto::ManagerError::new("body_decode_failed", error.to_string())
+            crate::dto::ManagerError::new(
+                crate::dto::ErrorCode::BodyDecodeFailed,
+                error.to_string(),
+            )
         })?;
         Ok::<_, crate::dto::ManagerError>(bytes)
     }
@@ -621,6 +623,6 @@ mod tests {
         assert!(prefix.starts_with(br#"{"log":{"version":"1.2""#));
 
         let error = output.try_next().await.unwrap_err();
-        assert_eq!(error.code, "body_read_failed");
+        assert_eq!(error.code, crate::dto::ErrorCode::BodyReadFailed);
     }
 }

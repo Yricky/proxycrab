@@ -8,7 +8,7 @@ use std::{
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use proxy_crab_mgr::{
-    dto::ManagerError,
+    dto::{ErrorCode, ManagerError},
     permission::{ManagementCredential, OBSOLETE_API_ACTION_IDS, PermissionMode, api_actions},
 };
 use proxy_crab_mitm::workspace::now_millis;
@@ -421,7 +421,7 @@ fn known_action_ids() -> BTreeSet<String> {
 
 fn invalid_api_key() -> ManagerError {
     ManagerError::new(
-        "invalid_api_key",
+        ErrorCode::InvalidApiKey,
         "Authorization must contain a valid Bearer API key",
     )
 }
@@ -557,7 +557,7 @@ mod tests {
         let error = store
             .replace_permissions(LOCAL_IDENTITY_ID, view.permissions)
             .unwrap_err();
-        assert_eq!(error.code, "bad_request");
+        assert_eq!(error.code, ErrorCode::BadRequest);
     }
 
     #[test]

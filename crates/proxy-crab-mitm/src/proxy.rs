@@ -35,6 +35,7 @@ use crate::{
     ProxyCrab,
     breakpoint::BreakpointContext,
     bypass::BypassStore,
+    error::Error,
     lua::{
         BodyReplacement, BreakpointHook, ModificationJournal, ResponseScriptContext,
         SharedInterceptorState, evaluate_routing, execute_request_with_state,
@@ -172,7 +173,7 @@ impl ProxyController {
             self.status(),
             ProxyStatus::Stopped | ProxyStatus::Failed { .. }
         ) {
-            bail!("proxy is already running or changing state");
+            bail!(Error::ProxyAlreadyRunning);
         }
         self.activity.clear();
         *self.status.write().expect("proxy status lock poisoned") = ProxyStatus::Starting;

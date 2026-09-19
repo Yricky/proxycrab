@@ -24,15 +24,15 @@ use crate::{
     dto::{
         ActiveSession, AgentsPresetState, BreakpointDetailPayload, BreakpointQuery, BypassPage,
         BypassQuery, CertificateResponse, CreateAgentsPresetRequest, CreateSessionRequest,
-        DebugFilterScriptRequest, DeleteCount, ExecuteTemporaryScriptRequest, ExportLogsRequest,
-        ExtendBreakpointRequest, HeaderItem, InterceptorCreateRequest, InterceptorDetail,
-        InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogExport, LogIdsPayload,
-        LogIdsRequest, LogViewException, LogViewRow, LogViewsPayload, LogViewsRequest,
-        ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest,
-        ReplayBodyPayload, ReplayRequestPayload, ReplayResult, RequestDetail, ResponseDetail,
-        RoutingSelection, ScriptRequest, SessionInterceptorItem, SessionInterceptorsPayload,
-        SessionViewPayload, SystemLogsQuery, UpdateAgentsPresetRequest, UpdateScriptRequest,
-        UpdateSessionRequest,
+        DebugFilterScriptRequest, DeleteCount, ErrorCode, ExecuteTemporaryScriptRequest,
+        ExportLogsRequest, ExtendBreakpointRequest, HeaderItem, InterceptorCreateRequest,
+        InterceptorDetail, InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogExport,
+        LogIdsPayload, LogIdsRequest, LogViewException, LogViewRow, LogViewsPayload,
+        LogViewsRequest, ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest,
+        ReplaceSessionViewRequest, ReplayBodyPayload, ReplayRequestPayload, ReplayResult,
+        RequestDetail, ResponseDetail, RoutingSelection, ScriptRequest, SessionInterceptorItem,
+        SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery, UpdateAgentsPresetRequest,
+        UpdateScriptRequest, UpdateSessionRequest,
     },
     har::{self, HarCapture},
 };
@@ -434,7 +434,9 @@ impl ProxyCrabManager for MitmManager {
         self.runtime
             .asset(&id)
             .map_err(map_asset_error)?
-            .ok_or_else(|| ManagerError::new("asset_not_found", format!("asset {id} not found")))
+            .ok_or_else(|| {
+                ManagerError::new(ErrorCode::AssetNotFound, format!("asset {id} not found"))
+            })
     }
 
     async fn begin_asset_upload(
@@ -575,10 +577,7 @@ impl ProxyCrabManager for MitmManager {
     }
 
     async fn archive_session(&self, id: u64) -> ManagerResult<SessionMetadata> {
-        self.runtime
-            .archive_session(id)
-            .await
-            .map_err(map_session_archive_error)
+        self.runtime.archive_session(id).await.map_err(map_error)
     }
 
     async fn restore_session(&self, id: u64) -> ManagerResult<SessionMetadata> {
@@ -832,7 +831,7 @@ impl ProxyCrabManager for MitmManager {
 
         if request.format != "har" {
             return Err(ManagerError::new(
-                "unsupported_export_format",
+                ErrorCode::UnsupportedExportFormat,
                 format!("unsupported export format {}", request.format),
             ));
         }
@@ -864,7 +863,7 @@ impl ProxyCrabManager for MitmManager {
                             .collect::<BTreeSet<_>>();
                         if let Some(missing) = requested.difference(&found).next() {
                             return Err(ManagerError::new(
-                                "log_not_found",
+                                ErrorCode::LogNotFound,
                                 format!("log {missing} not found"),
                             ));
                         }
@@ -919,19 +918,19 @@ impl ProxyCrabManager for MitmManager {
                         let id = summary.id;
                         if !runtime.has_capture(session_id, id).map_err(map_error)? {
                             return Err(ManagerError::new(
-                                "log_not_found",
+                                ErrorCode::LogNotFound,
                                 format!("log {id} disappeared during export"),
                             ));
                         }
                         let request_body = runtime
                             .capture_body_source(session_id, id, BodySide::Request)
                             .map_err(|error| {
-                                ManagerError::new("body_read_failed", error.to_string())
+                                ManagerError::new(ErrorCode::BodyReadFailed, error.to_string())
                             })?;
                         let response_body = runtime
                             .capture_body_source(session_id, id, BodySide::Response)
                             .map_err(|error| {
-                                ManagerError::new("body_read_failed", error.to_string())
+                                ManagerError::new(ErrorCode::BodyReadFailed, error.to_string())
                             })?;
                         Ok(HarCapture {
                             summary,
@@ -1003,7 +1002,7 @@ impl ProxyCrabManager for MitmManager {
                     ManagerError::not_found(format!("session {session_id} not found or archived"))
                 }
                 ReplayError::ProxyNotRunning => {
-                    ManagerError::new("proxy_not_running", "proxy is not running")
+                    ManagerError::new(ErrorCode::ProxyNotRunning, "proxy is not running")
                 }
                 ReplayError::BodyNotFound => {
                     ManagerError::not_found("referenced capture body not found")
@@ -1011,7 +1010,7 @@ impl ProxyCrabManager for MitmManager {
                 ReplayError::AssetNotFound => ManagerError::not_found("referenced asset not found"),
                 ReplayError::Invalid(message) => ManagerError::bad_request(message),
                 ReplayError::Internal(error) => {
-                    ManagerError::new("replay_failed", error.to_string())
+                    ManagerError::new(ErrorCode::ReplayFailed, error.to_string())
                 }
             })?;
         Ok(ReplayResult { log_id })
@@ -1020,7 +1019,7 @@ impl ProxyCrabManager for MitmManager {
     async fn assets(&self) -> ManagerResult<Vec<proxy_crab_mitm::asset::AssetMetadata>> {
         self.runtime
             .assets()
-            .map_err(|error| ManagerError::new("asset_store_failed", error.to_string()))
+            .map_err(|error| ManagerError::new(ErrorCode::AssetStoreFailed, error.to_string()))
     }
 
     async fn log(&self, session_id: Option<u64>, id: u64) -> ManagerResult<LogDetail> {
@@ -1047,15 +1046,15 @@ impl ProxyCrabManager for MitmManager {
         self.run_blocking("log body source", move || {
             if !runtime.has_capture(session_id, id).map_err(map_error)? {
                 return Err(ManagerError::new(
-                    "log_not_found",
+                    ErrorCode::LogNotFound,
                     format!("log {id} not found"),
                 ));
             }
             runtime
                 .capture_body_source(session_id, id, side)
-                .map_err(|error| ManagerError::new("body_read_failed", error.to_string()))?
+                .map_err(|error| ManagerError::new(ErrorCode::BodyReadFailed, error.to_string()))?
                 .ok_or_else(|| {
-                    ManagerError::new("body_not_found", format!("{side:?} body not found"))
+                    ManagerError::new(ErrorCode::BodyNotFound, format!("{side:?} body not found"))
                 })
         })
         .await
@@ -1073,10 +1072,10 @@ impl ProxyCrabManager for MitmManager {
         self.run_blocking("interceptor snapshot body source", move || {
             runtime
                 .interceptor_snapshot_body_source(session_id, capture_id, execution_id, side)
-                .map_err(|error| ManagerError::new("body_read_failed", error.to_string()))?
+                .map_err(|error| ManagerError::new(ErrorCode::BodyReadFailed, error.to_string()))?
                 .ok_or_else(|| {
                     ManagerError::new(
-                        "snapshot_body_not_found",
+                        ErrorCode::SnapshotBodyNotFound,
                         format!("interceptor execution {execution_id} snapshot body not found"),
                     )
                 })
@@ -1098,7 +1097,7 @@ impl ProxyCrabManager for MitmManager {
                 .map_err(map_error)?
                 .ok_or_else(|| {
                     ManagerError::new(
-                        "execution_not_found",
+                        ErrorCode::ExecutionNotFound,
                         format!("interceptor execution {execution_id} not found"),
                     )
                 })
@@ -1120,7 +1119,7 @@ impl ProxyCrabManager for MitmManager {
                 .map_err(map_error)?
                 .ok_or_else(|| {
                     ManagerError::new(
-                        "snapshot_not_found",
+                        ErrorCode::SnapshotNotFound,
                         format!("interceptor execution {execution_id} has no snapshot"),
                     )
                 })
@@ -1156,7 +1155,7 @@ impl ProxyCrabManager for MitmManager {
                 .breakpoint_body_source(id, side)
                 .map_err(map_error)?
                 .ok_or_else(|| {
-                    ManagerError::new("body_not_found", format!("{side:?} body not found"))
+                    ManagerError::new(ErrorCode::BodyNotFound, format!("{side:?} body not found"))
                 })
         })
         .await
@@ -1654,55 +1653,56 @@ fn interceptor_script_kind(kind: InterceptorKind) -> ScriptKind {
 }
 
 fn map_error(error: anyhow::Error) -> ManagerError {
-    let message = error.to_string();
-    if message.contains("not found") {
-        ManagerError::not_found(message)
-    } else if message.contains("already exists")
-        || message.contains("already running")
-        || message.contains("must be stopped")
-    {
-        ManagerError::conflict(message)
-    } else if message.contains("invalid")
-        || message.contains("must ")
-        || message.contains("cannot ")
-        || message.contains("duplicate")
-        || message.contains("script")
-        || message.contains("Lua")
-    {
-        ManagerError::bad_request(message)
-    } else {
-        ManagerError::internal(message)
+    use proxy_crab_mitm::error::Error as MitmError;
+    let Some(mitm) = error.downcast_ref::<MitmError>() else {
+        return ManagerError::internal(error.to_string());
+    };
+    let message = mitm.to_string();
+    match mitm {
+        MitmError::SessionNotFound(_)
+        | MitmError::ArchivedSessionNotFound(_)
+        | MitmError::ScriptNotFound(_)
+        | MitmError::CaptureNotFound(_)
+        | MitmError::BreakpointNotFound(_)
+        | MitmError::BypassEntryNotFound(_) => ManagerError::not_found(message),
+        MitmError::SessionAlreadyExists(_)
+        | MitmError::ArchivedSessionAlreadyExists(_)
+        | MitmError::ScriptAlreadyExists(_)
+        | MitmError::ProxyMustBeStopped
+        | MitmError::BypassEntryInProgress(_) => ManagerError::conflict(message),
+        MitmError::ActiveSessionArchive(_) | MitmError::SessionRequestsInProgress(_) => {
+            ManagerError::new(ErrorCode::SessionInUse, message)
+        }
+        MitmError::ProxyAlreadyRunning => ManagerError::new(ErrorCode::ProxyRunning, message),
+        MitmError::InvalidScriptName
+        | MitmError::InvalidScript(_)
+        | MitmError::InvalidArgument(_) => ManagerError::bad_request(message),
     }
 }
 
 fn map_asset_error(error: AssetError) -> ManagerError {
     match error {
-        AssetError::InvalidId(message) => {
-            ManagerError::new("invalid_asset_id", format!("invalid asset id: {message}"))
-        }
+        AssetError::InvalidId(message) => ManagerError::new(
+            ErrorCode::InvalidAssetId,
+            format!("invalid asset id: {message}"),
+        ),
         AssetError::NotFound(id) => {
-            ManagerError::new("asset_not_found", format!("asset {id} not found"))
+            ManagerError::new(ErrorCode::AssetNotFound, format!("asset {id} not found"))
         }
-        AssetError::AlreadyExists(id) => {
-            ManagerError::new("asset_already_exists", format!("asset {id} already exists"))
-        }
+        AssetError::AlreadyExists(id) => ManagerError::new(
+            ErrorCode::AssetAlreadyExists,
+            format!("asset {id} already exists"),
+        ),
         AssetError::PathConflict(id) => ManagerError::new(
-            "asset_path_conflict",
+            ErrorCode::AssetPathConflict,
             format!("asset path conflicts with an existing file or directory: {id}"),
         ),
-        AssetError::Storage(error) => ManagerError::new("asset_store_failed", error.to_string()),
-        AssetError::InvalidMetadata(error) => {
-            ManagerError::new("asset_store_failed", error.to_string())
+        AssetError::Storage(error) => {
+            ManagerError::new(ErrorCode::AssetStoreFailed, error.to_string())
         }
-    }
-}
-
-fn map_session_archive_error(error: anyhow::Error) -> ManagerError {
-    let message = error.to_string();
-    if message.contains("active session") || message.contains("requests in progress") {
-        ManagerError::conflict(message)
-    } else {
-        map_error(error)
+        AssetError::InvalidMetadata(error) => {
+            ManagerError::new(ErrorCode::AssetStoreFailed, error.to_string())
+        }
     }
 }
 
@@ -1724,7 +1724,7 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::dto::{
-        CreateAgentsPresetRequest, DebugFilterScriptRequest, ExportLogsRequest,
+        CreateAgentsPresetRequest, DebugFilterScriptRequest, ErrorCode, ExportLogsRequest,
         InterceptorCreateRequest, LogIdsRequest, LogViewItem, LogViewsRequest,
         ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ScriptRequest,
         SessionInterceptorInput, SessionViewInput, UpdateAgentsPresetRequest, UpdateScriptRequest,
@@ -1933,7 +1933,7 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert_eq!(invalid.code, "bad_request");
+        assert_eq!(invalid.code, ErrorCode::BadRequest);
     }
 
     #[tokio::test]
@@ -2081,7 +2081,7 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert_eq!(error.code, "bad_request");
+        assert_eq!(error.code, ErrorCode::BadRequest);
     }
 
     #[tokio::test]
@@ -2339,7 +2339,7 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert_eq!(invalid.code, "bad_request");
+        assert_eq!(invalid.code, ErrorCode::BadRequest);
 
         manager
             .create_column_script(ScriptRequest {
@@ -2553,7 +2553,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(error.code, "not_found");
+        assert_eq!(error.code, ErrorCode::NotFound);
 
         manager
             .create_column_script(ScriptRequest {
@@ -2665,7 +2665,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(error.code, "bad_request");
+        assert_eq!(error.code, ErrorCode::BadRequest);
     }
 
     #[tokio::test]
@@ -2761,7 +2761,7 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert_eq!(error.code, "unsupported_export_format");
+        assert_eq!(error.code, ErrorCode::UnsupportedExportFormat);
 
         let error = manager
             .export_logs(ExportLogsRequest {
@@ -2771,7 +2771,7 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert_eq!(error.code, "log_not_found");
+        assert_eq!(error.code, ErrorCode::LogNotFound);
 
         let export = manager
             .export_logs(ExportLogsRequest {
