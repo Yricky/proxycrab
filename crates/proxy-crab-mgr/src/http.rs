@@ -39,7 +39,7 @@ use tokio_util::{
 use crate::{
     dto::{
         ActiveSession, AssetQuery, BodyQuery, BreakpointQuery, BypassQuery, CreateSessionRequest,
-        DebugFilterScriptRequest, DeleteBypassRequest, ExecuteTemporaryScriptRequest,
+        DebugFilterScriptRequest, DeleteBypassRequest, ErrorCode, ExecuteTemporaryScriptRequest,
         ExtendBreakpointRequest, HttpApiChange, HttpApiResource, InterceptorCreateRequest,
         InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError, ManagerResult,
         ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ReplayRequestPayload,
@@ -897,24 +897,28 @@ async fn upload_asset(
     while let Some(bytes) = body.next().await {
         let bytes = bytes.map_err(|error| {
             ApiError(ManagerError::new(
-                "asset_store_failed",
+                ErrorCode::AssetStoreFailed,
                 format!("failed to read asset upload: {error}"),
             ))
         })?;
         upload.write(&bytes).await.map_err(|error| {
-            ApiError(ManagerError::new("asset_store_failed", error.to_string()))
+            ApiError(ManagerError::new(
+                ErrorCode::AssetStoreFailed,
+                error.to_string(),
+            ))
         })?;
     }
     let metadata = upload.finish().await.map_err(|error| {
         let error = match error {
-            proxy_crab_mitm::asset::AssetError::AlreadyExists(id) => {
-                ManagerError::new("asset_already_exists", format!("asset {id} already exists"))
-            }
+            proxy_crab_mitm::asset::AssetError::AlreadyExists(id) => ManagerError::new(
+                ErrorCode::AssetAlreadyExists,
+                format!("asset {id} already exists"),
+            ),
             proxy_crab_mitm::asset::AssetError::PathConflict(id) => ManagerError::new(
-                "asset_path_conflict",
+                ErrorCode::AssetPathConflict,
                 format!("asset path conflicts with an existing file or directory: {id}"),
             ),
-            other => ManagerError::new("asset_store_failed", other.to_string()),
+            other => ManagerError::new(ErrorCode::AssetStoreFailed, other.to_string()),
         };
         ApiError(error)
     })?;
@@ -942,7 +946,7 @@ async fn asset(
                 .expect("validated asset id has a filename");
             let file = tokio::fs::File::open(asset.path()).await.map_err(|error| {
                 ApiError(ManagerError::new(
-                    "asset_store_failed",
+                    ErrorCode::AssetStoreFailed,
                     format!("failed to open asset: {error}"),
                 ))
             })?;
@@ -952,7 +956,10 @@ async fn asset(
             headers.insert(
                 CONTENT_TYPE,
                 HeaderValue::from_str(&asset.metadata.content_type).map_err(|error| {
-                    ApiError(ManagerError::new("asset_store_failed", error.to_string()))
+                    ApiError(ManagerError::new(
+                        ErrorCode::AssetStoreFailed,
+                        error.to_string(),
+                    ))
                 })?,
             );
             headers.insert(
@@ -973,7 +980,7 @@ async fn asset(
             Ok(response)
         }
         Some(_) => Err(ApiError(ManagerError::new(
-            "invalid_asset_format",
+            ErrorCode::InvalidAssetFormat,
             "asset format must be raw when present",
         ))),
     }
@@ -1427,7 +1434,9 @@ impl AcceptedEncodings {
             return allowed;
         }
         if name.eq_ignore_ascii_case("identity") {
-            return true;
+            // RFC 9110 §12.5.3：未显式列出的 identity 受 `*` 约束，
+            // `*;q=0` 与 `identity;q=0` 等价地禁止 identity。
+            return self.explicit("*").unwrap_or(true);
         }
         self.explicit("*").unwrap_or(false)
     }
@@ -1466,7 +1475,7 @@ impl AcceptedEncodings {
             }
         }
         Err(ManagerError::new(
-            "not_acceptable_encoding",
+            ErrorCode::NotAcceptableEncoding,
             "the client prohibited every available response content encoding",
         ))
     }
@@ -1543,7 +1552,7 @@ pub(crate) async fn body_reader(
         BodySourceData::File(path) => Box::pin(
             tokio::fs::File::open(path)
                 .await
-                .map_err(|error| ManagerError::new("body_read_failed", error.to_string()))?,
+                .map_err(|error| ManagerError::new(ErrorCode::BodyReadFailed, error.to_string()))?,
         ),
         BodySourceData::Bytes(bytes) => {
             let stream = stream::once({
@@ -1565,7 +1574,7 @@ pub(crate) async fn body_reader(
             "zstd" => Box::pin(ZstdDecoder::new(buffered)),
             other => {
                 return Err(ManagerError::new(
-                    "body_decode_failed",
+                    ErrorCode::BodyDecodeFailed,
                     format!("unsupported content encoding {other}"),
                 ));
             }
@@ -1615,8 +1624,9 @@ pub(crate) async fn body_response(
         if !source.content_encodings.is_empty() {
             response.headers_mut().insert(
                 CONTENT_ENCODING,
-                HeaderValue::from_str(&source.content_encodings.join(", "))
-                    .map_err(|error| ManagerError::new("body_read_failed", error.to_string()))?,
+                HeaderValue::from_str(&source.content_encodings.join(", ")).map_err(|error| {
+                    ManagerError::new(ErrorCode::BodyReadFailed, error.to_string())
+                })?,
             );
         }
     } else if let Some(value) = match encoding {
@@ -1641,6 +1651,40 @@ fn success(value: impl serde::Serialize) -> ApiResult {
     Ok(Json(json!({ "ok": true, "data": value })))
 }
 
+impl ErrorCode {
+    /// 错误码对应的 HTTP 状态码。穷尽匹配：新增错误码必须在编译期决定状态码。
+    pub fn http_status(self) -> StatusCode {
+        match self {
+            Self::BadRequest
+            | Self::InvalidAssetId
+            | Self::InvalidAssetFormat
+            | Self::UnsupportedExportFormat => StatusCode::BAD_REQUEST,
+            Self::InvalidApiKey | Self::InvalidUiToken => StatusCode::UNAUTHORIZED,
+            Self::NotFound
+            | Self::LogNotFound
+            | Self::BodyNotFound
+            | Self::AssetNotFound
+            | Self::ExecutionNotFound
+            | Self::SnapshotNotFound
+            | Self::SnapshotBodyNotFound
+            | Self::ShareSessionUnavailable => StatusCode::NOT_FOUND,
+            Self::Conflict
+            | Self::ProxyRunning
+            | Self::ProxyNotRunning
+            | Self::SessionInUse
+            | Self::AssetAlreadyExists
+            | Self::AssetPathConflict => StatusCode::CONFLICT,
+            Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::BodyDecodeFailed => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::NotAcceptableEncoding => StatusCode::NOT_ACCEPTABLE,
+            Self::InternalError
+            | Self::BodyReadFailed
+            | Self::AssetStoreFailed
+            | Self::ReplayFailed => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
 struct ApiError(ManagerError);
 
 impl From<ManagerError> for ApiError {
@@ -1651,26 +1695,8 @@ impl From<ManagerError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let varies_on_accept_encoding = self.0.code == "not_acceptable_encoding";
-        let status = match self.0.code.as_str() {
-            "bad_request"
-            | "unsupported_export_format"
-            | "invalid_asset_id"
-            | "invalid_asset_format" => StatusCode::BAD_REQUEST,
-            "not_found" | "log_not_found" | "body_not_found" | "asset_not_found" => {
-                StatusCode::NOT_FOUND
-            }
-            "forbidden_origin" => StatusCode::FORBIDDEN,
-            "conflict"
-            | "proxy_running"
-            | "session_in_use"
-            | "asset_already_exists"
-            | "asset_path_conflict" => StatusCode::CONFLICT,
-            "body_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
-            "body_decode_failed" => StatusCode::UNPROCESSABLE_ENTITY,
-            "not_acceptable_encoding" => StatusCode::NOT_ACCEPTABLE,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
+        let varies_on_accept_encoding = self.0.code == ErrorCode::NotAcceptableEncoding;
+        let status = self.0.code.http_status();
         let mut response = (
             status,
             Json(json!({
@@ -1730,7 +1756,7 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::{
-        dto::HttpApiResource,
+        dto::{ErrorCode, HttpApiResource},
         http::{
             ApiError, body_response, change_for_request, router, router_with_changes,
             secured_router, spawn_proxy_status_change_bridge,
@@ -2009,16 +2035,55 @@ mod tests {
         let error = body_response(source.clone(), &headers, None)
             .await
             .unwrap_err();
-        assert_eq!(error.code, "not_acceptable_encoding");
+        assert_eq!(error.code, ErrorCode::NotAcceptableEncoding);
         let response = ApiError(error).into_response();
         assert_eq!(response.status(), axum::http::StatusCode::NOT_ACCEPTABLE);
         assert_eq!(response.headers()["vary"], "Accept-Encoding");
+
+        // RFC 9110 §12.5.3：未显式列出的 identity 受 `*` 约束
+        for header in ["*;q=0", "gzip;q=0, *;q=0", "identity;q=0, *;q=0"] {
+            headers.insert("accept-encoding", header.parse().unwrap());
+            let error = body_response(source.clone(), &headers, None)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, ErrorCode::NotAcceptableEncoding, "{header}");
+        }
+
+        // `*` 允许 fallback 转码：禁止 gzip 后应协商为 deflate
+        headers.insert("accept-encoding", "gzip;q=0, *".parse().unwrap());
+        let response = body_response(source.clone(), &headers, None).await.unwrap();
+        assert_eq!(response.headers()["content-encoding"], "deflate");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let mut decoder = ZlibDecoder::new(body.as_ref());
+        let mut decoded = Vec::new();
+        decoder.read_to_end(&mut decoded).unwrap();
+        assert_eq!(decoded, b"decoded body");
+
+        // 原始即为 identity 的 body 同样受 `*;q=0` 禁止
+        let identity_source = BodySource {
+            stored_size: 12,
+            data: BodySourceData::Bytes(b"decoded body".to_vec()),
+            path: None,
+            content_type: Some("text/plain; charset=utf-8".into()),
+            content_encodings: vec![],
+        };
+        headers.insert("accept-encoding", "*;q=0".parse().unwrap());
+        let error = body_response(identity_source.clone(), &headers, None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::NotAcceptableEncoding);
+        headers.insert("accept-encoding", "*".parse().unwrap());
+        let response = body_response(identity_source, &headers, None)
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), b"decoded body");
 
         headers.insert("accept-encoding", "deflate".parse().unwrap());
         let error = body_response(source.clone(), &headers, Some(4))
             .await
             .unwrap_err();
-        assert_eq!(error.code, "body_too_large");
+        assert_eq!(error.code, ErrorCode::BodyTooLarge);
         assert_eq!(error.actual_size, Some(source.stored_size));
         assert_eq!(error.max_size, Some(4));
         let response = ApiError(error).into_response();
@@ -2292,6 +2357,128 @@ mod tests {
         let snapshot: Value = serde_json::from_slice(&snapshot).unwrap();
         assert_eq!(snapshot["data"]["request"]["method"], "GET");
         assert_eq!(snapshot["data"]["request"]["body"]["type"], "original");
+    }
+
+    #[tokio::test]
+    async fn client_errors_map_to_precise_status_codes() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(None, None).unwrap();
+        let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
+        let request = RequestData {
+            method: "GET".into(),
+            uri: "https://example.com/".into(),
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+            tags: Default::default(),
+        };
+        let id = store.begin("127.0.0.1", &request, "request").unwrap();
+        let app = router(MitmManager::new(runtime), allow_all());
+
+        async fn error_of(response: axum::response::Response) -> (axum::http::StatusCode, Value) {
+            let status = response.status();
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            (status, serde_json::from_slice(&body).unwrap())
+        }
+
+        // Lua 语法错误 → 400 bad_request，且不泄漏内部 chunk 名
+        for method in [Method::POST, Method::PUT] {
+            let uri = if method == Method::POST {
+                "/api/filter-scripts".to_string()
+            } else {
+                "/api/filter-scripts/bad".to_string()
+            };
+            let (status, body) = error_of(
+                app.clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(uri)
+                            .header("content-type", "application/json")
+                            .body(Body::from(r#"{"name":"bad","content":"return ("}"#))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+            assert_eq!(body["error"]["code"], "bad_request");
+            let message = body["error"]["message"].as_str().unwrap();
+            assert!(!message.contains("[string"), "message: {message}");
+        }
+
+        // 缺失的拦截器执行与快照 → 404
+        let (status, body) = error_of(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!(
+                            "/api/logs/{id}/interceptors/99/content?session_id={}",
+                            session.id
+                        ))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(body["error"]["code"], "execution_not_found");
+
+        let (status, body) = error_of(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!(
+                            "/api/logs/{id}/interceptors/99/snapshot?session_id={}",
+                            session.id
+                        ))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(body["error"]["code"], "snapshot_not_found");
+
+        let (status, body) = error_of(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!(
+                            "/api/logs/{id}/body?session_id={}&side=request&execution_id=99",
+                            session.id
+                        ))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(body["error"]["code"], "snapshot_body_not_found");
+
+        // 归档活动 Session → 409 session_in_use
+        let (status, body) = error_of(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("/api/sessions/{}/archive", session.id))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(body["error"]["code"], "session_in_use");
     }
 
     #[test]
@@ -3341,7 +3528,7 @@ mod tests {
             .unwrap();
         assert!(response.status().is_client_error());
 
-        // 代理未运行 → proxy_not_running
+        // 代理未运行 → 409 proxy_not_running
         let response = app
             .clone()
             .oneshot(
@@ -3356,6 +3543,7 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["error"]["code"], "proxy_not_running");

@@ -21,7 +21,10 @@ use axum::{
 };
 use proxy_crab_mgr::{
     ProxyCrabManager,
-    dto::{CreateAgentsPresetRequest, HttpApiChange, ManagerError, UpdateAgentsPresetRequest},
+    dto::{
+        CreateAgentsPresetRequest, ErrorCode, HttpApiChange, ManagerError,
+        UpdateAgentsPresetRequest,
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -177,7 +180,7 @@ async fn authorize_ui(State(state): State<Arc<UiState>>, request: Request, next:
     } else {
         error_response(
             StatusCode::UNAUTHORIZED,
-            ManagerError::new("invalid_ui_token", "Access Token 无效"),
+            ManagerError::new(ErrorCode::InvalidUiToken, "Access Token 无效"),
         )
     }
 }
@@ -382,12 +385,7 @@ fn success<T: Serialize>(value: T) -> Response {
 }
 
 fn manager_error(error: ManagerError) -> Response {
-    let status = match error.code.as_str() {
-        "bad_request" => StatusCode::BAD_REQUEST,
-        "not_found" => StatusCode::NOT_FOUND,
-        "conflict" => StatusCode::CONFLICT,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
+    let status = error.code.http_status();
     error_response(status, error)
 }
 

@@ -397,7 +397,7 @@ impl BreakpointRegistry {
 }
 
 fn not_found(id: u64) -> anyhow::Error {
-    anyhow!("breakpoint {id} not found")
+    crate::error::Error::BreakpointNotFound(id).into()
 }
 
 #[cfg(test)]

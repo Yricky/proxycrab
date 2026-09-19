@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "me.yricky.proxycrab",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm build && pnpm dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"

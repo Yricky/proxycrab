@@ -12,9 +12,82 @@ use proxy_crab_mitm::{
 };
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    BadRequest,
+    NotFound,
+    LogNotFound,
+    BodyNotFound,
+    AssetNotFound,
+    ExecutionNotFound,
+    SnapshotNotFound,
+    SnapshotBodyNotFound,
+    Conflict,
+    ProxyRunning,
+    ProxyNotRunning,
+    SessionInUse,
+    AssetAlreadyExists,
+    AssetPathConflict,
+    InvalidAssetId,
+    InvalidAssetFormat,
+    UnsupportedExportFormat,
+    NotAcceptableEncoding,
+    BodyTooLarge,
+    BodyDecodeFailed,
+    InternalError,
+    BodyReadFailed,
+    AssetStoreFailed,
+    ReplayFailed,
+    InvalidApiKey,
+    InvalidUiToken,
+    ShareSessionUnavailable,
+}
+
+impl ErrorCode {
+    /// The stable snake_case wire representation.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BadRequest => "bad_request",
+            Self::NotFound => "not_found",
+            Self::LogNotFound => "log_not_found",
+            Self::BodyNotFound => "body_not_found",
+            Self::AssetNotFound => "asset_not_found",
+            Self::ExecutionNotFound => "execution_not_found",
+            Self::SnapshotNotFound => "snapshot_not_found",
+            Self::SnapshotBodyNotFound => "snapshot_body_not_found",
+            Self::Conflict => "conflict",
+            Self::ProxyRunning => "proxy_running",
+            Self::ProxyNotRunning => "proxy_not_running",
+            Self::SessionInUse => "session_in_use",
+            Self::AssetAlreadyExists => "asset_already_exists",
+            Self::AssetPathConflict => "asset_path_conflict",
+            Self::InvalidAssetId => "invalid_asset_id",
+            Self::InvalidAssetFormat => "invalid_asset_format",
+            Self::UnsupportedExportFormat => "unsupported_export_format",
+            Self::NotAcceptableEncoding => "not_acceptable_encoding",
+            Self::BodyTooLarge => "body_too_large",
+            Self::BodyDecodeFailed => "body_decode_failed",
+            Self::InternalError => "internal_error",
+            Self::BodyReadFailed => "body_read_failed",
+            Self::AssetStoreFailed => "asset_store_failed",
+            Self::ReplayFailed => "replay_failed",
+            Self::InvalidApiKey => "invalid_api_key",
+            Self::InvalidUiToken => "invalid_ui_token",
+            Self::ShareSessionUnavailable => "share_session_unavailable",
+        }
+    }
+}
+
+impl std::fmt::Display for ErrorCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ManagerError {
-    pub code: String,
+    pub code: ErrorCode,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actual_size: Option<u64>,
@@ -31,9 +104,9 @@ impl std::fmt::Display for ManagerError {
 impl std::error::Error for ManagerError {}
 
 impl ManagerError {
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
-            code: code.into(),
+            code,
             message: message.into(),
             actual_size: None,
             max_size: None,
@@ -42,7 +115,7 @@ impl ManagerError {
 
     pub fn body_too_large(actual_size: u64, max_size: u64) -> Self {
         Self {
-            code: "body_too_large".into(),
+            code: ErrorCode::BodyTooLarge,
             message: format!("body size {actual_size} exceeds the requested {max_size} byte limit"),
             actual_size: Some(actual_size),
             max_size: Some(max_size),
@@ -50,19 +123,19 @@ impl ManagerError {
     }
 
     pub fn bad_request(message: impl Into<String>) -> Self {
-        Self::new("bad_request", message)
+        Self::new(ErrorCode::BadRequest, message)
     }
 
     pub fn not_found(message: impl Into<String>) -> Self {
-        Self::new("not_found", message)
+        Self::new(ErrorCode::NotFound, message)
     }
 
     pub fn conflict(message: impl Into<String>) -> Self {
-        Self::new("conflict", message)
+        Self::new(ErrorCode::Conflict, message)
     }
 
     pub fn internal(message: impl Into<String>) -> Self {
-        Self::new("internal_error", message)
+        Self::new(ErrorCode::InternalError, message)
     }
 }
 

@@ -494,7 +494,8 @@ negotiates its response from `Accept-Encoding`. `max_size` applies to the select
 replacement size before decoding or recompressing. If the client accepts every captured content
 encoding, the original bytes and encoding stack are preserved. Otherwise ProxyCrab streams one
 decode pass and falls back in fixed `gzip`, `deflate`, then identity order; nonzero q weights do not
-reorder that preference, while `q=0` forbids an encoding. Responses include
+reorder that preference, while `q=0` forbids an encoding. An unlisted `identity` follows `*`, so
+`*;q=0` forbids identity exactly like `identity;q=0` (RFC 9110 §12.5.3). Responses include
 `Vary: Accept-Encoding`. An empty original request or response has no blob file and the endpoint
 returns a successful zero-byte stream.
 
@@ -564,7 +565,7 @@ not replace or restore an active Session.
 Inactive Sessions can be archived while the proxy runs with
 `POST /api/sessions/{id}/archive`. The whole directory moves to `sessions_archived/<id>`; archived
 Sessions disappear from all existing Session, log, view, interceptor, and export APIs. The active
-Session and Sessions with pinned requests return `409 conflict`. `GET /api/archived-sessions`
+Session and Sessions with pinned requests return `409 session_in_use`. `GET /api/archived-sessions`
 lists metadata only, `POST /api/archived-sessions/{id}/restore` moves it back without activating
 it, and `DELETE /api/archived-sessions/{id}` permanently removes it. Permanent deletion therefore
 requires archiving the Session first.

@@ -28,7 +28,7 @@ use subtle::ConstantTimeEq;
 
 use crate::{
     ProxyCrabManager,
-    dto::{BodyQuery, LogIdsRequest, LogViewsRequest, ManagerError, SessionViewPayload},
+    dto::{BodyQuery, ErrorCode, LogIdsRequest, LogViewsRequest, ManagerError, SessionViewPayload},
     http::body_response,
 };
 
@@ -552,7 +552,7 @@ struct ShareApiError(ManagerError);
 impl ShareApiError {
     fn unavailable() -> Self {
         Self(ManagerError::new(
-            "share_session_unavailable",
+            ErrorCode::ShareSessionUnavailable,
             "分享的 Session 已不可用",
         ))
     }
@@ -566,16 +566,7 @@ impl From<ManagerError> for ShareApiError {
 
 impl IntoResponse for ShareApiError {
     fn into_response(self) -> Response {
-        let status = match self.0.code.as_str() {
-            "bad_request" => StatusCode::BAD_REQUEST,
-            "not_found" | "log_not_found" | "body_not_found" | "share_session_unavailable" => {
-                StatusCode::NOT_FOUND
-            }
-            "body_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
-            "body_decode_failed" => StatusCode::UNPROCESSABLE_ENTITY,
-            "not_acceptable_encoding" => StatusCode::NOT_ACCEPTABLE,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
+        let status = self.0.code.http_status();
         (status, Json(json!({ "ok": false, "error": self.0 }))).into_response()
     }
 }
@@ -593,7 +584,7 @@ mod tests {
 
     use crate::{
         MitmManager,
-        dto::{ActiveSession, CreateSessionRequest, ScriptRequest},
+        dto::{ActiveSession, CreateSessionRequest, ErrorCode, ScriptRequest},
     };
 
     #[test]
@@ -703,7 +694,7 @@ mod tests {
         );
 
         let error = service.enable(&manager, u64::MAX).await.unwrap_err();
-        assert_eq!(error.code, "not_found");
+        assert_eq!(error.code, ErrorCode::NotFound);
     }
 
     #[tokio::test]

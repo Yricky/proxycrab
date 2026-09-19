@@ -225,7 +225,7 @@ mod tests {
             install(source.path(), &parent_path, false)
                 .unwrap_err()
                 .code,
-            "conflict"
+            crate::dto::ErrorCode::Conflict
         );
         install(source.path(), &parent_path, true).unwrap();
 
@@ -260,7 +260,7 @@ mod tests {
             install(source.path(), &file.to_string_lossy(), false)
                 .unwrap_err()
                 .code,
-            "bad_request"
+            crate::dto::ErrorCode::BadRequest
         );
 
         let target = parent.path().join("proxycrab");
@@ -269,7 +269,7 @@ mod tests {
             install(source.path(), &parent.path().to_string_lossy(), false)
                 .unwrap_err()
                 .code,
-            "bad_request"
+            crate::dto::ErrorCode::BadRequest
         );
     }
 

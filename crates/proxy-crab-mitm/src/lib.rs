@@ -4,6 +4,7 @@ pub mod asset;
 mod breakpoint;
 pub mod bypass;
 pub mod ca;
+pub mod error;
 pub mod log_buffer;
 pub mod lua;
 mod migration;
