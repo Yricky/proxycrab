@@ -1,0 +1,152 @@
+name: Build Artifacts
+
+on:
+  push:
+    branches:
+      - "build/*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: Desktop (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+          - os: macos-latest
+            platform: macos-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute artifact suffix
+        id: suffix
+        shell: bash
+        run: |
+          s="${GITHUB_REF_NAME#build/}"
+          echo "s=${s//\//-}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-${{ matrix.platform }}
+
+      - name: Build desktop app
+        run: pnpm tauri build
+
+      - name: Upload desktop bundles (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}-${{ steps.suffix.outputs.s }}
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+
+      - name: Upload desktop bundles (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}-${{ steps.suffix.outputs.s }}
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/*.app
+          if-no-files-found: error
+
+  cli:
+    name: CLI (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
+          - os: macos-latest
+            platform: macos-aarch64
+          - os: windows-latest
+            platform: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute artifact suffix
+        id: suffix
+        shell: bash
+        run: |
+          s="${GITHUB_REF_NAME#build/}"
+          echo "s=${s//\//-}" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-${{ matrix.platform }}
+
+      - name: Build frontend assets
+        run: pnpm build
+
+      - name: Build CLI
+        run: cargo build --release --locked -p proxycrab-cli
+
+      - name: Package CLI (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p out
+          tar -czf "out/proxycrab-cli-${{ matrix.platform }}-${{ steps.suffix.outputs.s }}.tar.gz" \
+            -C target/release proxycrab-cli
+
+      - name: Package CLI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path out | Out-Null
+          Compress-Archive -Path target/release/proxycrab-cli.exe `
+            -DestinationPath "out/proxycrab-cli-${{ matrix.platform }}-${{ steps.suffix.outputs.s }}.zip"
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.platform }}-${{ steps.suffix.outputs.s }}
+          path: out/*
+          if-no-files-found: error
