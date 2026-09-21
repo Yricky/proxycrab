@@ -67,9 +67,9 @@ jobs:
         with:
           name: desktop-${{ matrix.platform }}-${{ steps.suffix.outputs.s }}
           path: |
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/rpm/*.rpm
-            src-tauri/target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
+            target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
       - name: Upload desktop bundles (macOS)
@@ -78,8 +78,8 @@ jobs:
         with:
           name: desktop-${{ matrix.platform }}-${{ steps.suffix.outputs.s }}
           path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/*.app
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/macos/*.app
           if-no-files-found: error
 
   cli:
