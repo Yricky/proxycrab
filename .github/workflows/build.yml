@@ -66,10 +66,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.platform }}-${{ steps.suffix.outputs.s }}
-          path: |
-            target/release/bundle/deb/*.deb
-            target/release/bundle/rpm/*.rpm
-            target/release/bundle/appimage/*.AppImage
+          path: target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
       - name: Upload desktop bundles (macOS)
