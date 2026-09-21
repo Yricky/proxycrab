@@ -42,13 +42,13 @@ import {
   Io5QrCodeOutline,
   Io5RadioButtonOn,
   Io5Settings,
-  Io5SendOutline,
   Io5ShieldCheckmark,
   Io5Stop,
   Io5Flash,
   Io5Sunny,
   Io5Warning,
 } from "vue-icons-plus/io5";
+import { BsFillSendFill } from "vue-icons-plus/bs";
 
 type ToolbarMenu = "ai" | "scripts" | "tools" | "system";
 
@@ -285,7 +285,7 @@ onBeforeUnmount(() => {
             <span>JWT 解码 / 验签</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(() => openReplay())">
-            <Io5SendOutline :size="14" />
+            <BsFillSendFill :size="14" />
             <span>发送请求</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openQrCode)">

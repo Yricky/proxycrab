@@ -18,7 +18,6 @@ import {
   Io5Checkmark,
   Io5ChevronDown,
   Io5Copy,
-  Io5SendOutline,
   Io5Warning,
 } from "vue-icons-plus/io5";
 import {
@@ -37,6 +36,7 @@ import {
 } from "../utils/url-segments";
 import SegmentedUrl from "../components/SegmentedUrl.vue";
 import type { BodyTarget } from "../api/body";
+import { BsFillSendFill } from "vue-icons-plus/bs";
 
 const props = defineProps<{
   sessionId?: number;
@@ -571,7 +571,7 @@ function headerCount(headers: HeaderItem[]): string {
           <span v-if="loading" class="refreshing text-faint">刷新中…</span>
           <span class="summary-spacer" />
           <button class="btn icon" title="重放此请求" @click="replayCurrent">
-            <Io5SendOutline :size="14" />
+            <BsFillSendFill :size="14" />
           </button>
           <button
             class="btn icon copy-menu-button"

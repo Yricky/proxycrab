@@ -13,7 +13,7 @@ import SegmentedUrl from "../components/SegmentedUrl.vue";
 import { urlSegments as buildUrlSegments } from "../utils/url-segments";
 import { prefillFromSnapshot } from "../utils/replay";
 import { openReplay } from "./launcher";
-import { Io5SendOutline } from "vue-icons-plus/io5";
+import { BsFillSendFill } from "vue-icons-plus/bs";
 
 function replaySnapshot(): void {
   if (!snapshot.value) return;
@@ -143,7 +143,7 @@ const urlSegments = computed(() =>
             title="重放此快照请求"
             @click="replaySnapshot"
           >
-            <Io5SendOutline :size="14" />
+            <BsFillSendFill :size="14" />
           </button>
         </div>
         <SegmentedUrl

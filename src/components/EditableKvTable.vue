@@ -110,7 +110,7 @@ function onHandlePointerDown(index: number, event: PointerEvent): void {
             v-model="row.name"
             class="kv-edit kv-name-input"
             placeholder="header"
-            :size="Math.max(1, row.name.length)"
+            :size="Math.max(6, row.name.length)"
             spellcheck="false"
             @input="commit"
           />
@@ -161,6 +161,8 @@ function onHandlePointerDown(index: number, event: PointerEvent): void {
 
 .drag-handle {
   display: inline-flex;
+  align-items: center;
+  height: 1.5em;
   cursor: grab;
   touch-action: none;
   user-select: none;

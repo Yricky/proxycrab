@@ -69,10 +69,12 @@ if (props.prefill) {
   }
 }
 
-const methodOptions = [
-  ...REPLAY_METHODS.map((value) => ({ value, label: value })),
-  { value: CUSTOM_METHOD, label: "自定义…" },
-];
+const methodOptions = REPLAY_METHODS.map((value) => ({ value, label: value }));
+const methodDisplay = computed(() =>
+  methodChoice.value === CUSTOM_METHOD
+    ? customMethod.value || "自定义…"
+    : undefined,
+);
 const method = computed(() =>
   methodChoice.value === CUSTOM_METHOD
     ? customMethod.value.trim().toUpperCase()
@@ -310,18 +312,26 @@ const bodyExtra = computed(() => {
 
     <nav class="tab-bar">
       <CustomSelect
+        class="method-select"
         :model-value="methodChoice"
         :options="methodOptions"
+        :display-value="methodDisplay"
         aria-label="请求方法"
         @update:model-value="methodChoice = $event"
-      />
-      <input
-        v-if="methodChoice === CUSTOM_METHOD"
-        v-model="customMethod"
-        class="input mono custom-method"
-        placeholder="METHOD"
-        spellcheck="false"
-      />
+      >
+        <template #footer="{ close }">
+          <input
+            v-model="customMethod"
+            class="input method-custom-input mono"
+            placeholder="自定义 Method"
+            aria-label="自定义请求方法"
+            spellcheck="false"
+            @focus="methodChoice = CUSTOM_METHOD"
+            @input="methodChoice = CUSTOM_METHOD"
+            @keydown.enter.prevent="close(true)"
+          />
+        </template>
+      </CustomSelect>
       <button class="tab-btn active">请求</button>
       <span class="summary-spacer" />
       <button
@@ -501,12 +511,28 @@ const bodyExtra = computed(() => {
   background: var(--accent);
 }
 
-.custom-method {
-  width: 90px;
+.method-select {
+  width: 92px;
+}
+
+.method-select :deep(.select-trigger) {
+  min-height: 26px;
+  padding: 2px 7px 2px 9px;
+}
+
+.method-custom-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 4px 7px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
 }
 
 .send-btn {
   margin-left: auto;
+  min-height: 26px;
+  padding: 2px 10px;
 }
 
 /* 与详情页 tab-page / card 对齐 */

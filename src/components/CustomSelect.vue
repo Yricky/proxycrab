@@ -16,6 +16,7 @@ const props = withDefaults(
     placeholder?: string;
     disabled?: boolean;
     ariaLabel?: string;
+    displayValue?: string;
     /** 菜单弹出方向，默认向下；底部状态栏等场景可设为 up。 */
     placement?: "down" | "up";
   }>(),
@@ -126,7 +127,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
       @keydown="onKeydown"
     >
       <span class="select-copy">
-        <span :class="{ placeholder: !selected }">{{ selected?.label ?? placeholder }}</span>
+        <span :class="{ placeholder: !selected && displayValue === undefined }">{{ displayValue ?? selected?.label ?? placeholder }}</span>
         <small v-if="selected?.description">{{ selected.description }}</small>
       </span>
       <Io5ChevronDown :size="13" />
@@ -151,6 +152,9 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
         </span>
         <Io5Checkmark v-if="option.value === modelValue" :size="14" />
       </button>
+      <div v-if="$slots.footer" class="select-footer">
+        <slot name="footer" :close="closeList" />
+      </div>
     </div>
   </div>
 </template>
@@ -173,5 +177,6 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
 .select-option.selected { color: var(--accent); }
 .select-option:disabled { color: var(--text-faint); cursor: default; }
 .select-option > svg { flex: none; }
+.select-footer { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
 .disabled { opacity: 0.55; }
 </style>
