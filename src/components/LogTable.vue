@@ -541,6 +541,18 @@ interface DragState {
   pointerId: number;
 }
 
+/** 触屏平移滚动：按下后手指拖动直接滚动内容，位移超过阈值才判定为拖拽。 */
+interface PanState {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  scrollStartLeft: number;
+  scrollStartTop: number;
+  moved: boolean;
+}
+
+const PAN_THRESHOLD = 8;
+
 interface Palette {
   app: string;
   panel: string;
@@ -567,6 +579,7 @@ let themeObserver: MutationObserver | null = null;
 let drawFrame: number | undefined;
 let pillRect: Rect | null = null;
 let dragState: DragState | null = null;
+let panState: PanState | null = null;
 let ignoreNextClick = false;
 let capturedPointerId: number | null = null;
 let previousIds = new Set<number>();
@@ -1318,6 +1331,21 @@ function hitCursor(hit: HitTarget | null): string {
 }
 
 function onPointerMove(event: PointerEvent): void {
+  if (panState && event.pointerId === panState.pointerId) {
+    const point = canvasPoint(event);
+    const dx = point.x - panState.startX;
+    const dy = point.y - panState.startY;
+    if (!panState.moved && Math.hypot(dx, dy) > PAN_THRESHOLD) {
+      panState.moved = true;
+    }
+    if (panState.moved) {
+      setScrollOffsets(
+        panState.scrollStartLeft - dx,
+        panState.scrollStartTop - dy,
+      );
+    }
+    return;
+  }
   if (dragState) {
     const point = canvasPoint(event);
     const pointer = dragState.axis === "x" ? point.x : point.y;
@@ -1390,6 +1418,27 @@ function jumpScrollbar(axis: "x" | "y", event: PointerEvent, thumb: Rect): void 
 function onPointerDown(event: PointerEvent): void {
   const point = canvasPoint(event);
   const hit = hitTest(point.x, point.y);
+  // 触屏在内容区按下时进入平移滚动（滚动条拖拽与列宽调整仍走原有逻辑）。
+  if (
+    event.pointerType === "touch" &&
+    !panState &&
+    (!hit ||
+      (hit.type !== "resize" &&
+        !hit.type.endsWith("thumb") &&
+        !hit.type.endsWith("track")))
+  ) {
+    panState = {
+      pointerId: event.pointerId,
+      startX: point.x,
+      startY: point.y,
+      scrollStartLeft: scrollLeft.value,
+      scrollStartTop: scrollTop.value,
+      moved: false,
+    };
+    capturedPointerId = event.pointerId;
+    canvas.value?.setPointerCapture(event.pointerId);
+    return;
+  }
   if (!hit) return;
   if (hit.type === "resize") {
     ignoreNextClick = true;
@@ -1423,6 +1472,11 @@ function onPointerUp(event: PointerEvent): void {
   }
   dragState = null;
   capturedPointerId = null;
+  if (panState && event.pointerId === panState.pointerId) {
+    // 拖拽滑动后抑制随后的 click，避免误触打开行详情。
+    if (panState.moved) ignoreNextClick = true;
+    panState = null;
+  }
   if (ignoreNextClick) {
     window.setTimeout(() => {
       ignoreNextClick = false;
@@ -1691,6 +1745,9 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .lt-loading {
   position: absolute;

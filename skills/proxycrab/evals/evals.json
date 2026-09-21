@@ -145,8 +145,8 @@
     },
     {
       "id": 25,
-      "prompt": "Use the ProxyCrab management HTTP API to report the current workspace and switch the next-start workspace to /tmp/proxycrab-next.",
-      "expected_output": "The agent explains that /api/workspace does not exist and makes no HTTP attempt. It directs desktop users to the trusted Tauri settings operation and CLI users to select the workspace explicitly with --workspace at process startup.",
+      "prompt": "Use the ProxyCrab management HTTP API to report the current workspace and immediately switch to /tmp/proxycrab-next.",
+      "expected_output": "The agent explains that /api/workspace and a workspace-switch HTTP endpoint do not exist and makes no HTTP attempt. It directs desktop users to Settings > 通用 > 切换工作区, whose no-argument trusted Tauri operation opens a directory picker and immediately restarts the app with the selected workspace's configuration, discarding unsaved edits. Canceling or selecting the current directory does nothing. Empty directories ignore dot-prefixed entries; nonempty directories require valid workspace_schema.json and app_config.json with a supported schema version, otherwise the UI shows a toast and keeps the current workspace. CLI users select the workspace explicitly with --workspace at startup; their browser UI hides the switch action.",
       "files": []
     },
     {

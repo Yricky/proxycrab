@@ -27,16 +27,10 @@ struct WorkspaceSchema {
 pub(crate) fn migrate_workspace(root: &Path) -> Result<()> {
     let schema_path = root.join(WORKSPACE_SCHEMA_FILE);
     let mut version = if schema_path.exists() {
-        read_json::<WorkspaceSchema>(&schema_path)?.version
+        validate_workspace_schema(root)?
     } else {
         0
     };
-    if version > CURRENT_WORKSPACE_SCHEMA_VERSION {
-        bail!(
-            "workspace schema version {version} is newer than supported version {}",
-            CURRENT_WORKSPACE_SCHEMA_VERSION
-        );
-    }
 
     while version < CURRENT_WORKSPACE_SCHEMA_VERSION {
         match version {
@@ -49,6 +43,17 @@ pub(crate) fn migrate_workspace(root: &Path) -> Result<()> {
         write_json_atomic(&schema_path, &WorkspaceSchema { version })?;
     }
     Ok(())
+}
+
+pub(crate) fn validate_workspace_schema(root: &Path) -> Result<u32> {
+    let version = read_json::<WorkspaceSchema>(&root.join(WORKSPACE_SCHEMA_FILE))?.version;
+    if version > CURRENT_WORKSPACE_SCHEMA_VERSION {
+        bail!(
+            "workspace schema version {version} is newer than supported version {}",
+            CURRENT_WORKSPACE_SCHEMA_VERSION
+        );
+    }
+    Ok(version)
 }
 
 /// Workspace schema v1 adds persistent request tags to every Session capture database and

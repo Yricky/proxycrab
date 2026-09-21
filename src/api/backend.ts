@@ -79,7 +79,7 @@ export interface SkillManager {
 
 export interface HostOperations {
   readonly skillManager: SkillManager;
-  setWorkspaceForNextStart(path: string): Promise<WorkspacePaths>;
+  switchWorkspace?(): Promise<void>;
   replaceConfig(config: AppConfig): Promise<AppConfig>;
   regenerateCertificate(): Promise<CertificateResponse>;
 }

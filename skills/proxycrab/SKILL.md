@@ -249,7 +249,10 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
 - Do not archive or restore Sessions, permanently delete archived Sessions, delete scripts, start
   or stop the proxy, or clear logs or records unless the user explicitly requests that action.
   CA regeneration, full application-config replacement, and workspace changes are host operations
-  and are intentionally unavailable through this Agent HTTP API. An active Session
+  and are intentionally unavailable through this Agent HTTP API. Desktop users switch workspaces
+  through Settings > 通用 > 切换工作区: a native directory picker validates the selection and
+  immediately restarts the app, discarding unsaved UI edits. CLI users select `--workspace` at
+  startup; the browser UI has no switch action. An active Session
   cannot be archived; make it inactive only when the user authorizes that separate mutation.
 - Do not replay requests or configure another process's proxy environment automatically.
 - Keep local raw capture output intact for debugging. It can include authorization headers, cookies,

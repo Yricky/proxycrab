@@ -36,6 +36,18 @@ Desktop Skill paths are application-data-owned and synchronize the bundled Skill
 save, and on explicit manual sync; these operations are not part of `ProxyCrabManager`. Workspace
 selection has no management HTTP resource; read-only config and CA resources remain on `/api/*`.
 
+The optional frontend `backend.host.switchWorkspace(): Promise<void>` maps to the no-argument
+Tauri command `switch_workspace`. The backend opens a native directory picker and validates the
+selected directory before saving its path and restarting the entire app. An empty directory
+(ignoring dot-prefixed entries) is initialized; a nonempty directory requires valid
+`workspace_schema.json` and `app_config.json` files with a supported schema version. An invalid,
+unwritable, occupied, or unopenable workspace rejects the call and the UI shows a toast while the
+current workspace stays active. Canceling or selecting the current directory, including a symlink
+alias, is a no-op. Restart uses the new workspace's configuration and cold-start behavior, without
+migrating old workspace data or preserving unsaved UI edits or proxy running state. The UI shows
+the switch button only when this method is defined; CLI and share Backends omit it. The former
+`set_workspace_for_next_start` command is removed.
+
 ## Management HTTP authentication and permissions
 
 The management server binds `0.0.0.0:18089`. A request may omit `Authorization` only when its TCP

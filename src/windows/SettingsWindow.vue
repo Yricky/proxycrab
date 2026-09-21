@@ -25,9 +25,7 @@ const backend = useBackend();
 const page = ref<SettingsPage>("general");
 
 const currentPath = ref("");
-const configuredPath = ref("");
-const loadedConfiguredPath = ref("");
-const externalChanged = ref(false);
+const switchingWorkspace = ref(false);
 const serviceStatus = ref<HttpServiceStatus | null>(null);
 const permissionConfigError = ref<string | null>(null);
 
@@ -41,7 +39,6 @@ const loadingPermissions = ref(false);
 const savingPermissions = ref(false);
 const showCreateDialog = ref(false);
 
-const workspaceDirty = computed(() => configuredPath.value !== loadedConfiguredPath.value);
 const permissionDirty = computed(
   () => JSON.stringify(permissions.value) !== JSON.stringify(loadedPermissions.value),
 );
@@ -57,7 +54,6 @@ const identityOptions = computed<CustomSelectOption[]>(() =>
   })),
 );
 const managementDisabled = computed(() => permissionConfigError.value !== null);
-const canSwitchWorkspace = Boolean(backend.host);
 const serviceUrl = computed(() => {
   const status = serviceStatus.value;
   return status ? `http://${status.host}:${status.port}` : "—";
@@ -67,8 +63,6 @@ async function refreshWorkspace(): Promise<void> {
   try {
     const workspace = await backend.getWorkspace();
     currentPath.value = workspace.current_path;
-    configuredPath.value = workspace.configured_path;
-    loadedConfiguredPath.value = workspace.configured_path;
   } catch (error) {
     reportError(error, "获取工作区信息失败");
   }
@@ -141,20 +135,13 @@ async function confirmDiscardPermissions(): Promise<boolean> {
 async function confirmDiscardCurrentPage(): Promise<boolean> {
   if (showCreateDialog.value) return false;
   if (page.value === "management") return confirmDiscardPermissions();
-  if (!workspaceDirty.value) return true;
-  return confirmDialog({
-    title: "放弃工作区修改？",
-    message: "下次启动工作区尚未保存，继续将丢弃这项修改。",
-    confirmText: "放弃修改",
-    danger: true,
-  });
+  return true;
 }
 
 async function selectPage(next: SettingsPage): Promise<void> {
   if (next === page.value) return;
   if (!(await confirmDiscardCurrentPage())) return;
   if (page.value === "management") permissions.value = { ...loadedPermissions.value };
-  else configuredPath.value = loadedConfiguredPath.value;
   page.value = next;
 }
 
@@ -164,22 +151,15 @@ async function selectIdentity(id: string): Promise<void> {
   await loadIdentity(id);
 }
 
-async function saveWorkspace(): Promise<void> {
-  const host = backend.host;
-  if (!host) return;
-  const path = configuredPath.value.trim();
-  if (!path) {
-    reportError("工作区路径不能为空");
-    return;
-  }
+async function switchWorkspace(): Promise<void> {
+  if (!backend.host?.switchWorkspace || switchingWorkspace.value) return;
+  switchingWorkspace.value = true;
   try {
-    const workspace = await host.setWorkspaceForNextStart(path);
-    configuredPath.value = workspace.configured_path;
-    loadedConfiguredPath.value = workspace.configured_path;
-    externalChanged.value = false;
-    appStore.toast("已保存，重启后生效", "success");
+    await backend.host.switchWorkspace();
   } catch (error) {
-    reportError(error, "保存工作区失败");
+    reportError(error, "切换工作区失败");
+  } finally {
+    switchingWorkspace.value = false;
   }
 }
 
@@ -239,27 +219,16 @@ async function deleteSelectedKey(): Promise<void> {
   }
 }
 
-function reloadExternal(): void {
-  externalChanged.value = false;
-  void refreshWorkspace();
-}
-
 function onHttpApiChange(event: Event): void {
   const { resources } = (event as CustomEvent<HttpApiChange>).detail;
   if (!resources.includes("all") && !resources.includes("workspace") && !resources.includes("config")) return;
-  if (workspaceDirty.value) {
-    externalChanged.value = true;
-    return;
-  }
-  externalChanged.value = false;
   void refreshWorkspace();
 }
 
 function onKeydown(event: KeyboardEvent): void {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
     event.preventDefault();
-    if (page.value === "general") void saveWorkspace();
-    else void savePermissions();
+    if (page.value === "management") void savePermissions();
   }
 }
 
@@ -295,25 +264,17 @@ onBeforeUnmount(() => {
         <header class="page-header">
           <div>
             <h2>通用</h2>
-            <p>设置工作区和应用启动行为</p>
+            <p>查看和切换工作区</p>
           </div>
         </header>
-        <div v-if="externalChanged" class="external-warning">
-          <span>设置已被外部修改，当前未保存输入仍保留。</span>
-          <button class="btn compact" @click="reloadExternal">重新加载</button>
-        </div>
         <section class="settings-section">
           <h3>工作区</h3>
           <label class="settings-field">
             <span>当前工作区</span>
-            <code>{{ currentPath || "—" }}</code>
-          </label>
-          <label class="settings-field">
-            <span>下次启动工作区</span>
             <div class="field-row">
-              <input v-model="configuredPath" class="input" placeholder="工作区目录路径" :disabled="!canSwitchWorkspace" />
-              <button v-if="canSwitchWorkspace" class="btn primary" :disabled="!workspaceDirty" @click="saveWorkspace">
-                保存
+              <code>{{ currentPath || "—" }}</code>
+              <button v-if="backend.host?.switchWorkspace" class="btn primary" :disabled="switchingWorkspace" @click="switchWorkspace">
+                切换工作区
               </button>
             </div>
           </label>
@@ -444,10 +405,9 @@ onBeforeUnmount(() => {
 .settings-section h3, .permission-heading h3 { margin: 0; font-size: 12px; }
 .settings-field { display: flex; flex-direction: column; gap: 5px; margin-top: 14px; color: var(--text-secondary); font-size: 11px; }
 .settings-field code { overflow-wrap: anywhere; color: var(--text); font: 12px/1.5 var(--font-mono); user-select: text; }
-.field-row { display: flex; gap: 8px; }
-.field-row .input { flex: 1; min-width: 0; color: var(--text); }
-.external-warning { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding: 8px 10px; border-left: 3px solid var(--warning); background: color-mix(in srgb, var(--warning) 9%, transparent); color: var(--warning); font-size: 11px; }
-.external-warning span { flex: 1; }
+.field-row { display: flex; align-items: center; gap: 8px; }
+.field-row code { flex: 1; min-width: 0; }
+.field-row .btn { flex: none; }
 .service-state { display: flex; align-items: center; gap: 7px; color: var(--success); font-size: 11px; }
 .service-state code { color: var(--text-secondary); font: 10px var(--font-mono); user-select: text; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }

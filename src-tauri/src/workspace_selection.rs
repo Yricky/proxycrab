@@ -2,11 +2,12 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::RwLock,
+    sync::Arc,
 };
 
 use anyhow::Result;
 use proxy_crab_mgr::dto::ManagerError;
+use proxy_crab_mitm::{ProxyCrab, log_buffer::LogBuffer, workspace::Workspace};
 use serde::{Deserialize, Serialize};
 
 const POINTER_FILE: &str = "config.json";
@@ -25,7 +26,6 @@ struct WorkspacePointer {
 pub struct WorkspaceSelection {
     app_data_dir: PathBuf,
     current_path: PathBuf,
-    configured_path: RwLock<PathBuf>,
 }
 
 impl WorkspaceSelection {
@@ -45,7 +45,6 @@ impl WorkspaceSelection {
         };
         Ok(Self {
             app_data_dir,
-            configured_path: RwLock::new(current_path.clone()),
             current_path,
         })
     }
@@ -55,29 +54,36 @@ impl WorkspaceSelection {
     }
 
     pub fn paths(&self) -> Result<WorkspacePaths, ManagerError> {
-        let configured = self
-            .configured_path
-            .read()
-            .map_err(|_| ManagerError::internal("workspace selection lock poisoned"))?;
         Ok(WorkspacePaths {
             current_path: self.current_path.to_string_lossy().into_owned(),
-            configured_path: configured.to_string_lossy().into_owned(),
+            configured_path: self.current_path.to_string_lossy().into_owned(),
         })
     }
 
-    pub fn set_for_next_start(&self, path: &str) -> Result<WorkspacePaths, ManagerError> {
-        let path = PathBuf::from(path);
-        if !path.is_absolute() {
-            return Err(ManagerError::bad_request("workspace path must be absolute"));
+    /// Validate and prepare the selected workspace before committing the restart pointer.
+    /// Returns false for the current directory, including symlink aliases.
+    pub fn select_for_restart(&self, path: &Path) -> Result<bool, ManagerError> {
+        let path = fs::canonicalize(path)
+            .map_err(|error| ManagerError::bad_request(format!("无法访问所选目录：{error}")))?;
+        if path
+            == fs::canonicalize(&self.current_path)
+                .map_err(|error| ManagerError::internal(format!("无法访问当前工作区：{error}")))?
+        {
+            return Ok(false);
         }
-        write_pointer(&self.app_data_dir.join(POINTER_FILE), &path).map_err(|error| {
-            ManagerError::internal(format!("failed to save workspace selection: {error}"))
-        })?;
-        *self
-            .configured_path
-            .write()
-            .map_err(|_| ManagerError::internal("workspace selection lock poisoned"))? = path;
-        self.paths()
+        Workspace::validate_selection(&path)
+            .map_err(|error| ManagerError::bad_request(format!("{error:#}")))?;
+        if !valid_existing_workspace(&path) {
+            return Err(ManagerError::bad_request("所选工作区目录不可写"));
+        }
+        // Catch initialization/migration errors and workspaces locked by another process
+        // while the current workspace and its saved pointer are still untouched.
+        let runtime = ProxyCrab::open(&path, Arc::new(LogBuffer::default()))
+            .map_err(|error| ManagerError::bad_request(format!("无法打开所选工作区：{error:#}")))?;
+        drop(runtime);
+        write_pointer(&self.app_data_dir.join(POINTER_FILE), &path)
+            .map_err(|error| ManagerError::internal(format!("保存工作区路径失败：{error}")))?;
+        Ok(true)
     }
 }
 
@@ -115,9 +121,12 @@ fn valid_existing_workspace(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, sync::Arc};
+
+    use proxy_crab_mitm::{ProxyCrab, log_buffer::LogBuffer, model::AppConfig};
     use tempfile::tempdir;
 
-    use super::WorkspaceSelection;
+    use super::{WorkspaceSelection, read_pointer, write_pointer};
 
     #[test]
     fn missing_pointer_uses_and_persists_default_workspace() {
@@ -134,19 +143,117 @@ mod tests {
     }
 
     #[test]
-    fn setting_next_workspace_does_not_change_current_workspace() {
+    fn selecting_empty_workspace_initializes_it_and_persists_restart_pointer() {
         let app_data = tempdir().unwrap();
         let next = tempdir().unwrap();
         let selection = WorkspaceSelection::open(app_data.path().to_path_buf()).unwrap();
         let current = selection.current_path().to_path_buf();
 
-        let paths = selection
-            .set_for_next_start(next.path().to_str().unwrap())
-            .unwrap();
+        fs::write(next.path().join(".DS_Store"), b"keep").unwrap();
+        assert!(selection.select_for_restart(next.path()).unwrap());
+        assert_eq!(selection.current_path(), current);
+        assert!(next.path().join("workspace_schema.json").is_file());
+        assert!(next.path().join("app_config.json").is_file());
+        assert_eq!(fs::read(next.path().join(".DS_Store")).unwrap(), b"keep");
+        let reopened = WorkspaceSelection::open(app_data.path().to_path_buf()).unwrap();
+        assert_eq!(
+            reopened.current_path(),
+            fs::canonicalize(next.path()).unwrap()
+        );
+    }
 
-        assert_eq!(paths.current_path, current.to_string_lossy());
-        assert_eq!(paths.configured_path, next.path().to_string_lossy());
-        assert!(selection.set_for_next_start("relative/path").is_err());
+    #[test]
+    fn existing_workspace_retains_its_configuration_and_proxy_starts_stopped() {
+        let app_data = tempdir().unwrap();
+        let next = tempdir().unwrap();
+        let config = AppConfig {
+            proxy_port: 9876,
+            api_port: 19876,
+            ..AppConfig::default()
+        };
+        let runtime = ProxyCrab::open(next.path(), Arc::new(LogBuffer::default())).unwrap();
+        runtime.workspace().replace_config(config.clone()).unwrap();
+        drop(runtime);
+
+        let selection = WorkspaceSelection::open(app_data.path().to_path_buf()).unwrap();
+        assert!(selection.select_for_restart(next.path()).unwrap());
+        let reopened = ProxyCrab::open(next.path(), Arc::new(LogBuffer::default())).unwrap();
+        assert_eq!(reopened.config(), config);
+        assert!(matches!(
+            reopened.proxy_status(),
+            proxy_crab_mitm::model::ProxyStatus::Stopped
+        ));
+    }
+
+    #[test]
+    fn current_directory_does_not_trigger_restart_or_initialize_it() {
+        let app_data = tempdir().unwrap();
+        let selection = WorkspaceSelection::open(app_data.path().to_path_buf()).unwrap();
+        assert!(
+            !selection
+                .select_for_restart(selection.current_path())
+                .unwrap()
+        );
+        assert!(!selection.current_path().join("app_config.json").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn current_directory_symlink_does_not_trigger_restart() {
+        let app_data = tempdir().unwrap();
+        let selection = WorkspaceSelection::open(app_data.path().to_path_buf()).unwrap();
+        let alias = app_data.path().join("alias");
+        std::os::unix::fs::symlink(selection.current_path(), &alias).unwrap();
+        assert!(!selection.select_for_restart(&alias).unwrap());
+    }
+
+    #[test]
+    fn invalid_nonempty_directory_is_rejected_without_modifying_it_or_pointer() {
+        let app_data = tempdir().unwrap();
+        let next = tempdir().unwrap();
+        fs::write(next.path().join("notes.txt"), b"keep").unwrap();
+        let selection = WorkspaceSelection::open(app_data.path().to_path_buf()).unwrap();
+        let pointer = fs::read(app_data.path().join("config.json")).unwrap();
+        assert!(selection.select_for_restart(next.path()).is_err());
+        assert_eq!(
+            fs::read(app_data.path().join("config.json")).unwrap(),
+            pointer
+        );
+        assert_eq!(fs::read_dir(next.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn locked_workspace_is_rejected_without_changing_pointer() {
+        let app_data = tempdir().unwrap();
+        let next = tempdir().unwrap();
+        let _runtime = ProxyCrab::open(next.path(), Arc::new(LogBuffer::default())).unwrap();
+        let selection = WorkspaceSelection::open(app_data.path().to_path_buf()).unwrap();
+        assert!(selection.select_for_restart(next.path()).is_err());
+        assert_eq!(
+            read_pointer(&app_data.path().join("config.json"))
+                .unwrap()
+                .workspace_path,
+            selection.current_path()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unwritable_workspace_is_rejected_without_changing_pointer() {
+        use std::os::unix::fs::PermissionsExt;
+        let app_data = tempdir().unwrap();
+        let next = tempdir().unwrap();
+        let selection = WorkspaceSelection::open(app_data.path().to_path_buf()).unwrap();
+        fs::set_permissions(next.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        let result = selection.select_for_restart(next.path());
+        fs::set_permissions(next.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.is_err());
+        assert_eq!(
+            read_pointer(&app_data.path().join("config.json"))
+                .unwrap()
+                .workspace_path,
+            selection.current_path()
+        );
     }
 
     #[test]
@@ -154,9 +261,8 @@ mod tests {
         let app_data = tempdir().unwrap();
         let selection = WorkspaceSelection::open(app_data.path().to_path_buf()).unwrap();
         let missing = app_data.path().join("missing");
-        selection
-            .set_for_next_start(missing.to_str().unwrap())
-            .unwrap();
+        assert!(selection.select_for_restart(&missing).is_err());
+        write_pointer(&app_data.path().join("config.json"), &missing).unwrap();
         drop(selection);
 
         let reopened = WorkspaceSelection::open(app_data.path().to_path_buf()).unwrap();

@@ -34,7 +34,9 @@ with hot reload, while GTK/WebKit and the helper processes are the exact binarie
 - Captured request/response bodies stream directly to disk without an application-level size limit; at most 256 client connections are accepted.
 - Blocking capture/bypass queries and management Lua evaluations: at most eight concurrently; excess work waits without occupying Tokio worker threads.
 
-The Tauri application data directory contains `config.json`, which points at the workspace. When the pointer is absent or invalid, `app_data_dir/workspace` is used and persisted. A changed pointer takes effect only on the next application launch.
+The Tauri application data directory contains `config.json`, which points at the workspace. When the pointer is absent or invalid, `app_data_dir/workspace` is used and persisted. Settings > 通用 displays the current path and, on desktop, a 切换工作区 button. It opens a native directory picker, validates the selection, and immediately restarts the application with the new workspace's configuration. Unsaved UI edits are discarded; the proxy starts stopped, as on a cold launch. Canceling or selecting the current directory does nothing.
+
+A new workspace directory must be empty, ignoring dot-prefixed entries. A nonempty directory must contain valid `workspace_schema.json` and `app_config.json` files with a supported schema version. Invalid, unwritable, or occupied workspaces are rejected with a toast before the saved pointer changes. Existing workspace data stays in place; switching never copies data from the previous workspace.
 
 Desktop ProxyCrab Skill parent paths are stored separately in application data as
 `skill-paths.json` and do not follow workspace switches. On first use only, an existing
@@ -54,7 +56,7 @@ evaluates any persisted `approval` value as `deny`. API keys and permissions are
 Settings > 管理接口 through target-private operations, not the public agent API. Direct Tauri
 commands remain trusted and bypass HTTP authentication.
 
-Host mutations such as changing the next-start workspace, replacing global configuration
+Host mutations such as switching the workspace, replacing global configuration
 (including the proxy port), regenerating the CA, and managing bundled Skill paths are not management
 HTTP resources. They are available only through trusted Tauri commands or explicit local CLI options
 and subcommands. Workspace selection is not exposed through HTTP; the API retains read-only config

@@ -37,6 +37,7 @@ use tauri::{
     Emitter, Manager, RunEvent, State,
     menu::{Menu, MenuItem, Submenu},
 };
+use tauri_plugin_dialog::DialogExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::http_permissions::{
@@ -128,11 +129,34 @@ async fn get_workspace(state: State<'_, BackendState>) -> Result<WorkspacePaths,
 }
 
 #[tauri::command]
-async fn set_workspace_for_next_start(
-    state: State<'_, BackendState>,
-    path: String,
-) -> Result<WorkspacePaths, ManagerError> {
-    state.workspace.set_for_next_start(&path)
+async fn switch_workspace(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<(), ManagerError> {
+    let restart = tauri::async_runtime::spawn_blocking(move || {
+        let state = window.state::<BackendState>();
+        let selected = window
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("切换工作区")
+            .set_directory(state.workspace.current_path())
+            .blocking_pick_folder();
+        let Some(selected) = selected else {
+            return Ok(false);
+        };
+        let path = selected
+            .into_path()
+            .map_err(|error| ManagerError::bad_request(format!("无法访问所选目录：{error}")))?;
+        state.workspace.select_for_restart(&path)
+    })
+    .await
+    .map_err(|error| ManagerError::internal(format!("切换工作区失败：{error}")))??;
+    if restart {
+        // Run the existing Exit handler to stop the proxy and management HTTP service.
+        app.request_restart();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -901,6 +925,7 @@ fn setup_global_menu(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             setup_global_menu(app)?;
@@ -1030,7 +1055,7 @@ pub fn run() {
         })
         .invoke_handler(logging_invoke_handler(tauri::generate_handler![
             get_workspace,
-            set_workspace_for_next_start,
+            switch_workspace,
             get_config,
             replace_config,
             get_agents_presets,

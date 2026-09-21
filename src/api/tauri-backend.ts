@@ -89,8 +89,7 @@ export function createTauriBackend(): Backend {
           call("save_proxycrab_skill_paths", { paths, deleteRemoved }),
         sync: () => call("sync_proxycrab_skills"),
       },
-      setWorkspaceForNextStart: (path) =>
-        call("set_workspace_for_next_start", { path }),
+      switchWorkspace: () => call("switch_workspace"),
       replaceConfig: (config: AppConfig) => call("replace_config", { config }),
       regenerateCertificate: () => call("regenerate_certificate"),
     },

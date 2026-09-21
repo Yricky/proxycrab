@@ -35,6 +35,26 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    /// Accept an empty directory (ignoring dot-prefixed entries) or a labeled workspace.
+    /// Unlike `open`, this never initializes, repairs, or migrates the selected directory.
+    pub fn validate_selection(root: &Path) -> Result<()> {
+        let mut empty = true;
+        for entry in fs::read_dir(root)? {
+            if !entry?.file_name().as_encoded_bytes().starts_with(b".") {
+                empty = false;
+                break;
+            }
+        }
+        if !empty {
+            crate::migration::validate_workspace_schema(root).context(
+                "所选目录不是有效工作区：workspace_schema.json 缺失、损坏或版本不受支持",
+            )?;
+            read_json::<AppConfig>(&root.join(WORKSPACE_CONFIG_FILE))
+                .context("所选目录不是有效工作区：app_config.json 缺失或损坏")?;
+        }
+        Ok(())
+    }
+
     pub fn open(root: impl Into<PathBuf>) -> Result<Arc<Self>> {
         let root = root.into();
         fs::create_dir_all(root.join(SESSIONS_DIRECTORY))?;
@@ -523,6 +543,67 @@ mod tests {
     };
 
     use super::Workspace;
+
+    #[test]
+    fn selection_accepts_empty_directories_and_ignores_dot_entries_without_writing() {
+        let root = tempdir().unwrap();
+        assert!(Workspace::validate_selection(root.path()).is_ok());
+        std::fs::write(root.path().join(".DS_Store"), b"keep").unwrap();
+        std::fs::create_dir(root.path().join(".hidden")).unwrap();
+        assert!(Workspace::validate_selection(root.path()).is_ok());
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn selection_requires_valid_config_and_supported_schema_for_nonempty_directories() {
+        let supported = format!(
+            r#"{{"version":{}}}"#,
+            crate::migration::CURRENT_WORKSPACE_SCHEMA_VERSION
+        );
+        let future = format!(
+            r#"{{"version":{}}}"#,
+            crate::migration::CURRENT_WORKSPACE_SCHEMA_VERSION + 1
+        );
+        let cases = [
+            (None, None, false),
+            (None, Some("{}"), false),
+            (Some(supported.as_str()), None, false),
+            (Some("not json"), Some("{}"), false),
+            (Some("{}"), Some("{}"), false),
+            (Some(future.as_str()), Some("{}"), false),
+            (Some(supported.as_str()), Some("not json"), false),
+            (
+                Some(supported.as_str()),
+                Some(r#"{"proxy_port":"bad"}"#),
+                false,
+            ),
+            (Some(supported.as_str()), Some("{}"), true),
+            (Some(r#"{"version":1}"#), Some("{}"), true),
+        ];
+        for (schema, config, valid) in cases {
+            let root = tempdir().unwrap();
+            std::fs::write(root.path().join("notes.txt"), b"keep").unwrap();
+            if let Some(schema) = schema {
+                std::fs::write(root.path().join("workspace_schema.json"), schema).unwrap();
+            }
+            if let Some(config) = config {
+                std::fs::write(root.path().join("app_config.json"), config).unwrap();
+            }
+            let entries = std::fs::read_dir(root.path()).unwrap().count();
+            assert_eq!(
+                Workspace::validate_selection(root.path()).is_ok(),
+                valid,
+                "schema={schema:?}, config={config:?}"
+            );
+            assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), entries);
+            if let Some(schema) = schema {
+                assert_eq!(
+                    std::fs::read_to_string(root.path().join("workspace_schema.json")).unwrap(),
+                    schema
+                );
+            }
+        }
+    }
 
     #[test]
     fn active_session_cannot_be_archived_and_archive_can_be_restored_or_deleted() {

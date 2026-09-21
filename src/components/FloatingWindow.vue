@@ -156,6 +156,8 @@ onBeforeUnmount(() => {
   cursor: move;
   flex: none;
   user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
 }
 
 .fw-titlebar-max {
@@ -186,6 +188,7 @@ onBeforeUnmount(() => {
 .fw-resize {
   position: absolute;
   z-index: 10;
+  touch-action: none;
 }
 .fw-resize-n {
   top: -3px;
