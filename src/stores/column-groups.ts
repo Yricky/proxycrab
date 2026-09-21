@@ -44,13 +44,28 @@ export interface ColumnGroupCache {
   search: string;
   sort: ColumnGroupSort;
   descending: boolean;
+  expanded: Set<string>;
   loading: boolean;
 }
 
 export const columnGroupsState = reactive({
   caches: new Map<string, ColumnGroupCache>(),
   activeKey: null as string | null,
+  /** Global in-memory grouping delimiter for tree display; empty = flat list. */
+  delimiter: "",
 });
+
+export function setGroupDelimiter(delimiter: string): void {
+  if (columnGroupsState.delimiter === delimiter) return;
+  columnGroupsState.delimiter = delimiter;
+  // Tree paths become meaningless once the delimiter changes.
+  for (const cache of columnGroupsState.caches.values()) cache.expanded.clear();
+}
+
+export function toggleGroupExpanded(cache: ColumnGroupCache, key: string): void {
+  if (cache.expanded.has(key)) cache.expanded.delete(key);
+  else cache.expanded.add(key);
+}
 
 let runSequence = 0;
 let pollTimer: number | undefined;
@@ -106,6 +121,7 @@ export function getColumnGroupCache(
     search: "",
     sort: "count",
     descending: true,
+    expanded: new Set(),
     loading: false,
   };
   columnGroupsState.caches.set(key, cache);

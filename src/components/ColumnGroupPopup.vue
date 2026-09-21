@@ -1,20 +1,57 @@
 <script setup lang="ts">
-import { Io5ArrowDown, Io5ArrowUp, Io5Search } from "vue-icons-plus/io5";
+import { computed, ref, watch } from "vue";
+import {
+  Io5ArrowDown,
+  Io5ArrowUp,
+  Io5ChevronDown,
+  Io5ChevronForward,
+  Io5Search,
+} from "vue-icons-plus/io5";
 import type { ColumnGroupCache } from "../stores/column-groups";
-import type { ColumnGroupEntry, ColumnGroupSort } from "../utils/column-groups";
+import type { ColumnGroupRow, ColumnGroupSort } from "../utils/column-groups";
 
-defineProps<{
+const props = defineProps<{
   cache: ColumnGroupCache;
-  entries: ColumnGroupEntry[];
+  rows: ColumnGroupRow[];
+  delimiter: string;
   currentInput: string;
 }>();
 
 const emit = defineEmits<{
-  select: [entry: ColumnGroupEntry];
+  select: [row: ColumnGroupRow];
+  "toggle-expand": [row: ColumnGroupRow];
   "update:search": [value: string];
   "update:sort": [value: ColumnGroupSort];
+  "update:delimiter": [value: string];
   "toggle-direction": [];
 }>();
+
+const delimiterDraft = ref(props.delimiter);
+watch(
+  () => props.delimiter,
+  (value) => {
+    delimiterDraft.value = value;
+  },
+);
+
+const hoveredRowKey = ref<string | null>(null);
+const hoveredAncestors = computed(() => {
+  const key = hoveredRowKey.value;
+  if (key === null) return null;
+  const row = props.rows.find((candidate) => candidate.key === key);
+  if (!row || row.ancestors.length === 0) return null;
+  return new Set(row.ancestors);
+});
+
+function commitDelimiter(): void {
+  if (delimiterDraft.value !== props.delimiter) {
+    emit("update:delimiter", delimiterDraft.value);
+  }
+}
+
+function revertDelimiter(): void {
+  delimiterDraft.value = props.delimiter;
+}
 
 function updateSearch(event: Event): void {
   emit("update:search", (event.target as HTMLInputElement).value);
@@ -28,6 +65,16 @@ function updateSort(event: Event): void {
 <template>
   <div class="cgp-popup">
     <div class="cgp-controls">
+      <input
+        v-model="delimiterDraft"
+        class="input mono cgp-delimiter"
+        placeholder="分组符"
+        spellcheck="false"
+        title="自定义分组分隔符（如 /），留空为扁平列表"
+        @keyup.enter="commitDelimiter"
+        @keyup.esc="revertDelimiter"
+        @blur="commitDelimiter"
+      />
       <label class="cgp-search">
         <Io5Search :size="13" />
         <input
@@ -58,17 +105,39 @@ function updateSort(event: Event): void {
 
     <div class="cgp-list">
       <button
-        v-for="entry in entries"
-        :key="entry.key"
+        v-for="row in rows"
+        :key="row.key"
         class="cgp-item"
-        :class="{ selected: entry.exactPattern === currentInput }"
-        :disabled="entry.exactPattern === null"
-        @click="emit('select', entry)"
+        :class="{
+          selected: row.pattern !== null && row.pattern === currentInput,
+          ancestor: hoveredAncestors?.has(row.key),
+        }"
+        :disabled="row.pattern === null"
+        @click="emit('select', row)"
+        @mouseenter="hoveredRowKey = row.key"
+        @mouseleave="hoveredRowKey = null"
       >
-        <span class="cgp-value mono" :title="entry.label">{{ entry.label }}</span>
-        <span class="cgp-count mono">{{ entry.count }}</span>
+        <template v-if="delimiter">
+          <span
+            v-if="row.depth > 0"
+            class="cgp-indent"
+            :style="{ width: `${row.depth * 6}px` }"
+          />
+          <span
+            v-if="row.hasChildren"
+            class="cgp-chevron"
+            :title="row.expanded ? '折叠' : '展开'"
+            @click.stop="emit('toggle-expand', row)"
+          >
+            <Io5ChevronDown v-if="row.expanded" :size="12" />
+            <Io5ChevronForward v-else :size="12" />
+          </span>
+          <span v-else class="cgp-chevron placeholder" />
+        </template>
+        <span class="cgp-value mono" :title="row.tooltip">{{ row.label }}</span>
+        <span class="cgp-count mono">{{ row.count }}</span>
       </button>
-      <div v-if="entries.length === 0 && !cache.loading" class="cgp-empty">
+      <div v-if="rows.length === 0 && !cache.loading" class="cgp-empty">
         暂无匹配分组
       </div>
     </div>
@@ -90,10 +159,14 @@ function updateSort(event: Event): void {
 }
 .cgp-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 76px 28px;
+  grid-template-columns: 56px minmax(0, 1fr) 76px 28px;
   align-items: center;
   gap: 5px;
   padding: 6px;
+}
+.cgp-delimiter {
+  height: 27px;
+  padding: 0 6px;
 }
 .cgp-search {
   position: relative;
@@ -117,7 +190,7 @@ function updateSort(event: Event): void {
   padding: 0 5px;
 }
 .cgp-direction {
-  width: 28px;
+  width: 27px;
   height: 27px;
 }
 .cgp-progress {
@@ -140,11 +213,11 @@ function updateSort(event: Event): void {
 }
 .cgp-item {
   width: 100%;
-  min-height: 30px;
+  min-height: 26px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
+  gap: 6px;
+  padding: 3px 8px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -163,6 +236,27 @@ function updateSort(event: Event): void {
 .cgp-item:disabled {
   color: var(--text-faint);
   cursor: default;
+}
+.cgp-item.ancestor {
+  outline: 1px dashed var(--border-strong);
+  outline-offset: -1px;
+}
+.cgp-indent {
+  flex: none;
+}
+.cgp-chevron {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+}
+.cgp-chevron:not(.placeholder):hover {
+  background: var(--bg-active);
+  color: var(--accent);
 }
 .cgp-value {
   min-width: 0;

@@ -33,10 +33,12 @@ import {
   getColumnGroupCache,
   invalidateScriptColumnGroups,
   openColumnGroups,
+  setGroupDelimiter,
+  toggleGroupExpanded,
 } from "../stores/column-groups";
 import {
-  filterAndSortGroups,
-  type ColumnGroupEntry,
+  buildGroupRows,
+  type ColumnGroupRow,
   type ColumnGroupSort,
 } from "../utils/column-groups";
 
@@ -95,16 +97,18 @@ const activeGroupCache = computed(() => {
   if (!groupOpen.value || sessionId === null || !column) return null;
   return getColumnGroupCache(sessionId, column);
 });
-const groupEntries = computed(() => {
+const groupRows = computed(() => {
   const cache = activeGroupCache.value;
   if (!cache) return [];
-  return filterAndSortGroups(
+  return buildGroupRows(
     cache.groups,
     cache.emptyCount,
     cache.errorCount,
     cache.search,
     cache.sort,
     cache.descending,
+    columnGroupsState.delimiter,
+    cache.expanded,
   );
 });
 
@@ -264,21 +268,29 @@ function toggleGroupPopup(): void {
   else openGroupPopup();
 }
 
-async function selectGroup(entry: ColumnGroupEntry): Promise<void> {
+async function selectGroup(row: ColumnGroupRow): Promise<void> {
   const column = selectedColumn.value;
-  if (!column || entry.exactPattern === null || applying.value) return;
+  if (!column || row.pattern === null || applying.value) return;
   columnRegex.value = true;
   regexError.value = null;
   regexValidating.value = false;
   draft.value = {
     option: { kind: "column", column, regex: true },
-    input: entry.exactPattern,
+    input: row.pattern,
   };
   applying.value = true;
   try {
     await logsStore.applyFilter(cloneSessionFilter(draft.value));
   } finally {
     applying.value = false;
+  }
+}
+
+function toggleGroupRow(row: ColumnGroupRow): void {
+  const cache = activeGroupCache.value;
+  // While a search force-expands every branch, toggling would be a no-op.
+  if (cache && cache.search.length === 0 && row.hasChildren) {
+    toggleGroupExpanded(cache, row.key);
   }
 }
 
@@ -453,11 +465,14 @@ onBeforeUnmount(() => {
       <ColumnGroupPopup
         v-if="groupOpen && activeGroupCache"
         :cache="activeGroupCache"
-        :entries="groupEntries"
+        :rows="groupRows"
+        :delimiter="columnGroupsState.delimiter"
         :current-input="draft.input"
         @select="selectGroup"
+        @toggle-expand="toggleGroupRow"
         @update:search="setGroupSearch"
         @update:sort="setGroupSort"
+        @update:delimiter="setGroupDelimiter"
         @toggle-direction="toggleGroupDirection"
       />
     </div>
