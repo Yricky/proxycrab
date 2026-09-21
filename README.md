@@ -11,6 +11,20 @@ ProxyCrab is a macOS-first HTTP/HTTPS MITM capture application. The same Vue man
 
 Neither reusable crate depends on Tauri.
 
+## Linux development against the packaged WebKit
+
+Linux releases ship only as AppImage, which embeds its own WebKitGTK runtime. To develop against
+exactly that runtime instead of the system WebKit:
+
+```bash
+scripts/dev-appimage-webkit.sh import path/to/proxy-crab-t_amd64.AppImage   # one-time import
+scripts/dev-appimage-webkit.sh                                             # build + run
+```
+
+The script unpacks the AppImage into `.webkit-runtime/`, replaces its payload with the local debug
+build, and launches it through the original `AppRun`. The window still loads the vite dev server
+with hot reload, while GTK/WebKit and the helper processes are the exact binaries that ship.
+
 ## Runtime defaults
 
 - MITM proxy: `0.0.0.0:8089`, stopped when the app launches.

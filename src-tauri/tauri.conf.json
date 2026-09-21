@@ -25,7 +25,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["appimage", "dmg", "app"],
     "resources": {
       "../skills/proxycrab/SKILL.md": "skills/proxycrab/SKILL.md",
       "../skills/proxycrab/references/": "skills/proxycrab/references/",

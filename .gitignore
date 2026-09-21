@@ -22,3 +22,6 @@ target/*
 *.njsproj
 *.sln
 *.sw?
+
+# AppImage WebKit dev runtime
+.webkit-runtime/
