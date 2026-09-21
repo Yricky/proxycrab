@@ -226,6 +226,21 @@ browser UI.
 
 System logs accept `after_seq` and are capped at 10,000 entries.
 
+## Script display metadata
+
+Script list/detail responses expose optional `display_name`, derived from a leading
+`-- #display_name: ...` comment (see [Lua metadata rules](lua-api.md#script-display-names)).
+The same field is returned on interceptor library/detail items and resolved Session interceptor
+items. Historical interceptor execution and breakpoint responses derive it from the saved execution
+source. An absent (or null in share responses) display name means use the original name.
+This is response metadata, not an editable identity field: callers continue to send the stable
+`name` / `script_name` and update `content` to change a label. Creating two scripts with the same
+display name does not merge their references.
+
+`/share-api/column-scripts` and `/share-api/filter-scripts` retain `name` and `display_name` while
+returning empty `content`. Share-page polling detects label changes even when Session view columns
+have not changed. Metadata edits and removals use the existing script-change notifications.
+
 ## Workspace Assets
 
 Assets are immutable files shared by every Session and Lua interceptor in the active workspace.
@@ -360,7 +375,7 @@ perform one final explicit-ID evaluation and use its final `matched_ids` members
 
 `view` is optional and defaults to the selected Session's view. Duplicate IDs are deduplicated using the last supplied timestamp. A row is returned only when no timestamp was supplied or the stored `updated_at` is strictly greater than the supplied timestamp. IDs and response rows are unordered.
 
-The response columns and cells do not contain the ID column; `row.id` is a separate field which the frontend displays as its fixed first column. `columns` are the Session view's raw `Column` entries (kind/width, plus `script_name` for custom-column scripts); the frontend derives display metadata (label, key) from them:
+The response columns and cells do not contain the ID column; `row.id` is a separate field which the frontend displays as its fixed first column. `columns` are the Session view's raw `Column` entries (kind/width, plus `script_name` for custom-column scripts); the frontend keeps keys based on `script_name` and resolves script labels through the script list's `display_name` (falling back to `name`):
 
 ```json
 {

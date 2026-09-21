@@ -27,6 +27,7 @@ import {
 } from "../stores/logs";
 import { sessionsStore } from "../stores/sessions";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
+import { scriptLabel, scriptLabelFor, scriptTitle } from "../utils/script-label";
 import {
   closeColumnGroups,
   columnGroupsState,
@@ -78,9 +79,9 @@ const selectedColumn = computed(() =>
 const targetLabel = computed(() => {
   const option = draft.value.option;
   if (!option) return "未选择";
-  if (option.kind === "script") return `过滤脚本 · ${option.script_name}`;
+  if (option.kind === "script") return `过滤脚本 · ${scriptLabelFor(filterScripts.value, option.script_name)}`;
   if (option.column.kind === "script") {
-    return `自定义列 · ${option.column.script_name}`;
+    return `自定义列 · ${scriptLabelFor(columnScripts.value, option.column.script_name)}`;
   }
   return `列 · ${BUILTIN_COLUMNS.find((item) => item.kind === option.column.kind)?.label ?? option.column.kind}`;
 });
@@ -410,7 +411,7 @@ onBeforeUnmount(() => {
             @click="selectColumn({ kind: 'script', script_name: script.name })"
           >
             <Io5CodeSlash :size="13" class="fb-option-icon" />
-            <span class="fb-option-name">{{ script.name }}</span>
+            <span class="fb-option-name" :title="scriptTitle(script)">{{ scriptLabel(script) }}</span>
             <Io5Checkmark
               v-if="
                 selectedColumn?.kind === 'script' &&
@@ -437,7 +438,7 @@ onBeforeUnmount(() => {
             @click="selectFilterScript(script.name)"
           >
             <Io5CodeSlash :size="13" class="fb-option-icon" />
-            <span class="fb-option-name">{{ script.name }}</span>
+            <span class="fb-option-name" :title="scriptTitle(script)">{{ scriptLabel(script) }}</span>
             <Io5Checkmark
               v-if="
                 draft.option?.kind === 'script' &&

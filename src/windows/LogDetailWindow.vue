@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useBackend } from "../api";
+import { scriptLabel, scriptTitle } from "../utils/script-label";
 import type {
   BreakpointSummary,
   HeaderItem,
@@ -495,7 +496,7 @@ function openModDetail(
   if (!row.truncated || !detail.value) return;
   openModificationValue(
     `${detail.value.session_id}-${detail.value.id}-${execution.execution_id}-${index}`,
-    `${execution.name} · ${modificationLabel(row.mod)}`,
+    `${scriptTitle(execution)} · ${modificationLabel(row.mod)}`,
     modificationDetail(row.mod),
   );
 }
@@ -511,7 +512,7 @@ async function openExecution(execution: InterceptorExecution): Promise<void> {
     );
     openReadonlyViewer(
       `script-snapshot-${sessionId}-${id}-${execution.execution_id}`,
-      `${execution.name} — 历史脚本`,
+      `${scriptTitle(execution)} — 历史脚本`,
       content,
       "lua",
     );
@@ -606,7 +607,7 @@ function headerCount(headers: HeaderItem[]): string {
       <section v-if="breakpoint" class="breakpoint-panel">
         <div class="breakpoint-actions">
           <span class="breakpoint-state">
-            断点等待中 · {{ breakpoint.interceptor_name }} · 剩余
+            断点等待中 · {{ breakpoint.display_name ?? breakpoint.interceptor_name }} · 剩余
             {{ remainingLabel() }}
           </span>
           <span class="summary-spacer" />
@@ -784,7 +785,7 @@ function headerCount(headers: HeaderItem[]): string {
                 <span class="execution-order"
                   >#{{ execution.position + 1 }}</span
                 >
-                <span class="execution-name mono">{{ execution.name }}</span>
+                <span class="execution-name mono" :title="scriptTitle(execution)">{{ scriptLabel(execution) }}</span>
                 <span
                   v-if="execution.origin === 'temporary'"
                   class="execution-origin"
@@ -857,7 +858,7 @@ function headerCount(headers: HeaderItem[]): string {
                 <span class="execution-order"
                   >#{{ execution.position + 1 }}</span
                 >
-                <span class="execution-name mono">{{ execution.name }}</span>
+                <span class="execution-name mono" :title="scriptTitle(execution)">{{ scriptLabel(execution) }}</span>
                 <span
                   v-if="execution.origin === 'temporary'"
                   class="execution-origin"

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useBackend } from "../api";
+import { scriptTitle } from "../utils/script-label";
 import type { InterceptorKind } from "../api/types";
 import ScriptLibraryManager, {
   type ScriptLibraryConfig,
@@ -29,7 +30,7 @@ const config: ScriptLibraryConfig = {
     return null;
   },
   deleteMessage: (entry, dirty) =>
-    `确定删除${kindLabel.value}「${entry.name}」吗？${
+    `确定删除${kindLabel.value}「${scriptTitle(entry)}」吗？${
       dirty ? "它包含未保存的更改。" : ""
     }${
       entry.usage_count

@@ -1,3 +1,4 @@
+import { scriptTitle } from "../utils/script-label";
 // Central launchers for floating windows. Keeping component imports here
 // avoids spreading window ids / default sizes across the UI code.
 import { windowsStore } from "../stores/windows";
@@ -67,11 +68,12 @@ export function openBreakpointList(
   sessionId: number,
   phase: InterceptorKind,
   interceptorName: string,
+  displayName = interceptorName,
 ): void {
   windowsStore.open(`breakpoints-${sessionId}-${phase}-${interceptorName}`, {
-    title: `${interceptorName} — 断点列表`,
+    title: `${displayName} — 断点列表`,
     component: BreakpointListWindow,
-    props: { sessionId, phase, interceptorName },
+    props: { sessionId, phase, interceptorName, displayName },
     width: 680,
     height: 420,
   });
@@ -131,7 +133,7 @@ export function openInterceptorSnapshot(
   windowsStore.open(
     `interceptor-snapshot-${sessionId}-${logId}-${execution.execution_id}`,
     {
-      title: `${execution.name} — 进入拦截器前的快照`,
+      title: `${scriptTitle(execution)} — 进入拦截器前的快照`,
       component: InterceptorSnapshotWindow,
       props: { sessionId, logId, execution },
       width: 820,
@@ -168,13 +170,19 @@ export function openResponseInterceptorManager(): void {
   });
 }
 
-export function openColumnManager(): void {
+export function openColumnManager(initialName?: string): void {
   windowsStore.open("column-manager", {
     title: "自定义列管理器",
     component: ColumnManagerWindow,
+    props: { initialName },
     width: 960,
     height: 600,
   });
+  if (initialName) {
+    window.dispatchEvent(new CustomEvent("proxycrab-focus-script", {
+      detail: { scope: "column", name: initialName },
+    }));
+  }
 }
 
 export function openFilterManager(): void {

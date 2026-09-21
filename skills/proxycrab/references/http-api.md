@@ -21,6 +21,14 @@ This reference documents the complete local HTTP surface used by ProxyCrab agent
 15. [System logs](#system-logs)
 16. [Errors and lifecycle notes](#errors-and-lifecycle-notes)
 
+## Script display metadata
+
+Script list/detail and interceptor library/Session-chain responses may contain `display_name`.
+Use it only as a label; continue addressing scripts by `name` / `script_name`. Set the label by
+updating the leading `-- #display_name: ...` comment in `content`. Empty or missing metadata falls
+back to the original name. Historical execution labels use their recorded source. Share responses
+retain the label but omit script source content. See [Lua metadata rules](lua-api.md#script-display-names).
+
 ## Connection, authentication, and envelopes
 
 Default base URL:

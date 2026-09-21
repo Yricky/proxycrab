@@ -4,6 +4,7 @@ import { Io5Close, Io5Search } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import type { InterceptorKind, InterceptorLibraryItem } from "../api/types";
 import { reportError } from "../stores/app";
+import { scriptLabel, scriptTitle } from "../utils/script-label";
 
 const props = defineProps<{
   visible: boolean;
@@ -30,7 +31,7 @@ const available = computed(() => {
   const needle = query.value.trim().toLocaleLowerCase();
   return items.value.filter(
     (item) =>
-      !used.has(item.name) && (!needle || item.name.toLocaleLowerCase().includes(needle)),
+      !used.has(item.name) && (!needle || scriptTitle(item).toLocaleLowerCase().includes(needle)),
   );
 });
 
@@ -104,7 +105,7 @@ watch(
             class="picker-item"
             @click="choose(item.name)"
           >
-            <span class="mono">{{ item.name }}</span>
+            <span class="mono" :title="scriptTitle(item)">{{ scriptLabel(item) }}</span>
             <span class="text-faint">{{ item.usage_count }} 个会话使用</span>
           </button>
         </div>

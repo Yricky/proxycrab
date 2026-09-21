@@ -164,10 +164,50 @@ pub struct SessionMetadata {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct Script {
     pub name: String,
     pub content: String,
+}
+
+/// Metadata belongs to the leading single-line comments, never to executable Lua.
+pub fn script_display_name(content: &str) -> Option<&str> {
+    for line in content.trim_start_matches('\u{feff}').lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let comment = line.strip_prefix("--")?;
+        // A Lua long comment ends the single-line header, including --[=[...]=].
+        if comment
+            .strip_prefix('[')
+            .is_some_and(|rest| rest.trim_start_matches('=').starts_with('['))
+        {
+            return None;
+        }
+        if let Some((key, value)) = comment.split_once(':')
+            && key.trim() == "#display_name"
+        {
+            let value = value.trim();
+            return (!value.is_empty()).then_some(value);
+        }
+    }
+    None
+}
+
+impl Serialize for Script {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let display_name = script_display_name(&self.content);
+        let mut value =
+            serializer.serialize_struct("Script", if display_name.is_some() { 3 } else { 2 })?;
+        value.serialize_field("name", &self.name)?;
+        value.serialize_field("content", &self.content)?;
+        if let Some(display_name) = display_name {
+            value.serialize_field("display_name", display_name)?;
+        }
+        value.end()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -190,6 +230,8 @@ pub enum InterceptorKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResolvedSessionInterceptor {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     pub enabled: bool,
     pub valid: bool,
 }
@@ -204,6 +246,8 @@ pub struct ResolvedSessionInterceptors {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InterceptorLibraryItem {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     pub usage_count: usize,
 }
 
@@ -383,6 +427,8 @@ pub struct InterceptorExecution {
     pub phase: InterceptorKind,
     pub position: usize,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     pub script_hash: String,
     pub has_snapshot: bool,
     pub modifications: Vec<Modification>,
@@ -438,6 +484,8 @@ pub struct BreakpointSummary {
     pub phase: InterceptorKind,
     pub position: usize,
     pub interceptor_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     pub method: String,
     pub uri: String,
     pub created_at: u64,
@@ -492,6 +540,48 @@ pub struct SystemLogEntry {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn display_name_only_reads_the_leading_single_line_comment_header() {
+        for (source, expected) in [
+            ("-- #display_name:鉴权token\nreturn 1", Some("鉴权token")),
+            (
+                "\u{feff}\r\n -- description\r\n\t-- #display_name :  鉴权token  \r\nreturn 1",
+                Some("鉴权token"),
+            ),
+            (
+                "-- #other: ignored\n-- #display_name: First: value\n-- #display_name: second",
+                Some("First: value"),
+            ),
+            ("-- #display_name:  \n-- #display_name: second", None),
+            ("return 1\n-- #display_name: too late", None),
+            ("local value = [[\n-- #display_name: string\n]]", None),
+            ("--[[\n-- #display_name: long comment\n]]", None),
+            ("--[==[\n-- #display_name: long comment\n]==]", None),
+            ("-- unrelated\n\nreturn 1", None),
+            ("", None),
+        ] {
+            assert_eq!(super::script_display_name(source), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn script_metadata_is_derived_from_source_and_cannot_replace_its_identity() {
+        let script: super::Script = serde_json::from_value(serde_json::json!({
+            "name": "auth-token", "content": "-- #display_name: 鉴权token\nreturn 'ok'",
+            "display_name": "ignored client value"
+        }))
+        .unwrap();
+        let mut value = serde_json::to_value(&script).unwrap();
+        assert_eq!(value["name"], "auth-token");
+        assert_eq!(value["display_name"], "鉴权token");
+        value = serde_json::to_value(super::Script {
+            content: "return 'ok'".into(),
+            ..script
+        })
+        .unwrap();
+        assert!(value.get("display_name").is_none());
+    }
+
     use super::{AppConfig, Column, FilterColumn, FilterOption, default_columns};
 
     #[test]

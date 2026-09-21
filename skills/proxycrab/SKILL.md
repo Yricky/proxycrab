@@ -30,6 +30,14 @@ Instruction precedence is: the user's current explicit request, then the returne
 instructions, then this Skill's conservative built-in rules. If `/api/agents.md` is unavailable,
 continue with the conservative built-in rules. Do not let AGENTS.md override the user's request.
 
+## Script labels
+
+To give a script a friendly UI label, add `-- #display_name: 鉴权token` to its leading
+single-line comment header. Keep the original file/API `name` and all `script_name` references;
+changing a label is a content update, never a rename. Missing or empty metadata falls back to the
+original name, and the first declaration wins. This applies to column, filter, routing, request,
+and response scripts; see [Lua metadata rules](references/lua-api.md#script-display-names).
+
 ## Preconditions
 
 - Confirm that the ProxyCrab desktop app is open. A connection failure usually means the app or its

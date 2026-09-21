@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useBackend } from "../api";
+import { scriptTitle } from "../utils/script-label";
 import ScriptLibraryManager, {
   type ScriptLibraryConfig,
 } from "../components/ScriptLibraryManager.vue";
@@ -18,7 +19,7 @@ const config: ScriptLibraryConfig = {
   resources: ["filter_scripts"],
   changeEvent: "filter-scripts-changed",
   deleteMessage: (script) =>
-    `确定删除过滤脚本「${script.name}」吗？引用它的会话会清除过滤。该操作不可撤销。`,
+    `确定删除过滤脚本「${scriptTitle(script)}」吗？引用它的会话会清除过滤。该操作不可撤销。`,
   debug: {
     mode: "log-id-input",
     run: async ({ name, sessionId, logId, input }) => {

@@ -64,6 +64,7 @@ export interface SessionMetadata {
 
 export interface Script {
   name: string;
+  display_name?: string | null;
   content: string;
 }
 
@@ -82,6 +83,7 @@ export type InterceptorKind = "request" | "response";
 
 export interface InterceptorLibraryItem {
   name: string;
+  display_name?: string | null;
   usage_count: number;
 }
 
@@ -92,6 +94,7 @@ export interface InterceptorLibraryList {
 
 export interface SessionInterceptorItem {
   name: string;
+  display_name?: string | null;
   enabled: boolean;
   valid: boolean;
 }
@@ -409,6 +412,7 @@ export interface InterceptorExecution {
   phase: InterceptorKind;
   position: number;
   name: string;
+  display_name?: string | null;
   script_hash: string;
   has_snapshot: boolean;
   modifications: InterceptorModification[];
@@ -422,6 +426,7 @@ export interface BreakpointSummary {
   phase: InterceptorKind;
   position: number;
   interceptor_name: string;
+  display_name?: string | null;
   method: string;
   uri: string;
   created_at: number;

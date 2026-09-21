@@ -9,9 +9,11 @@ import { logsStore } from "../stores/logs";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { sessionsStore } from "../stores/sessions";
 import { windowsStore } from "../stores/windows";
+import { scriptLabel, scriptTitle } from "../utils/script-label";
 
 export interface ScriptLibraryEntry {
   name: string;
+  display_name?: string | null;
   usage_count?: number;
   /** Present when the list API returns full content (column/filter scripts). */
   content?: string;
@@ -19,7 +21,7 @@ export interface ScriptLibraryEntry {
 
 export interface ScriptLibraryApi {
   list(): Promise<ScriptLibraryEntry[]>;
-  get(name: string): Promise<{ content: string }>;
+  get(name: string): Promise<{ content: string; display_name?: string | null }>;
   create(name: string, content: string): Promise<void>;
   update(name: string, content: string): Promise<void>;
   remove(name: string): Promise<void>;
@@ -123,7 +125,7 @@ function validateName(name: string): string | null {
 
 function deleteMessage(script: ScriptLibraryEntry): string {
   if (config.deleteMessage) return config.deleteMessage(script, dirty.value);
-  return `确定删除脚本「${script.name}」吗？该操作不可撤销。`;
+  return `确定删除脚本「${scriptTitle(script)}」吗？该操作不可撤销。`;
 }
 
 function clearDebugResult(): void {
@@ -146,6 +148,7 @@ async function loadScript(script: ScriptLibraryEntry | null): Promise<void> {
     try {
       const loaded = await config.api.get(script.name);
       script.content = loaded.content;
+      script.display_name = loaded.display_name;
       content.value = loaded.content;
     } catch (error) {
       reportError(error, `加载${config.sidebarTitle}失败`);
@@ -202,7 +205,7 @@ async function confirmDiscard(): Promise<boolean> {
   if (!dirty.value) return true;
   return confirmDialog({
     title: "放弃未保存更改",
-    message: `${config.sidebarTitle}「${selectedName.value ?? ""}」包含未保存的更改，确定放弃吗？`,
+    message: `${config.sidebarTitle}「${selectedScript.value ? scriptTitle(selectedScript.value) : selectedName.value ?? ""}」包含未保存的更改，确定放弃吗？`,
     confirmText: "放弃",
     danger: true,
   });
@@ -226,11 +229,13 @@ async function persist(showToast: boolean): Promise<{ ok: true } | { ok: false; 
   saving.value = true;
   try {
     await config.api.update(name, content.value);
+    const saved = await config.api.get(name);
     const item = scripts.value.find((script) => script.name === name);
-    if (item) item.content = content.value;
-    dirty.value = false;
+    if (item) Object.assign(item, saved, { display_name: saved.display_name });
+    dirty.value = content.value !== saved.content;
     externalChanged.value = false;
     notifyChanged();
+    if (config.selection?.onChanged) await config.selection.onChanged();
     if (showToast) appStore.toast("已保存", "success");
     return { ok: true };
   } catch (error) {
@@ -351,7 +356,7 @@ function onKeydown(event: KeyboardEvent): void {
   }
 }
 
-function onFocusScript(event: Event): void {
+async function onFocusScript(event: Event): Promise<void> {
   const detail = (event as CustomEvent<{ scope?: string; name: string }>).detail;
   if (!config.focusScope || detail.scope !== config.focusScope) return;
   const script = scripts.value.find((item) => item.name === detail.name);
@@ -359,7 +364,7 @@ function onFocusScript(event: Event): void {
     void selectScript(script);
   } else {
     // List not loaded yet (freshly opened window): let refresh pick the target.
-    void refreshScripts(detail.name);
+    if (await confirmDiscard()) await refreshScripts(detail.name);
   }
 }
 
@@ -411,7 +416,7 @@ onBeforeUnmount(() => {
           :class="{ active: selectedName === script.name }"
           @click="selectScript(script)"
         >
-          <span class="slm-script-name mono" :title="script.name">{{ script.name }}</span>
+          <span class="slm-script-name mono" :title="scriptTitle(script)">{{ script.name }}</span>
           <span
             v-if="config.selection && activeName === script.name"
             class="slm-active"
@@ -432,7 +437,7 @@ onBeforeUnmount(() => {
       </div>
       <template v-if="selectedScript">
         <div class="slm-editor-toolbar">
-          <span class="slm-current-name mono" :title="selectedName ?? ''">{{ selectedName }}</span>
+          <span class="slm-current-name mono" :title="scriptTitle(selectedScript)">{{ scriptLabel(selectedScript) }}</span>
           <span v-if="usageBadge" class="slm-usage">{{ usageBadge }}</span>
           <span v-if="dirty" class="slm-dirty">未保存</span>
           <span

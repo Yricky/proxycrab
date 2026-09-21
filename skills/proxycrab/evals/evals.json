@@ -228,6 +228,12 @@
       "files": [
         "evals/fixtures/test-upstream-http-version.lua"
       ]
+    },
+    {
+      "id": 39,
+      "prompt": "Give the existing ProxyCrab custom-column script auth-token the UI label 鉴权token. Preserve its logic, file name, and all Session references; verify the saved label and explain how removing it and duplicate labels behave.",
+      "expected_output": "The agent reads auth-token, adds or updates the first leading -- #display_name: 鉴权token annotation, preserves the rest of the Lua source, updates content using the existing script name, and reads it back to verify name remains auth-token and display_name is 鉴权token. It does not rename files or rewrite script_name references. It explains missing or empty metadata falls back to auth-token, the first header declaration wins, duplicate labels are allowed while original names distinguish scripts, and share pages retain labels without exposing source. In script editors, sidebars show original names and the editor toolbar shows display_name with original-name fallback. The custom-column header menu starts with 编辑脚本 and opens or focuses that exact script.",
+      "files": []
     }
   ]
 }

@@ -112,16 +112,33 @@ export function createShareBackend(
     subscribeChanges: async (handler) => {
       let stopped = false;
       let columns = JSON.stringify(bootstrap.view.columns);
+      let columnScripts = "";
+      let filterScripts = "";
       let proxyRevision: string | undefined;
       const proxyAbort = new AbortController();
       const poll = async () => {
         if (stopped) return;
         try {
-          const view = await call<SessionViewPayload>("/share-api/session-view");
+          const [view, nextColumns, nextFilters] = await Promise.all([
+            call<SessionViewPayload>("/share-api/session-view"),
+            call<Script[]>("/share-api/column-scripts"),
+            call<Script[]>("/share-api/filter-scripts"),
+          ]);
+          if (stopped) return;
           const next = JSON.stringify(view.columns);
           if (next !== columns) {
             columns = next;
             handler({ resources: ["session_view"], session_id: bootstrap.session.id });
+          }
+          const nextColumnScripts = JSON.stringify(nextColumns);
+          const nextFilterScripts = JSON.stringify(nextFilters);
+          if (nextColumnScripts !== columnScripts) {
+            columnScripts = nextColumnScripts;
+            handler({ resources: ["column_scripts"], session_id: bootstrap.session.id });
+          }
+          if (nextFilterScripts !== filterScripts) {
+            filterScripts = nextFilterScripts;
+            handler({ resources: ["filter_scripts"], session_id: bootstrap.session.id });
           }
         } catch {
           // The request helper announces terminal share errors; network errors retry.

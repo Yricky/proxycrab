@@ -15,6 +15,28 @@ ProxyCrab syntax-checks every saved script and runs it in a fresh sandbox.
 Do not depend on filesystem or process APIs. Upload immutable workspace Assets through the
 management HTTP API and resolve them in interceptors with `get_asset(id)`.
 
+## Script display names
+
+All five script kinds (custom columns, filters, routing, request interceptors, and response
+interceptors) support an optional display name in the leading Lua comment header:
+
+```lua
+-- #display_name: 鉴权token
+```
+
+Only the initial blank lines and single-line `--` comments are scanned. Parsing stops at code
+or a Lua long comment (`--[[...]]` / `--[=[...]=]`). Whitespace around the colon and value is
+trimmed; the first `#display_name` declaration wins, including an empty declaration. Missing or
+empty values fall back to the script's original name. Unknown annotations are ignored.
+
+This changes UI labels only. File names, API paths, `name`, `script_name`, selections, and Session
+references remain unchanged. Duplicate display names are allowed; tooltips and delete confirmations
+retain the original name. Script editor sidebars show original names; the editor toolbar shows
+the display name (falling back to the original). Labels refresh after saving. Historical interceptor executions use the
+metadata from their captured script source, not the current script file. The share UI receives the
+parsed display name while script content remains hidden. Metadata is derived from the Lua source,
+not stored in a separate settings file.
+
 ## Base64 and JSON globals
 
 Every routing, filter, custom-column, request-interceptor, and response-interceptor sandbox provides

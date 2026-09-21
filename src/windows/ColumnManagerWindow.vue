@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { useBackend } from "../api";
+import { scriptTitle } from "../utils/script-label";
 import ScriptLibraryManager, {
   type ScriptLibraryConfig,
 } from "../components/ScriptLibraryManager.vue";
 
+defineProps<{ initialName?: string }>();
 const backend = useBackend();
 
 const config: ScriptLibraryConfig = {
@@ -16,12 +18,13 @@ const config: ScriptLibraryConfig = {
   defaultSource: "",
   resources: ["column_scripts"],
   changeEvent: "column-scripts-changed",
+  focusScope: "column",
   refreshLogsView: true,
   clearDebugOnSessionChange: true,
   deleteMessage: (script, dirty) =>
     dirty
-      ? `列脚本「${script.name}」包含未保存的更改。确定删除吗？该操作不可撤销。`
-      : `确定删除列脚本「${script.name}」吗？该操作不可撤销。`,
+      ? `列脚本「${scriptTitle(script)}」包含未保存的更改。确定删除吗？该操作不可撤销。`
+      : `确定删除列脚本「${scriptTitle(script)}」吗？该操作不可撤销。`,
   debug: {
     mode: "log-id",
     emptyLabel: "（空字符串）",
@@ -51,5 +54,5 @@ const config: ScriptLibraryConfig = {
 </script>
 
 <template>
-  <ScriptLibraryManager :config="config" />
+  <ScriptLibraryManager :config="config" :initial-name="initialName" />
 </template>

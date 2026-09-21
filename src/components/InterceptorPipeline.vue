@@ -9,6 +9,7 @@ import {
   Io5Trash,
 } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
+import { scriptLabel, scriptTitle } from "../utils/script-label";
 import type { InterceptorKind, SessionInterceptorItem } from "../api/types";
 import { reportError } from "../stores/app";
 import { openContextMenu } from "../stores/dialog";
@@ -63,7 +64,7 @@ function nodeInitial(name: string): string {
 function nodeClick(kind: InterceptorKind, item: SessionInterceptorItem, index: number): void {
   const sessionId = sessionsStore.viewingSessionId;
   if (sessionId !== null && breakpointCount(kind, item.name) > 0) {
-    openBreakpointList(sessionId, kind, item.name);
+    openBreakpointList(sessionId, kind, item.name, scriptLabel(item));
     return;
   }
   void interceptorsStore.toggle(kind, index);
@@ -217,7 +218,7 @@ onBeforeUnmount(() => {
         <template v-if="requestItems.length">
           <template v-for="(item, index) in requestItems" :key="`request-${item.name}`">
             <AppTooltip
-              :title="item.name"
+              :title="scriptTitle(item)"
               :detail="`${kindLabel('request')} · #${index + 1}`"
               :status="statusLabel(item)"
             >
@@ -235,7 +236,7 @@ onBeforeUnmount(() => {
                     dragging?.index !== index,
                 }"
                 :draggable="true"
-                :aria-label="item.name"
+                :aria-label="scriptLabel(item)"
                 @click="nodeClick('request', item, index)"
                 @contextmenu="nodeMenu($event, 'request', item, index)"
                 @dragstart="dragStart($event, 'request', index)"
@@ -247,7 +248,7 @@ onBeforeUnmount(() => {
                   {{ breakpointBadge('request', item.name) }}
                 </span>
                 <span v-else-if="!item.valid">!</span>
-                <span v-else class="node-initial">{{ nodeInitial(item.name) }}</span>
+                <span v-else class="node-initial">{{ nodeInitial(scriptLabel(item)) }}</span>
               </button>
             </AppTooltip>
             <AppTooltip
@@ -291,7 +292,7 @@ onBeforeUnmount(() => {
         <template v-if="responseItems.length">
           <template v-for="(item, index) in responseItems" :key="`response-${item.name}`">
             <AppTooltip
-              :title="item.name"
+              :title="scriptTitle(item)"
               :detail="`${kindLabel('response')} · #${index + 1}`"
               :status="statusLabel(item)"
             >
@@ -309,7 +310,7 @@ onBeforeUnmount(() => {
                     dragging?.index !== index,
                 }"
                 :draggable="true"
-                :aria-label="item.name"
+                :aria-label="scriptLabel(item)"
                 @click="nodeClick('response', item, index)"
                 @contextmenu="nodeMenu($event, 'response', item, index)"
                 @dragstart="dragStart($event, 'response', index)"
@@ -321,7 +322,7 @@ onBeforeUnmount(() => {
                   {{ breakpointBadge('response', item.name) }}
                 </span>
                 <span v-else-if="!item.valid">!</span>
-                <span v-else class="node-initial">{{ nodeInitial(item.name) }}</span>
+                <span v-else class="node-initial">{{ nodeInitial(scriptLabel(item)) }}</span>
               </button>
             </AppTooltip>
             <AppTooltip

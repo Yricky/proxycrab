@@ -6,9 +6,11 @@ import { sessionsStore } from "../stores/sessions";
 import { proxyStore } from "../stores/proxy";
 import { appStore, reportError } from "../stores/app";
 import { openContextMenu, openMenuAt, confirmDialog, type MenuItem } from "../stores/dialog";
-import { openLogDetail } from "../windows/launcher";
+import { openColumnManager, openLogDetail } from "../windows/launcher";
 import LogDetailWindow from "../windows/LogDetailWindow.vue";
-import type { Column, LogViewRow, Script } from "../api/types";
+import type { Column, HttpApiChange, LogViewRow, Script } from "../api/types";
+import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
+import { scriptLabel, scriptLabelFor, scriptTitle } from "../utils/script-label";
 import { isInactiveInProgress } from "../utils/capture-outcome";
 import { copyText as writeClipboardText } from "../utils/clipboard";
 import { formatDateTimeWithZone } from "../utils/format";
@@ -22,7 +24,9 @@ import {
 import {
   Io5Checkmark,
   Io5Close,
+  Io5CodeSlash,
   Io5Copy,
+  Io5Create,
   Io5Link,
   Io5OpenOutline,
   Io5Trash,
@@ -55,7 +59,9 @@ const following = ref(true);
 /** Local width overrides (view column index → px) for live resize. */
 const widthOverrides = ref<Record<number, number>>({});
 
-/** 展示用列：key/name 由 Column 派生（key=`script:${name}` 或 kind，name=kind 或 script_name）。 */
+const columnScripts = ref<Script[]>([]);
+
+/** Keep stable keys separate from labels derived from script metadata. */
 type TableColumn = Column & { key: string; name: string };
 
 const columns = computed<TableColumn[]>(() =>
@@ -63,10 +69,19 @@ const columns = computed<TableColumn[]>(() =>
     const key =
       column.kind === "script" ? `script:${column.script_name}` : column.kind;
     const name =
-      column.kind === "script" ? column.script_name : column.kind;
+      column.kind === "script" ? scriptLabelFor(columnScripts.value, column.script_name) : column.kind;
     return { ...column, key, name };
   }),
 );
+
+const headerTitle = computed(() => {
+  const hit = hoverHit.value;
+  if (hit?.type !== "header-column") return undefined;
+  const column = columns.value[hit.index];
+  if (column?.kind !== "script") return undefined;
+  const script = columnScripts.value.find((item) => item.name === column.script_name);
+  return script ? scriptTitle(script) : column.script_name;
+});
 
 function columnWidth(index: number): number {
   if (widthOverrides.value[index] !== undefined) return widthOverrides.value[index];
@@ -306,8 +321,10 @@ async function copyFocusedShareLink(id: number): Promise<void> {
 // ---------- column menu ----------
 
 interface ColumnChoice {
+  title?: string;
   key: string;
   label?: string;
+  icon?: unknown;
   defaultWidth: number;
   create: (width: number) => Column;
 }
@@ -350,18 +367,28 @@ const BUILTIN_COLUMN_CHOICES: ColumnChoice[] = [
   },
 ];
 
-async function columnChoices(): Promise<ColumnChoice[]> {
-  let scripts: Script[] = [];
+async function refreshColumnScripts(): Promise<void> {
   try {
-    scripts = await backend.listColumnScripts();
+    columnScripts.value = await backend.listColumnScripts();
   } catch (error) {
     reportError(error, "加载列脚本失败");
   }
+}
+
+function onScriptChange(event: Event): void {
+  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  if (resources.includes("all") || resources.includes("column_scripts")) void refreshColumnScripts();
+}
+
+async function columnChoices(): Promise<ColumnChoice[]> {
+  await refreshColumnScripts();
   return [
     ...BUILTIN_COLUMN_CHOICES,
-    ...scripts.map((script) => ({
+    ...columnScripts.value.map((script) => ({
       key: `script:${script.name}`,
-      label: `脚本：${script.name}`,
+      label: scriptLabel(script),
+      icon: Io5CodeSlash,
+      title: scriptTitle(script),
       defaultWidth: 100,
       create: (width: number): Column => ({
         kind: "script",
@@ -396,11 +423,18 @@ function currentChoiceKey(index: number): string {
 async function showColumnMenu(index: number, x: number, y: number): Promise<void> {
   const choices = await columnChoices();
   const currentKey = currentChoiceKey(index);
+  const column = columns.value[index];
   const items: MenuItem[] = [
+    ...(column?.kind === "script" ? [{
+      label: "编辑脚本",
+      icon: Io5Create,
+      action: () => openColumnManager(column.script_name),
+    }] : []),
     {
       label: "移除列",
       icon: Io5Trash,
       danger: true,
+      dividerBefore: column?.kind === "script",
       action: () => {
         void updateColumns(
           (viewColumns) => viewColumns.filter((_, itemIndex) => itemIndex !== index),
@@ -410,7 +444,8 @@ async function showColumnMenu(index: number, x: number, y: number): Promise<void
     },
     ...choices.map((choice, choiceIndex) => ({
       label: choice.label ?? choice.key,
-      icon: choice.key === currentKey ? Io5Checkmark : undefined,
+      title: choice.title,
+      icon: choice.key === currentKey ? Io5Checkmark : choice.icon,
       disabled: choice.key === currentKey,
       dividerBefore: choiceIndex === 0,
       action: () => {
@@ -434,6 +469,8 @@ async function showAddColumnMenu(x: number, y: number): Promise<void> {
     y,
     choices.map((choice) => ({
       label: choice.label ?? choice.key,
+      title: choice.title,
+      icon: choice.icon,
       action: () => {
         void updateColumns(
           (viewColumns) => [...viewColumns, choice.create(choice.defaultWidth)],
@@ -1585,6 +1622,9 @@ watchEffect(() => {
 });
 
 onMounted(() => {
+  void refreshColumnScripts();
+  window.addEventListener("column-scripts-changed", refreshColumnScripts);
+  window.addEventListener(HTTP_API_CHANGE_EVENT, onScriptChange);
   const updateSize = () => {
     const rect = tableWrap.value?.getBoundingClientRect();
     if (!rect) return;
@@ -1615,6 +1655,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener("column-scripts-changed", refreshColumnScripts);
+  window.removeEventListener(HTTP_API_CHANGE_EVENT, onScriptChange);
   resizeObserver?.disconnect();
   themeObserver?.disconnect();
   if (drawFrame !== undefined) window.cancelAnimationFrame(drawFrame);
@@ -1627,6 +1669,7 @@ onBeforeUnmount(() => {
       <canvas
         ref="canvas"
         class="lt-canvas"
+        :title="headerTitle"
         @pointermove="onPointerMove"
         @pointerleave="onPointerLeave"
         @pointerdown="onPointerDown"

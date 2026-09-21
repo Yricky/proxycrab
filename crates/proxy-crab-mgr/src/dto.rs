@@ -444,6 +444,8 @@ pub struct InterceptorDetail {
     pub kind: InterceptorKind,
     pub name: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -461,6 +463,8 @@ pub struct ReplaceSessionInterceptorsRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInterceptorItem {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     pub enabled: bool,
     pub valid: bool,
 }

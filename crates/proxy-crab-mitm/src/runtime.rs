@@ -745,6 +745,7 @@ impl ProxyCrab {
             .into_iter()
             .map(|script| InterceptorLibraryItem {
                 usage_count: counts.get(&script.name).copied().unwrap_or_default(),
+                display_name: crate::model::script_display_name(&script.content).map(str::to_owned),
                 name: script.name,
             })
             .collect())
@@ -757,10 +758,16 @@ impl ProxyCrab {
     ) -> Vec<ResolvedSessionInterceptor> {
         entries
             .into_iter()
-            .map(|entry| ResolvedSessionInterceptor {
-                valid: self.script(kind, &entry.name).is_ok(),
-                name: entry.name,
-                enabled: entry.enabled,
+            .map(|entry| {
+                let script = self.script(kind, &entry.name);
+                ResolvedSessionInterceptor {
+                    display_name: script.as_ref().ok().and_then(|script| {
+                        crate::model::script_display_name(&script.content).map(str::to_owned)
+                    }),
+                    valid: script.is_ok(),
+                    name: entry.name,
+                    enabled: entry.enabled,
+                }
             })
             .collect()
     }

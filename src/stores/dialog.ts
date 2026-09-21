@@ -15,6 +15,7 @@ export type ChoiceResult = "confirm" | "secondary" | "cancel";
 
 export interface MenuItem {
   label: string;
+  title?: string;
   icon?: unknown;
   danger?: boolean;
   disabled?: boolean;

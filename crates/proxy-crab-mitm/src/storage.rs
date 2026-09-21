@@ -804,10 +804,12 @@ impl CaptureStore {
     ) -> Result<Vec<InterceptorExecution>> {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
-            "SELECT id, origin, completed, position, name, script_hash, modifications, error
-             FROM capture_interceptor_runs
-             WHERE capture_id=?1 AND phase=?2
-             ORDER BY id ASC",
+            "SELECT runs.id, runs.origin, runs.completed, runs.position, runs.name,
+                    runs.script_hash, runs.modifications, runs.error, contents.content
+             FROM capture_interceptor_runs AS runs
+             LEFT JOIN interceptor_script_contents AS contents ON contents.hash=runs.script_hash
+             WHERE runs.capture_id=?1 AND runs.phase=?2
+             ORDER BY runs.id ASC",
         )?;
         let executions =
             statement.query_map(params![id as i64, interceptor_phase_name(phase)], |row| {
@@ -826,6 +828,11 @@ impl CaptureStore {
                     phase,
                     position: row.get::<_, i64>(3)? as usize,
                     name: row.get(4)?,
+                    display_name: row
+                        .get::<_, Option<String>>(8)?
+                        .as_deref()
+                        .and_then(crate::model::script_display_name)
+                        .map(str::to_owned),
                     script_hash: row.get(5)?,
                     has_snapshot,
                     modifications,
@@ -1452,7 +1459,7 @@ mod tests {
         let mut request = request("http://example.com");
         request.tags.insert("team".into(), "checkout".into());
         let id = store.begin("127.0.0.1", &request, "request").unwrap();
-        let source = "req.headers:set(\"x-test\", \"1\")";
+        let source = "-- #display_name: 历史名称\nreq.headers:set(\"x-test\", \"1\")";
         let hash = script_content_hash(source);
 
         for (index, (origin, name)) in [
@@ -1488,6 +1495,10 @@ mod tests {
         assert_eq!(detail.summary.request.tags["team"], "checkout");
         assert_eq!(detail.request_interceptors.len(), 3);
         assert_eq!(detail.request_interceptors[0].name, "first");
+        assert_eq!(
+            detail.request_interceptors[0].display_name.as_deref(),
+            Some("历史名称")
+        );
         assert!(!detail.request_interceptors[0].has_snapshot);
         let stored = store
             .interceptor_script_content(id, detail.request_interceptors[0].execution_id)

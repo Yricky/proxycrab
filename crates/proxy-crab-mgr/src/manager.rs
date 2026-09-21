@@ -1425,6 +1425,8 @@ impl ProxyCrabManager for MitmManager {
             .map_err(map_error)?;
         Ok(InterceptorDetail {
             kind,
+            display_name: proxy_crab_mitm::model::script_display_name(&script.content)
+                .map(str::to_owned),
             name: script.name,
             content: script.content,
         })
@@ -1464,6 +1466,7 @@ impl ProxyCrabManager for MitmManager {
                 .request
                 .into_iter()
                 .map(|item| SessionInterceptorItem {
+                    display_name: item.display_name,
                     name: item.name,
                     enabled: item.enabled,
                     valid: item.valid,
@@ -1473,6 +1476,7 @@ impl ProxyCrabManager for MitmManager {
                 .response
                 .into_iter()
                 .map(|item| SessionInterceptorItem {
+                    display_name: item.display_name,
                     name: item.name,
                     enabled: item.enabled,
                     valid: item.valid,
@@ -2578,13 +2582,28 @@ mod tests {
             .update_column_script(
                 "old".into(),
                 UpdateScriptRequest {
-                    content: "return entry.req().uri().host()".into(),
+                    content: "-- #display_name: 请求主机\nreturn entry.req().uri().host()".into(),
                 },
             )
             .await
             .unwrap();
 
         let view = manager.session_view(Some(session.id)).await.unwrap();
+        let script =
+            serde_json::to_value(manager.column_script("old".into()).await.unwrap()).unwrap();
+        assert_eq!(script["name"], "old");
+        assert_eq!(script["display_name"], "请求主机");
+        manager
+            .update_column_script(
+                "old".into(),
+                UpdateScriptRequest {
+                    content: "-- #display_name:\nreturn 'ok'".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let scripts = serde_json::to_value(manager.column_scripts().await.unwrap()).unwrap();
+        assert!(scripts[0].get("display_name").is_none());
         assert!(matches!(
             &view.columns[0],
             Column::Script { script_name, .. } if script_name == "old"
@@ -2611,7 +2630,7 @@ mod tests {
             .create_interceptor(InterceptorCreateRequest {
                 kind: InterceptorKind::Request,
                 name: "header".into(),
-                content: String::new(),
+                content: "-- #display_name: 请求头处理".into(),
             })
             .await
             .unwrap();
@@ -2632,6 +2651,15 @@ mod tests {
 
         let first_chain = manager.session_interceptors(Some(first.id)).await.unwrap();
         assert!(first_chain.request[0].valid);
+        assert_eq!(
+            first_chain.request[0].display_name.as_deref(),
+            Some("请求头处理")
+        );
+        let detail = manager
+            .interceptor(InterceptorKind::Request, "header".into())
+            .await
+            .unwrap();
+        assert_eq!(detail.display_name.as_deref(), Some("请求头处理"));
         assert!(
             manager
                 .session_interceptors(Some(second.id))
@@ -2645,6 +2673,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(library.items[0].usage_count, 1);
+        assert_eq!(library.items[0].name, "header");
+        assert_eq!(library.items[0].display_name.as_deref(), Some("请求头处理"));
 
         let error = manager
             .replace_session_interceptors(

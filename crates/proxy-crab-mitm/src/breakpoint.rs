@@ -54,6 +54,7 @@ struct DeadlineState {
 
 struct ActiveBreakpoint {
     id: u64,
+    display_name: Option<String>,
     created_at: u64,
     created_instant: Instant,
     context: BreakpointContext,
@@ -85,6 +86,7 @@ impl ActiveBreakpoint {
             phase: self.context.phase,
             position: self.context.position,
             interceptor_name: self.context.interceptor_name.clone(),
+            display_name: self.display_name.clone(),
             method: self.context.request.method.clone(),
             uri: self.context.request.uri.clone(),
             created_at: self.created_at,
@@ -128,6 +130,14 @@ impl BreakpointRegistry {
         let created_instant = Instant::now();
         let active = Arc::new(ActiveBreakpoint {
             id: self.next_id.fetch_add(1, Ordering::Relaxed) + 1,
+            display_name: context
+                .store
+                .interceptor_script_content(context.capture_id, context.parent_execution_id)
+                .ok()
+                .flatten()
+                .and_then(|script| {
+                    crate::model::script_display_name(&script.content).map(str::to_owned)
+                }),
             created_at: now_millis(),
             created_instant,
             context,
@@ -347,6 +357,7 @@ impl BreakpointRegistry {
                 phase: context.phase,
                 position: context.position,
                 name: run.name,
+                display_name: crate::model::script_display_name(content).map(str::to_owned),
                 script_hash,
                 has_snapshot,
                 modifications: public_modifications,

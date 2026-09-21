@@ -10,6 +10,7 @@ const props = defineProps<{
   sessionId: number;
   phase: InterceptorKind;
   interceptorName: string;
+  displayName?: string;
 }>();
 
 const backend = useBackend();
@@ -85,7 +86,7 @@ onMounted(() => void breakpointsStore.refresh());
   <div class="breakpoint-list">
     <header class="list-head">
       <div>
-        <strong class="mono">{{ interceptorName }}</strong>
+        <strong class="mono" :title="interceptorName">{{ displayName ?? interceptorName }}</strong>
         <span>{{ phaseLabel(phase) }}拦截器</span>
       </div>
       <div class="list-actions">

@@ -500,12 +500,12 @@ async fn filter_scripts(
     success(script_names(scripts))
 }
 
-fn script_names(scripts: Vec<Script>) -> Vec<Script> {
+fn script_names(scripts: Vec<Script>) -> Vec<serde_json::Value> {
     scripts
         .into_iter()
-        .map(|script| Script {
-            name: script.name,
-            content: String::new(),
+        .map(|script| {
+            let display_name = proxy_crab_mitm::model::script_display_name(&script.content);
+            serde_json::json!({ "name": script.name, "content": "", "display_name": display_name })
         })
         .collect()
 }
@@ -719,7 +719,7 @@ mod tests {
         manager
             .create_column_script(ScriptRequest {
                 name: "secret-column".into(),
-                content: "return 'secret source'".into(),
+                content: "-- #display_name: 鉴权token\nreturn 'secret source'".into(),
             })
             .await
             .unwrap();
@@ -781,6 +781,8 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["data"][0]["name"], "secret-column");
         assert_eq!(body["data"][0]["content"], "");
+        assert_eq!(body["data"][0]["display_name"], "鉴权token");
+        assert!(!body.to_string().contains("secret source"));
 
         let original_filter = manager.session_view(Some(shared.id)).await.unwrap().filter;
         let response = app

@@ -32,7 +32,7 @@ function run(item: (typeof contextMenuState.items)[number]): void {
             @click="run(item)"
           >
             <component :is="item.icon" v-if="item.icon" :size="14" class="ctx-icon" />
-            <span>{{ item.label }}</span>
+            <span :title="item.title">{{ item.label }}</span>
           </button>
         </template>
       </div>

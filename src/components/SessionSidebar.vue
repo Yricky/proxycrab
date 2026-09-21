@@ -2,6 +2,7 @@
 import { nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { sessionsStore } from "../stores/sessions";
 import { routingStore } from "../stores/routing";
+import { scriptLabelFor } from "../utils/script-label";
 import { proxyStore } from "../stores/proxy";
 import { confirmDialog, openContextMenu } from "../stores/dialog";
 import { formatRelativeTime } from "../utils/format";
@@ -268,8 +269,8 @@ watch(sidebarWidth, updatePopupPos);
         @click="openRoutingManager"
       >
         <Io5RadioButtonOn :size="13" />
-        <span v-if="routingStore.selectedName" class="sb-routing-name">
-          {{ routingStore.selectedName }}
+        <span v-if="routingStore.selectedName" class="sb-routing-name" :title="routingStore.selectedName">
+          {{ scriptLabelFor(routingStore.scripts, routingStore.selectedName) }}
         </span>
         <span v-else>未设置分流规则</span>
       </button>
