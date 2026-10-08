@@ -689,6 +689,50 @@ async fn regenerate_certificate(
     state.manager().regenerate_certificate().await
 }
 
+/// 保存文件：弹系统保存对话框并写入内容；用户取消时返回 false。
+/// 请求体为 raw bytes（application/octet-stream），文件名经 URL 编码后放在 header。
+#[tauri::command]
+async fn save_file(
+    window: tauri::WebviewWindow,
+    request: tauri::ipc::Request<'_>,
+) -> Result<bool, ManagerError> {
+    use tauri::ipc::InvokeBody;
+
+    let InvokeBody::Raw(data) = request.body() else {
+        return Err(ManagerError::bad_request("保存文件请求体必须是二进制数据"));
+    };
+    let data = data.clone();
+    let filename = request
+        .headers()
+        .get("x-proxycrab-filename")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            percent_encoding::percent_decode_str(value)
+                .decode_utf8_lossy()
+                .into_owned()
+        })
+        .ok_or_else(|| ManagerError::bad_request("保存文件请求缺少文件名"))?;
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        window
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_file_name(&filename)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|error| ManagerError::internal(format!("打开保存对话框失败：{error}")))?;
+    let Some(selected) = selected else {
+        return Ok(false);
+    };
+    let path = selected
+        .into_path()
+        .map_err(|error| ManagerError::bad_request(format!("无法访问所选路径：{error}")))?;
+    std::fs::write(&path, &data)
+        .map_err(|error| ManagerError::internal(format!("写入文件失败：{error}")))?;
+    Ok(true)
+}
+
 #[tauri::command]
 async fn get_system_logs(
     state: State<'_, BackendState>,
@@ -1120,6 +1164,7 @@ pub fn run() {
             replace_session_interceptors,
             get_certificate,
             regenerate_certificate,
+            save_file,
             get_system_logs,
             clear_system_logs,
             get_bypass_entries,

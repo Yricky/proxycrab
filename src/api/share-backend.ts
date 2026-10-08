@@ -1,6 +1,7 @@
 import type { Backend } from "./backend";
 import { BackendError } from "./backend-error";
 import { fetchBodyFromBase } from "./body";
+import { saveFileInWebview } from "./save-file";
 import type {
   AppConfig,
   InterceptorSnapshotPayload,
@@ -178,6 +179,7 @@ export function createShareBackend(
       link.rel = "noopener noreferrer";
       link.click();
     },
+    saveFile: saveFileInWebview,
     getConfig: async () => config,
     getProxyStatus: () => call("/share-api/proxy/status"),
     listSessions: async () => [bootstrap.session],

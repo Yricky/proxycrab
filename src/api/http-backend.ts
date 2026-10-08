@@ -1,6 +1,7 @@
 import type { Backend } from "./backend";
 import { BackendError } from "./backend-error";
 import { fetchBodyFromBase } from "./body";
+import { saveFileInWebview } from "./save-file";
 import type {
   ActiveSession,
   ApiActionView,
@@ -160,6 +161,7 @@ export function createHttpBackend(
       link.rel = "noopener noreferrer";
       link.click();
     },
+    saveFile: saveFileInWebview,
 
     getWorkspace: async () => bootstrap.workspace,
     getConfig: () => call("/api/config"),

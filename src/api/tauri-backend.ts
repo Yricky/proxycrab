@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { InvokeArgs, InvokeOptions } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Backend } from "./backend";
@@ -39,6 +40,7 @@ import type {
   ReplayResult,
   ResolveApprovalRequest,
   RoutingSelection,
+  SaveFileRequest,
   SessionShareState,
   ScriptRequest,
   SystemLogsQuery,
@@ -58,9 +60,13 @@ function isManagerError(value: unknown): value is ManagerError {
   );
 }
 
-async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+async function call<T>(
+  command: string,
+  args?: InvokeArgs,
+  options?: InvokeOptions,
+): Promise<T> {
   try {
-    return await invoke<T>(command, args);
+    return await invoke<T>(command, args, options);
   } catch (error) {
     if (isManagerError(error)) {
       throw new BackendError(error);
@@ -108,6 +114,12 @@ export function createTauriBackend(): Backend {
       return unlisten;
     },
     openExternal: (url) => openUrl(url),
+    // 整个 payload 为 Uint8Array 时 IPC 走 application/octet-stream 原始字节传输，
+    // 文件名经 URL 编码后通过 header 传递。
+    saveFile: (request: SaveFileRequest) =>
+      call("save_file", request.data, {
+        headers: { "x-proxycrab-filename": encodeURIComponent(request.filename) },
+      }),
 
     getWorkspace: () => call("get_workspace"),
     getConfig: () => call("get_config"),

@@ -2,6 +2,11 @@
 import QRCode from "qrcode";
 import { onBeforeUnmount, ref, watch } from "vue";
 import { Io5Download, Io5Trash } from "vue-icons-plus/io5";
+import { useBackend } from "../api";
+import { base64ToBytes } from "../api/save-file";
+import { reportError } from "../stores/app";
+
+const backend = useBackend();
 
 type ErrorCorrectionLevel = "L" | "M" | "Q" | "H";
 
@@ -50,12 +55,15 @@ watch([text, level], () => {
   }, 200);
 });
 
-function download(): void {
-  if (!qrCodeDataUrl.value) return;
-  const link = document.createElement("a");
-  link.href = qrCodeDataUrl.value;
-  link.download = "qrcode.png";
-  link.click();
+async function download(): Promise<void> {
+  // qrcode 库输出 data URL，提取其中的 base64 内容转为字节。
+  const base64 = qrCodeDataUrl.value.split(",", 2)[1];
+  if (!base64) return;
+  try {
+    await backend.saveFile({ filename: "qrcode.png", data: base64ToBytes(base64) });
+  } catch (error) {
+    reportError(error, "保存二维码失败");
+  }
 }
 
 function clearAll(): void {

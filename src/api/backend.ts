@@ -41,6 +41,7 @@ import type {
   ReplayResult,
   ResolveApprovalRequest,
   RoutingSelection,
+  SaveFileRequest,
   Script,
   ScriptRequest,
   SessionFilter,
@@ -102,6 +103,11 @@ export interface Backend {
   subscribeChanges(handler: (change: HttpApiChange) => void): Promise<Unsubscribe>;
   subscribeApprovalChanges(handler: (count: number) => void): Promise<Unsubscribe>;
   openExternal(url: string): Promise<void>;
+  /**
+   * 保存文件到本地：Tauri 弹系统保存对话框（用户取消时返回 false），
+   * Webview 环境直接触发浏览器下载。
+   */
+  saveFile(request: SaveFileRequest): Promise<boolean>;
 
   // workspace & config
   getWorkspace(): Promise<WorkspacePaths>;

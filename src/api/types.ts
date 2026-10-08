@@ -212,6 +212,12 @@ export interface WorkspacePaths {
   configured_path: string;
 }
 
+/** 保存文件请求：data 为文件原始字节内容。 */
+export interface SaveFileRequest {
+  filename: string;
+  data: Uint8Array<ArrayBuffer>;
+}
+
 export type HttpApiResource =
   | "workspace"
   | "config"

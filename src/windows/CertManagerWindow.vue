@@ -60,15 +60,16 @@ async function openDownloadUrl(): Promise<void> {
   }
 }
 
-function downloadPem(): void {
+async function downloadPem(): Promise<void> {
   if (!pem.value) return;
-  const blob = new Blob([pem.value], { type: "application/x-pem-file" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "proxycrab-ca.pem";
-  link.click();
-  URL.revokeObjectURL(url);
+  try {
+    await backend.saveFile({
+      filename: "proxycrab-ca.pem",
+      data: new TextEncoder().encode(pem.value),
+    });
+  } catch (error) {
+    reportError(error, "保存证书失败");
+  }
 }
 
 async function regenerate(): Promise<void> {
