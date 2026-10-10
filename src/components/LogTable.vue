@@ -35,6 +35,12 @@ import {
 const backend = useBackend();
 const readonly = backend.capabilities.readonly;
 
+// 加载环形进度条：与 spinner 同尺寸（28px）、同配色，半径 12。
+const PROGRESS_CIRCUMFERENCE = 2 * Math.PI * 12;
+const progressDashOffset = computed(
+  () => PROGRESS_CIRCUMFERENCE * (1 - (logsStore.loadProgress ?? 0)),
+);
+
 const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
 const ID_COLUMN_WIDTH = 58;
@@ -1680,7 +1686,23 @@ onBeforeUnmount(() => {
         @wheel="onWheel"
       />
       <div v-if="logsStore.loading" class="lt-loading" role="status" aria-label="正在加载日志">
-        <span class="lt-spinner" aria-hidden="true" />
+        <svg
+          v-if="logsStore.loadProgress !== null"
+          class="lt-progress"
+          viewBox="0 0 28 28"
+          aria-hidden="true"
+        >
+          <circle class="lt-progress-track" cx="14" cy="14" r="12" />
+          <circle
+            class="lt-progress-bar"
+            cx="14"
+            cy="14"
+            r="12"
+            :stroke-dasharray="PROGRESS_CIRCUMFERENCE"
+            :stroke-dashoffset="progressDashOffset"
+          />
+        </svg>
+        <span v-else class="lt-spinner" aria-hidden="true" />
       </div>
     </div>
     <template v-if="panelSessionId !== null && panelLogId !== null">
@@ -1809,6 +1831,23 @@ onBeforeUnmount(() => {
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: lt-spin 0.8s linear infinite;
+}
+.lt-progress {
+  width: 28px;
+  height: 28px;
+  transform: rotate(-90deg);
+}
+.lt-progress circle {
+  fill: none;
+  stroke-width: 3;
+}
+.lt-progress-track {
+  stroke: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.lt-progress-bar {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.15s;
 }
 @keyframes lt-spin {
   to {

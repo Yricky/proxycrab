@@ -12,7 +12,7 @@ import { proxyStore } from "./proxy";
 import { sessionsStore } from "./sessions";
 
 const VIEW_BATCH_SIZE = 200;
-const ID_PAGE_SIZE = 10_000;
+const ID_PAGE_SIZE = 5_000;
 const ROW_CACHE_CAPACITY = 5_000;
 const POLL_INTERVAL = 1_000;
 const IDLE_POLL_INTERVAL = 2_000;
@@ -157,6 +157,8 @@ export const logsStore = reactive({
   sortDesc: true,
   appliedFilter: emptySessionFilter() as SessionFilter,
   loading: false,
+  /** ID 扫描进度（0..1）；null 表示尚未探测到最大 ID，加载遮罩显示 spinner。 */
+  loadProgress: null as number | null,
 
   get filterActive(): boolean {
     return this.appliedFilter.option !== null && this.appliedFilter.input.length > 0;
@@ -226,6 +228,7 @@ export const logsStore = reactive({
     this.appliedFilter = emptySessionFilter();
     this.sortDesc = true;
     this.loading = false;
+    this.loadProgress = null;
     viewportIds.clear();
   },
 
@@ -460,6 +463,7 @@ export const logsStore = reactive({
     if (sessionsStore.viewingSessionId !== sessionId || generation !== targetGeneration) return;
     const initialMaxId = latest.matched_ids[0] ?? 0;
     let cursor = initialMaxId > 0 ? initialMaxId + 1 : undefined;
+    this.loadProgress = initialMaxId > 0 ? 0 : null;
     const matched = new Set<number>();
     const pending = new Set<number>();
     while (true) {
@@ -472,8 +476,16 @@ export const logsStore = reactive({
       if (sessionsStore.viewingSessionId !== sessionId || generation !== targetGeneration) return;
       for (const id of payload.matched_ids) matched.add(id);
       for (const id of payload.in_progress_ids) pending.add(id);
+      const minMatched = minOf(payload.matched_ids);
+      if (initialMaxId > 0) {
+        // 粗略扫描进度：cursor 在 ID 空间中的位置，单调递增并封顶 100%。
+        this.loadProgress =
+          minMatched === undefined
+            ? 1
+            : Math.min(1, Math.max(0, (initialMaxId - minMatched + 1) / initialMaxId));
+      }
       if (payload.matched_ids.length < ID_PAGE_SIZE) break;
-      cursor = minOf(payload.matched_ids);
+      cursor = minMatched;
     }
     this.ids = sortedUnique(matched);
     pendingFilterIds.clear();
@@ -486,6 +498,7 @@ export const logsStore = reactive({
     if (sessionId === null) return;
     const targetGeneration = ++generation;
     this.loading = true;
+    this.loadProgress = null;
     this.columns = [];
     this.clearIds();
     this.clearRows();
@@ -512,6 +525,7 @@ export const logsStore = reactive({
     if (sessionId === null) return false;
     const targetGeneration = ++generation;
     this.loading = true;
+    this.loadProgress = null;
     this.syncAppliedFilter(filter);
     this.clearIds();
     try {

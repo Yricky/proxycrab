@@ -184,6 +184,10 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
+      <button class="cert-entry-btn" title="证书管理" @click="openCertManager">
+        <Io5Key :size="13" />
+        <span>CA证书</span>
+      </button>
     </div>
 
     <div class="tb-spacer" />
@@ -306,10 +310,6 @@ onBeforeUnmount(() => {
           <Io5ChevronDown :size="12" />
         </button>
         <div v-if="activeMenu === 'system'" class="tb-menu tb-menu-system">
-          <button class="tb-menu-item" @click="runMenuAction(openCertManager)">
-            <Io5Key :size="14" />
-            <span>证书管理</span>
-          </button>
           <button class="tb-menu-item" @click="runMenuAction(openSystemLogs)">
             <Io5Newspaper :size="14" />
             <span>系统日志</span>
@@ -367,7 +367,27 @@ onBeforeUnmount(() => {
   color: var(--accent);
 }
 .tb-proxy {
-  gap: 10px;
+  gap: 8px;
+}
+/* 证书管理独立入口：橙色实心背景，图标与文案镂空反白。 */
+.cert-entry-btn {
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--warning);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.cert-entry-btn:hover {
+  background: color-mix(in srgb, var(--warning) 88%, #000);
 }
 .tb-spacer {
   flex: 1;
