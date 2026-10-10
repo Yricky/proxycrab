@@ -336,14 +336,25 @@ Returns `SessionMetadata[]`.
 ```json
 {
   "name": "checkout-debug",
-  "description": "Capture checkout failures"
+  "description": "Capture checkout failures",
+  "view": {
+    "columns": [{ "kind": "stage", "width": 91.0 }],
+    "filter": { "option": null, "input": "example" }
+  },
+  "interceptors": {
+    "request": [{ "name": "rewrite", "enabled": true }],
+    "response": []
+  },
+  "active": true
 }
 ```
 
-Both fields are optional or `null`. ProxyCrab generates a name when omitted. Returns the created
-`SessionMetadata`. New Sessions use the default table columns, empty filter, and empty interceptor
-chains. The first Session created in an empty workspace becomes active; later Session creation does
-not change the active Session.
+All fields are optional or `null`. ProxyCrab generates a name when omitted. Returns the created
+`SessionMetadata`. `view` uses the same shape as the Session view (`columns` plus `filter`); when
+omitted, the Session uses the default table columns and an empty filter. `interceptors` presets the
+Session interceptor chains by name without validating that the referenced interceptors exist; when
+omitted, both chains are empty. `active: true` makes the new Session the active one, replacing any
+previously active Session; when omitted or `false`, creation never changes the active Session.
 
 ### `POST /api/session-shares`
 

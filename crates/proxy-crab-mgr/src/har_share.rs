@@ -304,6 +304,7 @@ mod tests {
             .create_session(CreateSessionRequest {
                 name: Some("HAR share".into()),
                 description: None,
+                ..Default::default()
             })
             .await
             .unwrap();

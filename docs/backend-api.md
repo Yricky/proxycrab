@@ -588,9 +588,11 @@ reference it. Script names cannot be changed.
 { "option": { "kind": "column", "column": { "kind": "uri" }, "regex": false }, "input": "/api" }
 ```
 
-New Sessions always use the fixed built-in method, URI, status-code, and source columns plus an
-empty filter. The first Session created in an empty workspace becomes active. Later creation does
-not replace or restore an active Session.
+New Sessions default to the fixed built-in method, URI, status-code, and source columns plus an
+empty filter. `POST /api/sessions` also accepts optional `view` (same shape as the Session view:
+`columns` plus `filter`), `interceptors` (Session interceptor chains preset by name, without
+validating that the referenced interceptors exist), and `active`. `active: true` makes the new
+Session the active one; when omitted or `false`, creation never changes the active Session.
 
 Inactive Sessions can be archived while the proxy runs with
 `POST /api/sessions/{id}/archive`. The whole directory moves to `sessions_archived/<id>`; archived

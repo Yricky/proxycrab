@@ -18,7 +18,7 @@ use crate::{
         AppConfig, BodyPayload, BreakpointDetail, BreakpointListFilter, BreakpointSummary,
         CaptureDetail, CaptureSummary, Column, FilterColumn, FilterOption, InterceptorKind,
         InterceptorLibraryItem, InterceptorScriptContent, InterceptorSnapshot,
-        MAX_SESSION_INTERCEPTORS_PER_KIND, ProxyStatus, ResolvedSessionInterceptor,
+        MAX_SESSION_INTERCEPTORS_PER_KIND, NewSession, ProxyStatus, ResolvedSessionInterceptor,
         ResolvedSessionInterceptors, Script, ScriptKind, SessionFilter, SessionInterceptors,
         SessionMetadata, SessionView, SystemLogEntry, TemporaryExecutionResult,
     },
@@ -155,12 +155,8 @@ impl ProxyCrab {
         self.workspace.archived_sessions()
     }
 
-    pub fn create_session(
-        &self,
-        name: Option<String>,
-        description: Option<String>,
-    ) -> Result<SessionMetadata> {
-        self.workspace.create_session(name, description)
+    pub fn create_session(&self, params: NewSession) -> Result<SessionMetadata> {
+        self.workspace.create_session(params)
     }
 
     pub fn update_session(
@@ -1106,8 +1102,9 @@ mod tests {
     use crate::{
         log_buffer::LogBuffer,
         model::{
-            Column, FilterColumn, FilterOption, MAX_SESSION_INTERCEPTORS_PER_KIND, Script,
-            ScriptKind, SessionFilter, SessionInterceptor, SessionInterceptors, SessionView,
+            Column, FilterColumn, FilterOption, MAX_SESSION_INTERCEPTORS_PER_KIND, NewSession,
+            Script, ScriptKind, SessionFilter, SessionInterceptor, SessionInterceptors,
+            SessionView,
         },
     };
 
@@ -1117,7 +1114,13 @@ mod tests {
     async fn config_replacement_validates_active_session() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
-        let session = runtime.create_session(Some("one".into()), None).unwrap();
+        let session = runtime
+            .create_session(NewSession {
+                name: Some("one".into()),
+                active: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
         let mut config = runtime.config();
 
         config.active_session_id = Some(u64::MAX);
@@ -1133,7 +1136,7 @@ mod tests {
     async fn capture_store_pin_releases_registry_lock_during_storage_work() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         runtime.replace_active_session(None).await.unwrap();
 
         let pin = runtime.pin_capture_store(session.id).unwrap();
@@ -1155,7 +1158,12 @@ mod tests {
     fn session_interceptor_chains_enforce_limit_and_uniqueness() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
-        let session = runtime.create_session(Some("one".into()), None).unwrap();
+        let session = runtime
+            .create_session(NewSession {
+                name: Some("one".into()),
+                ..Default::default()
+            })
+            .unwrap();
         let duplicate = SessionInterceptors {
             request: vec![
                 SessionInterceptor {
@@ -1195,8 +1203,18 @@ mod tests {
     fn interceptor_delete_updates_every_session() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
-        let first = runtime.create_session(Some("one".into()), None).unwrap();
-        let second = runtime.create_session(Some("two".into()), None).unwrap();
+        let first = runtime
+            .create_session(NewSession {
+                name: Some("one".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let second = runtime
+            .create_session(NewSession {
+                name: Some("two".into()),
+                ..Default::default()
+            })
+            .unwrap();
         runtime
             .create_script(
                 ScriptKind::RequestInterceptor,
@@ -1244,7 +1262,12 @@ mod tests {
     fn column_script_delete_removes_view_references() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
-        let session = runtime.create_session(Some("one".into()), None).unwrap();
+        let session = runtime
+            .create_session(NewSession {
+                name: Some("one".into()),
+                ..Default::default()
+            })
+            .unwrap();
         runtime
             .create_script(
                 ScriptKind::Column,
@@ -1285,7 +1308,12 @@ mod tests {
     fn filter_script_delete_and_external_removal_repair_sessions() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::new(32))).unwrap();
-        let session = runtime.create_session(Some("one".into()), None).unwrap();
+        let session = runtime
+            .create_session(NewSession {
+                name: Some("one".into()),
+                ..Default::default()
+            })
+            .unwrap();
         runtime
             .create_script(
                 ScriptKind::Filter,

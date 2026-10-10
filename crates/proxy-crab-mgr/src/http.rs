@@ -1745,7 +1745,7 @@ mod tests {
     use proxy_crab_mitm::{
         model::{
             BodySourceType, HeaderValues, InterceptorExecutionOrigin, InterceptorKind,
-            InterceptorRun, Modification, RequestData, RequestInterceptorSnapshot,
+            InterceptorRun, Modification, NewSession, RequestData, RequestInterceptorSnapshot,
             script_content_hash,
         },
         storage::{BodySide, BodySource, BodySourceData, CaptureStore},
@@ -1900,7 +1900,7 @@ mod tests {
     async fn permission_middleware_uses_route_template_for_path_parameters() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         let manager = MitmManager::new(runtime);
         let (permissions, recorded) = recording_permissions(None);
         let app = router(manager, permissions);
@@ -2217,7 +2217,7 @@ mod tests {
     async fn log_body_route_returns_the_capture_file() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let request = RequestData {
             method: "POST".into(),
@@ -2259,7 +2259,7 @@ mod tests {
     async fn interceptor_content_and_snapshot_have_dedicated_routes() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let request = RequestData {
             method: "GET".into(),
@@ -2363,7 +2363,12 @@ mod tests {
     async fn client_errors_map_to_precise_status_codes() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime
+            .create_session(NewSession {
+                active: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
         let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let request = RequestData {
             method: "GET".into(),
@@ -2699,7 +2704,11 @@ mod tests {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime
-            .create_session(Some("capture".into()), None)
+            .create_session(NewSession {
+                name: Some("capture".into()),
+                active: Some(true),
+                ..Default::default()
+            })
             .unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
 
@@ -2746,12 +2755,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_session_accepts_initial_view_interceptors_and_active_flag() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let app = router(MitmManager::new(runtime), allow_all());
+        let create_body = r#"{
+            "name": "preconfigured",
+            "view": {
+                "columns": [{"kind": "stage", "width": 91.0}],
+                "filter": {"option": null, "input": "example"}
+            },
+            "interceptors": {
+                "request": [{"name": "rewrite", "enabled": true}],
+                "response": []
+            },
+            "active": true
+        }"#;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(create_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let session_id = body["data"]["id"].as_u64().unwrap();
+        assert_eq!(body["data"]["name"], "preconfigured");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/session-view?session_id={session_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"]["columns"][0]["kind"], "stage");
+        assert_eq!(body["data"]["filter"]["input"], "example");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/session-interceptors?session_id={session_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"]["request"][0]["name"], "rewrite");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/active-session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"]["session_id"], session_id);
+    }
+
+    #[tokio::test]
     async fn session_archive_routes_archive_restore_and_delete() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let active = runtime.create_session(Some("active".into()), None).unwrap();
+        let active = runtime
+            .create_session(NewSession {
+                name: Some("active".into()),
+                active: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
         let archived = runtime
-            .create_session(Some("archive-me".into()), Some("kept".into()))
+            .create_session(NewSession {
+                name: Some("archive-me".into()),
+                description: Some("kept".into()),
+                ..Default::default()
+            })
             .unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
 
@@ -2942,7 +3040,12 @@ mod tests {
     async fn log_id_reads_are_silent_and_filter_writes_publish_session_view() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime
+            .create_session(NewSession {
+                active: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
         let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
         let app = router_with_changes(MitmManager::new(runtime), allow_all(), changes);
         let filter_body = r#"{"option":{"kind":"column","column":{"kind":"uri"},"regex":false},"input":"example"}"#;
@@ -3011,7 +3114,12 @@ mod tests {
     async fn exposes_only_the_new_log_and_session_view_routes() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime
+            .create_session(NewSession {
+                active: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
         let filter_uri = format!("/api/sessions/{}/filter", session.id);
 
@@ -3186,7 +3294,7 @@ mod tests {
     async fn har_share_management_routes_expose_frozen_state() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
 
         let response = app
@@ -3508,7 +3616,7 @@ mod tests {
     async fn replay_route_validates_input_and_reports_guards() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
 
         // 缺少 ?session= → 4xx

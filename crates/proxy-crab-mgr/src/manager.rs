@@ -11,7 +11,7 @@ use proxy_crab_mitm::{
     model::{
         AppConfig, BreakpointListFilter, BreakpointSummary, CaptureDetail, CaptureOutcome,
         CaptureSummary, Column, FilterColumn, FilterOption, HeaderValues, InterceptorKind,
-        InterceptorScriptContent, InterceptorSnapshot, ProxyStatus, Script, ScriptKind,
+        InterceptorScriptContent, InterceptorSnapshot, NewSession, ProxyStatus, Script, ScriptKind,
         SessionFilter, SessionInterceptor, SessionInterceptors, SessionMetadata, SystemLogEntry,
         TemporaryExecutionResult,
     },
@@ -562,7 +562,13 @@ impl ProxyCrabManager for MitmManager {
         request: CreateSessionRequest,
     ) -> ManagerResult<SessionMetadata> {
         self.runtime
-            .create_session(request.name, request.description)
+            .create_session(NewSession {
+                name: request.name,
+                description: request.description,
+                view: request.view,
+                interceptors: request.interceptors,
+                active: request.active,
+            })
             .map_err(map_error)
     }
 
@@ -1721,7 +1727,7 @@ mod tests {
         lua::CaptureBodyAccess,
         model::{
             BodySourceType, CaptureOutcome, CaptureSummary, Column, FilterColumn, FilterOption,
-            HeaderValues, InterceptorKind, RequestData, ResponseData, SessionFilter,
+            HeaderValues, InterceptorKind, NewSession, RequestData, ResponseData, SessionFilter,
         },
         storage::{BodySide, CaptureStore},
     };
@@ -1847,7 +1853,7 @@ mod tests {
     async fn log_ids_can_filter_without_persisting_session_state() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let first = store
             .begin("127.0.0.1", &request("first"), "request")
@@ -1944,7 +1950,7 @@ mod tests {
     async fn replacing_session_filter_preserves_columns() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         let manager = MitmManager::new(runtime);
         let before = manager.session_view(Some(session.id)).await.unwrap();
         let filter = SessionFilter {
@@ -1978,7 +1984,7 @@ mod tests {
     async fn log_ids_apply_exclusive_bounds_and_batch_views_report_cell_errors() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let first = store
             .begin("127.0.0.1", &request("first"), "request")
@@ -2092,7 +2098,7 @@ mod tests {
     async fn historical_bodies_are_available_to_filter_and_column_scripts() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let request = RequestData {
             headers: HeaderValues::from([("content-type".into(), vec!["application/json".into()])]),
@@ -2253,7 +2259,7 @@ mod tests {
     async fn structured_filters_are_read_only_and_script_errors_are_non_matches() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let first = store
             .begin("127.0.0.1", &request("First"), "request")
@@ -2542,7 +2548,7 @@ mod tests {
     async fn session_views_validate_new_references_and_script_updates_keep_names() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         let manager = MitmManager::new(runtime);
 
         let error = manager
@@ -2623,8 +2629,13 @@ mod tests {
     async fn session_interceptors_validate_and_report_global_usage() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let first = runtime.create_session(None, None).unwrap();
-        let second = runtime.create_session(Some("second".into()), None).unwrap();
+        let first = runtime.create_session(NewSession::default()).unwrap();
+        let second = runtime
+            .create_session(NewSession {
+                name: Some("second".into()),
+                ..Default::default()
+            })
+            .unwrap();
         let manager = MitmManager::new(runtime);
         manager
             .create_interceptor(InterceptorCreateRequest {
@@ -2702,7 +2713,7 @@ mod tests {
     async fn export_logs_filters_orders_and_deduplicates_captures() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let first = store
             .begin("127.0.0.1", &request("first"), "request")
@@ -2780,7 +2791,7 @@ mod tests {
     async fn export_logs_validates_format_missing_ids_and_empty_selection() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(None, None).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
         let manager = MitmManager::new(runtime);
 
         let error = manager

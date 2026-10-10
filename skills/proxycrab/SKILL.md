@@ -109,15 +109,17 @@ skill directory.
    node <skill-dir>/scripts/session-list.mjs
    ```
 
-2. If the active AGENTS.md instructions permit it and it is needed, create a dedicated Session and make it active with
-   `PUT /api/active-session`:
+2. If the active AGENTS.md instructions permit it and it is needed, create a dedicated Session and
+   make it active in one call:
 
    ```bash
    node <skill-dir>/scripts/session-create.mjs \
      --name agent-debug \
-     --description "Temporary capture scope for the current investigation"
-   # then PUT {"session_id":3} to /api/active-session
+     --description "Temporary capture scope for the current investigation" \
+     --active true
    ```
+
+   An existing Session can also be made active with `PUT {"session_id":3}` to `/api/active-session`.
 
 3. Narrow the candidate set before reading full details. Only one ProxyCrab filter option can be
    active at a time:

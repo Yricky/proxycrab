@@ -18,8 +18,8 @@ use proxy_crab_mitm::{
     log_buffer::LogBuffer,
     model::{
         BodyPayload, BreakpointListFilter, CaptureOutcome, ErrorStage, InterceptorExecutionOrigin,
-        InterceptorKind, Modification, ProxyStatus, Script, ScriptKind, SessionInterceptor,
-        SessionInterceptors,
+        InterceptorKind, Modification, NewSession, ProxyStatus, Script, ScriptKind,
+        SessionInterceptor, SessionInterceptors,
     },
     storage::{BodySide, BodySourceData},
 };
@@ -520,7 +520,12 @@ async fn upgrade_echo_upstream() -> (u16, tokio::task::JoinHandle<()>) {
 async fn captures_plain_http_and_hot_active_session_switches() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
-    let first = runtime.create_session(None, None).unwrap();
+    let first = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
 
     let response = proxy_get(
         proxy_port,
@@ -530,7 +535,12 @@ async fn captures_plain_http_and_hot_active_session_switches() {
     .await;
     assert!(response.contains("\r\n\r\nok"));
 
-    let second = runtime.create_session(Some("second".into()), None).unwrap();
+    let second = runtime
+        .create_session(NewSession {
+            name: Some("second".into()),
+            ..Default::default()
+        })
+        .unwrap();
     runtime
         .replace_active_session(Some(second.id))
         .await
@@ -650,7 +660,12 @@ async fn streams_plain_http_bypass_before_the_upstream_response_finishes() {
 #[tokio::test]
 async fn empty_session_bodies_do_not_create_original_body_files() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, upstream) = empty_http_upstream().await;
     runtime
         .create_script(
@@ -715,7 +730,12 @@ async fn empty_session_bodies_do_not_create_original_body_files() {
 #[tokio::test]
 async fn streams_session_response_before_the_upstream_response_finishes() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, release, upstream) = staged_http_upstream().await;
     let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
     stream
@@ -791,7 +811,12 @@ async fn streams_session_response_before_the_upstream_response_finishes() {
 #[tokio::test]
 async fn response_replacement_does_not_wait_for_the_raw_upstream_body() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, release, upstream) = staged_http_upstream().await;
     runtime
         .create_script(
@@ -860,7 +885,12 @@ async fn response_replacement_does_not_wait_for_the_raw_upstream_body() {
 #[tokio::test]
 async fn request_replacement_is_sent_while_the_raw_client_body_keeps_draining() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, observation, upstream) = body_gated_http_upstream().await;
     runtime
         .create_script(
@@ -946,7 +976,12 @@ async fn request_replacement_is_sent_while_the_raw_client_body_keeps_draining() 
 #[tokio::test]
 async fn response_body_frame_timeout_terminates_the_stream_and_fails_the_capture() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, upstream) = delayed_response_frame_upstream(Duration::from_secs(2)).await;
     runtime
         .create_script(
@@ -1006,7 +1041,12 @@ async fn response_body_frame_timeout_terminates_the_stream_and_fails_the_capture
 #[tokio::test]
 async fn response_body_frame_timeout_also_bounds_the_first_frame() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, upstream) =
         delayed_first_response_frame_upstream(Duration::from_secs(2)).await;
     runtime
@@ -1058,7 +1098,12 @@ async fn response_body_frame_timeout_also_bounds_the_first_frame() {
 #[tokio::test]
 async fn response_replacement_survives_a_raw_body_frame_timeout() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, upstream) = delayed_response_frame_upstream(Duration::from_secs(2)).await;
     runtime
         .create_script(
@@ -1124,7 +1169,11 @@ async fn routing_script_receives_http_authority_and_captures_into_active_session
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
     let session = runtime
-        .create_session(Some("capture".into()), None)
+        .create_session(NewSession {
+            name: Some("capture".into()),
+            active: Some(true),
+            ..Default::default()
+        })
         .unwrap();
     runtime
         .create_script(
@@ -1164,7 +1213,11 @@ async fn routing_script_false_and_invalid_returns_bypass_even_with_an_active_ses
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
     let session = runtime
-        .create_session(Some("capture".into()), None)
+        .create_session(NewSession {
+            name: Some("capture".into()),
+            active: Some(true),
+            ..Default::default()
+        })
         .unwrap();
     runtime
         .create_script(
@@ -1217,7 +1270,12 @@ async fn routing_script_false_and_invalid_returns_bypass_even_with_an_active_ses
 async fn session_interceptor_chain_executes_and_records_source() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let source = "req.headers:set(\"x-session\", \"one\")";
     runtime
         .create_script(
@@ -1272,7 +1330,12 @@ async fn session_interceptor_chain_executes_and_records_source() {
 async fn request_interceptor_rewrites_method_and_upstream_uri() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (target_port, target_request, target) = recording_http_upstream().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let request_source =
         format!("req.method = 'BREW'; req.uri = 'http://127.0.0.1:{target_port}/rewritten?q=1'");
     runtime
@@ -1363,7 +1426,12 @@ async fn request_interceptor_rewrites_method_and_upstream_uri() {
 async fn request_interceptors_read_raw_json_and_observe_prior_replacement() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     for (name, content) in [
         (
             "read-original-json",
@@ -1447,7 +1515,12 @@ async fn request_interceptors_read_raw_json_and_observe_prior_replacement() {
 #[tokio::test]
 async fn response_body_getter_waits_for_complete_raw_body_then_replays_it() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, release, upstream) = staged_http_upstream().await;
     runtime
         .create_script(
@@ -1498,7 +1571,12 @@ async fn response_body_getter_waits_for_complete_raw_body_then_replays_it() {
 #[tokio::test]
 async fn response_body_getter_timeout_terminates_the_downstream_body() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, upstream) = delayed_response_frame_upstream(Duration::from_secs(2)).await;
     runtime
         .create_script(
@@ -1551,7 +1629,12 @@ async fn response_body_getter_timeout_terminates_the_downstream_body() {
 async fn asset_replacement_exposes_metadata_and_current_body() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let mut upload = runtime
         .begin_asset_upload("fixtures/replacement.json", "application/json".into())
         .await
@@ -1619,7 +1702,12 @@ async fn asset_replacement_exposes_metadata_and_current_body() {
 #[tokio::test]
 async fn crab_skip_avoids_upstream_and_runs_response_interceptors() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     runtime
         .create_script(
             ScriptKind::RequestInterceptor,
@@ -1697,7 +1785,12 @@ async fn crab_skip_avoids_upstream_and_runs_response_interceptors() {
 #[tokio::test]
 async fn request_speed_paces_the_final_body_sent_upstream() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, observation, upstream) = body_gated_http_upstream().await;
     runtime
         .create_script(
@@ -1745,7 +1838,12 @@ async fn request_speed_paces_the_final_body_sent_upstream() {
 #[tokio::test]
 async fn request_timeout_includes_paced_upload_waiting() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, observation, upstream) = body_gated_http_upstream().await;
     runtime
         .create_script(
@@ -1798,7 +1896,12 @@ async fn request_timeout_includes_paced_upload_waiting() {
 #[tokio::test]
 async fn response_speed_paces_the_final_interceptor_body() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, upstream) = fixed_http_upstream().await;
     runtime
         .create_script(
@@ -1848,7 +1951,12 @@ async fn response_speed_paces_the_final_interceptor_body() {
 async fn breakpoint_accepts_temporary_changes_and_resumes_saved_script() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     runtime
         .create_script(
             ScriptKind::RequestInterceptor,
@@ -1963,7 +2071,12 @@ async fn breakpoint_accepts_temporary_changes_and_resumes_saved_script() {
 async fn response_breakpoint_exposes_live_response_and_applies_temporary_body() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     runtime
         .create_script(
             ScriptKind::ResponseInterceptor,
@@ -2047,8 +2160,18 @@ async fn response_breakpoint_exposes_live_response_and_applies_temporary_body() 
 async fn pinned_session_cannot_be_archived_until_request_finishes() {
     let app_data = tempdir().unwrap();
     let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-    runtime.create_session(None, None).unwrap();
-    let second = runtime.create_session(Some("second".into()), None).unwrap();
+    runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
+    let second = runtime
+        .create_session(NewSession {
+            name: Some("second".into()),
+            ..Default::default()
+        })
+        .unwrap();
     let pin = runtime.pin_session(second.id).unwrap();
 
     assert!(
@@ -2066,9 +2189,17 @@ async fn pinned_session_cannot_be_archived_until_request_finishes() {
 #[tokio::test]
 async fn inactive_session_can_be_archived_while_proxy_runs_but_active_session_cannot() {
     let (_app_data, runtime, _proxy_port) = runtime().await;
-    let active = runtime.create_session(None, None).unwrap();
+    let active = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let inactive = runtime
-        .create_session(Some("inactive".into()), None)
+        .create_session(NewSession {
+            name: Some("inactive".into()),
+            ..Default::default()
+        })
         .unwrap();
 
     assert!(
@@ -2087,9 +2218,19 @@ async fn inactive_session_can_be_archived_while_proxy_runs_but_active_session_ca
 #[tokio::test]
 async fn connect_diagnostic_stays_in_session_pinned_at_connect() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let first = runtime.create_session(None, None).unwrap();
+    let first = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let stream = connect_tunnel(proxy_port).await;
-    let second = runtime.create_session(Some("second".into()), None).unwrap();
+    let second = runtime
+        .create_session(NewSession {
+            name: Some("second".into()),
+            ..Default::default()
+        })
+        .unwrap();
     runtime
         .replace_active_session(Some(second.id))
         .await
@@ -2127,7 +2268,13 @@ async fn connect_diagnostic_stays_in_session_pinned_at_connect() {
 #[tokio::test]
 async fn active_session_change_disconnects_existing_connect_but_noop_does_not() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let first = runtime.create_session(Some("first".into()), None).unwrap();
+    let first = runtime
+        .create_session(NewSession {
+            name: Some("first".into()),
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let mut stream = connect_tunnel(proxy_port).await;
 
     runtime
@@ -2141,7 +2288,12 @@ async fn active_session_change_disconnects_existing_connect_but_noop_does_not() 
             .is_err()
     );
 
-    let second = runtime.create_session(Some("second".into()), None).unwrap();
+    let second = runtime
+        .create_session(NewSession {
+            name: Some("second".into()),
+            ..Default::default()
+        })
+        .unwrap();
     runtime
         .replace_active_session(Some(second.id))
         .await
@@ -2160,7 +2312,13 @@ async fn active_session_change_disconnects_existing_connect_but_noop_does_not() 
 #[tokio::test]
 async fn active_session_change_replaces_upstream_connection_pool_but_noop_does_not() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let first = runtime.create_session(Some("first".into()), None).unwrap();
+    let first = runtime
+        .create_session(NewSession {
+            name: Some("first".into()),
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, accepted, upstream) = keepalive_counting_upstream().await;
     let uri = format!("http://127.0.0.1:{upstream_port}/pooled");
     let host = format!("127.0.0.1:{upstream_port}");
@@ -2173,7 +2331,12 @@ async fn active_session_change_replaces_upstream_connection_pool_but_noop_does_n
     assert!(proxy_get(proxy_port, &uri, &host).await.contains("ok"));
     assert_eq!(accepted.load(Ordering::SeqCst), 1);
 
-    let second = runtime.create_session(Some("second".into()), None).unwrap();
+    let second = runtime
+        .create_session(NewSession {
+            name: Some("second".into()),
+            ..Default::default()
+        })
+        .unwrap();
     runtime
         .replace_active_session(Some(second.id))
         .await
@@ -2189,7 +2352,11 @@ async fn active_session_change_replaces_upstream_connection_pool_but_noop_does_n
 async fn only_effective_routing_script_changes_disconnect_existing_connections() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     runtime
-        .create_session(Some("capture".into()), None)
+        .create_session(NewSession {
+            name: Some("capture".into()),
+            active: Some(true),
+            ..Default::default()
+        })
         .unwrap();
     runtime
         .create_script(
@@ -2254,7 +2421,12 @@ async fn only_effective_routing_script_changes_disconnect_existing_connections()
 #[tokio::test]
 async fn records_and_forwards_non_tls_connect_tunnel() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, upstream) = echo_upstream().await;
     let mut stream = connect_tunnel_to(proxy_port, &format!("127.0.0.1:{upstream_port}")).await;
     stream.write_all(b"ping").await.unwrap();
@@ -2317,7 +2489,12 @@ async fn bypass_connect_tunnels_bytes_without_creating_a_session() {
 #[tokio::test]
 async fn stop_cancels_idle_connect_without_waiting_for_client_payload() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let _idle = connect_tunnel(proxy_port).await;
     timeout(Duration::from_secs(2), runtime.stop_proxy())
         .await
@@ -2337,7 +2514,12 @@ async fn stop_cancels_idle_connect_without_waiting_for_client_payload() {
 #[tokio::test]
 async fn forwards_http_upgrade_bidirectionally() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, upstream) = upgrade_echo_upstream().await;
     runtime
         .create_script(
@@ -2432,7 +2614,12 @@ async fn concurrent_lifecycle_calls_are_serialized() {
 async fn lifecycle_preserves_preexisting_in_progress_outcomes() {
     let app_data = tempdir().unwrap();
     let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let capture_store =
         proxy_crab_mitm::storage::CaptureStore::open(session.id, runtime.workspace().root())
             .unwrap();
@@ -2515,7 +2702,12 @@ async fn origin_form_ca_download_is_local_and_not_recorded() {
 #[tokio::test]
 async fn tls_insecure_tag_allows_self_signed_upstream_without_weakening_default_pool() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, mut upstream_requests, upstream) = self_signed_https_upstream().await;
     let authority = format!("127.0.0.1:{upstream_port}");
 
@@ -2577,7 +2769,12 @@ async fn tls_insecure_tag_allows_self_signed_upstream_without_weakening_default_
 #[tokio::test]
 async fn upstream_http_version_tag_downgrades_browser_http2_to_local_http1() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, upstream_request, upstream) = recording_http_upstream().await;
     runtime
         .create_script(
@@ -2677,7 +2874,12 @@ async fn upstream_http_version_tag_downgrades_browser_http2_to_local_http1() {
 #[tokio::test]
 async fn trusted_ca_serves_certificate_and_untrusted_ca_is_diagnostic() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
 
     let mut roots = RootCertStore::empty();
     for certificate in rustls_pemfile::certs(&mut Cursor::new(runtime.certificate_pem())) {
@@ -2743,7 +2945,12 @@ async fn trusted_ca_serves_certificate_and_untrusted_ca_is_diagnostic() {
 #[tokio::test]
 async fn serves_ca_over_http2_without_recording_the_local_request() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let mut roots = RootCertStore::empty();
     for certificate in rustls_pemfile::certs(&mut Cursor::new(runtime.certificate_pem())) {
         roots.add(certificate.unwrap()).unwrap();
@@ -2807,7 +3014,12 @@ async fn wait_capture_success(runtime: &ProxyCrab, session_id: u64, id: u64) {
 #[tokio::test]
 async fn replay_records_capture_with_proxycrab_source() {
     let (_app_data, runtime, _proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, _upstream) = fixed_http_upstream().await;
 
     let log_id = runtime
@@ -2847,7 +3059,12 @@ async fn replay_records_capture_with_proxycrab_source() {
 #[tokio::test]
 async fn replay_passes_through_session_interceptors() {
     let (_app_data, runtime, _proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, _upstream) = fixed_http_upstream().await;
     runtime
         .create_script(
@@ -2898,7 +3115,12 @@ async fn replay_passes_through_session_interceptors() {
 #[tokio::test]
 async fn replay_body_ref_reuses_stored_capture_body() {
     let (_app_data, runtime, _proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
     let (upstream_port, _upstream) = fixed_http_upstream().await;
     let first_id = runtime
         .replay(
@@ -2949,8 +3171,13 @@ async fn replay_body_ref_reuses_stored_capture_body() {
 #[tokio::test]
 async fn replay_requires_running_proxy_and_live_session() {
     let (_app_data, runtime, _proxy_port) = runtime().await;
-    let session = runtime.create_session(None, None).unwrap();
-    let archived = runtime.create_session(None, None).unwrap();
+    let session = runtime
+        .create_session(NewSession {
+            active: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
+    let archived = runtime.create_session(NewSession::default()).unwrap();
     runtime.archive_session(archived.id).await.unwrap();
     runtime.stop_proxy().await.unwrap();
 

@@ -271,6 +271,15 @@ export interface SkillSaveResult {
 export interface CreateSessionRequest {
   name?: string | null;
   description?: string | null;
+  view?: {
+    columns?: Column[];
+    filter?: SessionFilter;
+  } | null;
+  interceptors?: {
+    request?: Array<{ name: string; enabled: boolean }>;
+    response?: Array<{ name: string; enabled: boolean }>;
+  } | null;
+  active?: boolean | null;
 }
 
 export interface UpdateSessionRequest {

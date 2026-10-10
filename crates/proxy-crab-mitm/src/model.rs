@@ -164,6 +164,15 @@ pub struct SessionMetadata {
     pub description: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct NewSession {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub view: Option<SessionView>,
+    pub interceptors: Option<SessionInterceptors>,
+    pub active: Option<bool>,
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct Script {
     pub name: String,

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {
+  UsageError,
   apiRequest,
   assertAllowedArgs,
   optionalString,
@@ -9,20 +10,45 @@ import {
   run,
 } from "./lib/common.mjs";
 
+function optionalBoolean(args, key) {
+  const value = optionalString(args, key);
+  if (value === undefined) return undefined;
+  if (value !== "true" && value !== "false") {
+    throw new UsageError(`--${key} must be "true" or "false"`);
+  }
+  return value === "true";
+}
+
+function optionalJson(args, key) {
+  const value = optionalString(args, key);
+  if (value === undefined) return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new UsageError(`--${key} must be valid JSON`);
+  }
+}
+
 run(async () => {
   const args = parseArgs();
-  assertAllowedArgs(args, ["name", "description"]);
+  assertAllowedArgs(args, ["name", "description", "view", "interceptors", "active"]);
   if (args.help) {
     printHelp(`
-Usage: node session-create.mjs [--name NAME] [--description TEXT] [--base-url URL]
+Usage: node session-create.mjs [--name NAME] [--description TEXT] [--view JSON] [--interceptors JSON] [--active true|false] [--base-url URL]
 
 Create a ProxyCrab Session. ProxyCrab generates a name when --name is omitted.
+--view presets the Session view, e.g. '{"columns":[{"kind":"stage","width":91}],"filter":{"option":null,"input":"example"}}'.
+--interceptors presets the interceptor chains by name, e.g. '{"request":[{"name":"rewrite","enabled":true}],"response":[]}'.
+--active true makes the new Session the active one; omitted or false leaves the active Session unchanged.
 `);
     return;
   }
   const body = {
     name: optionalString(args, "name") ?? null,
     description: optionalString(args, "description") ?? null,
+    view: optionalJson(args, "view") ?? null,
+    interceptors: optionalJson(args, "interceptors") ?? null,
+    active: optionalBoolean(args, "active") ?? null,
   };
   printJson(await apiRequest(args, "/api/sessions", { method: "POST", body }));
 });

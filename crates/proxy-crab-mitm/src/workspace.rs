@@ -12,7 +12,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::error::Error;
 use crate::model::{
-    AppConfig, Script, ScriptKind, SessionInterceptors, SessionMetadata, SessionView,
+    AppConfig, NewSession, Script, ScriptKind, SessionInterceptors, SessionMetadata, SessionView,
 };
 
 const WORKSPACE_CONFIG_FILE: &str = "app_config.json";
@@ -180,11 +180,7 @@ impl Workspace {
         self.update_config(|config| *config = next)
     }
 
-    pub fn create_session(
-        &self,
-        name: Option<String>,
-        description: Option<String>,
-    ) -> Result<SessionMetadata> {
+    pub fn create_session(&self, params: NewSession) -> Result<SessionMetadata> {
         let mut sessions = self
             .sessions
             .write()
@@ -193,10 +189,8 @@ impl Workspace {
             .archived_sessions
             .read()
             .map_err(|_| anyhow!("workspace archived sessions lock poisoned"))?;
-        let first = sessions.is_empty();
-        let session =
-            self.create_session_locked(&sessions, &archived_sessions, name, description)?;
-        if first
+        let session = self.create_session_locked(&sessions, &archived_sessions, &params)?;
+        if params.active == Some(true)
             && let Err(error) =
                 self.update_config(|config| config.active_session_id = Some(session.id))
         {
@@ -211,10 +205,10 @@ impl Workspace {
         &self,
         sessions: &[SessionMetadata],
         archived_sessions: &[SessionMetadata],
-        name: Option<String>,
-        description: Option<String>,
+        params: &NewSession,
     ) -> Result<SessionMetadata> {
-        let initial_view = SessionView::default();
+        let view = params.view.clone().unwrap_or_default();
+        let interceptors = params.interceptors.clone().unwrap_or_default();
         let mut id = now_millis();
         while sessions.iter().any(|session| session.id == id)
             || archived_sessions.iter().any(|session| session.id == id)
@@ -223,19 +217,19 @@ impl Workspace {
         }
         let session = SessionMetadata {
             id,
-            name: name.unwrap_or_else(|| format!("Session-{id}")),
+            name: params
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Session-{id}")),
             created_at: now_millis(),
-            description,
+            description: params.description.clone(),
         };
         let directory = self.session_dir(id);
         let result = (|| {
             fs::create_dir_all(directory.join("blob"))?;
             write_json_atomic(&directory.join("metadata.json"), &session)?;
-            write_json_atomic(&directory.join("view.json"), &initial_view)?;
-            write_json_atomic(
-                &directory.join("interceptors.json"),
-                &SessionInterceptors::default(),
-            )
+            write_json_atomic(&directory.join("view.json"), &view)?;
+            write_json_atomic(&directory.join("interceptors.json"), &interceptors)
         })();
         if let Err(error) = result {
             let _ = fs::remove_dir_all(&directory);
@@ -538,8 +532,8 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::model::{
-        Column, FilterColumn, FilterOption, SessionFilter, SessionInterceptor, SessionInterceptors,
-        SessionView,
+        Column, FilterColumn, FilterOption, NewSession, SessionFilter, SessionInterceptor,
+        SessionInterceptors, SessionView,
     };
 
     use super::Workspace;
@@ -610,7 +604,11 @@ mod tests {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
         let session = workspace
-            .create_session(Some("capture".into()), None)
+            .create_session(NewSession {
+                name: Some("capture".into()),
+                active: Some(true),
+                ..Default::default()
+            })
             .unwrap();
 
         assert_eq!(workspace.active_session_id(), Some(session.id));
@@ -639,7 +637,10 @@ mod tests {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
         let session = workspace
-            .create_session(Some("archive".into()), None)
+            .create_session(NewSession {
+                name: Some("archive".into()),
+                ..Default::default()
+            })
             .unwrap();
         workspace.replace_active_session(None).unwrap();
         workspace.archive_session(session.id).unwrap();
@@ -662,7 +663,10 @@ mod tests {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
         let first = workspace
-            .create_session(Some("first".into()), None)
+            .create_session(NewSession {
+                name: Some("first".into()),
+                ..Default::default()
+            })
             .unwrap();
         workspace
             .replace_session_view(
@@ -680,7 +684,10 @@ mod tests {
             )
             .unwrap();
         let second = workspace
-            .create_session(Some("second".into()), None)
+            .create_session(NewSession {
+                name: Some("second".into()),
+                ..Default::default()
+            })
             .unwrap();
 
         assert_eq!(
@@ -690,14 +697,78 @@ mod tests {
     }
 
     #[test]
+    fn new_session_accepts_initial_view_interceptors_and_active_flag() {
+        let root = tempdir().unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+        let view = SessionView {
+            columns: vec![Column::Stage { width: 91.0 }],
+            filter: SessionFilter {
+                option: None,
+                input: "example".into(),
+            },
+        };
+        let interceptors = SessionInterceptors {
+            request: vec![SessionInterceptor {
+                name: "rewrite".into(),
+                enabled: true,
+            }],
+            response: vec![],
+        };
+        let session = workspace
+            .create_session(NewSession {
+                view: Some(view.clone()),
+                interceptors: Some(interceptors.clone()),
+                active: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(workspace.session_view(session.id).unwrap(), view);
+        assert_eq!(
+            workspace.session_interceptors(session.id).unwrap(),
+            interceptors
+        );
+        assert_eq!(workspace.active_session_id(), Some(session.id));
+    }
+
+    #[test]
+    fn new_session_is_not_active_unless_requested() {
+        let root = tempdir().unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+        workspace.create_session(NewSession::default()).unwrap();
+        assert_eq!(workspace.active_session_id(), None);
+        workspace
+            .create_session(NewSession {
+                active: Some(false),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(workspace.active_session_id(), None);
+        let third = workspace
+            .create_session(NewSession {
+                active: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(workspace.active_session_id(), Some(third.id));
+    }
+
+    #[test]
     fn later_session_does_not_replace_active_and_active_can_be_switched_or_cleared() {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
         let first = workspace
-            .create_session(Some("first".into()), None)
+            .create_session(NewSession {
+                name: Some("first".into()),
+                active: Some(true),
+                ..Default::default()
+            })
             .unwrap();
         let second = workspace
-            .create_session(Some("second".into()), None)
+            .create_session(NewSession {
+                name: Some("second".into()),
+                ..Default::default()
+            })
             .unwrap();
 
         assert_eq!(workspace.active_session_id(), Some(first.id));
@@ -733,7 +804,12 @@ mod tests {
     fn session_filter_round_trip() {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
-        let session = workspace.create_session(Some("one".into()), None).unwrap();
+        let session = workspace
+            .create_session(NewSession {
+                name: Some("one".into()),
+                ..Default::default()
+            })
+            .unwrap();
         let view = SessionView {
             columns: vec![Column::Method { width: 72.0 }],
             filter: SessionFilter {
@@ -755,7 +831,7 @@ mod tests {
     fn missing_session_view_uses_fixed_defaults_without_migration() {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
-        let session = workspace.create_session(None, None).unwrap();
+        let session = workspace.create_session(NewSession::default()).unwrap();
         std::fs::remove_file(workspace.session_dir(session.id).join("view.json")).unwrap();
 
         assert_eq!(
@@ -769,7 +845,12 @@ mod tests {
     fn new_session_has_empty_interceptor_chains() {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
-        let session = workspace.create_session(Some("one".into()), None).unwrap();
+        let session = workspace
+            .create_session(NewSession {
+                name: Some("one".into()),
+                ..Default::default()
+            })
+            .unwrap();
 
         assert_eq!(
             workspace.session_interceptors(session.id).unwrap(),
@@ -781,7 +862,12 @@ mod tests {
     fn session_interceptors_round_trip_without_resolving_script_files() {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
-        let session = workspace.create_session(Some("one".into()), None).unwrap();
+        let session = workspace
+            .create_session(NewSession {
+                name: Some("one".into()),
+                ..Default::default()
+            })
+            .unwrap();
         let value = SessionInterceptors {
             request: vec![
                 SessionInterceptor {

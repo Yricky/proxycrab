@@ -7,7 +7,7 @@ use proxy_crab_mitm::{
     model::{
         AppConfig, BodyPayload, BreakpointSummary, CaptureError, Column, InterceptorExecution,
         InterceptorKind, InterceptorLibraryItem, ProxyStatus, Script, SessionFilter,
-        SessionMetadata, SystemLogEntry,
+        SessionInterceptors, SessionMetadata, SessionView, SystemLogEntry,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -146,10 +146,13 @@ pub struct SetWorkspaceRequest {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CreateSessionRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    pub view: Option<SessionView>,
+    pub interceptors: Option<SessionInterceptors>,
+    pub active: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

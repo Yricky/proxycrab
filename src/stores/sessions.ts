@@ -79,6 +79,7 @@ export const sessionsStore = reactive({
       const session = await backend.createSession({
         name: name || null,
         description,
+        active: this.sessions.length === 0,
       });
       await this.refresh();
       return session;

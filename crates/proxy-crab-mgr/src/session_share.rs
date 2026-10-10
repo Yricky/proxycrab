@@ -652,6 +652,7 @@ mod tests {
             .create_session(CreateSessionRequest {
                 name: Some("shared".into()),
                 description: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -706,6 +707,7 @@ mod tests {
             .create_session(CreateSessionRequest {
                 name: Some("shared".into()),
                 description: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -713,6 +715,7 @@ mod tests {
             .create_session(CreateSessionRequest {
                 name: Some("other".into()),
                 description: None,
+                ..Default::default()
             })
             .await
             .unwrap();
