@@ -567,7 +567,6 @@ impl ProxyCrabManager for MitmManager {
                 description: request.description,
                 view: request.view,
                 interceptors: request.interceptors,
-                active: request.active,
             })
             .map_err(map_error)
     }

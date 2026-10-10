@@ -190,13 +190,6 @@ impl Workspace {
             .read()
             .map_err(|_| anyhow!("workspace archived sessions lock poisoned"))?;
         let session = self.create_session_locked(&sessions, &archived_sessions, &params)?;
-        if params.active == Some(true)
-            && let Err(error) =
-                self.update_config(|config| config.active_session_id = Some(session.id))
-        {
-            let _ = fs::remove_dir_all(self.session_dir(session.id));
-            return Err(error);
-        }
         sessions.push(session.clone());
         Ok(session)
     }
@@ -606,10 +599,10 @@ mod tests {
         let session = workspace
             .create_session(NewSession {
                 name: Some("capture".into()),
-                active: Some(true),
                 ..Default::default()
             })
             .unwrap();
+        workspace.replace_active_session(Some(session.id)).unwrap();
 
         assert_eq!(workspace.active_session_id(), Some(session.id));
         assert!(
@@ -697,7 +690,7 @@ mod tests {
     }
 
     #[test]
-    fn new_session_accepts_initial_view_interceptors_and_active_flag() {
+    fn new_session_accepts_initial_view_and_interceptors() {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
         let view = SessionView {
@@ -718,7 +711,6 @@ mod tests {
             .create_session(NewSession {
                 view: Some(view.clone()),
                 interceptors: Some(interceptors.clone()),
-                active: Some(true),
                 ..Default::default()
             })
             .unwrap();
@@ -728,29 +720,26 @@ mod tests {
             workspace.session_interceptors(session.id).unwrap(),
             interceptors
         );
-        assert_eq!(workspace.active_session_id(), Some(session.id));
+        // 创建不再携带活跃语义：激活必须显式调用 replace_active_session。
+        assert_eq!(workspace.active_session_id(), None);
     }
 
     #[test]
-    fn new_session_is_not_active_unless_requested() {
+    fn creating_a_session_never_changes_the_active_session() {
         let root = tempdir().unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
         workspace.create_session(NewSession::default()).unwrap();
         assert_eq!(workspace.active_session_id(), None);
-        workspace
+        let second = workspace
             .create_session(NewSession {
-                active: Some(false),
+                name: Some("second".into()),
                 ..Default::default()
             })
             .unwrap();
         assert_eq!(workspace.active_session_id(), None);
-        let third = workspace
-            .create_session(NewSession {
-                active: Some(true),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(workspace.active_session_id(), Some(third.id));
+
+        workspace.replace_active_session(Some(second.id)).unwrap();
+        assert_eq!(workspace.active_session_id(), Some(second.id));
     }
 
     #[test]
@@ -760,10 +749,10 @@ mod tests {
         let first = workspace
             .create_session(NewSession {
                 name: Some("first".into()),
-                active: Some(true),
                 ..Default::default()
             })
             .unwrap();
+        workspace.replace_active_session(Some(first.id)).unwrap();
         let second = workspace
             .create_session(NewSession {
                 name: Some("second".into()),

@@ -11,7 +11,7 @@ import {
 import { useBackend } from "../api";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
 import type { InterceptorKind, SessionInterceptorItem } from "../api/types";
-import { reportError } from "../stores/app";
+import { appStore, reportError } from "../stores/app";
 import { openContextMenu } from "../stores/dialog";
 import { interceptorsStore } from "../stores/interceptors";
 import { sessionsStore } from "../stores/sessions";
@@ -19,6 +19,7 @@ import { breakpointsStore } from "../stores/breakpoints";
 import { openBreakpointList, openScriptEditor } from "../windows/launcher";
 import AppTooltip from "./AppTooltip.vue";
 import InterceptorPicker from "./InterceptorPicker.vue";
+import { GiBroom } from "vue-icons-plus/gi";
 
 const backend = useBackend();
 
@@ -34,6 +35,26 @@ const dragTarget = ref<{ kind: InterceptorKind; index: number } | null>(null);
 
 const requestItems = computed(() => interceptorsStore.request);
 const responseItems = computed(() => interceptorsStore.response);
+/** 清扫只在“当前查看的会话就是活跃会话”时可用。 */
+const canSweep = computed(
+  () =>
+    sessionsStore.viewingSessionId !== null &&
+    sessionsStore.viewingSessionId === sessionsStore.activeSessionId,
+);
+const sweeping = ref(false);
+
+async function sweepSession(): Promise<void> {
+  if (sweeping.value) return;
+  sweeping.value = true;
+  try {
+    const created = await sessionsStore.sweep();
+    if (created) {
+      appStore.toast(`已新建会话「${created.name}」并归档原会话`, "success");
+    }
+  } finally {
+    sweeping.value = false;
+  }
+}
 
 function entries(kind: InterceptorKind): SessionInterceptorItem[] {
   return kind === "request" ? requestItems.value : responseItems.value;
@@ -350,6 +371,22 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <AppTooltip
+      v-if="canSweep"
+      title="清扫会话"
+      detail="新建配置一致的活跃会话，原会话转入已归档"
+    >
+      <button
+        class="pipeline-sweep"
+        type="button"
+        :disabled="sweeping"
+        aria-label="清扫会话"
+        @click="sweepSession"
+      >
+        <GiBroom :size="16" />
+      </button>
+    </AppTooltip>
+
     <InterceptorPicker
       :visible="picker.visible"
       :kind="picker.kind"
@@ -394,6 +431,29 @@ onBeforeUnmount(() => {
 }
 .pipeline-track.saving {
   opacity: 0.72;
+}
+.pipeline-sweep {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin-left: 4px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.pipeline-sweep:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+.pipeline-sweep:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 .pipeline-endpoint,
 .pipeline-node,

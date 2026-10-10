@@ -170,7 +170,6 @@ pub struct NewSession {
     pub description: Option<String>,
     pub view: Option<SessionView>,
     pub interceptors: Option<SessionInterceptors>,
-    pub active: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

@@ -110,7 +110,7 @@ skill directory.
    ```
 
 2. If the active AGENTS.md instructions permit it and it is needed, create a dedicated Session and
-   make it active in one call:
+   make it active:
 
    ```bash
    node <skill-dir>/scripts/session-create.mjs \
@@ -119,7 +119,10 @@ skill directory.
      --active true
    ```
 
-   An existing Session can also be made active with `PUT {"session_id":3}` to `/api/active-session`.
+   Creation never changes the active Session; `--active true` follows it with `PUT /api/active-session`,
+   which closes every established proxy connection, CONNECT tunnel, Upgrade/WebSocket, and upstream
+   pooled connection before returning. An existing Session can also be made active with
+   `PUT {"session_id":3}` to `/api/active-session`.
 
 3. Narrow the candidate set before reading full details. Only one ProxyCrab filter option can be
    active at a time:

@@ -1,6 +1,7 @@
 import { reactive } from "vue";
 import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { SessionMetadata } from "../api/types";
+import { sweepCreateRequest } from "../utils/session-sweep";
 import { reportError } from "./app";
 
 export const sessionsStore = reactive({
@@ -76,11 +77,9 @@ export const sessionsStore = reactive({
 
   async create(name: string, description: string | null): Promise<SessionMetadata | null> {
     try {
-      const session = await backend.createSession({
-        name: name || null,
-        description,
-        active: this.sessions.length === 0,
-      });
+      const session = await backend.createSession({ name: name || null, description });
+      // 创建不含活跃语义：首个会话需要额外切换一次活跃身份。
+      if (this.sessions.length === 0) await this.replaceActive(session.id);
       await this.refresh();
       return session;
     } catch (error) {
@@ -141,6 +140,39 @@ export const sessionsStore = reactive({
     } catch (error) {
       reportError(error, "删除已归档会话失败");
       return false;
+    }
+  },
+
+  /**
+   * 清扫当前活跃会话：新建一个配置一致的新会话，切换为新活跃会话（只有这一步会断开
+   * 原会话的连接与在途请求），再把原会话归档。返回新会话；任一步失败返回 null 并已上报错误。
+   */
+  async sweep(): Promise<SessionMetadata | null> {
+    const id = this.viewingSessionId;
+    if (id === null || this.activeSessionId !== id) return null;
+    const current = this.sessions.find((session) => session.id === id);
+    if (current === undefined) return null;
+    try {
+      const [view, chains] = await Promise.all([
+        backend.getSessionView(id),
+        backend.getSessionInterceptors(id),
+      ]);
+      const created = await backend.createSession(sweepCreateRequest(current, view, chains));
+      await this.refresh();
+      if (!(await this.replaceActive(created.id))) return null;
+      this.view(created.id);
+      try {
+        await backend.archiveSession(id);
+      } catch (error) {
+        reportError(error, "新会话已启用，但原会话归档失败，请在侧边栏手动归档");
+        return null;
+      }
+      await this.refresh();
+      return created;
+    } catch (error) {
+      reportError(error, "清扫会话失败");
+      await this.refresh();
+      return null;
     }
   },
 

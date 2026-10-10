@@ -1117,10 +1117,10 @@ mod tests {
         let session = runtime
             .create_session(NewSession {
                 name: Some("one".into()),
-                active: Some(true),
                 ..Default::default()
             })
             .unwrap();
+        runtime.replace_active_session(Some(session.id)).await.unwrap();
         let mut config = runtime.config();
 
         config.active_session_id = Some(u64::MAX);

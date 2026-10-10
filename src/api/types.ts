@@ -279,7 +279,6 @@ export interface CreateSessionRequest {
     request?: Array<{ name: string; enabled: boolean }>;
     response?: Array<{ name: string; enabled: boolean }>;
   } | null;
-  active?: boolean | null;
 }
 
 export interface UpdateSessionRequest {

@@ -2365,10 +2365,10 @@ mod tests {
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime
             .create_session(NewSession {
-                active: Some(true),
                 ..Default::default()
             })
             .unwrap();
+        runtime.replace_active_session(Some(session.id)).await.unwrap();
         let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let request = RequestData {
             method: "GET".into(),
@@ -2706,10 +2706,10 @@ mod tests {
         let session = runtime
             .create_session(NewSession {
                 name: Some("capture".into()),
-                active: Some(true),
                 ..Default::default()
             })
             .unwrap();
+        runtime.replace_active_session(Some(session.id)).await.unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
 
         let response = app
@@ -2755,7 +2755,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_session_accepts_initial_view_interceptors_and_active_flag() {
+    async fn create_session_accepts_initial_view_and_interceptors() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
@@ -2768,8 +2768,7 @@ mod tests {
             "interceptors": {
                 "request": [{"name": "rewrite", "enabled": true}],
                 "response": []
-            },
-            "active": true
+            }
         }"#;
 
         let response = app
@@ -2819,6 +2818,36 @@ mod tests {
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["data"]["request"][0]["name"], "rewrite");
 
+        // 创建不改变活跃会话。
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/active-session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"]["session_id"], Value::Null);
+
+        // 需要活跃会话时显式切换。
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::PUT)
+                    .uri("/api/active-session")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"session_id":{session_id}}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
         let response = app
             .oneshot(
                 Request::builder()
@@ -2840,10 +2869,10 @@ mod tests {
         let active = runtime
             .create_session(NewSession {
                 name: Some("active".into()),
-                active: Some(true),
                 ..Default::default()
             })
             .unwrap();
+        runtime.replace_active_session(Some(active.id)).await.unwrap();
         let archived = runtime
             .create_session(NewSession {
                 name: Some("archive-me".into()),
@@ -3042,10 +3071,10 @@ mod tests {
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime
             .create_session(NewSession {
-                active: Some(true),
                 ..Default::default()
             })
             .unwrap();
+        runtime.replace_active_session(Some(session.id)).await.unwrap();
         let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
         let app = router_with_changes(MitmManager::new(runtime), allow_all(), changes);
         let filter_body = r#"{"option":{"kind":"column","column":{"kind":"uri"},"regex":false},"input":"example"}"#;
@@ -3116,10 +3145,10 @@ mod tests {
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let session = runtime
             .create_session(NewSession {
-                active: Some(true),
                 ..Default::default()
             })
             .unwrap();
+        runtime.replace_active_session(Some(session.id)).await.unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
         let filter_uri = format!("/api/sessions/{}/filter", session.id);
 

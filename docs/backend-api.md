@@ -590,9 +590,9 @@ reference it. Script names cannot be changed.
 
 New Sessions default to the fixed built-in method, URI, status-code, and source columns plus an
 empty filter. `POST /api/sessions` also accepts optional `view` (same shape as the Session view:
-`columns` plus `filter`), `interceptors` (Session interceptor chains preset by name, without
-validating that the referenced interceptors exist), and `active`. `active: true` makes the new
-Session the active one; when omitted or `false`, creation never changes the active Session.
+`columns` plus `filter`) and `interceptors` (Session interceptor chains preset by name, without
+validating that the referenced interceptors exist). Creation never changes the active Session: an
+inactive Session captures nothing, so make the new Session active with `PUT /api/active-session`.
 
 Inactive Sessions can be archived while the proxy runs with
 `POST /api/sessions/{id}/archive`. The whole directory moves to `sessions_archived/<id>`; archived

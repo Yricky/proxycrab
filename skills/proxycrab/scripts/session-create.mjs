@@ -39,16 +39,25 @@ Usage: node session-create.mjs [--name NAME] [--description TEXT] [--view JSON] 
 Create a ProxyCrab Session. ProxyCrab generates a name when --name is omitted.
 --view presets the Session view, e.g. '{"columns":[{"kind":"stage","width":91}],"filter":{"option":null,"input":"example"}}'.
 --interceptors presets the interceptor chains by name, e.g. '{"request":[{"name":"rewrite","enabled":true}],"response":[]}'.
---active true makes the new Session the active one; omitted or false leaves the active Session unchanged.
+--active true makes the new Session the active one with a second PUT /api/active-session call, which closes every established proxy connection, CONNECT tunnel, Upgrade/WebSocket, and upstream pooled connection before returning.
 `);
     return;
   }
-  const body = {
-    name: optionalString(args, "name") ?? null,
-    description: optionalString(args, "description") ?? null,
-    view: optionalJson(args, "view") ?? null,
-    interceptors: optionalJson(args, "interceptors") ?? null,
-    active: optionalBoolean(args, "active") ?? null,
-  };
-  printJson(await apiRequest(args, "/api/sessions", { method: "POST", body }));
+  const session = await apiRequest(args, "/api/sessions", {
+    method: "POST",
+    body: {
+      name: optionalString(args, "name") ?? null,
+      description: optionalString(args, "description") ?? null,
+      view: optionalJson(args, "view") ?? null,
+      interceptors: optionalJson(args, "interceptors") ?? null,
+    },
+  });
+  // 创建不含活跃语义：需要活跃会话时显式调用 PUT /api/active-session。
+  if (optionalBoolean(args, "active") === true) {
+    await apiRequest(args, "/api/active-session", {
+      method: "PUT",
+      body: { session_id: session.id },
+    });
+  }
+  printJson(session);
 });
