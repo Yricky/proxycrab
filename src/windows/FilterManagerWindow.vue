@@ -6,6 +6,7 @@ import ScriptLibraryManager, {
 } from "../components/ScriptLibraryManager.vue";
 
 const DEFAULT_SOURCE = "local input = ...\nreturn false\n";
+const props = defineProps<{ sessionId?: number | null }>();
 const backend = useBackend();
 
 const config: ScriptLibraryConfig = {
@@ -22,9 +23,9 @@ const config: ScriptLibraryConfig = {
     `确定删除过滤脚本「${scriptTitle(script)}」吗？引用它的会话会清除过滤。该操作不可撤销。`,
   debug: {
     mode: "log-id-input",
-    run: async ({ name, sessionId, logId, input }) => {
+    run: async ({ name, logId, input }) => {
       const result = await backend.debugFilterScript(name, {
-        session_id: sessionId,
+        session_id: props.sessionId ?? null,
         log_id: logId,
         input,
       });
@@ -42,5 +43,5 @@ const config: ScriptLibraryConfig = {
 </script>
 
 <template>
-  <ScriptLibraryManager :config="config" />
+  <ScriptLibraryManager :config="config" :session-id="props.sessionId ?? null" />
 </template>

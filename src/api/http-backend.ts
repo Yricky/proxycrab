@@ -131,6 +131,7 @@ export function createHttpBackend(
       approvals: false,
       permissionModes: ["allow", "deny"],
       readonly: false,
+      filterPersistence: true,
     },
     fetchBody: (target, side, maxSize) =>
       fetchBodyFromBase(baseUrl, target, side, maxSize, authorization(token)),

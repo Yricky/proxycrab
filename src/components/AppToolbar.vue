@@ -52,6 +52,7 @@ import { BsFillSendFill } from "vue-icons-plus/bs";
 
 type ToolbarMenu = "ai" | "scripts" | "tools" | "system";
 
+const props = defineProps<{ sessionId: number | null }>();
 const backend = useBackend();
 
 const aiTooltipTitle = computed(() => {
@@ -254,11 +255,17 @@ onBeforeUnmount(() => {
             <Io5ArrowUp :size="14" />
             <span>响应拦截器</span>
           </button>
-          <button class="tb-menu-item" @click="runMenuAction(openColumnManager)">
+          <button
+            class="tb-menu-item"
+            @click="runMenuAction(() => openColumnManager(undefined, props.sessionId))"
+          >
             <Io5List :size="14" />
             <span>自定义列</span>
           </button>
-          <button class="tb-menu-item" @click="runMenuAction(openFilterManager)">
+          <button
+            class="tb-menu-item"
+            @click="runMenuAction(() => openFilterManager(props.sessionId))"
+          >
             <Io5CodeSlash :size="14" />
             <span>过滤脚本</span>
           </button>

@@ -1,13 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { Io5Add, Io5Play, Io5RadioButtonOn, Io5Save, Io5Trash } from "vue-icons-plus/io5";
 import type { HttpApiChange, HttpApiResource } from "../api/types";
 import MonacoEditor from "./MonacoEditor.vue";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
-import { logsStore } from "../stores/logs";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
-import { sessionsStore } from "../stores/sessions";
 import { windowsStore } from "../stores/windows";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
 
@@ -34,7 +32,6 @@ export interface ScriptLibraryDebugRun {
   emptyLabel?: string;
   run(ctx: {
     name: string;
-    sessionId: number;
     logId: number;
     input: string;
   }): Promise<{ result: string; failed: boolean }>;
@@ -63,10 +60,6 @@ export interface ScriptLibraryConfig {
   resources: HttpApiResource[];
   /** Custom window event dispatched after create/update/delete. */
   changeEvent?: string;
-  /** Also refresh the log table view after create/delete (column scripts). */
-  refreshLogsView?: boolean;
-  /** Clear the debug result when the active session changes. */
-  clearDebugOnSessionChange?: boolean;
   /** Active-selection support (routing rules). */
   selection?: ScriptLibrarySelection;
   /** Scope for the window-level focus-script event; only matching scope is handled. */
@@ -77,7 +70,12 @@ export interface ScriptLibraryConfig {
   api: ScriptLibraryApi;
 }
 
-const props = defineProps<{ config: ScriptLibraryConfig; initialName?: string }>();
+const props = defineProps<{
+  config: ScriptLibraryConfig;
+  initialName?: string;
+  /** 调试运行的目标会话：打开窗口时由调用方传入（静态值）。 */
+  sessionId?: number | null;
+}>();
 
 const config = props.config;
 
@@ -134,8 +132,10 @@ function clearDebugResult(): void {
 }
 
 async function loadScript(script: ScriptLibraryEntry | null): Promise<void> {
-  selectedName.value = script?.name ?? null;
-  clearDebugResult();
+  const name = script?.name ?? null;
+  // 只有真的切换了脚本才清空调试结果：保存后由变更事件触发的重载是同一个脚本。
+  if (name !== selectedName.value) clearDebugResult();
+  selectedName.value = name;
   if (!script) {
     content.value = "";
     dirty.value = false;
@@ -253,7 +253,7 @@ async function save(): Promise<void> {
 
 async function saveAndRun(): Promise<void> {
   if (debugging.value || !config.debug) return;
-  const sessionId = sessionsStore.viewingSessionId;
+  const sessionId = props.sessionId ?? null;
   if (sessionId === null) {
     debugResult.value = "请先选择会话";
     debugFailed.value = true;
@@ -280,7 +280,6 @@ async function saveAndRun(): Promise<void> {
   try {
     const out = await config.debug.run({
       name,
-      sessionId,
       logId,
       input: debugInput.value,
     });
@@ -320,7 +319,6 @@ async function createScript(): Promise<void> {
     newName.value = "";
     await refreshScripts(name);
     notifyChanged();
-    if (config.refreshLogsView) await logsStore.refreshView();
   } catch (error) {
     reportError(error, `创建${config.sidebarTitle}失败`);
   }
@@ -339,7 +337,6 @@ async function removeScript(script: ScriptLibraryEntry): Promise<void> {
     scripts.value = scripts.value.filter((item) => item.name !== script.name);
     if (selectedName.value === script.name) void loadScript(scripts.value[0] ?? null);
     notifyChanged();
-    if (config.refreshLogsView) await logsStore.refreshView();
   } catch (error) {
     reportError(error, `删除${config.sidebarTitle}失败`);
   }
@@ -367,13 +364,6 @@ async function onFocusScript(event: Event): Promise<void> {
     if (await confirmDiscard()) await refreshScripts(detail.name);
   }
 }
-
-watch(
-  () => sessionsStore.viewingSessionId,
-  () => {
-    if (config.clearDebugOnSessionChange) clearDebugResult();
-  },
-);
 
 onMounted(() => {
   windowsStore.registerCloseGuard(config.windowId, confirmDiscard);

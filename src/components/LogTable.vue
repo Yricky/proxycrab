@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from "vue";
 import { useBackend } from "../api";
-import { logsStore } from "../stores/logs";
-import { sessionsStore } from "../stores/sessions";
+import type { LogsStore } from "../stores/logs";
 import { proxyStore } from "../stores/proxy";
 import { appStore, reportError } from "../stores/app";
 import { openContextMenu, openMenuAt, confirmDialog, type MenuItem } from "../stores/dialog";
@@ -31,6 +30,10 @@ import {
   Io5OpenOutline,
   Io5Trash,
 } from "vue-icons-plus/io5";
+
+const props = defineProps<{ logs: LogsStore }>();
+// 实例由宿主组件（AppMain / AppReadonly）持有；同一实例贯穿本组件生命周期。
+const logsStore = props.logs;
 
 const backend = useBackend();
 const readonly = backend.capabilities.readonly;
@@ -163,7 +166,7 @@ function toggleSort(): void {
 }
 
 function openRow(id: number): void {
-  const sessionId = sessionsStore.viewingSessionId;
+  const sessionId = logsStore.sessionId;
   if (sessionId === null) return;
   // 再次点击已选中行则关闭底部面板。
   if (panelLogId.value === id) {
@@ -200,7 +203,7 @@ function openPanel(sessionId: number, id: number): void {
 
 /** 分享链接定位：滚动到目标行（尽量居中）并打开底部详情面板。 */
 function focusLog(id: number): boolean {
-  const sessionId = sessionsStore.viewingSessionId;
+  const sessionId = logsStore.sessionId;
   if (sessionId === null) return false;
   const index = rowIds.value.indexOf(id);
   if (index < 0) return false;
@@ -218,7 +221,7 @@ function openPanelInWindow(): void {
   closePanel();
 }
 
-watch(() => sessionsStore.viewingSessionId, closePanel);
+watch(() => logsStore.sessionId, closePanel);
 
 function maxPanelHeight(): number {
   const container = wrap.value?.clientHeight ?? 0;
@@ -286,7 +289,7 @@ async function copyFocusedShareLink(id: number): Promise<void> {
     }
     return;
   }
-  const sessionId = sessionsStore.viewingSessionId;
+  const sessionId = logsStore.sessionId;
   if (sessionId === null) return;
   try {
     const [current, status, addresses] = await Promise.all([
@@ -409,7 +412,7 @@ async function updateColumns(
   update: (columns: Column[]) => Column[],
   errorMessage: string,
 ): Promise<void> {
-  const sessionId = sessionsStore.viewingSessionId;
+  const sessionId = logsStore.sessionId;
   if (sessionId === null) return;
   try {
     const view = await backend.getSessionView(sessionId);
@@ -434,7 +437,7 @@ async function showColumnMenu(index: number, x: number, y: number): Promise<void
     ...(column?.kind === "script" ? [{
       label: "编辑脚本",
       icon: Io5Create,
-      action: () => openColumnManager(column.script_name),
+      action: () => openColumnManager(column.script_name, logsStore.sessionId),
     }] : []),
     {
       label: "移除列",
@@ -512,7 +515,7 @@ function startResize(index: number, event: PointerEvent): void {
 }
 
 async function persistWidth(payloadIndex: number, width: number): Promise<void> {
-  const sessionId = sessionsStore.viewingSessionId;
+  const sessionId = logsStore.sessionId;
   if (sessionId === null) return;
   const column = columns.value[payloadIndex];
   if (!column) return;
@@ -549,7 +552,7 @@ function displayCellValue(row: LogViewRow, index: number): string {
 }
 
 function outcomeDotClass(row: LogViewRow): string {
-  const active = proxyStore.isNetlogActive(sessionsStore.viewingSessionId, row.id);
+  const active = proxyStore.isNetlogActive(logsStore.sessionId, row.id);
   if (isInactiveInProgress(row.outcome, active)) return "stale";
   if (active) return "active";
   if (row.outcome === "failed") return "failed";
@@ -785,7 +788,7 @@ function resetFollowState(): void {
 
 watch(
   [
-    () => sessionsStore.viewingSessionId,
+    () => logsStore.sessionId,
     () => JSON.stringify(logsStore.appliedFilter),
   ],
   resetFollowState,
@@ -1002,7 +1005,7 @@ function drawHeader(ctx: CanvasRenderingContext2D, colors: Palette): void {
       hoverHit.value?.type === "header-add",
       "add",
       false,
-      sessionsStore.viewingSessionId === null,
+      logsStore.sessionId === null,
     );
   }
 
@@ -1159,7 +1162,7 @@ function drawRows(ctx: CanvasRenderingContext2D, colors: Palette): void {
 
   if (!logsStore.loading && rowIds.value.length === 0) {
     const message =
-      sessionsStore.viewingSessionId === null
+      logsStore.sessionId === null
         ? "请选择或创建一个会话"
         : logsStore.filterActive
           ? "没有匹配过滤条件的记录"
@@ -1368,7 +1371,7 @@ function hitCursor(hit: HitTarget | null): string {
     return "pointer";
   }
   if (hit.type === "header-add") {
-    return sessionsStore.viewingSessionId === null ? "default" : "pointer";
+    return logsStore.sessionId === null ? "default" : "pointer";
   }
   return "default";
 }
@@ -1549,7 +1552,7 @@ function onCanvasClick(event: MouseEvent): void {
       (rect?.left ?? 0) + Math.max(0, x - scrollLeft.value),
       (rect?.top ?? 0) + HEADER_HEIGHT + 4,
     );
-  } else if (hit.type === "header-add" && sessionsStore.viewingSessionId !== null) {
+  } else if (hit.type === "header-add" && logsStore.sessionId !== null) {
     const rect = canvas.value?.getBoundingClientRect();
     void showAddColumnMenu(
       (rect?.left ?? 0) + Math.max(0, totalWidth.value - ADD_COLUMN_WIDTH - scrollLeft.value),
@@ -1616,7 +1619,7 @@ watchEffect(() => {
     for (let columnIndex = 0; columnIndex < columns.value.length; columnIndex += 1) {
       void logsStore.cellError(id, columnIndex);
     }
-    void proxyStore.isNetlogActive(sessionsStore.viewingSessionId, id);
+    void proxyStore.isNetlogActive(logsStore.sessionId, id);
   }
   void appStore.theme;
   void logsStore.loading;

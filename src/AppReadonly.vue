@@ -9,20 +9,24 @@ import ContextMenu from "./components/ContextMenu.vue";
 import { windowsStore } from "./stores/windows";
 import { sessionsStore } from "./stores/sessions";
 import { proxyStore } from "./stores/proxy";
-import { logsStore } from "./stores/logs";
+import { createLogsStore } from "./stores/logs";
 import { startHttpApiSync, stopHttpApiSync } from "./stores/http-api-sync";
+import { useBackend } from "./api";
 
 const props = defineProps<{ focusLogId?: number }>();
+const backend = useBackend();
 
+// 只读分享页同样自持一份日志视图（会话来自分享 bootstrap）。
+const logs = createLogsStore();
 const logTable = ref<InstanceType<typeof LogTable> | null>(null);
 
 // 分享链接带 id 参数时，等日志加载出目标记录后聚焦一次（滚动 + 打开底部详情）。
 // 找不到（id 非法 / 不存在 / 被过滤隐藏）则静默忽略。
 let focused = false;
 watch(
-  [logTable, () => logsStore.loading, () => logsStore.sortedIds.length],
+  [logTable, () => logs.loading, () => logs.sortedIds.length],
   () => {
-    if (focused || props.focusLogId === undefined || logsStore.loading) return;
+    if (focused || props.focusLogId === undefined || logs.loading) return;
     if (logTable.value?.focusLog(props.focusLogId)) focused = true;
   },
   { immediate: true },
@@ -31,11 +35,11 @@ watch(
 // 只读分享页只展示单个 Session 的日志，无断点/审批能力；日志 store 会根据
 // 活跃/待复算状态动态降频或停止轮询。
 function syncCapturePolling(): void {
-  const canPoll = proxyStore.running && sessionsStore.viewingSessionId !== null;
+  const canPoll = proxyStore.running && logs.sessionId !== null;
   if (canPoll) {
-    logsStore.startPolling();
+    logs.startPolling();
   } else {
-    logsStore.stopPolling();
+    logs.stopPolling();
   }
 }
 
@@ -43,7 +47,7 @@ watch(
   [
     () => proxyStore.running,
     () => sessionsStore.activeSessionId,
-    () => sessionsStore.viewingSessionId,
+    () => logs.sessionId,
   ],
   () => {
     syncCapturePolling();
@@ -53,6 +57,7 @@ watch(
 onMounted(async () => {
   await startHttpApiSync();
   await sessionsStore.init();
+  logs.view(sessionsStore.sessions[0]?.id ?? null);
   // 确保启动时状态已刷新，避免 syncCapturePolling 拿到过期的 stopped 状态。
   await proxyStore.refresh();
   syncCapturePolling();
@@ -60,7 +65,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   proxyStore.dispose();
-  logsStore.stopPolling();
+  logs.dispose();
   stopHttpApiSync();
 });
 </script>
@@ -70,9 +75,14 @@ onBeforeUnmount(() => {
     <div class="app-main">
       <section class="app-content">
         <div class="traffic-controls">
-          <FilterBar />
+          <FilterBar
+            :filter="logs.appliedFilter"
+            :session-id="logs.sessionId"
+            :syncing="backend.capabilities.filterPersistence"
+            :apply-filter="(filter) => logs.applyFilter(filter)"
+          />
         </div>
-        <LogTable ref="logTable" />
+        <LogTable ref="logTable" :logs="logs" />
       </section>
     </div>
 

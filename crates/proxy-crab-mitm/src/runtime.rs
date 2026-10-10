@@ -1120,7 +1120,10 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        runtime.replace_active_session(Some(session.id)).await.unwrap();
+        runtime
+            .replace_active_session(Some(session.id))
+            .await
+            .unwrap();
         let mut config = runtime.config();
 
         config.active_session_id = Some(u64::MAX);

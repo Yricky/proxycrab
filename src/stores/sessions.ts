@@ -7,8 +7,6 @@ import { reportError } from "./app";
 export const sessionsStore = reactive({
   sessions: [] as SessionMetadata[],
   archivedSessions: [] as SessionMetadata[],
-  /** The session whose logs are shown in the main table. */
-  viewingSessionId: null as number | null,
   activeSessionId: null as number | null,
   loading: false,
 
@@ -22,12 +20,6 @@ export const sessionsStore = reactive({
       this.sessions = sessions;
       this.archivedSessions = archivedSessions;
       this.activeSessionId = active.session_id;
-      if (
-        this.viewingSessionId !== null &&
-        !this.sessions.some((s) => s.id === this.viewingSessionId)
-      ) {
-        this.viewingSessionId = this.sessions[0]?.id ?? null;
-      }
     } catch (error) {
       reportError(error, "获取会话列表失败");
     }
@@ -44,9 +36,6 @@ export const sessionsStore = reactive({
       this.sessions = sessions;
       this.archivedSessions = archivedSessions;
       this.activeSessionId = active.session_id;
-      // 默认查看活跃会话；活跃会话不存在时回退到第一个会话
-      const activeSession = sessions.find((s) => s.id === active.session_id);
-      this.viewingSessionId = activeSession?.id ?? sessions[0]?.id ?? null;
     } catch (error) {
       reportError(error, "初始化会话失败");
     } finally {
@@ -64,12 +53,6 @@ export const sessionsStore = reactive({
       this.sessions = sessions;
       this.archivedSessions = archivedSessions;
       this.activeSessionId = active.session_id;
-      if (
-        this.viewingSessionId === null ||
-        !sessions.some((session) => session.id === this.viewingSessionId)
-      ) {
-        this.viewingSessionId = sessions[0]?.id ?? null;
-      }
     } catch (error) {
       reportError(error, "同步会话状态失败");
     }
@@ -109,11 +92,7 @@ export const sessionsStore = reactive({
   async archive(id: number): Promise<boolean> {
     try {
       await backend.archiveSession(id);
-      if (this.viewingSessionId === id) this.viewingSessionId = null;
       await this.refresh();
-      if (this.viewingSessionId === null) {
-        this.viewingSessionId = this.sessions[0]?.id ?? null;
-      }
       return true;
     } catch (error) {
       reportError(error, "归档会话失败");
@@ -147,8 +126,8 @@ export const sessionsStore = reactive({
    * 清扫当前活跃会话：新建一个配置一致的新会话，切换为新活跃会话（只有这一步会断开
    * 原会话的连接与在途请求），再把原会话归档。返回新会话；任一步失败返回 null 并已上报错误。
    */
-  async sweep(): Promise<SessionMetadata | null> {
-    const id = this.viewingSessionId;
+  async sweep(sessionId: number | null): Promise<SessionMetadata | null> {
+    const id = sessionId;
     if (id === null || this.activeSessionId !== id) return null;
     const current = this.sessions.find((session) => session.id === id);
     if (current === undefined) return null;
@@ -160,7 +139,6 @@ export const sessionsStore = reactive({
       const created = await backend.createSession(sweepCreateRequest(current, view, chains));
       await this.refresh();
       if (!(await this.replaceActive(created.id))) return null;
-      this.view(created.id);
       try {
         await backend.archiveSession(id);
       } catch (error) {
@@ -185,9 +163,5 @@ export const sessionsStore = reactive({
       reportError(error, "切换活跃会话失败");
       return false;
     }
-  },
-
-  view(id: number): void {
-    this.viewingSessionId = id;
   },
 });

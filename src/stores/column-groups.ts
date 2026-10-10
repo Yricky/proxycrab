@@ -14,7 +14,6 @@ import {
   type ColumnGroupSort,
 } from "../utils/column-groups";
 import { reportError } from "./app";
-import { logsStore } from "./logs";
 import { proxyStore } from "./proxy";
 
 const ID_PAGE_SIZE = 10_000;
@@ -46,6 +45,8 @@ export interface ColumnGroupCache {
   descending: boolean;
   expanded: Set<string>;
   loading: boolean;
+  /** 打开分组弹层时主过滤是否生效：决定轮询间隔。 */
+  filterActive: boolean;
 }
 
 export const columnGroupsState = reactive({
@@ -123,6 +124,7 @@ export function getColumnGroupCache(
     descending: true,
     expanded: new Set(),
     loading: false,
+    filterActive: false,
   };
   columnGroupsState.caches.set(key, cache);
   return columnGroupsState.caches.get(key)!;
@@ -311,7 +313,7 @@ function schedulePoll(backend: Backend, cache: ColumnGroupCache, runId: number):
   if (!isActive(cache, runId)) return;
   pollTimer = window.setTimeout(
     () => void synchronize(backend, cache, runId, false),
-    logsStore.filterActive ? 2000 : 1000,
+    cache.filterActive ? 2000 : 1000,
   );
 }
 
@@ -343,9 +345,11 @@ export function openColumnGroups(
   backend: Backend,
   sessionId: number,
   column: FilterColumn,
+  filterActive: boolean,
 ): ColumnGroupCache {
   closeColumnGroups();
   const cache = getColumnGroupCache(sessionId, column);
+  cache.filterActive = filterActive;
   columnGroupsState.activeKey = cache.key;
   const runId = ++runSequence;
   void synchronize(backend, cache, runId, true);

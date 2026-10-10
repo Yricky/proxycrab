@@ -170,11 +170,14 @@ export function openResponseInterceptorManager(): void {
   });
 }
 
-export function openColumnManager(initialName?: string): void {
+export function openColumnManager(
+  initialName?: string,
+  sessionId: number | null = null,
+): void {
   windowsStore.open("column-manager", {
     title: "自定义列管理器",
     component: ColumnManagerWindow,
-    props: { initialName },
+    props: { initialName, sessionId },
     width: 960,
     height: 600,
   });
@@ -185,10 +188,11 @@ export function openColumnManager(initialName?: string): void {
   }
 }
 
-export function openFilterManager(): void {
+export function openFilterManager(sessionId: number | null = null): void {
   windowsStore.open("filter-manager", {
     title: "过滤脚本管理器",
     component: FilterManagerWindow,
+    props: { sessionId },
     width: 1000,
     height: 600,
   });

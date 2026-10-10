@@ -12,7 +12,7 @@ import ContextMenu from "./components/ContextMenu.vue";
 import { windowsStore } from "./stores/windows";
 import { sessionsStore } from "./stores/sessions";
 import { proxyStore } from "./stores/proxy";
-import { logsStore } from "./stores/logs";
+import { createLogsStore } from "./stores/logs";
 import { startHttpApiSync, stopHttpApiSync } from "./stores/http-api-sync";
 import { breakpointsStore } from "./stores/breakpoints";
 import { approvalsStore } from "./stores/approvals";
@@ -21,18 +21,25 @@ import { useBackend } from "./api";
 
 const backend = useBackend();
 
+// 主内容区的日志视图：只在这里创建，由 AppMain 持有并交给子组件；
+// "查看哪个会话" 就是 logs.sessionId（不再有全局 viewingSessionId）。
+const logs = createLogsStore();
+
 // 日志轮询由 store 根据当前 Session 的活跃/待复算状态动态降频或停止；
 // 断点轮询只对正在运行的活跃 Session 有意义。
 function syncCapturePolling(): void {
-  const canPollLogs = proxyStore.running && sessionsStore.viewingSessionId !== null;
+  const canPollLogs = proxyStore.running && logs.sessionId !== null;
   if (canPollLogs) {
-    logsStore.startPolling();
+    logs.startPolling();
   } else {
-    logsStore.stopPolling();
+    logs.stopPolling();
   }
   const canPollBreakpoints = canPollLogs && sessionsStore.activeSessionId !== null;
   if (canPollBreakpoints) {
-    breakpointsStore.startPolling();
+    breakpointsStore.startPolling({
+      sessionId: () => logs.sessionId,
+      hasActive: () => logs.hasActive,
+    });
   } else {
     breakpointsStore.stopPolling();
   }
@@ -42,11 +49,23 @@ watch(
   [
     () => proxyStore.running,
     () => sessionsStore.activeSessionId,
-    () => sessionsStore.viewingSessionId,
+    () => logs.sessionId,
   ],
   () => {
     syncCapturePolling();
   },
+);
+
+// 正在查看的会话失效（被归档/删除）时，回落到活跃会话，再不行取第一个。
+watch(
+  () => sessionsStore.sessions,
+  (sessions) => {
+    if (logs.sessionId !== null && sessions.some((s) => s.id === logs.sessionId)) return;
+    const fallback =
+      sessions.find((s) => s.id === sessionsStore.activeSessionId) ?? sessions[0];
+    logs.view(fallback?.id ?? null);
+  },
+  { deep: true },
 );
 
 onMounted(async () => {
@@ -55,6 +74,10 @@ onMounted(async () => {
   void skillStore.refresh();
   await proxyStore.init();
   await sessionsStore.init();
+  const initial = sessionsStore.sessions.find(
+    (session) => session.id === sessionsStore.activeSessionId,
+  );
+  logs.view(initial?.id ?? sessionsStore.sessions[0]?.id ?? null);
   // 确保启动时状态已刷新，避免 syncCapturePolling 拿到过期的 stopped 状态。
   await proxyStore.refresh();
   syncCapturePolling();
@@ -62,7 +85,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   proxyStore.dispose();
-  logsStore.stopPolling();
+  logs.dispose();
   breakpointsStore.stopPolling();
   stopHttpApiSync();
   if (backend.capabilities.approvals) approvalsStore.stop();
@@ -71,15 +94,20 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app-shell">
-    <AppToolbar />
+    <AppToolbar :session-id="logs.sessionId" />
     <div class="app-main">
-      <SessionSidebar />
+      <SessionSidebar :logs="logs" />
       <section class="app-content">
         <div class="traffic-controls">
-          <FilterBar />
-          <InterceptorPipeline />
+          <FilterBar
+            :filter="logs.appliedFilter"
+            :session-id="logs.sessionId"
+            :syncing="backend.capabilities.filterPersistence"
+            :apply-filter="(filter) => logs.applyFilter(filter)"
+          />
+          <InterceptorPipeline :logs="logs" />
         </div>
-        <LogTable />
+        <LogTable :logs="logs" />
       </section>
     </div>
 

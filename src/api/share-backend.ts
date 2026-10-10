@@ -96,6 +96,8 @@ export function createShareBackend(
       approvals: false,
       permissionModes: [],
       readonly: true,
+      // 分享页没有 replaceSessionFilter 能力：过滤只在本地生效。
+      filterPersistence: false,
     },
     host: undefined,
     fetchBody: (target, side, maxSize) => {

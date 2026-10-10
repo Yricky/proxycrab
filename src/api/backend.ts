@@ -68,6 +68,11 @@ export interface BackendCapabilities {
   approvals: boolean;
   permissionModes: Array<"allow" | "approval" | "deny">;
   readonly: boolean;
+  /**
+   * 能否把过滤条件写回 Session 配置。只有主应用主内容区的过滤行会同步到后端；
+   * 其余过滤面（分享页、picker 等）只把 Session 保存的过滤当初始状态。
+   */
+  filterPersistence: boolean;
 }
 
 export type Unsubscribe = () => void;

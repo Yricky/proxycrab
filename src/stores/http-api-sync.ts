@@ -2,8 +2,6 @@ import type { Unsubscribe } from "../api/backend";
 import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { HttpApiChange, HttpApiResource } from "../api/types";
 import { reportError } from "./app";
-import { interceptorsStore } from "./interceptors";
-import { logsStore } from "./logs";
 import { proxyStore } from "./proxy";
 import { sessionsStore } from "./sessions";
 import { routingStore } from "./routing";
@@ -47,25 +45,14 @@ function enqueue(change: HttpApiChange): void {
   }
 }
 
-function affectsSession(
-  batch: Map<HttpApiResource, Set<number | null>>,
-  resource: HttpApiResource,
-  sessionId: number | null,
-): boolean {
-  const scopes = batch.get(resource);
-  return (
-    scopes !== undefined &&
-    (scopes.has(null) || (sessionId !== null && scopes.has(sessionId)))
-  );
-}
-
 async function flush(): Promise<void> {
   flushTimer = undefined;
   const batch = new Map(pending);
   pending.clear();
   const resources = [...batch.keys()];
-  const viewingBefore = sessionsStore.viewingSessionId;
 
+  // 这里只处理全局资源；会话相关的刷新（日志、拦截器）由各自持有会话的
+  // store/组件监听下面的前端事件后自行判断。
   if (
     batch.has("sessions") ||
     batch.has("archived_sessions") ||
@@ -82,23 +69,6 @@ async function flush(): Promise<void> {
   }
   if (batch.has("bypass")) {
     await bypassStore.refresh();
-  }
-
-  const viewingSessionId = sessionsStore.viewingSessionId;
-  const viewingChanged = viewingBefore !== viewingSessionId;
-  if (
-    !viewingChanged &&
-    viewingSessionId !== null &&
-    affectsSession(batch, "session_view", viewingSessionId)
-  ) {
-    await logsStore.syncSessionView();
-  }
-  if (
-    viewingSessionId !== null &&
-    (affectsSession(batch, "session_interceptors", viewingSessionId) ||
-      batch.has("interceptors"))
-  ) {
-    await interceptorsStore.refresh(viewingSessionId);
   }
 
   const scopedIds = new Set<number>();

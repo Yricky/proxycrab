@@ -2368,7 +2368,10 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        runtime.replace_active_session(Some(session.id)).await.unwrap();
+        runtime
+            .replace_active_session(Some(session.id))
+            .await
+            .unwrap();
         let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
         let request = RequestData {
             method: "GET".into(),
@@ -2709,7 +2712,10 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        runtime.replace_active_session(Some(session.id)).await.unwrap();
+        runtime
+            .replace_active_session(Some(session.id))
+            .await
+            .unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
 
         let response = app
@@ -2872,7 +2878,10 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        runtime.replace_active_session(Some(active.id)).await.unwrap();
+        runtime
+            .replace_active_session(Some(active.id))
+            .await
+            .unwrap();
         let archived = runtime
             .create_session(NewSession {
                 name: Some("archive-me".into()),
@@ -3074,7 +3083,10 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        runtime.replace_active_session(Some(session.id)).await.unwrap();
+        runtime
+            .replace_active_session(Some(session.id))
+            .await
+            .unwrap();
         let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
         let app = router_with_changes(MitmManager::new(runtime), allow_all(), changes);
         let filter_body = r#"{"option":{"kind":"column","column":{"kind":"uri"},"regex":false},"input":"example"}"#;
@@ -3148,7 +3160,10 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        runtime.replace_active_session(Some(session.id)).await.unwrap();
+        runtime
+            .replace_active_session(Some(session.id))
+            .await
+            .unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
         let filter_uri = format!("/api/sessions/{}/filter", session.id);
 

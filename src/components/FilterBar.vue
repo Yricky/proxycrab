@@ -5,6 +5,7 @@ import {
   Io5Checkmark,
   Io5ChevronDown,
   Io5Close,
+  Io5CloudOfflineOutline,
   Io5CodeSlash,
   Io5Layers,
   Io5ReturnDownBack,
@@ -20,12 +21,7 @@ import type {
   SessionFilter,
 } from "../api/types";
 import { reportError } from "../stores/app";
-import {
-  cloneSessionFilter,
-  emptySessionFilter,
-  logsStore,
-} from "../stores/logs";
-import { sessionsStore } from "../stores/sessions";
+import { cloneSessionFilter, emptySessionFilter } from "../stores/logs";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { scriptLabel, scriptLabelFor, scriptTitle } from "../utils/script-label";
 import {
@@ -57,6 +53,20 @@ const BUILTIN_COLUMNS: BuiltinColumnChoice[] = [
 ];
 
 const backend = useBackend();
+/**
+ * 受控过滤行：过滤值的真源在调用方（主内容区是 logsStore，picker 是自己的局部状态）。
+ *
+ * `syncing` 表示这个过滤面是否把过滤同步到 Session 配置——只有主应用主内容区为 true。
+ * 为 false 的过滤面既不写回后端，也不接受后端过滤变更（后端值只当初始状态）。
+ */
+const props = defineProps<{
+  filter: SessionFilter;
+  sessionId: number | null;
+  syncing: boolean;
+  /** 应用过滤；返回 false 表示未生效，组件回滚草稿。 */
+  applyFilter: (filter: SessionFilter) => Promise<boolean>;
+}>();
+
 const root = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLInputElement | null>(null);
 const menuOpen = ref(false);
@@ -70,8 +80,11 @@ const regexError = ref<string | null>(null);
 const regexValidating = ref(false);
 let validationSequence = 0;
 
+const filterActive = computed(
+  () => props.filter.option !== null && props.filter.input.length > 0,
+);
 const dirty = computed(
-  () => JSON.stringify(draft.value) !== JSON.stringify(logsStore.appliedFilter),
+  () => JSON.stringify(draft.value) !== JSON.stringify(props.filter),
 );
 const selectedColumn = computed(() =>
   draft.value.option?.kind === "column" ? draft.value.option.column : null,
@@ -93,7 +106,7 @@ const placeholder = computed(() =>
       : "输入包含文本，回车应用",
 );
 const activeGroupCache = computed(() => {
-  const sessionId = sessionsStore.viewingSessionId;
+  const sessionId = props.sessionId;
   const column = selectedColumn.value;
   if (!groupOpen.value || sessionId === null || !column) return null;
   return getColumnGroupCache(sessionId, column);
@@ -114,7 +127,7 @@ const groupRows = computed(() => {
 });
 
 watch(
-  () => logsStore.appliedFilter,
+  () => props.filter,
   (filter) => {
     draft.value = cloneSessionFilter(filter);
     if (filter.option?.kind === "column") {
@@ -150,7 +163,7 @@ watch(
 );
 
 watch(
-  () => sessionsStore.viewingSessionId,
+  () => props.sessionId,
   () => closeGroupPopup(),
 );
 
@@ -173,9 +186,6 @@ async function refreshAfterScriptChange(): Promise<void> {
   if (reopenGroups) closeGroupPopup();
   invalidateScriptColumnGroups();
   await refreshScripts();
-  if (sessionsStore.viewingSessionId !== null) {
-    await logsStore.loadSession();
-  }
   if (reopenGroups && selectedColumn.value?.kind === "script") openGroupPopup();
 }
 
@@ -191,7 +201,7 @@ async function apply(): Promise<void> {
   }
   applying.value = true;
   try {
-    await logsStore.applyFilter(cloneSessionFilter(draft.value));
+    await props.applyFilter(cloneSessionFilter(draft.value));
   } finally {
     applying.value = false;
   }
@@ -199,11 +209,11 @@ async function apply(): Promise<void> {
 
 async function selectNone(): Promise<void> {
   menuOpen.value = false;
-  const previous = cloneSessionFilter(logsStore.appliedFilter);
+  const previous = cloneSessionFilter(props.filter);
   draft.value = emptySessionFilter();
   applying.value = true;
   try {
-    const applied = await logsStore.applyFilter(emptySessionFilter());
+    const applied = await props.applyFilter(emptySessionFilter());
     if (!applied) draft.value = previous;
   } finally {
     applying.value = false;
@@ -250,12 +260,12 @@ function toggleTargetMenu(): void {
 }
 
 function openGroupPopup(): void {
-  const sessionId = sessionsStore.viewingSessionId;
+  const sessionId = props.sessionId;
   const column = selectedColumn.value;
   if (sessionId === null || !column) return;
   menuOpen.value = false;
   groupOpen.value = true;
-  openColumnGroups(backend, sessionId, column);
+  openColumnGroups(backend, sessionId, column, filterActive.value);
 }
 
 function closeGroupPopup(): void {
@@ -281,7 +291,7 @@ async function selectGroup(row: ColumnGroupRow): Promise<void> {
   };
   applying.value = true;
   try {
-    await logsStore.applyFilter(cloneSessionFilter(draft.value));
+    await props.applyFilter(cloneSessionFilter(draft.value));
   } finally {
     applying.value = false;
   }
@@ -351,7 +361,7 @@ onBeforeUnmount(() => {
     class="filter-bar"
     :class="{
       empty: !draft.option,
-      applied: logsStore.filterActive && !dirty,
+      applied: filterActive && !dirty,
       dirty: dirty && draft.option,
     }"
   >
@@ -457,7 +467,7 @@ onBeforeUnmount(() => {
         class="btn icon fb-group-trigger"
         :class="{ active: groupOpen }"
         :aria-expanded="groupOpen"
-        :disabled="sessionsStore.viewingSessionId === null"
+        :disabled="sessionId === null"
         title="按当前列分组"
         @click="toggleGroupPopup"
       >
@@ -503,7 +513,7 @@ onBeforeUnmount(() => {
         v-model="draft.input"
         class="input fb-input mono"
         :class="{
-          active: logsStore.filterActive && !dirty,
+          active: filterActive && !dirty,
           dirty: dirty && draft.option,
           invalid: regexError,
         }"
@@ -522,6 +532,14 @@ onBeforeUnmount(() => {
         <Io5Close :size="13" />
       </button>
     </div>
+
+    <span
+      v-if="!syncing"
+      class="fb-local"
+      title="过滤条件只在本地生效，不写入会话配置；分享链接与下次打开不受影响"
+    >
+      <Io5CloudOfflineOutline :size="14" />
+    </span>
   </div>
 </template>
 
@@ -761,6 +779,15 @@ button.fb-group-trigger.active {
   right: 4px;
   top: 50%;
   transform: translateY(-50%);
+}
+/* 仅本地生效的过滤面（分享页、picker）在行尾标出，避免误以为已写回会话配置 */
+.fb-local {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px 0 4px;
+  align-self: stretch;
+  color: var(--text-faint);
 }
 @keyframes enter-pulse {
   0%,

@@ -10,16 +10,21 @@ import {
 } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
-import type { InterceptorKind, SessionInterceptorItem } from "../api/types";
+import type { HttpApiChange, InterceptorKind, SessionInterceptorItem } from "../api/types";
 import { appStore, reportError } from "../stores/app";
 import { openContextMenu } from "../stores/dialog";
 import { interceptorsStore } from "../stores/interceptors";
 import { sessionsStore } from "../stores/sessions";
 import { breakpointsStore } from "../stores/breakpoints";
+import type { LogsStore } from "../stores/logs";
+import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { openBreakpointList, openScriptEditor } from "../windows/launcher";
 import AppTooltip from "./AppTooltip.vue";
 import InterceptorPicker from "./InterceptorPicker.vue";
 import { GiBroom } from "vue-icons-plus/gi";
+
+const props = defineProps<{ logs: LogsStore }>();
+const logs = props.logs;
 
 const backend = useBackend();
 
@@ -37,9 +42,7 @@ const requestItems = computed(() => interceptorsStore.request);
 const responseItems = computed(() => interceptorsStore.response);
 /** 清扫只在“当前查看的会话就是活跃会话”时可用。 */
 const canSweep = computed(
-  () =>
-    sessionsStore.viewingSessionId !== null &&
-    sessionsStore.viewingSessionId === sessionsStore.activeSessionId,
+  () => logs.sessionId !== null && logs.sessionId === sessionsStore.activeSessionId,
 );
 const sweeping = ref(false);
 
@@ -47,8 +50,9 @@ async function sweepSession(): Promise<void> {
   if (sweeping.value) return;
   sweeping.value = true;
   try {
-    const created = await sessionsStore.sweep();
+    const created = await sessionsStore.sweep(logs.sessionId);
     if (created) {
+      logs.view(created.id);
       appStore.toast(`已新建会话「${created.name}」并归档原会话`, "success");
     }
   } finally {
@@ -83,7 +87,7 @@ function nodeInitial(name: string): string {
 }
 
 function nodeClick(kind: InterceptorKind, item: SessionInterceptorItem, index: number): void {
-  const sessionId = sessionsStore.viewingSessionId;
+  const sessionId = logs.sessionId;
   if (sessionId !== null && breakpointCount(kind, item.name) > 0) {
     openBreakpointList(sessionId, kind, item.name, scriptLabel(item));
     return;
@@ -119,7 +123,7 @@ async function recreate(kind: InterceptorKind, item: SessionInterceptorItem): Pr
   try {
     await backend.createInterceptor({ kind, name: item.name, content: "" });
     window.dispatchEvent(new CustomEvent("interceptors-changed"));
-    await interceptorsStore.refresh(sessionsStore.viewingSessionId);
+    await interceptorsStore.refresh(logs.sessionId);
     openScriptEditor(kind, item.name);
   } catch (error) {
     reportError(error, "重新创建拦截器失败");
@@ -188,29 +192,40 @@ function dragEnd(): void {
 }
 
 function refresh(): void {
-  void interceptorsStore.refresh(sessionsStore.viewingSessionId);
+  void interceptorsStore.refresh(logs.sessionId);
 }
 
-watch(
-  () => sessionsStore.viewingSessionId,
-  () => refresh(),
-  { immediate: true },
-);
+// 自己没有后端订阅：全局只有 http-api-sync 一条订阅，这里只挑自己关心的事件。
+function onHttpApiChange(event: Event): void {
+  const change = (event as CustomEvent<HttpApiChange>).detail;
+  if (change.session_id !== undefined && change.session_id !== logs.sessionId) return;
+  if (
+    change.resources.includes("all") ||
+    change.resources.includes("interceptors") ||
+    change.resources.includes("session_interceptors")
+  ) {
+    refresh();
+  }
+}
+
+watch(() => logs.sessionId, () => refresh(), { immediate: true });
 
 onMounted(() => {
   window.addEventListener("focus", refresh);
   window.addEventListener("interceptors-changed", refresh);
+  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("focus", refresh);
   window.removeEventListener("interceptors-changed", refresh);
+  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 </script>
 
 <template>
   <div class="pipeline-shell">
-    <div v-if="sessionsStore.viewingSessionId === null" class="pipeline-empty">
+    <div v-if="logs.sessionId === null" class="pipeline-empty">
       请选择或创建会话
     </div>
     <div v-else class="pipeline-scroll">

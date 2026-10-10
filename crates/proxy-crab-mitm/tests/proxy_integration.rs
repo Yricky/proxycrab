@@ -63,7 +63,10 @@ async fn create_active_session(runtime: &ProxyCrab, name: Option<&str>) -> Sessi
             ..Default::default()
         })
         .unwrap();
-    runtime.replace_active_session(Some(session.id)).await.unwrap();
+    runtime
+        .replace_active_session(Some(session.id))
+        .await
+        .unwrap();
     session
 }
 

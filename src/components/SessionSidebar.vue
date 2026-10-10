@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import type { LogsStore } from "../stores/logs";
 import { sessionsStore } from "../stores/sessions";
 import { routingStore } from "../stores/routing";
 import { scriptLabelFor } from "../utils/script-label";
@@ -24,6 +25,9 @@ import {
   Io5RadioButtonOn,
 } from "vue-icons-plus/io5";
 import { IoArrowForwardCircle } from "vue-icons-plus/io";
+
+const props = defineProps<{ logs: LogsStore }>();
+const logs = props.logs;
 
 const creating = ref(false);
 const editingId = ref<number | null>(null);
@@ -123,7 +127,7 @@ async function createSession(): Promise<void> {
   const session = await sessionsStore.create("", null);
   creating.value = false;
   if (!session) return;
-  sessionsStore.view(session.id);
+  logs.view(session.id);
   appStore.toast("会话已创建", "success");
 }
 
@@ -176,7 +180,7 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
   // currentTarget 仅在事件分发期间有效，需在打开菜单前捕获
   const anchor = event.currentTarget as HTMLElement;
   openContextMenu(event, [
-    { label: "查看", icon: Io5Eye, action: () => sessionsStore.view(session.id) },
+    { label: "查看", icon: Io5Eye, action: () => logs.view(session.id) },
     {
       label: "导出和分享",
       icon: Io5Link,
@@ -278,10 +282,10 @@ watch(sidebarWidth, updatePopupPos);
         v-for="session in sessionsStore.sessions"
         :key="session.id"
         :session="session"
-        :viewing="sessionsStore.viewingSessionId === session.id"
+        :viewing="logs.sessionId === session.id"
         :active="sessionsStore.activeSessionId === session.id"
         :active-connections="proxyStore.activeNetlogCount(session.id)"
-        @click="sessionsStore.view(session.id)"
+        @click="logs.view(session.id)"
         @contextmenu="sessionMenu($event, session)"
         @dblclick="onItemDblclick($event, session)"
       />

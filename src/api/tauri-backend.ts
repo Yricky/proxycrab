@@ -87,6 +87,7 @@ export function createTauriBackend(): Backend {
       approvals: true,
       permissionModes: ["allow", "approval", "deny"],
       readonly: false,
+      filterPersistence: true,
     },
     host: {
       skillManager: {
