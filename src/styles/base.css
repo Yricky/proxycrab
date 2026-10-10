@@ -206,6 +206,22 @@ body {
   color: var(--text-secondary);
 }
 
+/* 活跃连接数徽标（会话行、透明转发记录入口共用） */
+.activity-badge {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .mono {
   font-family: var(--font-mono);
   font-size: 12px;

@@ -5,8 +5,9 @@ import { routingStore } from "../stores/routing";
 import { scriptLabelFor } from "../utils/script-label";
 import { proxyStore } from "../stores/proxy";
 import { confirmDialog, openContextMenu } from "../stores/dialog";
-import { formatRelativeTime } from "../utils/format";
+import { formatActivityCount } from "../utils/format";
 import { appStore } from "../stores/app";
+import SessionListItem from "./SessionListItem.vue";
 import {
   openArchivedSessions,
   openBypass,
@@ -68,10 +69,6 @@ function onDocMouseDown(e: MouseEvent): void {
 
 function onWindowResize(): void {
   updatePopupPos();
-}
-
-function formatActivityCount(count: number): string {
-  return count > 99 ? "99+" : String(count);
 }
 
 /* ---- 侧边栏宽度拖拽调整 ---- */
@@ -277,45 +274,17 @@ watch(sidebarWidth, updatePopupPos);
     </div>
 
     <div class="sb-list" @scroll.passive="updatePopupPos">
-      <div
+      <SessionListItem
         v-for="session in sessionsStore.sessions"
         :key="session.id"
-        class="sb-item"
-        :class="{
-          viewing: sessionsStore.viewingSessionId === session.id,
-          active: sessionsStore.activeSessionId === session.id,
-        }"
+        :session="session"
+        :viewing="sessionsStore.viewingSessionId === session.id"
+        :active="sessionsStore.activeSessionId === session.id"
+        :active-connections="proxyStore.activeNetlogCount(session.id)"
         @click="sessionsStore.view(session.id)"
         @contextmenu="sessionMenu($event, session)"
         @dblclick="onItemDblclick($event, session)"
-      >
-        <div class="sb-item-top">
-          <span class="sb-name" :title="session.name">{{ session.name }}</span>
-          <span
-            v-if="sessionsStore.activeSessionId === session.id"
-            class="sb-active"
-            :title="
-              proxyStore.activeNetlogCount(session.id) > 0
-                ? `活跃会话，${proxyStore.activeNetlogCount(session.id)} 条活跃连接`
-                : '活跃会话'
-            "
-          >
-            <span
-              v-if="proxyStore.activeNetlogCount(session.id) > 0"
-              class="activity-badge session-activity-badge"
-            >
-              {{ formatActivityCount(proxyStore.activeNetlogCount(session.id)) }}
-            </span>
-            <Io5RadioButtonOn v-else :size="11" />活跃
-          </span>
-        </div>
-        <div class="sb-item-meta">
-          <span>{{ formatRelativeTime(session.created_at) }}</span>
-          <span v-if="session.description" class="sb-desc" :title="session.description">
-            {{ session.description }}
-          </span>
-        </div>
-      </div>
+      />
       <div v-if="!sessionsStore.loading && sessionsStore.sessions.length === 0" class="empty-hint">
         暂无会话，点击右上角 + 新建
       </div>
@@ -512,77 +481,6 @@ watch(sidebarWidth, updatePopupPos);
 .sb-archived:hover {
   background: var(--bg-hover);
   color: var(--text);
-}
-.sb-item {
-  padding: 7px 10px;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  margin-bottom: 2px;
-}
-.sb-item:hover {
-  background: var(--bg-hover);
-}
-.sb-item.viewing {
-  background: var(--bg-selected);
-}
-.sb-item.active .sb-name {
-  color: var(--accent);
-}
-.sb-item-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-.sb-name {
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sb-active {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  color: var(--accent);
-  font-size: 10px;
-}
-.activity-badge {
-  min-width: 15px;
-  height: 15px;
-  padding: 0 3px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--accent);
-  color: white;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-}
-.session-activity-badge {
-  min-width: 13px;
-  height: 13px;
-  padding: 0 2px;
-  font-size: 8px;
-}
-.sb-item-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  font-size: 11px;
-  color: var(--text-faint);
-  margin-top: 2px;
-}
-.sb-desc {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .sb-edit-popup .input {
   width: 100%;

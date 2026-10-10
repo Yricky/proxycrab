@@ -1,21 +1,21 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import {
   Io5ChevronDown,
   Io5OpenOutline,
   Io5Play,
-  Io5RadioButtonOn,
   Io5Warning,
 } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type { AssetMetadata, SessionMetadata } from "../api/types";
+import type { AssetMetadata } from "../api/types";
 import { proxyStore } from "../stores/proxy";
-import { openDropdownMenu } from "../stores/dialog";
+import { sessionsStore } from "../stores/sessions";
 import CustomSelect from "../components/CustomSelect.vue";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import EditableKvTable from "../components/EditableKvTable.vue";
 import UrlInput from "../components/UrlInput.vue";
 import AssetTreePicker from "../components/AssetTreePicker.vue";
+import SessionListItem from "../components/SessionListItem.vue";
 import {
   REPLAY_METHODS,
   contentLengthIssue,
@@ -82,20 +82,29 @@ const method = computed(() =>
 );
 
 // ---------- 会话 ----------
-const sessions = ref<SessionMetadata[]>([]);
-const activeSessionId = ref<number | null>(null);
-onMounted(async () => {
-  const [list, active] = await Promise.all([
-    backend.listSessions(),
-    backend.getActiveSession(),
-  ]);
-  sessions.value = list;
-  activeSessionId.value =
-    active.session_id !== null &&
-    list.some((session) => session.id === active.session_id)
-      ? active.session_id
-      : null;
+// 会话列表统一走 sessionsStore，样式复用 SessionListItem（与侧边栏一致）。
+const pickerOpen = ref(false);
+const sendWrap = ref<HTMLElement | null>(null);
+
+function closePicker(): void {
+  pickerOpen.value = false;
+}
+
+function togglePicker(): void {
+  pickerOpen.value = !pickerOpen.value;
+}
+
+function onDocumentPointerDown(event: PointerEvent): void {
+  if (!sendWrap.value?.contains(event.target as Node)) closePicker();
+}
+
+watch(pickerOpen, (open) => {
+  if (open) document.addEventListener("pointerdown", onDocumentPointerDown);
+  else document.removeEventListener("pointerdown", onDocumentPointerDown);
 });
+onBeforeUnmount(() =>
+  document.removeEventListener("pointerdown", onDocumentPointerDown),
+);
 
 // ---------- 资源 ----------
 const assets = ref<AssetMetadata[]>([]);
@@ -199,29 +208,23 @@ function buildBody(): ReplayBodySpec | undefined {
 const canCompose = computed(
   () => method.value !== "" && /^https?:\/\//.test(url.value),
 );
+const noSession = computed(() => sessionsStore.sessions.length === 0);
 const sendDisabled = computed(
-  () => executing.value || !canCompose.value || !proxyStore.running,
+  () => executing.value || !canCompose.value || !proxyStore.running || noSession.value,
 );
 const sendTitle = computed(() =>
   !proxyStore.running
     ? "代理未启动，无法发送"
     : !canCompose.value
       ? "请填写合法的请求方法与 URL"
-      : "选择会话并发送",
+      : noSession.value
+        ? "没有可用的会话"
+        : "选择会话并发送",
 );
-
-function openSendMenu(event: MouseEvent): void {
-  if (sendDisabled.value) return;
-  const items = sessions.value.map((session) => ({
-    label: `#${session.id} ${session.name || "未命名"}`,
-    icon: session.id === activeSessionId.value ? Io5RadioButtonOn : undefined,
-    action: () => void execute(session.id),
-  }));
-  openDropdownMenu(event.currentTarget as HTMLElement, items);
-}
 
 async function execute(targetSessionId: number): Promise<void> {
   if (executing.value) return;
+  closePicker();
   executing.value = true;
   resultLogId.value = null;
   resultSessionId.value = null;
@@ -334,16 +337,39 @@ const bodyExtra = computed(() => {
       </CustomSelect>
       <button class="tab-btn active">请求</button>
       <span class="summary-spacer" />
-      <button
-        class="btn primary send-btn"
-        :disabled="sendDisabled"
-        :title="sendTitle"
-        @click="openSendMenu"
-      >
-        <Io5Play :size="13" />
-        {{ executing ? "发送中…" : "发送" }}
-        <Io5ChevronDown :size="11" />
-      </button>
+      <div ref="sendWrap" class="send-wrap" @keydown.esc="closePicker">
+        <button
+          class="btn primary send-btn"
+          :disabled="sendDisabled"
+          :title="sendTitle"
+          :aria-expanded="pickerOpen"
+          @click="togglePicker"
+        >
+          <Io5Play :size="13" />
+          {{ executing ? "发送中…" : "发送" }}
+          <Io5ChevronDown :size="11" />
+        </button>
+        <div
+          v-if="pickerOpen"
+          class="session-picker"
+          role="menu"
+          aria-label="选择会话"
+        >
+          <SessionListItem
+            v-for="session in sessionsStore.sessions"
+            :key="session.id"
+            :session="session"
+            :active="sessionsStore.activeSessionId === session.id"
+            :active-connections="proxyStore.activeNetlogCount(session.id)"
+            class="picker-row"
+            role="menuitem"
+            tabindex="0"
+            @click="execute(session.id)"
+            @keydown.enter.prevent="execute(session.id)"
+            @keydown.space.prevent="execute(session.id)"
+          />
+        </div>
+      </div>
     </nav>
 
     <div class="tab-page">
@@ -529,10 +555,37 @@ const bodyExtra = computed(() => {
   font-size: 11px;
 }
 
-.send-btn {
+.send-wrap {
+  position: relative;
+  display: flex;
+  flex: none;
   margin-left: auto;
+}
+
+.send-btn {
   min-height: 26px;
   padding: 2px 10px;
+}
+
+.session-picker {
+  position: absolute;
+  z-index: 100006;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 220px;
+  max-width: 360px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popup);
+}
+
+.picker-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 /* 与详情页 tab-page / card 对齐 */

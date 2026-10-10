@@ -13,6 +13,11 @@ export function formatRelativeTime(millis: number): string {
   return formatDateTime(millis);
 }
 
+/** 活跃连接数徽标：超过 99 折叠为 "99+"。 */
+export function formatActivityCount(count: number): string {
+  return count > 99 ? "99+" : String(count);
+}
+
 export function formatDateTime(millis: number): string {
   const d = new Date(millis);
   const pad = (n: number) => String(n).padStart(2, "0");
