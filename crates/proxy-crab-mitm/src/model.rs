@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::hex::hex_lower;
+
 pub type HeaderValues = BTreeMap<String, Vec<String>>;
 pub type RequestTags = BTreeMap<String, String>;
 pub const MAX_SESSION_INTERCEPTORS_PER_KIND: usize = 12;
@@ -457,7 +459,7 @@ pub struct InterceptorRun {
 }
 
 pub fn script_content_hash(content: &str) -> String {
-    format!("{:x}", Sha256::digest(content.as_bytes()))
+    hex_lower(&Sha256::digest(content.as_bytes()))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

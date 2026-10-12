@@ -287,16 +287,16 @@ function loadSample(): void {
   keyText.value = SAMPLE_SECRET;
 }
 
-let copiedKey: string | null = null;
+const copiedKey = ref<string | null>(null);
 let copiedTimer: number | undefined;
 
 async function copy(key: string, value: string): Promise<void> {
   if (!value) return;
   try {
     await writeClipboardText(value);
-    copiedKey = key;
+    copiedKey.value = key;
     if (copiedTimer !== undefined) window.clearTimeout(copiedTimer);
-    copiedTimer = window.setTimeout(() => (copiedKey = null), 1200);
+    copiedTimer = window.setTimeout(() => (copiedKey.value = null), 1200);
   } catch {
     appStore.toast("复制失败", "error");
   }

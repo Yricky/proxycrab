@@ -9,7 +9,7 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD},
 };
-use mlua::{AnyUserData, Error as LuaError, Lua, String as LuaString, Table, UserData, Value};
+use mlua::{AnyUserData, Error as LuaError, Lua, LuaString, Table, UserData, Value};
 use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
 
 const CODEC_BYTE_LIMIT: usize = 16 * 1024 * 1024;

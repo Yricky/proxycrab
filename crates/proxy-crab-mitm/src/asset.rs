@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 
+use crate::hex::hex_lower;
 use crate::workspace::now_millis;
 
 const ASSETS_DIRECTORY: &str = "assets";
@@ -247,7 +248,7 @@ impl AssetUpload {
             id: self.id.clone(),
             size: self.size,
             content_type: self.content_type.clone(),
-            sha256: format!("{:x}", self.digest.clone().finalize()),
+            sha256: hex_lower(&self.digest.clone().finalize()),
             created_at: now_millis(),
         };
         let metadata_temporary = self.temporary.with_extension("metadata.tmp");
@@ -402,7 +403,7 @@ mod tests {
         assert_eq!(metadata.size, 11);
         assert_eq!(
             metadata.sha256,
-            format!("{:x}", Sha256::digest(b"{\"ok\":true}"))
+            hex_lower(&Sha256::digest(b"{\"ok\":true}"))
         );
         let asset = store.get("fixtures/example.json").unwrap().unwrap();
         assert_eq!(asset.metadata, metadata);

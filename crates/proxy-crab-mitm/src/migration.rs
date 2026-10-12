@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     asset::{AssetError, AssetMetadata, AssetStore, create_parent, validate_asset_id},
+    hex::hex_lower,
     model::{BodySourceType, CaptureModifications, HeaderValues},
     workspace::{read_json, write_json_atomic},
 };
@@ -388,7 +389,7 @@ fn import_migration_asset(
                 size += read as u64;
             }
             destination.sync_all()?;
-            Ok((size, format!("{:x}", hasher.finalize())))
+            Ok((size, hex_lower(&hasher.finalize())))
         })();
         let (size, sha256) = match copy_result {
             Ok(result) => result,
