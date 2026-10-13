@@ -18,8 +18,8 @@ const emit = defineEmits<{ "update:modelValue": [value: string] }>();
 const container = ref<HTMLElement | null>(null);
 
 // Monaco is heavy; load it lazily so the main bundle stays lean.
-let editor: import("monaco-editor").editor.IStandaloneCodeEditor | null = null;
-let monacoRef: typeof import("monaco-editor") | null = null;
+let editor: import("monaco-editor/editor/editor.api").editor.IStandaloneCodeEditor | null = null;
+let monacoRef: typeof import("monaco-editor/editor/editor.api") | null = null;
 let suppressChange = false;
 let resizeObserver: ResizeObserver | null = null;
 let themeObserver: MutationObserver | null = null;

@@ -344,6 +344,11 @@ export function createHttpBackend(
     ),
 
     getCertificate: () => call("/api/ca"),
+    clashSubscription: {
+      getState: () => call("/api/clash-subscription"),
+      enable: (server) => call("/api/clash-subscription", json("PUT", { server })),
+      disable: () => call("/api/clash-subscription", json("DELETE")),
+    },
     getSystemLogs: (requestValue: SystemLogsQuery) =>
       call(query("/api/system-logs", requestValue as unknown as Record<string, unknown>)),
     clearSystemLogs: () => call("/api/system-logs", json("DELETE")),

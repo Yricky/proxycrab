@@ -14,8 +14,8 @@ use axum::{
     http::{
         HeaderMap, HeaderValue, Method, StatusCode,
         header::{
-            ACCEPT_ENCODING, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
-            VARY,
+            ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LENGTH,
+            CONTENT_TYPE, VARY,
         },
         request::Parts,
     },
@@ -37,6 +37,7 @@ use tokio_util::{
 };
 
 use crate::{
+    clash_subscription::EnableClashSubscriptionRequest,
     dto::{
         ActiveSession, AssetQuery, BodyQuery, BreakpointQuery, BypassQuery, CreateSessionRequest,
         DebugFilterScriptRequest, DeleteBypassRequest, ErrorCode, ExecuteTemporaryScriptRequest,
@@ -261,6 +262,10 @@ fn router_with_changes_and_extra(
     changes: ChangeSender,
     extra: Router,
 ) -> Router {
+    let downloads = Router::new()
+        .route("/ca.crt", get(download_certificate))
+        .with_state(manager.clone())
+        .merge(crate::clash_subscription::router(manager.clone()));
     Router::new()
         .route("/api/agents.md", get(agents_markdown))
         .route("/api/assets", get(assets))
@@ -373,6 +378,12 @@ fn router_with_changes_and_extra(
         )
         .route("/api/ca", get(certificate))
         .route(
+            "/api/clash-subscription",
+            get(clash_subscription)
+                .put(enable_clash_subscription)
+                .delete(disable_clash_subscription),
+        )
+        .route(
             "/api/system-logs",
             get(system_logs).delete(clear_system_logs),
         )
@@ -398,6 +409,7 @@ fn router_with_changes_and_extra(
             publish_successful_http_changes,
         ))
         .merge(extra)
+        .merge(downloads)
         .fallback(not_found)
 }
 
@@ -633,6 +645,9 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
         }
         (&Method::PUT, "/api/active-session") => {
             vec![HttpApiResource::ActiveSession, HttpApiResource::Config]
+        }
+        (&Method::PUT | &Method::DELETE, "/api/clash-subscription") => {
+            vec![HttpApiResource::ClashSubscription]
         }
         (&Method::POST, "/api/session-shares") => vec![HttpApiResource::SessionShare],
         (&Method::DELETE, value) if value.starts_with("/api/session-shares/") => {
@@ -1322,8 +1337,44 @@ async fn delete_interceptor(
     success(json!({}))
 }
 
+async fn clash_subscription(State(manager): State<ManagerState>) -> ApiResult {
+    success(manager.clash_subscription().await?)
+}
+
+async fn enable_clash_subscription(
+    State(manager): State<ManagerState>,
+    ApiJson(request): ApiJson<EnableClashSubscriptionRequest>,
+) -> ApiResult {
+    success(manager.enable_clash_subscription(request).await?)
+}
+
+async fn disable_clash_subscription(State(manager): State<ManagerState>) -> ApiResult {
+    success(manager.disable_clash_subscription().await?)
+}
+
 async fn certificate(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.certificate().await?)
+}
+
+async fn download_certificate(State(manager): State<ManagerState>) -> Response {
+    let mut response = match manager.certificate().await {
+        Ok(certificate) => (
+            [
+                (CONTENT_TYPE, "application/x-x509-ca-cert"),
+                (
+                    CONTENT_DISPOSITION,
+                    "attachment; filename=\"proxycrab-ca.crt\"",
+                ),
+            ],
+            certificate.pem,
+        )
+            .into_response(),
+        Err(error) => ApiError(error).into_response(),
+    };
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn system_logs(
@@ -3332,6 +3383,262 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
         }
+    }
+
+    #[tokio::test]
+    async fn ca_download_is_public_fresh_and_independent_of_proxy_lifecycle() {
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager = MitmManager::new(runtime.clone());
+        let (permissions, recorded) = recording_permissions(Some(PermissionDenied::forbidden(
+            "permission_denied",
+            "blocked",
+        )));
+        let app = secured_router(manager.clone(), permissions);
+        let request = |method: &str, path: &str| {
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header("host", "192.168.1.20:18089")
+                .extension(ConnectInfo(
+                    "192.168.1.30:50000".parse::<SocketAddr>().unwrap(),
+                ))
+                .body(Body::empty())
+                .unwrap()
+        };
+        let original = runtime.certificate_pem();
+        for round in 0..2 {
+            let expected = if round == 0 {
+                original.clone()
+            } else {
+                manager.regenerate_certificate().await.unwrap().pem
+            };
+            let response = app
+                .clone()
+                .oneshot(request("GET", "/ca.crt"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers()["content-type"],
+                "application/x-x509-ca-cert"
+            );
+            assert_eq!(
+                response.headers()["content-disposition"],
+                "attachment; filename=\"proxycrab-ca.crt\""
+            );
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(body.as_ref(), expected.as_bytes());
+            assert!(!String::from_utf8_lossy(&body).contains("PRIVATE KEY"));
+            assert!(expected.contains("BEGIN CERTIFICATE"));
+        }
+        assert_ne!(runtime.certificate_pem(), original);
+        assert!(recorded.lock().unwrap().is_empty());
+        assert_eq!(
+            app.clone()
+                .oneshot(request("POST", "/ca.crt"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+        assert_eq!(
+            app.oneshot(request("GET", "/api/ca"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            runtime.proxy_status(),
+            proxy_crab_mitm::model::ProxyStatus::Stopped
+        );
+        assert!(runtime.sessions().is_empty());
+        assert!(runtime.bypass_entries(10, None).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn clash_subscription_management_and_download_lifecycle() {
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager = MitmManager::new(runtime.clone());
+        let (changes, mut receiver) = tokio::sync::broadcast::channel(128);
+        let app = router_with_changes(manager.clone(), allow_all(), changes);
+        let state_request = || {
+            Request::builder()
+                .uri("/api/clash-subscription")
+                .body(Body::empty())
+                .unwrap()
+        };
+        let response = app.clone().oneshot(state_request()).await.unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["data"],
+            serde_json::json!({"enabled": false})
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/clash-subscription")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"server":"192.168.1.20"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        let token = payload["data"]["token"].as_str().unwrap();
+        assert_eq!(
+            receiver.try_recv().unwrap().resources,
+            vec![HttpApiResource::ClashSubscription]
+        );
+        assert!(matches!(
+            manager.proxy_status().await.unwrap(),
+            proxy_crab_mitm::model::ProxyStatus::Stopped
+        ));
+
+        // The LAN download is intentionally independent of management Bearer authentication.
+        let remote = secured_router(manager.clone(), allow_all());
+        let download = format!("/clash.yaml?token={token}");
+        let response = remote
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&download)
+                    .header("host", "192.168.1.20:18089")
+                    .extension(ConnectInfo(
+                        "192.168.1.30:50000".parse::<SocketAddr>().unwrap(),
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/yaml; charset=utf-8"
+        );
+        let yaml = String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(yaml.contains("server: 192.168.1.20"));
+        assert!(yaml.contains(&format!("port: {}", runtime.config().proxy_port)));
+        assert!(yaml.ends_with("  - MATCH,ProxyCrab\n"));
+
+        for uri in [
+            "/clash.yaml".to_owned(),
+            "/clash.yaml?token=wrong".to_owned(),
+            format!("{download}&token={token}"),
+            format!("{download}&extra=1"),
+        ] {
+            let response = remote
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+        }
+
+        let mut config = manager.config().await.unwrap();
+        config.proxy_port = 9876;
+        manager.replace_config(config).await.unwrap();
+        assert!(
+            manager
+                .clash_subscription_yaml(token.to_owned())
+                .await
+                .unwrap()
+                .contains("port: 9876")
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/clash-subscription")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            receiver.try_recv().unwrap().resources,
+            vec![HttpApiResource::ClashSubscription]
+        );
+        let response = remote
+            .oneshot(
+                Request::builder()
+                    .uri(download)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        manager
+            .enable_clash_subscription(crate::clash_subscription::EnableClashSubscriptionRequest {
+                server: "10.0.0.2".into(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            !MitmManager::new(runtime)
+                .clash_subscription()
+                .await
+                .unwrap()
+                .enabled
+        );
+    }
+
+    #[tokio::test]
+    async fn clash_subscription_management_requires_permission_and_remote_auth() {
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager = MitmManager::new(runtime);
+        let (permissions, recorded) = recording_permissions(Some(PermissionDenied::forbidden(
+            "permission_denied",
+            "blocked",
+        )));
+        let denied = router(manager.clone(), permissions);
+        let remote = secured_router(manager.clone(), allow_all());
+        for method in ["GET", "PUT", "DELETE"] {
+            let request = || {
+                Request::builder()
+                    .method(method)
+                    .uri("/api/clash-subscription")
+                    .header("content-type", "application/json")
+                    .header("host", "192.168.1.20:18089")
+                    .extension(ConnectInfo(
+                        "192.168.1.30:50000".parse::<SocketAddr>().unwrap(),
+                    ))
+                    .body(Body::from(r#"{"server":"192.168.1.20"}"#))
+                    .unwrap()
+            };
+            assert_eq!(
+                denied.clone().oneshot(request()).await.unwrap().status(),
+                StatusCode::FORBIDDEN
+            );
+            assert_eq!(
+                remote.clone().oneshot(request()).await.unwrap().status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        assert_eq!(recorded.lock().unwrap().len(), 3);
+        assert!(!manager.clash_subscription().await.unwrap().enabled);
     }
 
     #[tokio::test]

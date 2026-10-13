@@ -708,9 +708,6 @@ async fn handle_proxy_request(
     tracker: TaskGroup,
 ) -> Result<Response<ProxyBody>, Infallible> {
     let request_data = request_data(&request);
-    if is_ca_download(&request_data) {
-        return Ok(certificate_response(&runtime));
-    }
     if request.method() == Method::CONNECT {
         return Ok(handle_connect(
             &mut request,
@@ -1148,35 +1145,6 @@ fn is_upgrade_request<B>(request: &Request<B>) -> bool {
             .get(CONNECTION)
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.to_ascii_lowercase().contains("upgrade"))
-}
-
-fn is_ca_download(request: &RequestData) -> bool {
-    if request.method != "GET" {
-        return false;
-    }
-    let Ok(uri) = request.uri.parse::<Uri>() else {
-        return false;
-    };
-    if uri.path() != "/ca.crt" {
-        return false;
-    }
-    uri.host() == Some("proxy.crab")
-        || routing_authority(request)
-            .parse::<hyper::http::uri::Authority>()
-            .ok()
-            .is_some_and(|authority| authority.host() == "proxy.crab")
-}
-
-fn certificate_response(runtime: &ProxyCrab) -> Response<ProxyBody> {
-    let response = ResponseData {
-        status: 200,
-        version: "HTTP/1.1".into(),
-        headers: HeaderValues::from([(
-            "content-type".into(),
-            vec!["application/x-x509-ca-cert".into()],
-        )]),
-    };
-    mitm::response_from_data(&response, runtime.certificate_pem().into_bytes(), false)
 }
 
 fn normalize_tls_error(message: &str) -> &'static str {

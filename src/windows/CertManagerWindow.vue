@@ -1,21 +1,84 @@
 <script setup lang="ts">
 import QRCode from "qrcode";
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Io5Copy, Io5Download, Io5Refresh, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type { HttpApiChange } from "../api/types";
+import type { ClashSubscriptionState, HttpApiChange, HttpServiceStatus } from "../api/types";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { proxyStore } from "../stores/proxy";
 import { copyText as writeClipboardText } from "../utils/clipboard";
+import { clashServerAddresses, clashSubscriptionUrl } from "../utils/clash-subscription";
+import ClashConnectionPanel from "./ClashConnectionPanel.vue";
 
 const backend = useBackend();
-const CERT_DOWNLOAD_URL = "http://proxy.crab/ca.crt";
+const addresses = ref<string[]>([]);
+const selectedIp = ref("");
+const service = ref<HttpServiceStatus | null>(null);
+const clashState = ref<ClashSubscriptionState | null>(null);
+const connectionLoading = ref(false);
+const connectionMutating = ref(false);
+const canConnect = computed(() => !!service.value?.running && addresses.value.includes(selectedIp.value));
+const certificateUrl = computed(() => canConnect.value ? `http://${selectedIp.value}:${service.value!.port}/ca.crt` : "");
+const clashUrl = computed(() => {
+  if (connectionMutating.value || !canConnect.value || !clashState.value?.enabled || !clashState.value.token || !clashState.value.server) return "";
+  return clashSubscriptionUrl(clashState.value.server, service.value!.port, clashState.value.token);
+});
+const activeTab = ref<"certificate" | "connection">("certificate");
 
 const pem = ref("");
 const loading = ref(false);
 const qrCodeDataUrl = ref("");
+
+async function refreshConnection(): Promise<void> {
+  if (connectionLoading.value || connectionMutating.value) return;
+  connectionLoading.value = true;
+  try {
+    const [ips, status, subscription] = await Promise.all([
+      backend.listLocalIps(), backend.getHttpServiceStatus(),
+      backend.clashSubscription?.getState() ?? Promise.resolve(null),
+    ]);
+    addresses.value = clashServerAddresses(ips);
+    service.value = status;
+    clashState.value = subscription;
+    selectedIp.value = subscription?.server ?? (addresses.value.includes(selectedIp.value) ? selectedIp.value : addresses.value[0] ?? "");
+  } catch (error) {
+    reportError(error, "读取连接配置失败");
+  } finally {
+    connectionLoading.value = false;
+  }
+}
+
+async function selectIp(event: Event): Promise<void> {
+  const ip = (event.target as HTMLSelectElement).value;
+  if (connectionLoading.value || connectionMutating.value) return;
+  selectedIp.value = ip;
+  if (!backend.clashSubscription || !clashState.value?.enabled) return;
+  connectionMutating.value = true;
+  try {
+    clashState.value = await backend.clashSubscription.enable(ip);
+  } catch (error) {
+    selectedIp.value = clashState.value.server ?? "";
+    reportError(error, "更新订阅 IP 失败");
+  } finally {
+    connectionMutating.value = false;
+  }
+}
+
+async function toggleClash(): Promise<void> {
+  if (!backend.clashSubscription || !clashState.value || connectionLoading.value || connectionMutating.value) return;
+  connectionMutating.value = true;
+  try {
+    clashState.value = clashState.value.enabled
+      ? await backend.clashSubscription.disable()
+      : await backend.clashSubscription.enable(selectedIp.value);
+  } catch (error) {
+    reportError(error, "切换 Clash 订阅失败");
+  } finally {
+    connectionMutating.value = false;
+  }
+}
 
 async function refresh(): Promise<void> {
   try {
@@ -28,6 +91,7 @@ async function refresh(): Promise<void> {
 
 function onHttpApiChange(event: Event): void {
   const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  if (resources.some((resource) => ["all", "config", "clash_subscription"].includes(resource))) void refreshConnection();
   if (resources.includes("all") || resources.includes("certificate")) {
     void refresh();
   }
@@ -44,8 +108,9 @@ async function copyPem(): Promise<void> {
 }
 
 async function copyDownloadUrl(): Promise<void> {
+  if (!certificateUrl.value) return;
   try {
-    await writeClipboardText(CERT_DOWNLOAD_URL);
+    await writeClipboardText(certificateUrl.value);
     appStore.toast("证书下载地址已复制", "success");
   } catch (error) {
     reportError(error, "复制失败");
@@ -53,8 +118,9 @@ async function copyDownloadUrl(): Promise<void> {
 }
 
 async function openDownloadUrl(): Promise<void> {
+  if (!certificateUrl.value) return;
   try {
-    await backend.openExternal(CERT_DOWNLOAD_URL);
+    await backend.openExternal(certificateUrl.value);
   } catch (error) {
     reportError(error, "打开证书下载地址失败");
   }
@@ -94,21 +160,22 @@ async function regenerate(): Promise<void> {
   }
 }
 
-async function renderQrCode(): Promise<void> {
+watch(certificateUrl, async (url, _previous, onCleanup) => {
+  let stale = false;
+  onCleanup(() => { stale = true; });
+  qrCodeDataUrl.value = "";
+  if (!url) return;
   try {
-    qrCodeDataUrl.value = await QRCode.toDataURL(CERT_DOWNLOAD_URL, {
-      errorCorrectionLevel: "M",
-      margin: 1,
-      width: 160,
-    });
+    const image = await QRCode.toDataURL(url, { errorCorrectionLevel: "M", margin: 1, width: 160 });
+    if (!stale) qrCodeDataUrl.value = image;
   } catch (error) {
-    reportError(error, "生成证书下载二维码失败");
+    if (!stale) reportError(error, "生成证书下载二维码失败");
   }
-}
+});
 
 onMounted(() => {
   void refresh();
-  void renderQrCode();
+  void refreshConnection();
   window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 
@@ -118,7 +185,24 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="cert-root">
+  <div class="cert-manager-root">
+    <div class="cert-tabs" role="tablist" aria-label="代理配置步骤">
+      <button id="certificate-tab" class="cert-tab" :class="{ active: activeTab === 'certificate' }" role="tab" :aria-selected="activeTab === 'certificate'" aria-controls="certificate-panel" @click="activeTab = 'certificate'">1.证书配置</button>
+      <button v-if="backend.clashSubscription" id="connection-tab" class="cert-tab" :class="{ active: activeTab === 'connection' }" role="tab" :aria-selected="activeTab === 'connection'" aria-controls="connection-panel" @click="activeTab = 'connection'">2. 代理连接</button>
+    </div>
+    <div class="connection-ip-row">
+      <label for="connection-ip">连接 IP</label>
+      <select id="connection-ip" class="input mono" :value="selectedIp" :disabled="connectionLoading || connectionMutating || !addresses.length" @change="selectIp">
+        <option v-if="!addresses.length" value="">暂无可用的 IPv4 地址</option>
+        <option v-else-if="selectedIp && !addresses.includes(selectedIp)" :value="selectedIp" disabled>{{ selectedIp }}（已不可用）</option>
+        <option v-for="ip in addresses" :key="ip" :value="ip">{{ ip }}</option>
+      </select>
+      <button class="btn icon" title="刷新 IP 和连接状态" :disabled="connectionLoading || connectionMutating" @click="refreshConnection"><Io5Refresh :size="14" /></button>
+    </div>
+    <p v-if="service && !service.running" class="connection-warning"><Io5Warning :size="14" />管理 HTTP 服务未运行，暂时无法下载证书或订阅。</p>
+    <p v-else-if="!connectionLoading && !addresses.length" class="connection-warning"><Io5Warning :size="14" />请连接网络后刷新，选择其他设备可访问的本机 IP。</p>
+    <p v-else-if="selectedIp && !addresses.includes(selectedIp)" class="connection-warning"><Io5Warning :size="14" />原 IP 已不可用，请重新选择 IP 并更新 Clash 中的订阅地址。</p>
+  <div v-show="activeTab === 'certificate'" id="certificate-panel" class="cert-root" role="tabpanel" aria-labelledby="certificate-tab">
     <p class="cert-desc text-secondary">
       这是 ProxyCrab 的根 CA 证书（PEM 格式）。请将它安装到操作系统或浏览器的受信任根证书列表中，
       以便代理解密 HTTPS 流量。
@@ -126,20 +210,20 @@ onBeforeUnmount(() => {
 
     <section class="cert-download" aria-labelledby="cert-download-title">
       <div class="cert-download-info">
-        <h3 id="cert-download-title">从代理设备下载</h3>
+        <h3 id="cert-download-title">从其他设备下载</h3>
         <p class="text-secondary">
-          让手机或其他设备连接 ProxyCrab 代理后，打开以下链接或扫描二维码。
+          让手机或其他设备能访问所选 IP，打开以下链接或扫描二维码，无需先连接代理。
         </p>
-        <div class="cert-download-link">
-          <a :href="CERT_DOWNLOAD_URL" class="mono" @click.prevent="openDownloadUrl">
-            {{ CERT_DOWNLOAD_URL }}
+        <div v-if="certificateUrl" class="cert-download-link">
+          <a :href="certificateUrl" class="mono" @click.prevent="openDownloadUrl">
+            {{ certificateUrl }}
           </a>
           <button class="btn icon" title="复制证书下载地址" @click="copyDownloadUrl">
             <Io5Copy :size="14" />
           </button>
         </div>
       </div>
-      <div class="cert-qr">
+      <div v-if="certificateUrl" class="cert-qr">
         <img v-if="qrCodeDataUrl" :src="qrCodeDataUrl" alt="证书下载地址二维码" />
         <span v-else class="text-faint">二维码生成中…</span>
       </div>
@@ -172,9 +256,52 @@ onBeforeUnmount(() => {
       </button>
     </div>
   </div>
+    <ClashConnectionPanel
+      v-if="activeTab === 'connection' && backend.clashSubscription"
+      id="connection-panel" role="tabpanel" aria-labelledby="connection-tab"
+      :state="clashState" :url="clashUrl" :loading="connectionLoading" :mutating="connectionMutating"
+      :can-enable="canConnect" @toggle="toggleClash"
+    />
+  </div>
 </template>
 
 <style scoped>
+.cert-manager-root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cert-tabs {
+  display: flex;
+  flex: none;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.cert-tab {
+  padding: 10px 2px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cert-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.connection-ip-row { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3) 0; flex: none; }
+.connection-ip-row label { flex: none; font-size: 12px; }
+.connection-ip-row select { flex: 1; min-width: 0; }
+.connection-warning { display: flex; align-items: flex-start; gap: var(--space-1); color: var(--warning); font-size: 12px; margin: var(--space-2) var(--space-3) 0; }
+.connection-warning svg { flex: none; margin-top: 2px; }
+
 .cert-root {
   flex: 1;
   min-height: 0;

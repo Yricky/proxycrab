@@ -345,11 +345,10 @@ Forced `HTTP/2` is strict: HTTPS uses H2-only ALPN and cleartext HTTP uses h2c p
 no HTTP/1.1 fallback. Any other present value is ignored with a Rust warning and keeps the default
 upstream selection.
 
-The speed/timeout controls exclude bypass, raw CONNECT, Upgrade/WebSocket, `proxy.crab/ca.crt`, and
-proxy-generated errors. `_crab_skip` makes request speed/timeout irrelevant, but response speed can
+The speed/timeout controls exclude bypass, raw CONNECT, Upgrade/WebSocket, and proxy-generated
+errors. `_crab_skip` makes request speed/timeout irrelevant, but response speed can
 pace a synthetic body created by response interceptors. The upstream-version override applies to
-Upgrade/WebSocket but excludes bypass, raw CONNECT, the local CA response, and proxy-generated
-errors.
+Upgrade/WebSocket but excludes bypass, raw CONNECT, and proxy-generated errors.
 
 ## Response interceptors
 

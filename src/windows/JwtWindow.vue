@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import {
   Io5Checkmark,
   Io5CheckmarkCircle,
@@ -115,32 +115,19 @@ const editorOptions = {
   lineDecorationsWidth: 8,
 };
 
-// ---------- Encoded 彩色分段高亮 ----------
-
-const segments = computed(() => {
-  const t = token.value;
-  const i1 = t.indexOf(".");
-  const i2 = i1 < 0 ? -1 : t.indexOf(".", i1 + 1);
-  return {
-    header: i1 < 0 ? t : t.slice(0, i1),
-    payload: i1 < 0 ? "" : i2 < 0 ? t.slice(i1 + 1) : t.slice(i1 + 1, i2),
-    signature: i2 < 0 ? "" : t.slice(i2 + 1),
-    hasPayload: i1 >= 0,
-    hasSignature: i2 >= 0,
-  };
-});
-
-const tokenInputRef = ref<HTMLTextAreaElement | null>(null);
-const highlightRef = ref<HTMLElement | null>(null);
-
-function syncScroll(): void {
-  const ta = tokenInputRef.value;
-  const hl = highlightRef.value;
-  if (!ta || !hl) return;
-  hl.style.transform = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`;
-}
-
-watch(token, () => void nextTick(syncScroll));
+const tokenEditorOptions = {
+  ...editorOptions,
+  ariaLabel: "JWT 令牌",
+  placeholder: "粘贴 JWT 令牌，自动解码…",
+  lineHeight: 17,
+  padding: { top: 6, bottom: 6 },
+  renderLineHighlight: "none",
+  quickSuggestions: false,
+  suggestOnTriggerCharacters: false,
+  wordBasedSuggestions: "off",
+  stopRenderingLineAfter: -1,
+  maxTokenizationLineLength: Number.MAX_SAFE_INTEGER,
+};
 
 // ---------- 时间戳声明（exp / nbf / iat）提示 ----------
 
@@ -326,11 +313,7 @@ async function copy(key: string, value: string): Promise<void> {
           </button>
         </div>
         <div class="jwt-tokenbox">
-          <pre ref="highlightRef" class="jwt-hl mono" aria-hidden="true"><span class="c-h">{{ segments.header }}</span><template v-if="segments.hasPayload"><span class="c-dot">.</span><span class="c-p">{{ segments.payload }}</span></template><template
-  v-if="segments.hasSignature"><span class="c-dot">.</span><span class="c-s">{{ segments.signature }}</span></template><span>&#8203;</span>
-</pre>
-          <textarea ref="tokenInputRef" v-model="token" class="jwt-token mono" placeholder="粘贴 JWT 令牌，自动解码…"
-            spellcheck="false" @scroll="syncScroll" />
+          <MonacoEditor v-model="token" language="jwt" :options="tokenEditorOptions" />
         </div>
         <div v-if="decoded.error" class="jwt-error text-danger">{{ decoded.error }}</div>
       </section>
@@ -522,7 +505,7 @@ async function copy(key: string, value: string): Promise<void> {
 }
 
 .jwt-tokenbox {
-  position: relative;
+  display: flex;
   flex: 1;
   min-height: 0;
   border: 1px solid var(--border);
@@ -536,56 +519,12 @@ async function copy(key: string, value: string): Promise<void> {
   border-color: var(--accent);
 }
 
-.jwt-hl,
-.jwt-token {
-  position: absolute;
-  inset: 0;
-  margin: 0;
-  padding: 6px 10px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 17px;
-  letter-spacing: 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  overflow-wrap: break-word;
-}
-
-.jwt-hl {
-  overflow: hidden;
-  pointer-events: none;
-  color: var(--text-faint);
-}
-
-.jwt-token {
-  border: none;
-  outline: none;
-  resize: none;
-  background: transparent;
-  color: transparent;
-  caret-color: var(--text);
-  width: 100%;
-  height: 100%;
-}
-
-.jwt-token::placeholder {
-  color: var(--text-faint);
-}
-
 .c-h {
   color: var(--jwt-h);
 }
 
 .c-p {
   color: var(--jwt-p);
-}
-
-.c-s {
-  color: var(--jwt-s);
-}
-
-.c-dot {
-  color: var(--text-faint);
 }
 
 .jwt-error {

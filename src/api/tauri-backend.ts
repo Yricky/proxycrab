@@ -237,6 +237,11 @@ export function createTauriBackend(): Backend {
     ) => call("replace_session_interceptors", { sessionId, request }),
 
     getCertificate: () => call("get_certificate"),
+    clashSubscription: {
+      getState: () => call("get_clash_subscription"),
+      enable: (server) => call("enable_clash_subscription", { request: { server } }),
+      disable: () => call("disable_clash_subscription"),
+    },
 
     getSystemLogs: (query: SystemLogsQuery) => call("get_system_logs", { query }),
     clearSystemLogs: () => call("clear_system_logs"),

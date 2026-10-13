@@ -222,9 +222,52 @@ browser UI.
 | `/api/interceptors`, `/api/interceptors/{kind}/{name}` | global interceptor script CRUD |
 | `/api/bypass`, `/api/bypass/{id}`, `/api/bypass/delete` | query/delete transparent forwarding metadata |
 | `/api/ca` | `GET` |
+| `/api/clash-subscription` | `GET` current state (default: `allow`); `PUT` enable/update selected IPv4; `DELETE` disable (both default: `approval`) |
 | `/api/system-logs` | `GET`, `DELETE` |
 
 System logs accept `after_seq` and are capped at 10,000 entries.
+
+## Clash subscription
+
+The shared manager keeps one subscription in memory, initially disabled. Desktop commands
+`get_clash_subscription`, `enable_clash_subscription`, and `disable_clash_subscription`, and the
+CLI UI's normal management requests operate on that state. The frontend exposes this as the optional
+`Backend.clashSubscription` API; the certificate window shows “2. 代理连接” only when it exists.
+The default tab “1.证书配置” contains the existing certificate controls.
+
+`GET /api/clash-subscription` returns the usual envelope with `{"enabled":false}` or
+`{"enabled":true,"server":"192.168.1.20","token":"pcrab_clash_…"}`.
+`PUT` takes `{"server":"192.168.1.20"}`; non-IPv4, loopback, zero-network, multicast, broadcast,
+and malformed addresses are rejected. The UI lists the backend machine's non-loopback IPv4
+addresses, using the selected address for both the subscription URL and proxy server.
+An enabled subscription keeps its token when changing IP. `DELETE` clears the state and revokes
+the token; enabling again generates a new random 256-bit token. State is never persisted.
+Successful HTTP `PUT`/`DELETE` emit the `clash_subscription` change resource.
+
+`GET /clash.yaml?token=TOKEN` is a separate download route, outside management Bearer auth.
+Exactly one nonempty `token` query parameter is required. A missing, incorrect, revoked, or
+malformed token returns `404 not_found`. All download responses use `Cache-Control: no-store`
+and `Referrer-Policy: no-referrer`; success uses `application/yaml; charset=utf-8` and attachment
+filename `ProxyCrab.yaml`. The token grants only download access, not management access.
+
+```yaml
+mode: rule
+proxies:
+  - name: ProxyCrab
+    type: http
+    server: 192.168.1.20
+    port: 8089
+rules:
+  - MATCH,ProxyCrab
+```
+
+The proxy port is read from current configuration on each download. The proxy may be stopped
+when enabling or downloading the subscription; neither operation changes its lifecycle.
+The QR code contains the HTTP download URL. The import button opens
+`clash://install-config?url=ENCODED_HTTP_URL`. Users select the imported profile and enable system
+proxy in Clash. Changing the chosen IP or re-enabling requires updating the subscription URL in
+Clash; changing the proxy port requires refreshing the subscription. Revoking downloads does not
+remove previously imported configurations or stop existing proxy traffic.
 
 ## Script display metadata
 
@@ -811,8 +854,16 @@ workspace version.
 An active ID that references a missing Session is cleared and persisted when the workspace opens.
 
 Each workspace has an independent generated CA. Missing or corrupt CA files are regenerated with a warning, the per-host certificate cache is bounded, and the CA private key is restricted to owner-only permissions on macOS/Unix. Regeneration is serialized with proxy start/stop and rejected while the proxy is running.
-`http://proxy.crab/ca.crt` is always served locally without routing, Session capture, or bypass
-persistence.
+`GET /ca.crt` on the management HTTP service returns the current public CA certificate as raw PEM,
+with `Content-Type: application/x-x509-ca-cert`, download filename `proxycrab-ca.crt`, and
+`Cache-Control: no-store`. It requires no Bearer key, token, running proxy, or active Session, and
+never returns the private key. Regenerating the CA changes the downloaded certificate at the same
+URL. The permission-controlled JSON endpoint `GET /api/ca` remains available for management reads.
+The certificate window shares one non-loopback IPv4 selector across its certificate and Clash tabs;
+both URLs and QR codes use that address and the management service port. An unavailable service or
+IP suppresses the download links. The old virtual-host download implementation has been removed
+from the proxy, including plain HTTP, MITM HTTP/1 and HTTP/2, and interceptor-rewritten requests.
+Requests to the old URL now follow ordinary routing and capture rules.
 
 ## System logs
 

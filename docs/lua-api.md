@@ -242,10 +242,10 @@ replacement is already being returned, expiry only stops the background raw-body
 a capture warning; the replacement and successful outcome are retained.
 
 The speed and timeout tags do not apply to bypass traffic, raw CONNECT tunnels, Upgrade/WebSocket,
-the local `proxy.crab/ca.crt` response, or proxy-generated error responses. With `_crab_skip`,
+or proxy-generated error responses. With `_crab_skip`,
 request speed and timeout are unused, while `_crab_resp_speed` still applies to the final synthetic
 response after response interceptors. The upstream-version override applies to Upgrade/WebSocket but
-not bypass traffic, raw CONNECT tunnels, the local CA response, or proxy-generated errors. All
+not bypass traffic, raw CONNECT tunnels, or proxy-generated errors. All
 special tags remain persisted capture metadata and are never emitted as HTTP headers.
 
 ## Response interceptors

@@ -74,6 +74,9 @@ export const ACTION_LABELS: Record<string, string> = {
   "POST /api/bypass/delete": "批量删除 Bypass 流量",
   "DELETE /api/bypass/{id}": "删除 Bypass 流量",
   "GET /api/ca": "读取 CA 证书",
+  "GET /api/clash-subscription": "读取 Clash 订阅状态",
+  "PUT /api/clash-subscription": "开启或更新 Clash 订阅",
+  "DELETE /api/clash-subscription": "关闭 Clash 订阅",
   "GET /api/system-logs": "读取系统日志",
   "DELETE /api/system-logs": "清空系统日志",
 };
@@ -87,7 +90,7 @@ export interface FunctionGroupDef {
 
 export const FUNCTION_GROUPS: FunctionGroupDef[] = [
   { key: "general", label: "基础配置", prefixes: ["/api/agents.md", "/api/config", "/api/assets"] },
-  { key: "proxy", label: "代理服务", prefixes: ["/api/proxy/"] },
+  { key: "proxy", label: "代理服务", prefixes: ["/api/proxy/", "/api/clash-subscription"] },
   { key: "sessions", label: "Session", prefixes: ["/api/sessions", "/api/session-shares", "/api/session-har-shares", "/api/archived-sessions", "/api/active-session"] },
   { key: "logs", label: "抓包日志", prefixes: ["/api/logs/"] },
   { key: "views", label: "Session 视图", prefixes: ["/api/session-view", "/api/session-interceptors"] },

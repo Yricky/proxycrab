@@ -21,6 +21,9 @@ use regex::Regex;
 
 use crate::{
     agents::AgentsStore,
+    clash_subscription::{
+        ClashSubscription, ClashSubscriptionState, EnableClashSubscriptionRequest,
+    },
     dto::{
         ActiveSession, AgentsPresetState, BreakpointDetailPayload, BreakpointQuery, BypassPage,
         BypassQuery, CertificateResponse, CreateAgentsPresetRequest, CreateSessionRequest,
@@ -203,6 +206,13 @@ pub trait ProxyCrabManager: Send + Sync {
         request: ReplaceSessionInterceptorsRequest,
     ) -> ManagerResult<SessionInterceptorsPayload>;
     async fn certificate(&self) -> ManagerResult<CertificateResponse>;
+    async fn clash_subscription(&self) -> ManagerResult<ClashSubscriptionState>;
+    async fn enable_clash_subscription(
+        &self,
+        request: EnableClashSubscriptionRequest,
+    ) -> ManagerResult<ClashSubscriptionState>;
+    async fn disable_clash_subscription(&self) -> ManagerResult<ClashSubscriptionState>;
+    async fn clash_subscription_yaml(&self, token: String) -> ManagerResult<String>;
     async fn regenerate_certificate(&self) -> ManagerResult<CertificateResponse>;
     async fn system_logs(&self, query: SystemLogsQuery) -> ManagerResult<Vec<SystemLogEntry>>;
     async fn clear_system_logs(&self) -> ManagerResult<()>;
@@ -215,6 +225,7 @@ pub trait ProxyCrabManager: Send + Sync {
 pub struct MitmManager {
     runtime: Arc<ProxyCrab>,
     agents: Arc<AgentsStore>,
+    clash_subscription: ClashSubscription,
     blocking_tasks: Arc<Semaphore>,
 }
 
@@ -249,6 +260,7 @@ impl MitmManager {
         Arc::new(Self {
             runtime,
             agents,
+            clash_subscription: ClashSubscription::default(),
             blocking_tasks: Arc::new(Semaphore::new(MAX_BLOCKING_MANAGEMENT_TASKS)),
         })
     }
@@ -1520,6 +1532,26 @@ impl ProxyCrabManager for MitmManager {
             )
             .map_err(map_error)?;
         self.session_interceptors(Some(session_id)).await
+    }
+
+    async fn clash_subscription(&self) -> ManagerResult<ClashSubscriptionState> {
+        Ok(self.clash_subscription.state())
+    }
+
+    async fn enable_clash_subscription(
+        &self,
+        request: EnableClashSubscriptionRequest,
+    ) -> ManagerResult<ClashSubscriptionState> {
+        self.clash_subscription.enable(&request.server)
+    }
+
+    async fn disable_clash_subscription(&self) -> ManagerResult<ClashSubscriptionState> {
+        Ok(self.clash_subscription.disable())
+    }
+
+    async fn clash_subscription_yaml(&self, token: String) -> ManagerResult<String> {
+        self.clash_subscription
+            .yaml(&token, self.runtime.config().proxy_port)
     }
 
     async fn certificate(&self) -> ManagerResult<CertificateResponse> {

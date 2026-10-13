@@ -177,14 +177,10 @@ async fn serve_mitm_tls<C>(
     let service_cancellation = cancellation.clone();
     let service = service_fn(move |mut request: Request<Incoming>| {
         inject_https_authority(&mut request, &authority);
-        let local_ca = is_ca_download(&request_data(&request));
         let runtime = runtime.clone();
         let cancellation = service_cancellation.clone();
         let tracker = tracker.clone();
         async move {
-            if local_ca {
-                return Ok::<_, Infallible>(certificate_response(&runtime));
-            }
             let request = request.map(|body| {
                 body.map_err(|error| Box::new(error) as BoxError)
                     .boxed_unsync()
@@ -485,29 +481,13 @@ pub(crate) async fn handle_session_http_request(
                 .unwrap_or(UPSTREAM_TIMEOUT),
         )
     };
-    let local_response =
-        is_ca_download(&request_data) || request_data.tags.contains_key("_crab_skip");
+    let local_response = request_data.tags.contains_key("_crab_skip");
     let forward_original = request_replacement.is_none() && !local_response;
     let (original_request_body, raw_request_done) = raw_request.finish(
         forward_original,
         forward_original.then_some(request_speed).flatten(),
         None,
     );
-
-    if is_ca_download(&request_data) {
-        let bytes = runtime.certificate_pem().into_bytes();
-        let response_data = ResponseData {
-            status: 200,
-            version: "HTTP/1.1".into(),
-            headers: HeaderValues::from([(
-                "content-type".into(),
-                vec!["application/x-x509-ca-cert".into()],
-            )]),
-        };
-        let _ = store.save_body(capture_id, BodySide::Response, &bytes);
-        let _ = store.complete(capture_id, &response_data, &BodySourceType::Original);
-        return response_from_data(&response_data, bytes, false);
-    }
 
     if request_data.tags.contains_key("_crab_skip") {
         return finish_session_response(

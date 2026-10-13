@@ -92,6 +92,8 @@ and response scripts; see [Lua metadata rules](references/lua-api.md#script-disp
 | Inspect or control active interceptor breakpoints | `scripts/breakpoint-list.mjs`, then `scripts/breakpoint-control.mjs` |
 | Create or update a routing script | `scripts/routing-upsert.mjs` |
 | Select or clear the routing script | `scripts/routing-select.mjs` |
+| Download the current public CA certificate | `scripts/certificate-download.mjs --out PATH` (no proxy setup required) |
+| Inspect, enable, or disable a temporary Clash subscription | `scripts/clash-subscription.mjs`; see `references/http-api.md#clash-subscription` |
 | Inspect or change the active Session | `GET` or `PUT /api/active-session` |
 | Archive, restore, or permanently delete a Session | Read `references/http-api.md` and use the archived-Session endpoints |
 | Inspect transparent forwarding | `scripts/bypass-list.mjs` |
@@ -100,6 +102,12 @@ and response scripts; see [Lua metadata rules](references/lua-api.md#script-disp
 
 Resolve script paths relative to this `SKILL.md`; do not assume the current working directory is the
 skill directory.
+
+Clash subscriptions use a separate `pcrab_clash_…` download token, never an Agent API key. The
+bundled script omits that token from its output; users copy the subscription link from certificate
+management's “2. 代理连接” tab. Enabling only publishes a minimal rule-mode configuration and does
+not start ProxyCrab or change the OS system proxy. Disabling revokes future downloads; a restart
+also resets the subscription. Existing configurations imported into Clash remain usable.
 
 ## Standard capture-debugging workflow
 

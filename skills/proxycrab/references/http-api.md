@@ -20,6 +20,7 @@ This reference documents the complete local HTTP surface used by ProxyCrab agent
 14. [Certificate authority](#certificate-authority)
 15. [System logs](#system-logs)
 16. [Errors and lifecycle notes](#errors-and-lifecycle-notes)
+17. [Clash subscription](#clash-subscription)
 
 ## Script display metadata
 
@@ -1082,8 +1083,52 @@ Returns:
 { "pem": "-----BEGIN CERTIFICATE-----\n..." }
 ```
 
-The same CA is available through the proxy at `http://proxy.crab/ca.crt`. This local URL bypasses
-routing, Session capture, and bypass persistence.
+### `GET /ca.crt`
+
+Public raw-file download on the management HTTP port. No proxy setup, running proxy, Bearer key,
+subscription token, or active Session is required. It returns only the current public certificate
+as PEM (`application/x-x509-ca-cert`, attachment `proxycrab-ca.crt`, `Cache-Control: no-store`).
+Regenerating the CA updates the file at the same URL. The old proxy virtual-host handler has been
+removed; the old URL is now an ordinary upstream request. Certificate and Clash URLs share the
+selected non-loopback IPv4 in the management UI.
+
+```bash
+node <skill-dir>/scripts/certificate-download.mjs --out /tmp/proxycrab-ca.crt
+```
+
+The script uses the usual base URL options and reports the saved path and byte count. Its shared
+CLI connection helper still requires `PROXYCRAB_API_KEY` for remote base URLs; browsers and other
+HTTP clients can download this public file without authentication.
+
+## Clash subscription
+
+`GET /api/clash-subscription` reads the current state (default permission: `allow`).
+`PUT /api/clash-subscription` takes `{"server":"192.168.1.20"}` to enable or update the selected
+non-loopback IPv4; `DELETE` disables it (both default to `approval`, which CLI treats as deny for
+Agent identities until allowed). These routes use standard management authentication and envelopes.
+Disabled state is `{"enabled":false}`; enabled state also contains `server` and a `pcrab_clash_…`
+token. State is in memory and resets on restart. Updates while enabled preserve the token;
+disabling then re-enabling rotates it.
+
+```bash
+node <skill-dir>/scripts/clash-subscription.mjs --action status
+node <skill-dir>/scripts/clash-subscription.mjs --action enable --server 192.168.1.20
+node <skill-dir>/scripts/clash-subscription.mjs --action disable
+```
+
+The script prints only `enabled` and `server`, omitting download credentials. The user can choose
+an IP, copy/scan the link, or import it directly into Clash in certificate management's
+“2. 代理连接” tab. Use an address reachable from the device running Clash; `127.0.0.0/8`,
+`0.0.0.0/8`, multicast/broadcast, IPv6, and non-IP values are rejected.
+
+`GET /clash.yaml?token=TOKEN` independently validates exactly one nonempty download token and
+returns YAML with `mode: rule`, a `ProxyCrab` HTTP node using the selected server and current
+configured proxy port, and `MATCH,ProxyCrab`. Responses are not cached; invalid/disabled links
+return `404 not_found`. This token grants no management access and must not be sent as Bearer.
+Enabling/downloading does not start the proxy. Closing the subscription does not disconnect
+existing clients or remove cached Clash profiles. After changing IP or re-enabling, update the URL
+in Clash; after changing the proxy port, refresh the subscription. Successful management updates
+publish `clash_subscription` for UI synchronization.
 
 ## System logs
 

@@ -198,7 +198,7 @@ mod tests {
         let service = HttpPermissionService::open(directory.path(), Arc::new(|_| {})).unwrap();
         let catalog = service.catalog();
 
-        assert_eq!(catalog.len(), 71);
+        assert_eq!(catalog.len(), 74);
         assert!(catalog.iter().any(|action| {
             action.id == "GET /api/assets" && action.route_template == "/api/assets"
         }));

@@ -29,7 +29,8 @@ with hot reload, while GTK/WebKit and the helper processes are the exact binarie
 
 - MITM proxy: `0.0.0.0:8089`, stopped when the app launches.
 - Management API: `0.0.0.0:18089`, started with the app. Remote management calls still require Bearer authentication.
-- CA download through the proxy: `http://proxy.crab/ca.crt`.
+- Certificate management opens on “1.证书配置”; “2. 代理连接” provides a temporary Clash subscription in both desktop and CLI management UIs. Select a non-loopback local IPv4, enable the subscription, then copy/scan its link or import it into Clash. The generated rule-mode configuration forwards all matched traffic to ProxyCrab's current proxy port. This does not start the proxy or enable the OS system proxy. Disabling revokes downloads only; restarting resets the switch and invalidates the link.
+- CA download: `http://<selected local IPv4>:18089/ca.crt`, available without configuring or starting the proxy. The certificate and Clash tabs share the same IP selector.
 - System log buffer: the newest 10,000 entries in memory.
 - Captured request/response bodies stream directly to disk without an application-level size limit; at most 256 client connections are accepted.
 - Blocking capture/bypass queries and management Lua evaluations: at most eight concurrently; excess work waits without occupying Tokio worker threads.

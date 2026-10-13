@@ -70,6 +70,32 @@ async fn create_active_session(runtime: &ProxyCrab, name: Option<&str>) -> Sessi
     session
 }
 
+// Requests to the removed CA URL must go through normal interceptors and capture.
+fn mock_old_ca_url(runtime: &ProxyCrab, session_id: u64) {
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "mock-old-ca-url".into(),
+                content: "req.uri = 'https://proxy.crab/ca.crt'; req:set_tag('_crab_skip', 'true')"
+                    .into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session_id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "mock-old-ca-url".into(),
+                    enabled: true,
+                }],
+                response: vec![],
+            },
+        )
+        .unwrap();
+}
+
 async fn fixed_http_upstream() -> (u16, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -2529,23 +2555,19 @@ async fn lifecycle_preserves_preexisting_in_progress_outcomes() {
 }
 
 #[tokio::test]
-async fn origin_form_ca_download_is_local_and_not_recorded() {
+async fn old_ca_url_and_rewritten_requests_use_normal_interceptors_and_capture() {
     let (_app_data, runtime, proxy_port) = runtime().await;
-    let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
-    stream
-        .write_all(
-            b"GET /ca.crt HTTP/1.1\r\nHost: proxy.crab\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
-        )
-        .await
-        .unwrap();
-    let mut response = Vec::new();
-    timeout(Duration::from_secs(3), stream.read_to_end(&mut response))
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert!(String::from_utf8_lossy(&response).contains("BEGIN CERTIFICATE"));
-    assert!(runtime.sessions().is_empty());
+    let session = create_active_session(&runtime, None).await;
+    mock_old_ca_url(&runtime, session.id);
+    for path in ["/ca.crt", "/rewritten-to-ca"] {
+        let response = proxy_get(proxy_port, path, "proxy.crab").await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(!response.contains("BEGIN CERTIFICATE"));
+    }
+    assert_eq!(
+        runtime.list_captures(session.id, 10, None).unwrap().len(),
+        2
+    );
     assert!(runtime.bypass_entries(10, None).unwrap().is_empty());
     runtime.stop_proxy().await.unwrap();
 }
@@ -2713,9 +2735,10 @@ async fn upstream_http_version_tag_downgrades_browser_http2_to_local_http1() {
 }
 
 #[tokio::test]
-async fn trusted_ca_serves_certificate_and_untrusted_ca_is_diagnostic() {
+async fn trusted_ca_allows_interception_and_untrusted_ca_is_diagnostic() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let session = create_active_session(&runtime, None).await;
+    mock_old_ca_url(&runtime, session.id);
 
     let mut roots = RootCertStore::empty();
     for certificate in rustls_pemfile::certs(&mut Cursor::new(runtime.certificate_pem())) {
@@ -2740,7 +2763,8 @@ async fn trusted_ca_serves_certificate_and_untrusted_ca_is_diagnostic() {
         .await
         .unwrap()
         .unwrap();
-    assert!(String::from_utf8_lossy(&response).contains("BEGIN CERTIFICATE"));
+    assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 200"));
+    assert!(!String::from_utf8_lossy(&response).contains("BEGIN CERTIFICATE"));
     let captures = runtime.list_captures(session.id, 10, None).unwrap();
     assert!(captures.iter().any(|capture| {
         capture.outcome == CaptureOutcome::Success
@@ -2779,9 +2803,10 @@ async fn trusted_ca_serves_certificate_and_untrusted_ca_is_diagnostic() {
 }
 
 #[tokio::test]
-async fn serves_ca_over_http2_without_recording_the_local_request() {
+async fn old_ca_url_over_http2_uses_normal_interceptors_and_capture() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let session = create_active_session(&runtime, None).await;
+    mock_old_ca_url(&runtime, session.id);
     let mut roots = RootCertStore::empty();
     for certificate in rustls_pemfile::certs(&mut Cursor::new(runtime.certificate_pem())) {
         roots.add(certificate.unwrap()).unwrap();
@@ -2810,7 +2835,7 @@ async fn serves_ca_over_http2_without_recording_the_local_request() {
     let response = sender.send_request(request).await.unwrap();
     assert_eq!(response.version(), Version::HTTP_2);
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    assert!(String::from_utf8_lossy(&body).contains("BEGIN CERTIFICATE"));
+    assert!(body.is_empty());
     drop(sender);
     connection.abort();
 
@@ -2819,7 +2844,7 @@ async fn serves_ca_over_http2_without_recording_the_local_request() {
             .list_captures(session.id, 10, None)
             .unwrap()
             .iter()
-            .all(|capture| capture.request.version != "HTTP/2")
+            .any(|capture| capture.request.version == "HTTP/2" && capture.request.method == "GET")
     );
     assert!(runtime.bypass_entries(10, None).unwrap().is_empty());
     runtime.stop_proxy().await.unwrap();

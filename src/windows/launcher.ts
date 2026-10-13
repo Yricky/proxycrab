@@ -10,6 +10,7 @@ import FilterManagerWindow from "./FilterManagerWindow.vue";
 import Base64Window from "./Base64Window.vue";
 import JwtWindow from "./JwtWindow.vue";
 import QrCodeWindow from "./QrCodeWindow.vue";
+import TextDiffWindow from "./TextDiffWindow.vue";
 import CertManagerWindow from "./CertManagerWindow.vue";
 import SystemLogsWindow from "./SystemLogsWindow.vue";
 import SettingsWindow from "./SettingsWindow.vue";
@@ -265,6 +266,15 @@ export function openQrCode(): void {
     component: QrCodeWindow,
     width: 520,
     height: 560,
+  });
+}
+
+export function openTextDiff(): void {
+  windowsStore.open("tool-text-diff", {
+    title: "文本比对",
+    component: TextDiffWindow,
+    width: 940,
+    height: 640,
   });
 }
 

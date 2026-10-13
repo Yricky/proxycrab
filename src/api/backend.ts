@@ -10,6 +10,7 @@ import type {
   BypassPage,
   BypassQuery,
   CertificateResponse,
+  ClashSubscriptionState,
   CreatedApiKey,
   CreateAgentsPresetRequest,
   CreateSessionRequest,
@@ -97,6 +98,11 @@ export interface HostOperations {
  * can be dropped in without touching any component.
  */
 export interface Backend {
+  readonly clashSubscription?: {
+    getState(): Promise<ClashSubscriptionState>;
+    enable(server: string): Promise<ClashSubscriptionState>;
+    disable(): Promise<ClashSubscriptionState>;
+  };
   readonly capabilities: BackendCapabilities;
   readonly host?: HostOperations;
 

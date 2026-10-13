@@ -6,6 +6,10 @@
   "permissions": [
     "core:default",
     "clipboard-manager:allow-write-text",
-    "opener:default"
+    "opener:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "clash://install-config?url=*" }]
+    }
   ]
 }

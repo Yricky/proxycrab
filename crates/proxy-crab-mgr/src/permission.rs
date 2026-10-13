@@ -172,6 +172,9 @@ pub static API_ACTIONS: &[ApiAction] = &[
     action!("POST", "/api/bypass/delete", Deny),
     action!("DELETE", "/api/bypass/{id}", Deny),
     action!("GET", "/api/ca", Deny),
+    action!("GET", "/api/clash-subscription", Allow),
+    action!("PUT", "/api/clash-subscription", Approval),
+    action!("DELETE", "/api/clash-subscription", Approval),
     action!("GET", "/api/system-logs", Allow),
     action!("DELETE", "/api/system-logs", Deny),
 ];

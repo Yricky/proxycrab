@@ -16,6 +16,7 @@ import {
   openJwt,
   openQrCode,
   openReplay,
+  openTextDiff,
   openRequestInterceptorManager,
   openResponseInterceptorManager,
   openRoutingManager,
@@ -45,6 +46,7 @@ import {
   Io5ShieldCheckmark,
   Io5Stop,
   Io5Flash,
+  Io5GitCompareOutline,
   Io5Sunny,
   Io5Warning,
 } from "vue-icons-plus/io5";
@@ -302,6 +304,10 @@ onBeforeUnmount(() => {
           <button class="tb-menu-item" @click="runMenuAction(openQrCode)">
             <Io5QrCodeOutline :size="14" />
             <span>二维码生成</span>
+          </button>
+          <button class="tb-menu-item" @click="runMenuAction(openTextDiff)">
+            <Io5GitCompareOutline :size="14" />
+            <span>文本比对</span>
           </button>
         </div>
       </div>
