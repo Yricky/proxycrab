@@ -8,7 +8,7 @@ test("share links prefer reachable non-loopback IPv4 addresses", () => {
         "127.0.0.1",
         "192.168.1.5",
         "0.0.0.0",
-        "10.0.0.2",
+        "192.0.2.10",
         "192.168.1.5",
       ],
       18089,
@@ -16,7 +16,7 @@ test("share links prefer reachable non-loopback IPv4 addresses", () => {
     ),
   ).toEqual([
     "http://192.168.1.5:18089/session?token=pcrab_share_a%2Bb",
-    "http://10.0.0.2:18089/session?token=pcrab_share_a%2Bb",
+    "http://192.0.2.10:18089/session?token=pcrab_share_a%2Bb",
   ]);
 });
 

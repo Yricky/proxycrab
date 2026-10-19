@@ -3591,7 +3591,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         manager
             .enable_clash_subscription(crate::clash_subscription::EnableClashSubscriptionRequest {
-                server: "10.0.0.2".into(),
+                server: "192.0.2.10".into(),
             })
             .await
             .unwrap();

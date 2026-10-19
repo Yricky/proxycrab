@@ -163,14 +163,14 @@ mod tests {
                 .unwrap()
                 .contains("server: 192.168.1.20\n    port: 8089")
         );
-        subscription.enable("10.0.0.2").unwrap();
+        subscription.enable("192.0.2.10").unwrap();
         let yaml = subscription.yaml(&token, 9999).unwrap();
-        assert!(yaml.contains("server: 10.0.0.2\n    port: 9999"));
+        assert!(yaml.contains("server: 192.0.2.10\n    port: 9999"));
         assert!(yaml.ends_with("rules:\n  - MATCH,ProxyCrab\n"));
         assert_eq!(subscription.disable(), ClashSubscriptionState::default());
         assert!(subscription.yaml(&token, 8089).is_err());
         assert_ne!(
-            subscription.enable("10.0.0.2").unwrap().token.as_ref(),
+            subscription.enable("192.0.2.10").unwrap().token.as_ref(),
             Some(&token)
         );
         assert_eq!(

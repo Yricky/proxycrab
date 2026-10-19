@@ -6,8 +6,8 @@ test("Clash server candidates exclude unusable addresses without loopback fallba
   deepStrictEqual(clashServerAddresses([
     "0.0.0.0", "127.0.0.1", "127.0.0.2", "::1", "localhost", "224.0.0.1",
     "255.255.255.255", "256.1.1.1", "1.2.3", "01.2.3.4", "0.1.2.3",
-    "192.168.1.5", "10.0.0.2", "192.168.1.5",
-  ]), ["192.168.1.5", "10.0.0.2"]);
+    "192.168.1.5", "192.0.2.10", "192.168.1.5",
+  ]), ["192.168.1.5", "192.0.2.10"]);
   deepStrictEqual(clashServerAddresses(["0.0.0.0", "127.0.0.1"]), []);
 });
 
