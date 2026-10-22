@@ -10,6 +10,7 @@ import type {
   BypassPage,
   BypassQuery,
   CertificateResponse,
+  ClashConfig,
   ClashSubscriptionState,
   CreatedApiKey,
   CreateAgentsPresetRequest,
@@ -102,6 +103,11 @@ export interface Backend {
     getState(): Promise<ClashSubscriptionState>;
     enable(server: string): Promise<ClashSubscriptionState>;
     disable(): Promise<ClashSubscriptionState>;
+  };
+  readonly clashConfig?: {
+    get(): Promise<ClashConfig>;
+    save(yaml: string): Promise<ClashConfig>;
+    reset(): Promise<ClashConfig>;
   };
   readonly capabilities: BackendCapabilities;
   readonly host?: HostOperations;

@@ -223,51 +223,72 @@ browser UI.
 | `/api/bypass`, `/api/bypass/{id}`, `/api/bypass/delete` | query/delete transparent forwarding metadata |
 | `/api/ca` | `GET` |
 | `/api/clash-subscription` | `GET` current state (default: `allow`); `PUT` enable/update selected IPv4; `DELETE` disable (both default: `approval`) |
+| `/api/clash-config` | `GET` full YAML, path, and default; `PUT` validate/write; `DELETE` reset (all default: `allow`) |
 | `/api/system-logs` | `GET`, `DELETE` |
 
 System logs accept `after_seq` and are capped at 10,000 entries.
 
 ## Clash subscription
 
-The shared manager keeps one subscription in memory, initially disabled. Desktop commands
-`get_clash_subscription`, `enable_clash_subscription`, and `disable_clash_subscription`, and the
-CLI UI's normal management requests operate on that state. The frontend exposes this as the optional
-`Backend.clashSubscription` API; the certificate window shows “2. 代理连接” only when it exists.
-The default tab “1.证书配置” contains the existing certificate controls.
+The shared manager keeps one subscription in memory, initially disabled, plus a persistent full
+Clash YAML file in the workspace. Desktop commands `get_clash_subscription`,
+`enable_clash_subscription`, and `disable_clash_subscription` manage the switch; `get_clash_config`,
+`save_clash_config`, and `reset_clash_config` manage the file. The CLI UI's normal management
+requests operate on the same state. The frontend exposes these as the optional
+`Backend.clashSubscription` and `Backend.clashConfig` APIs; the certificate window shows
+“2. 代理连接” only when the subscription capability exists, and shows the editor only when the
+config capability exists. The default tab “1.证书配置” contains the existing certificate controls.
 
 `GET /api/clash-subscription` returns the usual envelope with `{"enabled":false}` or
-`{"enabled":true,"server":"192.168.1.20","token":"pcrab_clash_…"}`.
-`PUT` takes `{"server":"192.168.1.20"}`; non-IPv4, loopback, zero-network, multicast, broadcast,
-and malformed addresses are rejected. The UI lists the backend machine's non-loopback IPv4
-addresses, using the selected address for both the subscription URL and proxy server.
-An enabled subscription keeps its token when changing IP. `DELETE` clears the state and revokes
-the token; enabling again generates a new random 256-bit token. State is never persisted.
-Successful HTTP `PUT`/`DELETE` emit the `clash_subscription` change resource.
+`{"enabled":true,"server":"192.168.1.20"}`. `PUT` takes `{"server":"192.168.1.20"}`; non-IPv4,
+loopback, zero-network, multicast, broadcast, and malformed addresses are rejected. The UI lists the
+backend machine's non-loopback IPv4 addresses, using the selected address for both the subscription
+URL and proxy server. No download token is generated, persisted, or returned. `DELETE` clears the
+in-memory state. State is never persisted across application restarts. Successful HTTP
+`PUT`/`DELETE` emit the `clash_subscription` change resource.
 
-`GET /clash.yaml?token=TOKEN` is a separate download route, outside management Bearer auth.
-Exactly one nonempty `token` query parameter is required. A missing, incorrect, revoked, or
-malformed token returns `404 not_found`. All download responses use `Cache-Control: no-store`
-and `Referrer-Policy: no-referrer`; success uses `application/yaml; charset=utf-8` and attachment
-filename `ProxyCrab.yaml`. The token grants only download access, not management access.
+`GET /api/clash-config` returns `{"yaml":"…","path":"…","default_yaml":"…"}`; it creates
+`<workspace>/clash/config.yaml` from the default template when missing. `PUT` takes
+`{"yaml":"…"}`, validates it, and writes it atomically. `DELETE` writes the default template back.
+All three default to `allow`. The file is a complete Clash YAML and must contain both `{{server}}`
+and `{{port}}`; validation checks YAML parsing (after substituting sample values), a top-level
+mapping, a non-empty `proxies` list whose entries are mappings with non-empty `name` and `type`, a
+non-empty `rules` list of non-empty strings, a final `MATCH,<target>` rule, both placeholders, and a
+1 MiB size limit. The raw file is a template, so validation substitutes `192.0.2.1` and `8089` for
+the placeholders before parsing. Invalid input returns `400 bad_request` without writing. Successful
+`PUT`/`DELETE` emit the `clash_config` change resource. The file persists across restarts independently of the
+subscription switch.
+
+`GET /clash.yaml` is a separate public download route, outside management Bearer authentication.
+It is available only while the subscription is enabled; otherwise it returns `404 not_found`. The
+URL has no token and query parameters are ignored, so legacy `?token=…` links keep working. The
+saved YAML is rendered by replacing `{{server}}` with the selected IPv4 and `{{port}}` with the
+current configured proxy port; comments, formatting, and all other content are preserved. The file
+is not validated at download time, so edits made outside ProxyCrab are served as-is. All download
+responses use `Cache-Control: no-store` and `Referrer-Policy: no-referrer`; success uses
+`application/yaml; charset=utf-8` and attachment filename `ProxyCrab.yaml`.
 
 ```yaml
+# ProxyCrab Clash subscription
+# The server and port placeholders are replaced when Clash downloads this file.
 mode: rule
 proxies:
   - name: ProxyCrab
     type: http
-    server: 192.168.1.20
-    port: 8089
+    server: "{{server}}"
+    port: {{port}}
 rules:
   - MATCH,ProxyCrab
 ```
 
-The proxy port is read from current configuration on each download. The proxy may be stopped
-when enabling or downloading the subscription; neither operation changes its lifecycle.
-The QR code contains the HTTP download URL. The import button opens
+The proxy port is read from current configuration on each download. The proxy may be stopped when
+enabling or downloading the subscription; neither operation changes its lifecycle. The QR code
+contains the HTTP download URL. The import button opens
 `clash://install-config?url=ENCODED_HTTP_URL`. Users select the imported profile and enable system
-proxy in Clash. Changing the chosen IP or re-enabling requires updating the subscription URL in
-Clash; changing the proxy port requires refreshing the subscription. Revoking downloads does not
-remove previously imported configurations or stop existing proxy traffic.
+proxy in Clash. Changing the chosen IP changes the URL host, so update the subscription URL in
+Clash; changing the proxy port only requires refreshing the subscription. Re-enabling with the same
+IP keeps the same URL. Revoking downloads does not remove previously imported configurations or stop
+existing proxy traffic, and does not modify the persistent YAML file.
 
 ## Script display metadata
 
@@ -859,8 +880,9 @@ with `Content-Type: application/x-x509-ca-cert`, download filename `proxycrab-ca
 `Cache-Control: no-store`. It requires no Bearer key, token, running proxy, or active Session, and
 never returns the private key. Regenerating the CA changes the downloaded certificate at the same
 URL. The permission-controlled JSON endpoint `GET /api/ca` remains available for management reads.
-The certificate window shares one non-loopback IPv4 selector across its certificate and Clash tabs;
-both URLs and QR codes use that address and the management service port. An unavailable service or
+The certificate window shares one non-loopback IPv4 selector across its certificate and Clash
+tabs; the Clash tab's lower half edits the complete YAML. Both URLs and QR codes use that address
+and the management service port. An unavailable service or
 IP suppresses the download links. The old virtual-host download implementation has been removed
 from the proxy, including plain HTTP, MITM HTTP/1 and HTTP/2, and interceptor-rewritten requests.
 Requests to the old URL now follow ordinary routing and capture rules.

@@ -1105,30 +1105,68 @@ HTTP clients can download this public file without authentication.
 `GET /api/clash-subscription` reads the current state (default permission: `allow`).
 `PUT /api/clash-subscription` takes `{"server":"192.168.1.20"}` to enable or update the selected
 non-loopback IPv4; `DELETE` disables it (both default to `approval`, which CLI treats as deny for
-Agent identities until allowed). These routes use standard management authentication and envelopes.
-Disabled state is `{"enabled":false}`; enabled state also contains `server` and a `pcrab_clash_…`
-token. State is in memory and resets on restart. Updates while enabled preserve the token;
-disabling then re-enabling rotates it.
+Agent identities until allowed). Disabled state is `{"enabled":false}`; enabled state is
+`{"enabled":true,"server":"192.168.1.20"}`. No download token is generated, returned, or validated.
+State is in memory and resets on restart. Successful management updates publish
+`clash_subscription` for UI synchronization.
+
+`GET /api/clash-config` returns `{"yaml":"…","path":"…","default_yaml":"…"}` (default permission:
+`allow`). `PUT /api/clash-config` takes `{"yaml":"…"}` and validates before writing; `DELETE`
+restores the built-in default (both default permission: `allow`). The file is
+`<workspace>/clash/config.yaml` and persists across restarts, independently of the subscription
+switch. It is a complete Clash YAML (including `mode`, `proxies`, optional groups, and `rules`) and
+must contain both `{{server}}` and `{{port}}`. Saving validates that the YAML parses, the top level
+is a mapping, `proxies` is a non-empty list of mappings with non-empty `name` and `type`, `rules` is
+a non-empty list of non-empty strings, the final rule is `MATCH,<target>`, both placeholders are
+present, and the file is at most 1 MiB. The raw file is a template, so validation substitutes
+`192.0.2.1` and `8089` for the placeholders before parsing. Invalid input returns `400 bad_request`
+and does not write the file. Successful `PUT`/`DELETE` publish `clash_config`.
+
+`GET /clash.yaml` is a separate public download route, outside management Bearer auth and the
+management permission catalog. It is available only while the subscription is enabled; otherwise it
+returns `404 not_found`. The URL has no token, and query parameters are ignored, so legacy
+`?token=…` links keep working. The downloaded YAML is the saved file with `{{server}}` replaced by
+the selected IPv4 and `{{port}}` replaced by the current configured proxy port; all other text,
+comments, and formatting are preserved. The file is not validated at download time, so external
+edits are served as-is. Responses use `Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
+`application/yaml; charset=utf-8`, and attachment filename `ProxyCrab.yaml`.
+
+The default file is:
+
+```yaml
+# ProxyCrab Clash subscription
+# The server and port placeholders are replaced when Clash downloads this file.
+mode: rule
+proxies:
+  - name: ProxyCrab
+    type: http
+    server: "{{server}}"
+    port: {{port}}
+rules:
+  - MATCH,ProxyCrab
+```
+
+The proxy port is read from current configuration on each download. The proxy may be stopped when
+enabling or downloading the subscription; neither operation changes its lifecycle. The QR code
+contains the HTTP download URL. The import button opens
+`clash://install-config?url=ENCODED_HTTP_URL`. Users select the imported profile and enable system
+proxy in Clash. Changing the chosen IP changes the URL host, so update the subscription URL in
+Clash; changing the proxy port only requires refreshing the subscription. Re-enabling with the same
+IP keeps the same URL. Closing the subscription does not remove previously imported configurations
+or stop existing proxy traffic.
 
 ```bash
 node <skill-dir>/scripts/clash-subscription.mjs --action status
 node <skill-dir>/scripts/clash-subscription.mjs --action enable --server 192.168.1.20
 node <skill-dir>/scripts/clash-subscription.mjs --action disable
+node <skill-dir>/scripts/clash-subscription.mjs --action config
+node <skill-dir>/scripts/clash-subscription.mjs --action save-config --file /tmp/clash-config.yaml
+node <skill-dir>/scripts/clash-subscription.mjs --action reset-config
 ```
 
-The script prints only `enabled` and `server`, omitting download credentials. The user can choose
-an IP, copy/scan the link, or import it directly into Clash in certificate management's
-“2. 代理连接” tab. Use an address reachable from the device running Clash; `127.0.0.0/8`,
-`0.0.0.0/8`, multicast/broadcast, IPv6, and non-IP values are rejected.
-
-`GET /clash.yaml?token=TOKEN` independently validates exactly one nonempty download token and
-returns YAML with `mode: rule`, a `ProxyCrab` HTTP node using the selected server and current
-configured proxy port, and `MATCH,ProxyCrab`. Responses are not cached; invalid/disabled links
-return `404 not_found`. This token grants no management access and must not be sent as Bearer.
-Enabling/downloading does not start the proxy. Closing the subscription does not disconnect
-existing clients or remove cached Clash profiles. After changing IP or re-enabling, update the URL
-in Clash; after changing the proxy port, refresh the subscription. Successful management updates
-publish `clash_subscription` for UI synchronization.
+The script prints only subscription state for status/enable/disable and prints `path`, `yaml`, and
+`default_yaml` for config operations. Use an address reachable from the device running Clash;
+`127.0.0.0/8`, `0.0.0.0/8`, multicast/broadcast, IPv6, and non-IP values are rejected.
 
 ## System logs
 

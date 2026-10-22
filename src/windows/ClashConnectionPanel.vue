@@ -1,15 +1,19 @@
 <script setup lang="ts">
 import QRCode from "qrcode";
-import { ref, watch } from "vue";
-import { Io5Copy, Io5OpenOutline, Io5Warning } from "vue-icons-plus/io5";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { Io5Copy, Io5OpenOutline, Io5Reload, Io5Save, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type { ClashSubscriptionState } from "../api/types";
+import type { ClashConfig, ClashSubscriptionState, HttpApiChange } from "../api/types";
+import MonacoEditor from "../components/MonacoEditor.vue";
 import { appStore, reportError } from "../stores/app";
+import { confirmDialog } from "../stores/dialog";
+import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { proxyStore } from "../stores/proxy";
 import { copyText } from "../utils/clipboard";
 import { clashImportUrl } from "../utils/clash-subscription";
 
 const backend = useBackend();
+const configBackend = backend.clashConfig;
 const props = defineProps<{
   state: ClashSubscriptionState | null;
   url: string;
@@ -19,6 +23,99 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ toggle: [] }>();
 const qrCode = ref("");
+
+const configPath = ref("");
+const configSaved = ref("");
+const configDraft = ref("");
+const configLoading = ref(false);
+const configSaving = ref(false);
+const configError = ref("");
+const configExternal = ref(false);
+const configDirty = computed(() => configDraft.value !== configSaved.value);
+const configEditorOptions = {
+  fontSize: 12,
+  lineNumbersMinChars: 3,
+  padding: { top: 8, bottom: 8 },
+};
+
+function applyConfig(value: ClashConfig): void {
+  configPath.value = value.path;
+  configSaved.value = value.yaml;
+  configDraft.value = value.yaml;
+  configError.value = "";
+  configExternal.value = false;
+}
+
+async function loadConfig(): Promise<void> {
+  if (!configBackend || configLoading.value) return;
+  configLoading.value = true;
+  try {
+    applyConfig(await configBackend.get());
+  } catch (error) {
+    configError.value = reportError(error, "读取 Clash 规则文件失败");
+  } finally {
+    configLoading.value = false;
+  }
+}
+
+async function saveConfig(): Promise<void> {
+  if (!configBackend || !configDirty.value || configSaving.value) return;
+  configSaving.value = true;
+  configError.value = "";
+  try {
+    applyConfig(await configBackend.save(configDraft.value));
+    appStore.toast("Clash 规则文件已保存", "success");
+  } catch (error) {
+    configError.value = reportError(error, "保存 Clash 规则文件失败");
+  } finally {
+    configSaving.value = false;
+  }
+}
+
+async function reloadConfig(): Promise<void> {
+  if (configLoading.value || configSaving.value) return;
+  if (configDirty.value) {
+    const ok = await confirmDialog({
+      title: "重新载入规则文件",
+      message: "当前修改尚未保存，重新载入会丢弃这些修改。确定继续吗？",
+      confirmText: "重新载入",
+      danger: true,
+    });
+    if (!ok) return;
+  }
+  await loadConfig();
+}
+
+async function resetConfig(): Promise<void> {
+  if (!configBackend || configSaving.value) return;
+  const ok = await confirmDialog({
+    title: "恢复默认规则文件",
+    message: "将覆盖当前规则文件，恢复为默认的 MATCH,ProxyCrab 配置。确定继续吗？",
+    confirmText: "恢复默认",
+    danger: true,
+  });
+  if (!ok) return;
+  configSaving.value = true;
+  configError.value = "";
+  try {
+    applyConfig(await configBackend.reset());
+    appStore.toast("Clash 规则文件已恢复默认", "success");
+  } catch (error) {
+    configError.value = reportError(error, "恢复默认规则文件失败");
+  } finally {
+    configSaving.value = false;
+  }
+}
+
+function onHttpApiChange(event: Event): void {
+  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  if (!resources.some((resource) => resource === "all" || resource === "clash_config")) return;
+  if (configDirty.value) {
+    configExternal.value = true;
+    return;
+  }
+  void loadConfig();
+}
 
 async function copyUrl(): Promise<void> {
   if (!props.url) return;
@@ -39,6 +136,10 @@ async function importClash(): Promise<void> {
   }
 }
 
+watch(configDraft, () => {
+  if (configError.value) configError.value = "";
+});
+
 watch(() => props.url, async (value, _previous, onCleanup) => {
   let stale = false;
   onCleanup(() => { stale = true; });
@@ -52,50 +153,85 @@ watch(() => props.url, async (value, _previous, onCleanup) => {
   }
 }, { immediate: true });
 
+onMounted(() => {
+  if (configBackend) {
+    void loadConfig();
+    window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
+  }
+});
+
+onBeforeUnmount(() => {
+  if (configBackend) window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
+});
 </script>
 
 <template>
   <div class="connection-root">
-    <div class="connection-heading">
-      <div>
-        <h3>Clash 连接</h3>
-        <p class="text-secondary">将订阅导入 Clash，把流量转发到 ProxyCrab。</p>
+    <div class="connection-top">
+      <div class="connection-heading">
+        <div>
+          <h3>Clash 连接</h3>
+          <p class="text-secondary">将订阅导入 Clash，把流量转发到 ProxyCrab。</p>
+        </div>
+        <button
+          class="switch" :class="{ on: state?.enabled }" type="button"
+          :aria-pressed="state?.enabled ?? false"
+          :aria-label="state?.enabled ? '关闭 Clash 订阅' : '开启 Clash 订阅'"
+          :title="state?.enabled ? '关闭 Clash 订阅' : '开启 Clash 订阅'"
+          :disabled="loading || mutating || !state || (!state.enabled && !canEnable)"
+          @click="emit('toggle')"
+        />
       </div>
-      <button
-        class="switch" :class="{ on: state?.enabled }" type="button"
-        :aria-pressed="state?.enabled ?? false"
-        :aria-label="state?.enabled ? '关闭 Clash 订阅' : '开启 Clash 订阅'"
-        :title="state?.enabled ? '关闭 Clash 订阅' : '开启 Clash 订阅'"
-        :disabled="loading || mutating || !state || (!state.enabled && !canEnable)"
-        @click="emit('toggle')"
-      />
+
+      <section v-if="url" class="subscription-content">
+        <div class="subscription-info">
+          <h3>订阅链接</h3>
+          <p class="text-secondary">其他设备需能访问所选 IP。扫描二维码或复制链接导入订阅。</p>
+          <div class="subscription-link">
+            <span class="mono">{{ url }}</span>
+            <button class="btn icon" title="复制 Clash 订阅链接" @click="copyUrl"><Io5Copy :size="14" /></button>
+          </div>
+          <button class="btn primary import-button" @click="importClash"><Io5OpenOutline :size="14" />导入 Clash</button>
+          <p class="text-secondary">导入后选择该订阅，并在 Clash 中开启系统代理。</p>
+        </div>
+        <div class="subscription-qr">
+          <img v-if="qrCode" :src="qrCode" alt="Clash 订阅链接二维码" />
+          <span v-else class="text-faint">二维码生成中…</span>
+        </div>
+      </section>
+      <p v-else class="connection-empty text-secondary">{{ loading ? '正在读取订阅状态…' : mutating ? '正在更新订阅…' : '开启后生成订阅链接和二维码。' }}</p>
+
+      <p v-if="state?.enabled && !proxyStore.running" class="connection-warning"><Io5Warning :size="14" />ProxyCrab 代理尚未启动，启动后才能转发流量。</p>
+      <p class="connection-note text-secondary">关闭后返回 404，已导入的配置仍可用；重启重置开关，规则文件保留。</p>
     </div>
 
-    <section v-if="url" class="subscription-content">
-      <div class="subscription-info">
-        <h3>订阅链接</h3>
-        <p class="text-secondary">其他设备需能访问所选 IP。扫描二维码或复制链接导入订阅。</p>
-        <div class="subscription-link">
-          <span class="mono">{{ url }}</span>
-          <button class="btn icon" title="复制 Clash 订阅链接" @click="copyUrl"><Io5Copy :size="14" /></button>
+    <section v-if="configBackend" class="config-section">
+      <div class="config-heading">
+        <div class="config-title">
+          <h3>规则文件</h3>
+          <span class="config-path mono" :title="configPath">{{ configPath || '读取中…' }}</span>
         </div>
-        <button class="btn primary import-button" @click="importClash"><Io5OpenOutline :size="14" />导入 Clash</button>
-        <p class="text-secondary">导入后选择该订阅，并在 Clash 中开启系统代理。</p>
+        <div class="config-actions">
+          <span v-if="configDirty" class="config-dirty">未保存</span>
+          <button class="btn icon" title="重新载入规则文件" :disabled="configLoading || configSaving" @click="reloadConfig"><Io5Reload :size="14" /></button>
+          <button class="btn" :disabled="configLoading || configSaving" @click="resetConfig">恢复默认</button>
+          <button class="btn primary" :disabled="!configDirty || configLoading || configSaving" @click="saveConfig"><Io5Save :size="14" />{{ configSaving ? "保存中…" : "保存" }}</button>
+        </div>
       </div>
-      <div class="subscription-qr">
-        <img v-if="qrCode" :src="qrCode" alt="Clash 订阅链接二维码" />
-        <span v-else class="text-faint">二维码生成中…</span>
+      <p class="config-hint text-secondary" v-pre>完整 Clash YAML；下载时 {{server}} / {{port}} 会替换为所选 IP 和当前代理端口，保存时用示例值校验。</p>
+      <p v-if="configError" class="config-error">{{ configError }}</p>
+      <p v-else-if="configExternal && configDirty" class="config-warning">文件已在外部更新；保存会覆盖外部修改，重新载入会丢弃当前修改。</p>
+      <div v-if="configLoading && !configSaved" class="config-loading text-secondary">正在读取规则文件…</div>
+      <div v-else class="config-editor">
+        <MonacoEditor v-model="configDraft" language="yaml" :options="configEditorOptions" />
       </div>
     </section>
-    <p v-else class="connection-empty text-secondary">{{ loading ? '正在读取订阅状态…' : mutating ? '正在更新订阅…' : '开启后生成订阅链接和二维码。' }}</p>
-
-    <p v-if="state?.enabled && !proxyStore.running" class="connection-warning"><Io5Warning :size="14" />ProxyCrab 代理尚未启动，启动后才能转发流量。</p>
-    <p class="connection-note text-secondary">关闭仅停止提供订阅，已导入的配置仍可使用。应用重启后恢复关闭；更换 IP 或重新开启后，请更新 Clash 中的订阅地址。</p>
   </div>
 </template>
 
 <style scoped>
-.connection-root { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); overflow: auto; min-height: 0; flex: 1; }
+.connection-root { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); overflow: hidden; min-height: 0; flex: 1; }
+.connection-top { flex: 0 1 auto; min-height: 0; max-height: 48%; overflow: auto; display: flex; flex-direction: column; gap: var(--space-3); }
 .connection-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
 p { margin: 0; font-size: 12px; }
@@ -110,5 +246,17 @@ p { margin: 0; font-size: 12px; }
 .connection-empty { padding: var(--space-3) 0; border-top: 1px solid var(--border); }
 .connection-warning { display: flex; align-items: flex-start; gap: var(--space-1); color: var(--warning); }
 .connection-warning svg { flex: none; margin-top: 2px; }
-.connection-note { margin-top: auto; font-size: 11px; }
+.connection-note { font-size: 11px; }
+.config-section { flex: 1 1 52%; min-height: 160px; display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--border); }
+.config-heading { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
+.config-title { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.config-title h3 { margin: 0; }
+.config-path { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); font-size: 10px; user-select: text; }
+.config-actions { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; }
+.config-dirty { color: var(--warning); font-size: 11px; }
+.config-hint { flex: none; font-size: 11px; line-height: 1.45; }
+.config-error { flex: none; color: var(--danger); font-size: 11px; line-height: 1.45; user-select: text; }
+.config-warning { flex: none; color: var(--warning); font-size: 11px; line-height: 1.45; }
+.config-loading { flex: 1; min-height: 0; display: grid; place-items: center; border: 1px solid var(--border); border-radius: var(--radius-md); font-size: 11px; }
+.config-editor { flex: 1; min-height: 0; display: flex; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); }
 </style>

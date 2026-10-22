@@ -518,6 +518,7 @@ pub enum HttpApiResource {
     SessionInterceptors,
     Certificate,
     ClashSubscription,
+    ClashConfig,
     SystemLogs,
     All,
 }

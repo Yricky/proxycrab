@@ -22,8 +22,8 @@ const connectionMutating = ref(false);
 const canConnect = computed(() => !!service.value?.running && addresses.value.includes(selectedIp.value));
 const certificateUrl = computed(() => canConnect.value ? `http://${selectedIp.value}:${service.value!.port}/ca.crt` : "");
 const clashUrl = computed(() => {
-  if (connectionMutating.value || !canConnect.value || !clashState.value?.enabled || !clashState.value.token || !clashState.value.server) return "";
-  return clashSubscriptionUrl(clashState.value.server, service.value!.port, clashState.value.token);
+  if (connectionMutating.value || !canConnect.value || !clashState.value?.enabled || !clashState.value.server) return "";
+  return clashSubscriptionUrl(clashState.value.server, service.value!.port);
 });
 const activeTab = ref<"certificate" | "connection">("certificate");
 
@@ -257,7 +257,8 @@ onBeforeUnmount(() => {
     </div>
   </div>
     <ClashConnectionPanel
-      v-if="activeTab === 'connection' && backend.clashSubscription"
+      v-if="backend.clashSubscription"
+      v-show="activeTab === 'connection'"
       id="connection-panel" role="tabpanel" aria-labelledby="connection-tab"
       :state="clashState" :url="clashUrl" :loading="connectionLoading" :mutating="connectionMutating"
       :can-enable="canConnect" @toggle="toggleClash"

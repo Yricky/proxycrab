@@ -42,6 +42,8 @@ rules:
 
 No configuration editor or multiple routing schemes in this iteration. Enabling the subscription does not start or stop the proxy. State and selected IP are not persisted across application restarts. QR encodes the HTTP download URL; import invokes the OS handler for Clash. Existing imported configurations remain usable after disabling the subscription.
 
+> Superseded by the 2026-10-21 follow-up below: the download token was removed and a full YAML editor was added.
+
 ## Verification results
 
 - `cargo test -p proxy-crab-mgr`: 78 unit tests and 3 permission contract tests passed.
@@ -65,3 +67,23 @@ The user requested removing the old proxy virtual-host implementation entirely.
 - [x] Run manager tests, proxy integration tests, frontend checks, workspace compile, and isolated browser checks for both tabs.
 
 Follow-up verification: 79 manager unit tests, 3 permission contract tests, 45 proxy integration tests, 47 frontend tests, and 6 Skill helper tests passed. Workspace compile and frontend production build passed. An isolated CLI browser run verified anonymous LAN certificate download with the proxy stopped, certificate headers and public PEM, clipboard, the download script, shared IP updates across both tabs and subscription YAML, QR rendering after tab changes, and subscription revocation without affecting certificate downloads. Both tabs were visually inspected; no browser errors occurred. The isolated test server was stopped afterward.
+
+## Follow-up: tokenless download and editable full YAML
+
+The user requested removing the subscription download token and making the complete Clash YAML
+editable.
+
+- [x] Remove the Clash download token from state, URLs, the management API, QR/import links, and Skill output. `GET /clash.yaml` is now gated only by the in-memory subscription switch; query parameters are ignored.
+- [x] Store the complete YAML at `<workspace>/clash/config.yaml`, persist it across restarts, and require the `{{server}}` / `{{port}}` placeholders.
+- [x] Add `GET`/`PUT`/`DELETE /api/clash-config` with structure and Clash-rule validation on save, atomic writes, default restore, and the `clash_config` change resource. All three actions default to `allow`.
+- [x] Render downloads by substituting the selected IPv4 and current proxy port; do not revalidate on download, so external edits are served as-is.
+- [x] Add the lower-half Monaco YAML editor to “2. 代理连接”, with save, reload, reset, dirty state, validation errors, and external-update handling. Preserve unsaved edits across tab switches.
+- [x] Extend `clash-subscription.mjs` with `config`, `save-config --file`, and `reset-config`; update Skill docs and evals.
+- [x] Run manager/permission/frontend/Skill tests, workspace compile, and a browser check of the editor and tokenless download.
+
+Follow-up verification: 84 manager tests, 3 permission contract tests, 37 Tauri lib tests, 45 proxy
+integration tests, 47 frontend tests, and 6 Skill helper tests passed; `cargo check --workspace`,
+`cargo fmt --check`, and `pnpm build` passed. An isolated CLI browser run verified the tokenless
+`/clash.yaml` URL, enabled/disabled 404 behavior, legacy `?token=` compatibility, the lower-half
+Monaco editor, save/reload/reset, dirty-state preservation across tab switches, external-update
+warnings, and the API/Skill config actions. The test server was stopped afterward.

@@ -27,6 +27,7 @@ const ALL_RESOURCES: HttpApiResource[] = [
   "session_interceptors",
   "certificate",
   "clash_subscription",
+  "clash_config",
   "system_logs",
 ];
 

@@ -7,10 +7,8 @@ export function clashServerAddresses(addresses: string[]): string[] {
   });
 }
 
-export function clashSubscriptionUrl(server: string, port: number, token: string): string {
-  const url = new URL(`http://${server}:${port}/clash.yaml`);
-  url.searchParams.set("token", token);
-  return url.toString();
+export function clashSubscriptionUrl(server: string, port: number): string {
+  return new URL(`http://${server}:${port}/clash.yaml`).toString();
 }
 
 export function clashImportUrl(subscriptionUrl: string): string {

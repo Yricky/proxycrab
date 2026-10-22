@@ -14,6 +14,7 @@ import type {
   CreateAgentsPresetRequest,
   BreakpointQuery,
   BypassQuery,
+  ClashConfig,
   CreateSessionRequest,
   DebugFilterScriptRequest,
   ExecuteTemporaryScriptRequest,
@@ -241,6 +242,11 @@ export function createTauriBackend(): Backend {
       getState: () => call("get_clash_subscription"),
       enable: (server) => call("enable_clash_subscription", { request: { server } }),
       disable: () => call("disable_clash_subscription"),
+    },
+    clashConfig: {
+      get: () => call<ClashConfig>("get_clash_config"),
+      save: (yaml) => call<ClashConfig>("save_clash_config", { request: { yaml } }),
+      reset: () => call<ClashConfig>("reset_clash_config"),
     },
 
     getSystemLogs: (query: SystemLogsQuery) => call("get_system_logs", { query }),

@@ -22,7 +22,8 @@ use regex::Regex;
 use crate::{
     agents::AgentsStore,
     clash_subscription::{
-        ClashSubscription, ClashSubscriptionState, EnableClashSubscriptionRequest,
+        ClashConfig, ClashSubscription, ClashSubscriptionState, EnableClashSubscriptionRequest,
+        SaveClashConfigRequest,
     },
     dto::{
         ActiveSession, AgentsPresetState, BreakpointDetailPayload, BreakpointQuery, BypassPage,
@@ -212,7 +213,13 @@ pub trait ProxyCrabManager: Send + Sync {
         request: EnableClashSubscriptionRequest,
     ) -> ManagerResult<ClashSubscriptionState>;
     async fn disable_clash_subscription(&self) -> ManagerResult<ClashSubscriptionState>;
-    async fn clash_subscription_yaml(&self, token: String) -> ManagerResult<String>;
+    async fn clash_subscription_yaml(&self) -> ManagerResult<String>;
+    async fn clash_config(&self) -> ManagerResult<ClashConfig>;
+    async fn save_clash_config(
+        &self,
+        request: SaveClashConfigRequest,
+    ) -> ManagerResult<ClashConfig>;
+    async fn reset_clash_config(&self) -> ManagerResult<ClashConfig>;
     async fn regenerate_certificate(&self) -> ManagerResult<CertificateResponse>;
     async fn system_logs(&self, query: SystemLogsQuery) -> ManagerResult<Vec<SystemLogEntry>>;
     async fn clear_system_logs(&self) -> ManagerResult<()>;
@@ -257,10 +264,11 @@ impl MitmManager {
         if let Err(error) = agents.initialize() {
             tracing::error!("failed to initialize AGENTS.md presets: {error}");
         }
+        let clash_subscription = ClashSubscription::new(runtime.workspace().root());
         Arc::new(Self {
             runtime,
             agents,
-            clash_subscription: ClashSubscription::default(),
+            clash_subscription,
             blocking_tasks: Arc::new(Semaphore::new(MAX_BLOCKING_MANAGEMENT_TASKS)),
         })
     }
@@ -1549,9 +1557,24 @@ impl ProxyCrabManager for MitmManager {
         Ok(self.clash_subscription.disable())
     }
 
-    async fn clash_subscription_yaml(&self, token: String) -> ManagerResult<String> {
+    async fn clash_subscription_yaml(&self) -> ManagerResult<String> {
         self.clash_subscription
-            .yaml(&token, self.runtime.config().proxy_port)
+            .yaml(self.runtime.config().proxy_port)
+    }
+
+    async fn clash_config(&self) -> ManagerResult<ClashConfig> {
+        self.clash_subscription.config()
+    }
+
+    async fn save_clash_config(
+        &self,
+        request: SaveClashConfigRequest,
+    ) -> ManagerResult<ClashConfig> {
+        self.clash_subscription.save_config(&request.yaml)
+    }
+
+    async fn reset_clash_config(&self) -> ManagerResult<ClashConfig> {
+        self.clash_subscription.reset_config()
     }
 
     async fn certificate(&self) -> ManagerResult<CertificateResponse> {

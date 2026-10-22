@@ -8,6 +8,7 @@ import type {
   AssetMetadata,
   BreakpointQuery,
   BypassQuery,
+  ClashConfig,
   CreatedApiKey,
   CreateAgentsPresetRequest,
   CreateSessionRequest,
@@ -348,6 +349,11 @@ export function createHttpBackend(
       getState: () => call("/api/clash-subscription"),
       enable: (server) => call("/api/clash-subscription", json("PUT", { server })),
       disable: () => call("/api/clash-subscription", json("DELETE")),
+    },
+    clashConfig: {
+      get: () => call<ClashConfig>("/api/clash-config"),
+      save: (yaml) => call<ClashConfig>("/api/clash-config", json("PUT", { yaml })),
+      reset: () => call<ClashConfig>("/api/clash-config", json("DELETE")),
     },
     getSystemLogs: (requestValue: SystemLogsQuery) =>
       call(query("/api/system-logs", requestValue as unknown as Record<string, unknown>)),

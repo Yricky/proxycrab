@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use proxy_crab_mgr::{
     MitmManager, ProxyCrabManager,
-    clash_subscription::{ClashSubscriptionState, EnableClashSubscriptionRequest},
+    clash_subscription::{
+        ClashConfig, ClashSubscriptionState, EnableClashSubscriptionRequest, SaveClashConfigRequest,
+    },
     dto::{
         ActiveSession, AgentsPresetState, BreakpointDetailPayload, BreakpointQuery, BypassPage,
         BypassQuery, CertificateResponse, CreateAgentsPresetRequest, CreateSessionRequest,
@@ -699,6 +701,24 @@ async fn disable_clash_subscription(
 }
 
 #[tauri::command]
+async fn get_clash_config(state: State<'_, BackendState>) -> Result<ClashConfig, ManagerError> {
+    state.manager().clash_config().await
+}
+
+#[tauri::command]
+async fn save_clash_config(
+    state: State<'_, BackendState>,
+    request: SaveClashConfigRequest,
+) -> Result<ClashConfig, ManagerError> {
+    state.manager().save_clash_config(request).await
+}
+
+#[tauri::command]
+async fn reset_clash_config(state: State<'_, BackendState>) -> Result<ClashConfig, ManagerError> {
+    state.manager().reset_clash_config().await
+}
+
+#[tauri::command]
 async fn get_certificate(
     state: State<'_, BackendState>,
 ) -> Result<CertificateResponse, ManagerError> {
@@ -1189,6 +1209,9 @@ pub fn run() {
             get_clash_subscription,
             enable_clash_subscription,
             disable_clash_subscription,
+            get_clash_config,
+            save_clash_config,
+            reset_clash_config,
             regenerate_certificate,
             save_file,
             get_system_logs,

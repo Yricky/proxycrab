@@ -283,7 +283,7 @@ export function openCertManager(): void {
     title: "证书管理",
     component: CertManagerWindow,
     width: 640,
-    height: 520,
+    height: 600,
   });
 }
 

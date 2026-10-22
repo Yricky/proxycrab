@@ -237,6 +237,7 @@ export type HttpApiResource =
   | "session_interceptors"
   | "certificate"
   | "clash_subscription"
+  | "clash_config"
   | "system_logs"
   | "all";
 
@@ -546,7 +547,12 @@ export interface CertificateResponse {
 export interface ClashSubscriptionState {
   enabled: boolean;
   server?: string;
-  token?: string;
+}
+
+export interface ClashConfig {
+  yaml: string;
+  path: string;
+  default_yaml: string;
 }
 
 export interface HttpServiceStatus {
