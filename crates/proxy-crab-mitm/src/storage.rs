@@ -923,7 +923,6 @@ impl CaptureStore {
         if source.stored_size > BODY_DETAIL_LIMIT {
             return Ok(BodyPayload::Large {
                 size: source.stored_size,
-                path: source.path,
             });
         }
         let mut bytes = match source.data {
@@ -940,37 +939,22 @@ impl CaptureStore {
                 Err(DecodeBodyError::TooLarge) => {
                     return Ok(BodyPayload::Large {
                         size: source.stored_size,
-                        path: source.path,
                     });
                 }
                 Err(DecodeBodyError::Failed) => {
                     return Ok(BodyPayload::Binary {
                         size: source.stored_size,
-                        path: source.path,
                     });
                 }
             };
         }
-        Ok(body_payload(
-            &bytes,
-            headers,
-            source.stored_size,
-            source.path,
-        ))
+        Ok(body_payload(&bytes, headers, source.stored_size))
     }
 }
 
-pub(crate) fn body_payload(
-    bytes: &[u8],
-    headers: &HeaderValues,
-    stored_size: u64,
-    path: Option<String>,
-) -> BodyPayload {
+pub(crate) fn body_payload(bytes: &[u8], headers: &HeaderValues, stored_size: u64) -> BodyPayload {
     if bytes.len() as u64 > BODY_DETAIL_LIMIT {
-        return BodyPayload::Large {
-            size: stored_size,
-            path,
-        };
+        return BodyPayload::Large { size: stored_size };
     }
     if bytes.is_empty() {
         return BodyPayload::Empty;
@@ -982,7 +966,6 @@ pub(crate) fn body_payload(
         return BodyPayload::Json {
             content,
             size: stored_size,
-            path,
         };
     }
     if is_textual(content_type)
@@ -991,13 +974,9 @@ pub(crate) fn body_payload(
         return BodyPayload::Text {
             content,
             size: stored_size,
-            path,
         };
     }
-    BodyPayload::Binary {
-        size: stored_size,
-        path,
-    }
+    BodyPayload::Binary { size: stored_size }
 }
 
 fn first_header<'a>(headers: &'a HeaderValues, name: &str) -> Option<&'a str> {
@@ -1287,7 +1266,7 @@ mod tests {
     }
 
     #[test]
-    fn detail_embeds_at_most_64_kib_and_exposes_capture_path() {
+    fn detail_embeds_at_most_64_kib_without_capture_path() {
         let root = tempdir().unwrap();
         let store = CaptureStore::open(7, root.path()).unwrap();
         let mut request = request("http://example.com/body");
@@ -1301,10 +1280,15 @@ mod tests {
             .save_body(small_id, BodySide::Request, &vec![b'a'; 64 * 1024])
             .unwrap();
         let small = store.get(small_id).unwrap().unwrap();
+        assert!(
+            serde_json::to_value(&small.request_body)
+                .unwrap()
+                .get("path")
+                .is_none()
+        );
         assert!(matches!(
             small.request_body,
-            BodyPayload::Text { size: 65_536, ref path, .. }
-                if path.as_deref().is_some_and(|path| path.ends_with("-request.body"))
+            BodyPayload::Text { size: 65_536, .. }
         ));
 
         let large_id = store.begin("127.0.0.1", &request, "request").unwrap();
@@ -1314,8 +1298,7 @@ mod tests {
         let large = store.get(large_id).unwrap().unwrap();
         assert!(matches!(
             large.request_body,
-            BodyPayload::Large { size: 65_537, ref path }
-                if path.as_deref().is_some_and(|path| path.ends_with("-request.body"))
+            BodyPayload::Large { size: 65_537 }
         ));
     }
 

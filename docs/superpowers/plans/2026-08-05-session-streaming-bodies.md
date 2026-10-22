@@ -320,3 +320,8 @@ Expected: `vue-tsc --noEmit` and `vite build` both exit 0. No DTO shape change i
 - [ ] **Step 4: Recheck requirement coverage**
 
 Confirm with focused tests that: bodies above 64 MiB forward and persist; request and response interceptors run once at headers; raw and replacement bodies proceed concurrently; replacement files stream; `_crab_resp_bodyframe_timeout` is an idle per-frame timeout; normal stream timeout fails the transfer; replacement raw timeout is only a capture warning; and inline previews remain capped at 64 KiB.
+
+## Follow-up (2026-10-22)
+
+`BodyPayload::Large` no longer carries a capture path; log detail reports only its stored-byte
+`size`. Use `body-get.mjs` to export the bytes.

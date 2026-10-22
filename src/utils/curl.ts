@@ -18,9 +18,20 @@ export function fullCurl(detail: LogDetail): string {
     lines.push(`  --header ${shellQuote(`${header.name}: ${header.value}`)}`);
   }
   const body = detail.request.body;
-  if (body.type !== "empty" && body.path) {
+  if (body.type === "text" || body.type === "json") {
+    const content =
+      body.type === "text"
+        ? body.content
+        : (JSON.stringify(body.content) ?? "null");
     lines[lines.length - 1] += " \\";
-    lines.push(`  --data-binary ${shellQuote(`@${body.path}`)}`);
+    lines.push(`  --data-raw ${shellQuote(content)}`);
+  } else if (
+    (body.type === "binary" || body.type === "large") &&
+    body.size > 0
+  ) {
+    lines.unshift("# Body 未内联：请将原始 Body 通过 stdin 传给 curl。");
+    lines[lines.length - 1] += " \\";
+    lines.push("  --data-binary @-");
   }
   return lines.join("\n");
 }

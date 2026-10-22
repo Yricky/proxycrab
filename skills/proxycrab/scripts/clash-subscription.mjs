@@ -65,7 +65,6 @@ proxy port. save-config validates and writes the file; reset-config restores the
     ...(action === "save-config" ? { body: { yaml } } : {}),
   });
   printJson({
-    path: config.path,
     yaml: config.yaml,
     ...(config.default_yaml ? { default_yaml: config.default_yaml } : {}),
   });

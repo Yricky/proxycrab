@@ -38,25 +38,24 @@ fn body_replacement_payload(
         BodyReplacement::String(content) => {
             let size = content.len() as u64;
             if size > BODY_DETAIL_LIMIT {
-                return Ok(BodyPayload::Large { size, path: None });
+                return Ok(BodyPayload::Large { size });
             }
-            Ok(body_payload(content.as_bytes(), headers, size, None))
+            Ok(body_payload(content.as_bytes(), headers, size))
         }
         BodyReplacement::Asset(asset) => {
             let file = File::open(asset.path())?;
             let size = file.metadata()?.len();
             if size > BODY_DETAIL_LIMIT {
-                return Ok(BodyPayload::Large { size, path: None });
+                return Ok(BodyPayload::Large { size });
             }
             let mut bytes = Vec::new();
             file.take(BODY_DETAIL_LIMIT + 1).read_to_end(&mut bytes)?;
             if bytes.len() as u64 > BODY_DETAIL_LIMIT {
                 return Ok(BodyPayload::Large {
                     size: bytes.len() as u64,
-                    path: None,
                 });
             }
-            Ok(body_payload(&bytes, headers, bytes.len() as u64, None))
+            Ok(body_payload(&bytes, headers, bytes.len() as u64))
         }
     }
 }

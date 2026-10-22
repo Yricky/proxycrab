@@ -267,19 +267,20 @@ Exactly one of:
 
 ```json
 { "type": "empty" }
-{ "type": "text", "content": "plain text", "size": 10, "path": "/workspace/sessions/3/blob/42-request.body" }
-{ "type": "json", "content": { "key": "value" }, "size": 15, "path": "/workspace/sessions/3/blob/42-response.body" }
-{ "type": "binary", "size": 2048, "path": "/workspace/sessions/3/blob/42-response.body" }
-{ "type": "large", "size": 73400320, "path": "/workspace/sessions/3/blob/42-response.body" }
+{ "type": "text", "content": "plain text", "size": 10 }
+{ "type": "json", "content": { "key": "value" }, "size": 15 }
+{ "type": "binary", "size": 2048 }
+{ "type": "large", "size": 73400320 }
 ```
 
-Text/JSON content is embedded only when its decoded representation is at most 64 KiB. `size` and
-`path` describe the selected final source: original stored bytes may still be content-encoded,
-string replacements use `path: null`, and Asset replacements use the Asset path. Retrieve complete
-body bytes through the raw endpoints below. An empty original request or response is represented as
-`empty` without creating a blob file. An empty string replacement is also `empty` and is stored in
-capture metadata; ProxyCrab does not create `.modified` capture blobs. The raw body endpoint still
-returns a successful zero-byte stream.
+Text/JSON content is embedded only when its decoded representation is at most 64 KiB. `size`
+describes the selected final source: original stored bytes may still be content-encoded, string
+replacements expose their replacement content, and Asset replacements are read from the workspace
+Asset store. Body detail never exposes a local capture path; retrieve complete body bytes through
+the raw endpoints below. An empty original request or response is represented as `empty` without
+creating a blob file. An empty string replacement is also `empty` and is stored in capture metadata;
+ProxyCrab does not create `.modified` capture blobs. The raw body endpoint still returns a
+successful zero-byte stream.
 
 ### CaptureError
 
@@ -1110,7 +1111,7 @@ Agent identities until allowed). Disabled state is `{"enabled":false}`; enabled 
 State is in memory and resets on restart. Successful management updates publish
 `clash_subscription` for UI synchronization.
 
-`GET /api/clash-config` returns `{"yaml":"…","path":"…","default_yaml":"…"}` (default permission:
+`GET /api/clash-config` returns `{"yaml":"…","default_yaml":"…"}` (default permission:
 `allow`). `PUT /api/clash-config` takes `{"yaml":"…"}` and validates before writing; `DELETE`
 restores the built-in default (both default permission: `allow`). The file is
 `<workspace>/clash/config.yaml` and persists across restarts, independently of the subscription
@@ -1164,7 +1165,7 @@ node <skill-dir>/scripts/clash-subscription.mjs --action save-config --file /tmp
 node <skill-dir>/scripts/clash-subscription.mjs --action reset-config
 ```
 
-The script prints only subscription state for status/enable/disable and prints `path`, `yaml`, and
+The script prints only subscription state for status/enable/disable and prints `yaml` and
 `default_yaml` for config operations. Use an address reachable from the device running Clash;
 `127.0.0.0/8`, `0.0.0.0/8`, multicast/broadcast, IPv6, and non-IP values are rejected.
 

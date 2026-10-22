@@ -225,3 +225,9 @@ Expected: build exits zero, diff check reports no whitespace errors, and status 
 - [x] **Step 5: Self-review requirement coverage**
 
 Verify every confirmed requirement: 64 KiB compatible detail metadata with paths; raw log and breakpoint endpoints; stored-size limiting and 413 metadata; default encoded streaming plus optional gzip/br/deflate/zstd single-pass decoding; stored-size 16 MiB/1 GiB UI behavior; complete text/media/protobuf/gRPC rendering; unsupported-binary metadata only; copy URL/full cURL rules; no full cURL during breakpoints; Skill/docs/eval synchronization.
+
+## Follow-up (2026-10-22)
+
+`BodyPayload` no longer exposes a local capture `path`, and the body viewer no longer offers a
+copy-path action. Copied cURL inlines text/JSON bodies and uses `--data-binary @-` for binary/large
+bodies. Use `body-get.mjs` to export complete body bytes.

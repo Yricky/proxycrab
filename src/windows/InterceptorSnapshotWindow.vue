@@ -71,7 +71,7 @@ const assetId = computed(() =>
 );
 // 快照 Body 一律通过 Body 接口按 execution_id 读取（原始文件 / 字符串 / 资产
 // 均由后端解析），体积在加载后按实际结果显示。
-const snapshotBody: BodyPayload = { type: "binary", size: 0, path: null };
+const snapshotBody: BodyPayload = { type: "binary", size: 0 };
 const bodyTarget = computed<BodyTarget>(() => ({
   kind: "interceptor",
   id: props.logId,

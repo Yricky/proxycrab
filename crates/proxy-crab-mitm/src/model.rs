@@ -312,20 +312,16 @@ pub enum BodyPayload {
     Text {
         content: String,
         size: u64,
-        path: Option<String>,
     },
     Json {
         content: serde_json::Value,
         size: u64,
-        path: Option<String>,
     },
     Binary {
         size: u64,
-        path: Option<String>,
     },
     Large {
         size: u64,
-        path: Option<String>,
     },
 }
 

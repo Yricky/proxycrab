@@ -3521,12 +3521,7 @@ mod tests {
         let payload: Value = serde_json::from_slice(&body).unwrap();
         let default_yaml = payload["data"]["yaml"].as_str().unwrap().to_owned();
         assert_eq!(payload["data"]["default_yaml"], default_yaml);
-        assert!(
-            payload["data"]["path"]
-                .as_str()
-                .unwrap()
-                .ends_with("clash/config.yaml")
-        );
+        assert!(payload["data"].get("path").is_none());
         assert!(default_yaml.contains("{{server}}"));
         assert!(default_yaml.contains("{{port}}"));
         assert!(directory.path().join("clash").join("config.yaml").is_file());

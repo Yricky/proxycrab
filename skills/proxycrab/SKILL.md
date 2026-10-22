@@ -286,9 +286,9 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
 - Treat request and response bodies with side effects or credentials as sensitive.
 - Prefer a dedicated active Session and tight filters over reading a large unrelated capture
   history.
-- Log detail embeds at most 64 KiB of decoded text/JSON. Every non-empty persisted body includes its
-  stored-byte size and local capture path. Use `body-get.mjs` for complete, normally client-decoded
-  binary or oversized bytes;
+- Log detail embeds at most 64 KiB of decoded text/JSON. Every non-empty persisted body reports its
+  stored-byte size; body detail does not expose a local capture path. Use `body-get.mjs` for
+  complete, normally client-decoded binary or oversized bytes;
   always set a deliberate stored-file maximum and output path because bodies can contain
   credentials or personal data. The body endpoint negotiates a browser-safe response encoding from
   `Accept-Encoding`; the limit applies to the selected final or interceptor-snapshot Body source.

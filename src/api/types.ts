@@ -128,10 +128,10 @@ export interface CaptureError {
 
 export type BodyPayload =
   | { type: "empty" }
-  | { type: "text"; content: string; size: number; path: string | null }
-  | { type: "json"; content: unknown; size: number; path: string | null }
-  | { type: "binary"; size: number; path: string | null }
-  | { type: "large"; size: number; path: string | null };
+  | { type: "text"; content: string; size: number }
+  | { type: "json"; content: unknown; size: number }
+  | { type: "binary"; size: number }
+  | { type: "large"; size: number };
 
 export type BodySourceType =
   | { type: "original" }
@@ -551,7 +551,6 @@ export interface ClashSubscriptionState {
 
 export interface ClashConfig {
   yaml: string;
-  path: string;
   default_yaml: string;
 }
 

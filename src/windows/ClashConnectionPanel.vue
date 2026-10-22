@@ -24,7 +24,6 @@ const props = defineProps<{
 const emit = defineEmits<{ toggle: [] }>();
 const qrCode = ref("");
 
-const configPath = ref("");
 const configSaved = ref("");
 const configDraft = ref("");
 const configLoading = ref(false);
@@ -39,7 +38,6 @@ const configEditorOptions = {
 };
 
 function applyConfig(value: ClashConfig): void {
-  configPath.value = value.path;
   configSaved.value = value.yaml;
   configDraft.value = value.yaml;
   configError.value = "";
@@ -209,7 +207,7 @@ onBeforeUnmount(() => {
       <div class="config-heading">
         <div class="config-title">
           <h3>规则文件</h3>
-          <span class="config-path mono" :title="configPath">{{ configPath || '读取中…' }}</span>
+          <span class="config-path mono">clash/config.yaml</span>
         </div>
         <div class="config-actions">
           <span v-if="configDirty" class="config-dirty">未保存</span>

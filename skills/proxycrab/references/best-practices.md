@@ -85,17 +85,17 @@ h2c because it deliberately disables HTTP/1.1 fallback.
 ## Handle bodies accurately
 
 `text` and `json` bodies embed decoded content only through 64 KiB. Every non-empty persisted body
-includes its stored-byte size and local capture path. `binary` and `large` detail variants remain
-metadata-only; use `body-get.mjs` with an explicit stored-size maximum and output file before
-claiming to have inspected their bytes. The endpoint negotiates from the client's `Accept-Encoding`:
-it preserves original bytes when every captured encoding is accepted, otherwise it streams a
-gzip, deflate, or identity fallback. The explicit maximum always checks the original stored file,
-not the decoded or recompressed byte count. `size` and `path` always describe stored bytes used to
-reproduce the captured request.
+reports its stored-byte size. Body detail never exposes a local capture path. `binary` and `large`
+detail variants remain metadata-only; use `body-get.mjs` with an explicit stored-size maximum and
+output file before claiming to have inspected their bytes. The endpoint negotiates from the client's
+`Accept-Encoding`: it preserves original bytes when every captured encoding is accepted, otherwise
+it streams a gzip, deflate, or identity fallback. The explicit maximum always checks the original
+stored file, not the decoded or recompressed byte count. `size` always describes stored bytes used
+to reproduce the captured request.
 
-When an interceptor replaces a body from a file, the historical modification records the absolute
-path, not a durable copy of that file's bytes. The interceptor source and modification history are
-durable capture evidence; Asset metadata and immutable workspace content identify the replacement.
+When an interceptor replaces a body from an Asset, the historical modification records the Asset
+id. The interceptor source and modification history are durable capture evidence; Asset metadata
+and immutable workspace content identify the replacement.
 
 ## Report with traceable evidence
 

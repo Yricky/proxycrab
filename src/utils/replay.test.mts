@@ -44,7 +44,7 @@ describe("prefillFromLog", () => {
       method: "POST",
       uri: "http://x.test/a?b=1",
       headers: [{ name: "content-type", value: "text/plain" }],
-      body: { type: "text", content: "hi", size: 2, path: null },
+      body: { type: "text", content: "hi", size: 2 },
     },
   } as never;
   it("uses final values and body_ref for non-empty bodies", () => {

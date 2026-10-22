@@ -133,9 +133,6 @@ const effectiveStoredSize = computed(
     reportedStoredSize.value ??
     (props.unknownSize ? (loaded.value?.decodedSize ?? 0) : storedSize.value),
 );
-const path = computed(() =>
-  props.body.type === "empty" ? null : props.body.path,
-);
 const embeddedIdentity = computed(() => {
   if (props.body.type === "text") return props.body.content;
   if (props.body.type === "json") return JSON.stringify(props.body.content);
@@ -271,7 +268,6 @@ watch(
     props.side,
     props.body.type,
     storedSize.value,
-    path.value,
     embeddedIdentity.value,
     headerIdentity.value,
     props.revision,
@@ -336,21 +332,6 @@ onBeforeUnmount(() => {
             <Io5Copy v-else :size="13" />
           </button>
         </template>
-        <button
-          v-if="
-            path && (error || previewKind === 'unsupported' || !canRequestFull)
-          "
-          class="btn"
-          @click="copy('path', path)"
-        >
-          <Io5Checkmark
-            v-if="copied === 'path'"
-            :size="13"
-            class="text-success"
-          />
-          <Io5Copy v-else :size="13" />
-          Body 路径
-        </button>
       </span>
     </div>
 
@@ -366,7 +347,7 @@ onBeforeUnmount(() => {
       >
         加载完整 Body（{{ formatBytes(effectiveStoredSize) }}）
       </button>
-      <span v-else>Body 实际体积超过 1 GiB，仅可使用本地 Body 文件</span>
+      <span v-else>Body 实际体积超过 1 GiB，无法在此加载</span>
     </div>
     <div v-else-if="error" class="body-state body-limit">
       <Io5Warning :size="18" />

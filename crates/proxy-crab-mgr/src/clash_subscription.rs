@@ -54,7 +54,6 @@ pub struct EnableClashSubscriptionRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClashConfig {
     pub yaml: String,
-    pub path: String,
     pub default_yaml: String,
 }
 
@@ -108,7 +107,6 @@ impl ClashSubscription {
     pub fn config(&self) -> ManagerResult<ClashConfig> {
         Ok(ClashConfig {
             yaml: self.config_yaml()?,
-            path: self.config_path.display().to_string(),
             default_yaml: DEFAULT_CONFIG.to_owned(),
         })
     }
@@ -367,18 +365,10 @@ mod tests {
     fn config_defaults_validate_and_reset() {
         let (directory, subscription) = subscription();
         let config = subscription.config().unwrap();
-        assert_eq!(
-            config.path,
-            directory
-                .path()
-                .join("clash")
-                .join("config.yaml")
-                .display()
-                .to_string()
-        );
         assert_eq!(config.default_yaml, DEFAULT_CONFIG);
         assert_eq!(config.yaml, DEFAULT_CONFIG);
-        assert!(Path::new(&config.path).is_file());
+        assert!(directory.path().join("clash").join("config.yaml").is_file());
+        assert!(serde_json::to_value(&config).unwrap().get("path").is_none());
 
         let custom = DEFAULT_CONFIG.replace("MATCH,ProxyCrab", "MATCH,DIRECT");
         let saved = subscription.save_config(&custom).unwrap();

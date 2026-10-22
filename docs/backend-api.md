@@ -223,7 +223,7 @@ browser UI.
 | `/api/bypass`, `/api/bypass/{id}`, `/api/bypass/delete` | query/delete transparent forwarding metadata |
 | `/api/ca` | `GET` |
 | `/api/clash-subscription` | `GET` current state (default: `allow`); `PUT` enable/update selected IPv4; `DELETE` disable (both default: `approval`) |
-| `/api/clash-config` | `GET` full YAML, path, and default; `PUT` validate/write; `DELETE` reset (all default: `allow`) |
+| `/api/clash-config` | `GET` full YAML and default; `PUT` validate/write; `DELETE` reset (all default: `allow`) |
 | `/api/system-logs` | `GET`, `DELETE` |
 
 System logs accept `after_seq` and are capped at 10,000 entries.
@@ -247,7 +247,7 @@ URL and proxy server. No download token is generated, persisted, or returned. `D
 in-memory state. State is never persisted across application restarts. Successful HTTP
 `PUT`/`DELETE` emit the `clash_subscription` change resource.
 
-`GET /api/clash-config` returns `{"yaml":"…","path":"…","default_yaml":"…"}`; it creates
+`GET /api/clash-config` returns `{"yaml":"…","default_yaml":"…"}`; it creates
 `<workspace>/clash/config.yaml` from the default template when missing. `PUT` takes
 `{"yaml":"…"}`, validates it, and writes it atomically. `DELETE` writes the default template back.
 All three default to `allow`. The file is a complete Clash YAML and must contain both `{{server}}`
