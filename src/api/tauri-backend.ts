@@ -122,6 +122,8 @@ export function createTauriBackend(): Backend {
       call("save_file", request.data, {
         headers: { "x-proxycrab-filename": encodeURIComponent(request.filename) },
       }),
+    downloadBody: (target, side, filename) =>
+      call("download_body", { target, side, filename }),
 
     getWorkspace: () => call("get_workspace"),
     getConfig: () => call("get_config"),

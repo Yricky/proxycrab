@@ -1,6 +1,6 @@
 import type { Backend } from "./backend";
 import { BackendError } from "./backend-error";
-import { fetchBodyFromBase } from "./body";
+import { downloadBodyFromBase, fetchBodyFromBase } from "./body";
 import { saveFileInWebview } from "./save-file";
 import type {
   ActiveSession,
@@ -136,6 +136,8 @@ export function createHttpBackend(
     },
     fetchBody: (target, side, maxSize) =>
       fetchBodyFromBase(baseUrl, target, side, maxSize, authorization(token)),
+    downloadBody: (target, side, filename) =>
+      downloadBodyFromBase(baseUrl, target, side, filename, authorization(token)),
     subscribeChanges: async (handler) => {
       let stopped = false;
       let cursor = 0;

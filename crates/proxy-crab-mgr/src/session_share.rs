@@ -437,10 +437,20 @@ async fn log_body(
             )));
         }
     };
-    let source = state
-        .manager
-        .log_body_source(Some(scope.session_id), id, side)
-        .await?;
+    let source = match query.execution_id {
+        Some(execution_id) => {
+            state
+                .manager
+                .interceptor_snapshot_body_source(Some(scope.session_id), id, execution_id, side)
+                .await?
+        }
+        None => {
+            state
+                .manager
+                .log_body_source(Some(scope.session_id), id, side)
+                .await?
+        }
+    };
     body_response(source, &headers, query.max_size)
         .await
         .map_err(ShareApiError)
@@ -586,6 +596,114 @@ mod tests {
         MitmManager,
         dto::{ActiveSession, CreateSessionRequest, ErrorCode, ScriptRequest},
     };
+
+    #[tokio::test]
+    async fn shared_body_selects_snapshot_and_preserves_session_scope_and_limits() {
+        use proxy_crab_mitm::{
+            model::{
+                BodySourceType, HeaderValues, InterceptorExecutionOrigin, InterceptorKind,
+                InterceptorRun, Modification, NewSession, RequestData, RequestInterceptorSnapshot,
+            },
+            storage::{BodySide, CaptureStore},
+        };
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let shared = runtime.create_session(NewSession::default()).unwrap();
+        let other = runtime.create_session(NewSession::default()).unwrap();
+        let request = RequestData {
+            method: "POST".into(),
+            uri: "https://example.com/body".into(),
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+            tags: Default::default(),
+        };
+        let mut selected = (0, 0);
+        for (session, content) in [(&shared, "snapshot bytes"), (&other, "private bytes")] {
+            let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
+            let id = store.begin("127.0.0.1", &request, "request").unwrap();
+            store
+                .save_body(id, BodySide::Request, b"final bytes")
+                .unwrap();
+            let run = InterceptorRun {
+                origin: InterceptorExecutionOrigin::Saved,
+                completed: true,
+                phase: InterceptorKind::Request,
+                position: 0,
+                name: "snapshot".into(),
+                script_hash: "hash".into(),
+                content: "-- snapshot".into(),
+                error: None,
+                modifications: vec![Modification::Snapshot {
+                    request: Some(RequestInterceptorSnapshot {
+                        method: request.method.clone(),
+                        uri: request.uri.clone(),
+                        version: request.version.clone(),
+                        headers: HeaderValues::new(),
+                        body: BodySourceType::String {
+                            content: content.into(),
+                        },
+                    }),
+                    response: None,
+                }],
+            };
+            let execution = store.begin_interceptor_run(id, &run).unwrap();
+            if session.id == shared.id {
+                selected = (id, execution);
+            }
+        }
+        let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
+        let shares = SessionShareService::new();
+        let token = shares
+            .enable(&manager, shared.id)
+            .await
+            .unwrap()
+            .token
+            .unwrap();
+        let app = router(manager, shares);
+        let (id, execution) = selected;
+        let base = format!(
+            "/share-api/logs/{id}/body?side=request&session_id={}&token={token}",
+            other.id
+        );
+        for (query, status, expected) in [
+            (String::new(), StatusCode::OK, "final bytes"),
+            (
+                format!("&execution_id={execution}"),
+                StatusCode::OK,
+                "snapshot bytes",
+            ),
+            (
+                format!("&execution_id={execution}&max_size=1"),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "body_too_large",
+            ),
+            (
+                "&execution_id=99999".into(),
+                StatusCode::NOT_FOUND,
+                "snapshot_body_not_found",
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("{base}{query}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            if status == StatusCode::OK {
+                assert_eq!(body.as_ref(), expected.as_bytes());
+            } else {
+                let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(error["error"]["code"], expected);
+            }
+        }
+    }
 
     #[test]
     fn shared_proxy_status_contains_only_authorized_netlogs() {

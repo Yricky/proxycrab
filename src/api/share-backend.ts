@@ -1,6 +1,6 @@
 import type { Backend } from "./backend";
 import { BackendError } from "./backend-error";
-import { fetchBodyFromBase } from "./body";
+import { downloadBodyFromBase, fetchBodyFromBase } from "./body";
 import { saveFileInWebview } from "./save-file";
 import type {
   AppConfig,
@@ -100,6 +100,10 @@ export function createShareBackend(
       filterPersistence: false,
     },
     host: undefined,
+    downloadBody: (target, side, filename) => {
+      if (target.kind === "breakpoint") return unsupported("download breakpoint body")();
+      return downloadBodyFromBase(baseUrl, target, side, filename, undefined, "/share-api", token);
+    },
     fetchBody: (target, side, maxSize) => {
       if (target.kind === "breakpoint") return unsupported("fetch breakpoint body")();
       return fetchBodyFromBase(

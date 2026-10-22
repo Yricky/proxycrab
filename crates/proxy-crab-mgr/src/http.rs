@@ -1617,9 +1617,10 @@ fn is_encoding_token(value: &str) -> bool {
         })
 }
 
-pub(crate) type DynBodyReader = Pin<Box<dyn AsyncRead + Send>>;
+pub type DynBodyReader = Pin<Box<dyn AsyncRead + Send>>;
 
-pub(crate) async fn body_reader(
+/// Open a Body stream for HTTP responses or trusted host file downloads.
+pub async fn body_reader(
     source: &BodySource,
     decompress: bool,
 ) -> Result<DynBodyReader, ManagerError> {

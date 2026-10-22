@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { Io5Checkmark, Io5Copy, Io5Warning } from "vue-icons-plus/io5";
+import {
+  Io5Checkmark, Io5Copy, Io5DownloadOutline, Io5Warning,
+} from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import {
   BodyFetchError,
@@ -15,6 +17,7 @@ import { appStore } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 import { copyText as writeClipboardText } from "../utils/clipboard";
 import { formatBytes } from "../utils/format";
+import { bodyFilename } from "../utils/body-filename";
 import { inspectGrpc, inspectProtobuf } from "../utils/protobuf";
 import MonacoEditor from "./MonacoEditor.vue";
 
@@ -32,6 +35,7 @@ const props = defineProps<{
 const backend = useBackend();
 const loaded = ref<LoadedBody | null>(null);
 const loading = ref(false);
+const downloading = ref(false);
 const error = ref<string | null>(null);
 const reportedStoredSize = ref<number | null>(null);
 const pretty = ref(true);
@@ -259,6 +263,22 @@ async function copy(key: string, value: string): Promise<void> {
   }
 }
 
+async function download(): Promise<void> {
+  if (!backend.downloadBody || downloading.value) return;
+  downloading.value = true;
+  try {
+    await backend.downloadBody(
+      props.target, props.side, bodyFilename(props.target, props.side, props.headers),
+    );
+  } catch (cause) {
+    appStore.toast(
+      `Body 下载失败：${cause instanceof Error ? cause.message : String(cause)}`, "error",
+    );
+  } finally {
+    downloading.value = false;
+  }
+}
+
 watch(
   () => [
     props.target.kind,
@@ -304,6 +324,16 @@ onBeforeUnmount(() => {
         实际体积 {{ formatBytes(effectiveStoredSize) }}
       </span>
       <span class="body-actions">
+        <button
+          v-if="body.type !== 'empty' && backend.downloadBody"
+          class="btn icon"
+          :disabled="downloading"
+          :title="downloading ? '正在下载 Body…' : '下载 Body'"
+          :aria-label="downloading ? '正在下载 Body' : '下载 Body'"
+          @click="download"
+        >
+          <Io5DownloadOutline :size="13" />
+        </button>
         <template v-if="loaded && previewKind === 'text'">
           <button
             class="tool-btn"

@@ -701,8 +701,7 @@ source is the original network Blob, a complete replacement string, or an Asset.
 only original network bodies; ProxyCrab does not create `.modified` files.
 
 Add `execution_id=17` to read the selected interceptor-entry snapshot body. The endpoint can
-resolve `original`, `string`, and `asset` sources; the desktop snapshot window intentionally shows
-only `asset_id` for Asset snapshots instead of fetching their bytes. `side` is required and must be
+resolve `original`, `string`, and `asset` sources, including in the snapshot viewer. `side` is required and must be
 `request` or `response`.
 `max_size` defaults to 16 MiB, has no server maximum, and checks the selected final Body source
 before any decoding or recompression. Oversized bodies return 413 with the stored sizes:
@@ -735,6 +734,20 @@ can terminate after HTTP 200 has begun. Empty body files return 200 with zero by
 Missing/not-yet-produced bodies return `body_not_found`; unreadable files return
 `body_read_failed`; an original encoding that cannot be decoded for fallback returns
 `body_decode_failed`.
+
+The Session share equivalent, `GET /share-api/logs/{id}/body?token=…&side=request&execution_id=17`,
+uses the same snapshot selection, encoding negotiation, and size rules. The share token fixes the
+Session; a supplied `session_id` cannot select another Session. A missing snapshot returns a
+snapshot error rather than falling back to the final Body. Share tokens remain share-only credentials.
+
+The UI's Body download button saves complete HTTP-decoded bytes, preserving text whitespace and
+binary/protocol data regardless of preview formatting. It works without loading a preview and is
+not restricted by the preview's 16 MiB/1 GiB limits. Desktop saves stream through a native save
+dialog; browser saves consume a browser-managed Blob before handing it to the browser downloader
+(browser resource limits still apply). Names prefer captured Content-Disposition filenames and
+otherwise include capture/breakpoint ID, snapshot execution ID when applicable, side, and MIME
+extension. No public API route, default size limit, authentication, or response format changed.
+`body-get.mjs` still requires an output path and retains its explicit/default stored-size limit.
 
 ### Replaying a request: `POST /api/replay?session=3`
 

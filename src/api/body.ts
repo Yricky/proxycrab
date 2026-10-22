@@ -1,4 +1,5 @@
 import type { AppConfig, ManagerError } from "./types";
+import { saveBlobInWebview } from "./save-file";
 
 export const DEFAULT_BODY_MAX_SIZE = 16 * 1024 * 1024;
 export const UI_BODY_MAX_SIZE = 1024 * 1024 * 1024;
@@ -69,6 +70,43 @@ export async function fetchBodyFromBase(
       message: "无效的 Body 大小限制",
     });
   }
+  const response = await requestBody(
+    base, target, side, maxSize, authorization, apiPrefix, queryToken,
+  );
+  const buffer = await response.arrayBuffer();
+  return {
+    bytes: new Uint8Array(buffer),
+    decodedSize: buffer.byteLength,
+    contentType:
+      response.headers.get("content-type") ?? "application/octet-stream",
+  };
+}
+
+/** Downloads use browser-managed Blob storage, without the preview's JS buffer or size cap. */
+export async function downloadBodyFromBase(
+  base: string,
+  target: BodyTarget,
+  side: BodySide,
+  filename: string,
+  authorization?: string,
+  apiPrefix = "/api",
+  queryToken?: string,
+): Promise<boolean> {
+  const response = await requestBody(
+    base, target, side, Number.MAX_SAFE_INTEGER, authorization, apiPrefix, queryToken,
+  );
+  return saveBlobInWebview(await response.blob(), filename);
+}
+
+async function requestBody(
+  base: string,
+  target: BodyTarget,
+  side: BodySide,
+  maxSize: number,
+  authorization: string | undefined,
+  apiPrefix: string,
+  queryToken: string | undefined,
+): Promise<Response> {
   const path =
     target.kind === "breakpoint"
       ? `${apiPrefix}/breakpoints/${target.id}/body`
@@ -101,11 +139,5 @@ export async function fetchBodyFromBase(
     }
     throw new BodyFetchError(error);
   }
-  const buffer = await response.arrayBuffer();
-  return {
-    bytes: new Uint8Array(buffer),
-    decodedSize: buffer.byteLength,
-    contentType:
-      response.headers.get("content-type") ?? "application/octet-stream",
-  };
+  return response;
 }

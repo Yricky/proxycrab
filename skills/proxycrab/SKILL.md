@@ -292,6 +292,10 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
   always set a deliberate stored-file maximum and output path because bodies can contain
   credentials or personal data. The body endpoint negotiates a browser-safe response encoding from
   `Accept-Encoding`; the limit applies to the selected final or interceptor-snapshot Body source.
+- UI Body downloads are also available in desktop, CLI browser, and read-only Session shares.
+  They preserve complete HTTP-decoded bytes independently of preview formatting and preview size
+  limits. Shared snapshot downloads honor `execution_id` within the token's Session. The script's
+  16 MiB default and explicit `--max-size` contract remain unchanged.
 - An empty original request or response has no capture blob file. Final interceptor Body strings
   are stored in capture metadata and Assets remain in `assets/`; ProxyCrab does not create
   `.modified` capture blobs.

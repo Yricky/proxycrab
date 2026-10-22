@@ -596,9 +596,32 @@ returns a successful zero-byte stream.
 The default stored-file limit is 16 MiB and there is no server maximum. Transcoded and identity
 responses omit decoded `Content-Length`; original responses retain the stored length. Adding
 `execution_id` reads the selected `original`, `string`, or `asset` interceptor-entry snapshot Body
-for that log. The desktop snapshot window intentionally displays only the Asset ID for Asset
-snapshots. Active breakpoints expose the same final-body contract at
+for that log, including Asset-backed snapshots. Active breakpoints expose the same final-body contract at
 `GET /api/breakpoints/{id}/body` and include current replacements for the paused phase.
+
+The read-only `GET /share-api/logs/{id}/body` also honors `execution_id`; all sources are resolved
+within the token's Session, regardless of a supplied `session_id`. Missing snapshots return the
+normal snapshot error, never the final Body. Authentication, encoding negotiation, size checks,
+and raw response formats are unchanged.
+
+The shared Body toolbar exposes download only when the Backend provides `downloadBody`. It saves
+the complete HTTP-decoded bytes for the displayed log, breakpoint, or interceptor-entry snapshot,
+independent of formatting, protocol parsing, preview support, or the 16 MiB/1 GiB preview limits.
+Empty bodies have no download button. Known in-progress snapshots remain unavailable until captured.
+Downloads disable repeat clicks and report failures; there is no progress, cancel, or batch UI.
+Names prefer the captured `Content-Disposition` filename (`filename*` UTF-8 before `filename`),
+sanitized to a local basename, then fall back to log/breakpoint ID, optional execution ID, side,
+and a MIME-derived extension (`.bin` for unknown types).
+
+Desktop uses the trusted Tauri `download_body` command with `{target, side, filename}`. Targets
+are `{kind:"log", id, sessionId}`, `{kind:"interceptor", id, sessionId, executionId}`, or
+`{kind:"breakpoint", id}`. It opens the native save dialog (cancel returns `false`), streams HTTP
+content decoding into a temporary file beside the destination, and replaces the destination only
+after a successful write. Browser Backends retain their existing Bearer/share-token authentication,
+request the existing Body endpoint with an explicit `Number.MAX_SAFE_INTEGER` stored-size ceiling,
+and use `Response.blob()` plus browser download, without creating a full JavaScript ArrayBuffer.
+Browser transfer must finish before the download is handed to the browser; Blob resource limits
+remain browser-dependent. Preview fetches and the existing `saveFile` contract are unchanged.
 
 ### Replay a request
 

@@ -33,6 +33,7 @@ with hot reload, while GTK/WebKit and the helper processes are the exact binarie
 - CA download: `http://<selected local IPv4>:18089/ca.crt`, available without configuring or starting the proxy. The certificate and Clash tabs share the same IP selector.
 - System log buffer: the newest 10,000 entries in memory.
 - Captured request/response bodies stream directly to disk without an application-level size limit; at most 256 client connections are accepted.
+- Body toolbars offer complete decoded downloads in desktop, CLI browser, and Session share views, including interceptor snapshots and supported breakpoint views. Downloads preserve original bytes and ignore preview formatting and the 16 MiB/1 GiB preview limits. Desktop saves stream to disk; browser saves use browser-managed Blobs.
 - Blocking capture/bypass queries and management Lua evaluations: at most eight concurrently; excess work waits without occupying Tokio worker threads.
 
 The Tauri application data directory contains `config.json`, which points at the workspace. When the pointer is absent or invalid, `app_data_dir/workspace` is used and persisted. Settings > 通用 displays the current path and, on desktop, a 切换工作区 button. It opens a native directory picker, validates the selection, and immediately restarts the application with the new workspace's configuration. Unsaved UI edits are discarded; the proxy starts stopped, as on a cold launch. Canceling or selecting the current directory does nothing.

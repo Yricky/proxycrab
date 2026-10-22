@@ -117,6 +117,11 @@ export interface Backend {
     side: BodySide,
     maxSize?: number,
   ): Promise<LoadedBody>;
+  downloadBody?(
+    target: BodyTarget,
+    side: BodySide,
+    filename: string,
+  ): Promise<boolean>;
   subscribeChanges(handler: (change: HttpApiChange) => void): Promise<Unsubscribe>;
   subscribeApprovalChanges(handler: (count: number) => void): Promise<Unsubscribe>;
   openExternal(url: string): Promise<void>;

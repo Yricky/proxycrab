@@ -252,6 +252,12 @@
       "prompt": "Edit ProxyCrab's Clash subscription YAML so only example.com and its subdomains go through ProxyCrab and everything else uses DIRECT, keeping the placeholders intact. Save it through the management API, verify the saved YAML and the rendered /clash.yaml, then restore the default. Explain when validation runs and what happens if the file is edited outside ProxyCrab.",
       "expected_output": "The agent reads the current config with clash-subscription.mjs --action config (or GET /api/clash-config), preserves {{server}} and {{port}}, adds a DOMAIN-SUFFIX,example.com,ProxyCrab rule plus MATCH,DIRECT, writes a temporary file, saves with --action save-config --file, and verifies the returned yaml. It fetches /clash.yaml while the subscription is enabled to confirm the selected IP and proxy port were substituted, then uses --action reset-config to restore the default. It explains that validation runs only on save/reset (structure, rules, final MATCH, placeholders, size), that downloads do not revalidate external edits, and that the config file persists across restarts while the subscription switch resets.",
       "files": []
+    },
+    {
+      "id": 43,
+      "prompt": "Explain how to download a complete Body larger than 1 GiB from ProxyCrab UI, and how to save the exact interceptor-entry snapshot from a read-only Session share. Does formatting JSON change the downloaded bytes, and does this change body-get.mjs limits?",
+      "expected_output": "The agent points to the Body toolbar download button without requiring preview loading, explains that downloads preserve complete HTTP-decoded bytes (not formatted JSON or parsed protobuf/gRPC), and distinguishes native desktop streaming saves from browser-managed Blob downloads subject to browser resources. It states that share Body reads honor execution_id within the token's Session and missing snapshots do not fall back to final bodies. Names prefer Content-Disposition then capture/execution/side and MIME suffix. Existing API authentication, parameters, raw responses, and the script's 16 MiB default or explicit max-size remain unchanged.",
+      "files": []
     }
   ]
 }

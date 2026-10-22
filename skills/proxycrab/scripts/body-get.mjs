@@ -37,6 +37,7 @@ Usage:
 Read the complete decoded body into FILE. The default maximum is 16777216 stored bytes. Exactly one
 of --log-id and --breakpoint-id is required. ProxyCrab negotiates the response encoding from the
 client's Accept-Encoding header, while max-size limits the selected final or snapshot Body source.
+UI preview limits do not restrict downloads; this script still uses its own default or --max-size.
 `);
     return;
   }

@@ -21,3 +21,19 @@ export function saveFileInWebview(request: SaveFileRequest): Promise<boolean> {
   URL.revokeObjectURL(url);
   return Promise.resolve(true);
 }
+
+/** Keep the Blob alive long enough for the browser to take ownership of a large download. */
+export function saveBlobInWebview(blob: Blob, filename: string): Promise<boolean> {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  try {
+    link.click();
+  } finally {
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+  return Promise.resolve(true);
+}
