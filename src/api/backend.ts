@@ -65,18 +65,6 @@ import type {
 } from "./types";
 import type { BodySide, BodyTarget, LoadedBody } from "./body";
 
-export interface BackendCapabilities {
-  target: "tauri" | "cli" | "share";
-  approvals: boolean;
-  permissionModes: Array<"allow" | "approval" | "deny">;
-  readonly: boolean;
-  /**
-   * 能否把过滤条件写回 Session 配置。只有主应用主内容区的过滤行会同步到后端；
-   * 其余过滤面（分享页、picker 等）只把 Session 保存的过滤当初始状态。
-   */
-  filterPersistence: boolean;
-}
-
 export type Unsubscribe = () => void;
 
 export interface SkillManager {
@@ -97,6 +85,10 @@ export interface HostOperations {
  * The Tauri implementation (tauri-backend.ts) maps these onto `invoke` calls;
  * an alternative implementation (e.g. plain HTTP against the management API)
  * can be dropped in without touching any component.
+ *
+ * 能力位由方法是否存在表达：可选方法未实现时，UI 不展示对应入口，而不是探测
+ * 一个独立的能力配置。分享后端只暴露只读接口，因此没有 replay、Session 写入、
+ * 审批等方法。
  */
 export interface Backend {
   readonly clashSubscription?: {
@@ -109,7 +101,6 @@ export interface Backend {
     save(yaml: string): Promise<ClashConfig>;
     reset(): Promise<ClashConfig>;
   };
-  readonly capabilities: BackendCapabilities;
   readonly host?: HostOperations;
 
   fetchBody(
@@ -148,7 +139,7 @@ export interface Backend {
   getProxyStatus(): Promise<ProxyStatus>;
   startProxy(): Promise<ProxyStatus>;
   stopProxy(): Promise<ProxyStatus>;
-  listLocalIps(): Promise<string[]>;
+  listLocalIps?(): Promise<string[]>;
 
   // sessions
   listSessions(): Promise<SessionMetadata[]>;
@@ -172,7 +163,7 @@ export interface Backend {
   getLogViews(request: LogViewsRequest): Promise<LogViewsPayload>;
   validateFilterRegex(pattern: string): Promise<string | null>;
   getLog(sessionId: number | null, id: number): Promise<LogDetail>;
-  replay(
+  replay?(
     sessionId: number,
     request: ReplayRequestPayload,
   ): Promise<ReplayResult>;
@@ -199,11 +190,11 @@ export interface Backend {
     request: ExecuteTemporaryScriptRequest,
   ): Promise<TemporaryExecutionResult>;
   getSessionView(sessionId: number | null): Promise<SessionViewPayload>;
-  replaceSessionView(
+  replaceSessionView?(
     sessionId: number | null,
     request: ReplaceSessionViewRequest,
   ): Promise<SessionViewPayload>;
-  replaceSessionFilter(
+  replaceSessionFilter?(
     sessionId: number,
     filter: SessionFilter,
   ): Promise<SessionViewPayload>;
@@ -273,7 +264,7 @@ export interface Backend {
   ): Promise<IdentityPermissions>;
   createHttpApiKey(name: string): Promise<CreatedApiKey>;
   deleteHttpApiKey(id: string): Promise<void>;
-  listHttpApprovals(): Promise<PendingApproval[]>;
-  resolveHttpApproval(id: number, request: ResolveApprovalRequest): Promise<void>;
+  listHttpApprovals?(): Promise<PendingApproval[]>;
+  resolveHttpApproval?(id: number, request: ResolveApprovalRequest): Promise<void>;
 
 }

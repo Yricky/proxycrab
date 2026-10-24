@@ -223,14 +223,15 @@ const sendTitle = computed(() =>
 );
 
 async function execute(targetSessionId: number): Promise<void> {
-  if (executing.value) return;
+  const replay = backend.replay;
+  if (executing.value || !replay) return;
   closePicker();
   executing.value = true;
   resultLogId.value = null;
   resultSessionId.value = null;
   executeError.value = null;
   try {
-    const result = await backend.replay(targetSessionId, {
+    const result = await replay(targetSessionId, {
       method: method.value,
       url: url.value,
       headers: tuples.value,

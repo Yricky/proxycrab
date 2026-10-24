@@ -83,13 +83,6 @@ async function call<T>(
  */
 export function createTauriBackend(): Backend {
   return {
-    capabilities: {
-      target: "tauri",
-      approvals: true,
-      permissionModes: ["allow", "approval", "deny"],
-      readonly: false,
-      filterPersistence: true,
-    },
     host: {
       skillManager: {
         getState: () => call("get_proxycrab_skill_manager_state"),

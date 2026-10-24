@@ -36,7 +36,7 @@ async function refreshConnection(): Promise<void> {
   connectionLoading.value = true;
   try {
     const [ips, status, subscription] = await Promise.all([
-      backend.listLocalIps(), backend.getHttpServiceStatus(),
+      backend.listLocalIps?.() ?? [], backend.getHttpServiceStatus(),
       backend.clashSubscription?.getState() ?? Promise.resolve(null),
     ]);
     addresses.value = clashServerAddresses(ips);

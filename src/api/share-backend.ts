@@ -90,15 +90,9 @@ export function createShareBackend(
     routing_script_name: null,
     active_session_id: bootstrap.session.id,
   };
+  // 分享后端只实现 /share-api 暴露的只读方法：未实现的方法（replay、Session 写入、
+  // 审批等）保持 undefined，UI 直接以方法是否存在决定入口是否展示。
   const implemented: Partial<Backend> = {
-    capabilities: {
-      target: "share",
-      approvals: false,
-      permissionModes: [],
-      readonly: true,
-      // 分享页没有 replaceSessionFilter 能力：过滤只在本地生效。
-      filterPersistence: false,
-    },
     host: undefined,
     downloadBody: (target, side, filename) => {
       if (target.kind === "breakpoint") return unsupported("download breakpoint body")();
@@ -234,10 +228,5 @@ export function createShareBackend(
     listColumnScripts: () => call<Script[]>("/share-api/column-scripts"),
     listFilterScripts: () => call<Script[]>("/share-api/filter-scripts"),
   };
-  return new Proxy(implemented as Backend, {
-    get(target, property, receiver) {
-      if (Reflect.has(target, property)) return Reflect.get(target, property, receiver);
-      return unsupported(property);
-    },
-  });
+  return implemented as Backend;
 }

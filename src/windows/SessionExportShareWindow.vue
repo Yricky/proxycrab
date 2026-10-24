@@ -50,7 +50,7 @@ async function load(): Promise<void> {
       backend.getSessionShare(props.sessionId),
       backend.getHarShare(props.sessionId),
       backend.getHttpServiceStatus(),
-      backend.listLocalIps(),
+      backend.listLocalIps?.() ?? [],
     ]);
     if (sequence !== loadSequence) return;
     pageShare.value = nextPageShare;

@@ -70,7 +70,7 @@ watch(
 
 onMounted(async () => {
   await startHttpApiSync();
-  if (backend.capabilities.approvals) await approvalsStore.start();
+  if (backend.listHttpApprovals) await approvalsStore.start();
   void skillStore.refresh();
   await proxyStore.init();
   await sessionsStore.init();
@@ -88,7 +88,7 @@ onBeforeUnmount(() => {
   logs.dispose();
   breakpointsStore.stopPolling();
   stopHttpApiSync();
-  if (backend.capabilities.approvals) approvalsStore.stop();
+  if (backend.listHttpApprovals) approvalsStore.stop();
 });
 </script>
 
@@ -102,7 +102,7 @@ onBeforeUnmount(() => {
           <FilterBar
             :filter="logs.appliedFilter"
             :session-id="logs.sessionId"
-            :syncing="backend.capabilities.filterPersistence"
+            :syncing="Boolean(backend.replaceSessionFilter)"
             :apply-filter="(filter) => logs.applyFilter(filter)"
           />
           <InterceptorPipeline :logs="logs" />

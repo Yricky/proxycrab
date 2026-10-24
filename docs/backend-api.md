@@ -127,9 +127,15 @@ exactly one non-empty `token` query parameter; `Authorization` is ignored. Respo
 Session scope on every request and overwrites any client Session ID. The surface
 contains bootstrap, scoped proxy status and proxy-change long polling, Session view, stateless log-ID queries, rendered log rows, detail,
 body, name-only column/filter lists, and regex validation. It has no write, export, interceptor,
-breakpoint, config, permission, routing, CA, bypass, or system-log route. Disable or process restart
-invalidates it. An archived Session is unavailable; restoring it in the same process preserves its
-still-enabled share. The token is not accepted by `/api/*` and is not an Agent credential.
+breakpoint, config, permission, routing, CA, bypass, or system-log route. The frontend expresses
+these limits as missing optional `Backend` methods: the share Backend omits `replay`, Session-view
+writes, approvals, and local-IP lookup, so the UI hides the send-request entry, replay buttons, and
+editable column controls instead of offering actions the surface would reject. Column widths stay
+adjustable in each viewer's own page; the overrides live only in memory and are never written back.
+Disable or process
+restart invalidates it. An archived Session is unavailable; restoring it in the same process
+preserves its still-enabled share. The token is not accepted by `/api/*` and is not an Agent
+credential.
 
 ## HTTP changes and desktop UI synchronization
 
@@ -633,6 +639,8 @@ exchange. Request body: `method`, absolute `url`, ordered `headers` pairs (sent 
 `content-length`), and an optional `body` of `{ "type": "text", "text", "charset": "utf8" }`,
 `{ "type": "body_ref", "session_id", "log_id", "side": "request" | "response" }` (reuse a
 stored capture blob body), or `{ "type": "asset", "asset_id" }` (reuse a workspace Asset).
+The read-only share surface has no replay route, and the UI only offers replay entries when the
+Backend implements `replay`.
 
 ## Session table views
 

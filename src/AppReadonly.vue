@@ -78,7 +78,7 @@ onBeforeUnmount(() => {
           <FilterBar
             :filter="logs.appliedFilter"
             :session-id="logs.sessionId"
-            :syncing="backend.capabilities.filterPersistence"
+            :syncing="Boolean(backend.replaceSessionFilter)"
             :apply-filter="(filter) => logs.applyFilter(filter)"
           />
         </div>

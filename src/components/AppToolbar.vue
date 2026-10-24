@@ -35,22 +35,22 @@ import {
   Io5Desktop,
   Io5DocumentText,
   Io5Download,
-  Io5Key,
   Io5List,
   Io5Moon,
   Io5Newspaper,
   Io5Play,
-  Io5QrCodeOutline,
   Io5RadioButtonOn,
   Io5Settings,
   Io5ShieldCheckmark,
   Io5Stop,
   Io5Flash,
-  Io5GitCompareOutline,
   Io5Sunny,
   Io5Warning,
+  Io5GitCompare,
+  Io5QrCode,
 } from "vue-icons-plus/io5";
 import { BsFillSendFill } from "vue-icons-plus/bs";
+import { GrConnect } from "vue-icons-plus/gr";
 
 type ToolbarMenu = "ai" | "scripts" | "tools" | "system";
 
@@ -188,8 +188,8 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <button class="cert-entry-btn" title="证书管理" @click="openCertManager">
-        <Io5Key :size="13" />
-        <span>CA证书</span>
+        <GrConnect :size="13" />
+        <span>连接</span>
       </button>
     </div>
 
@@ -297,16 +297,20 @@ onBeforeUnmount(() => {
             <Io5ShieldCheckmark :size="14" />
             <span>JWT 解码 / 验签</span>
           </button>
-          <button class="tb-menu-item" @click="runMenuAction(() => openReplay())">
+          <button
+            v-if="backend.replay"
+            class="tb-menu-item"
+            @click="runMenuAction(() => openReplay())"
+          >
             <BsFillSendFill :size="14" />
             <span>发送请求</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openQrCode)">
-            <Io5QrCodeOutline :size="14" />
+            <Io5QrCode :size="14" />
             <span>二维码生成</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openTextDiff)">
-            <Io5GitCompareOutline :size="14" />
+            <Io5GitCompare :size="14" />
             <span>文本比对</span>
           </button>
         </div>

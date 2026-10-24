@@ -571,7 +571,12 @@ function headerCount(headers: HeaderItem[]): string {
           </span>
           <span v-if="loading" class="refreshing text-faint">刷新中…</span>
           <span class="summary-spacer" />
-          <button class="btn icon" title="重放此请求" @click="replayCurrent">
+          <button
+            v-if="backend.replay"
+            class="btn icon"
+            title="重放此请求"
+            @click="replayCurrent"
+          >
             <BsFillSendFill :size="14" />
           </button>
           <button

@@ -560,9 +560,10 @@ export function createLogsStore() {
       const targetGeneration = generation;
       const previous = cloneSessionFilter(this.appliedFilter);
       this.syncAppliedFilter(filter);
-      if (backend.capabilities.filterPersistence) {
+      const replaceFilter = backend.replaceSessionFilter;
+      if (replaceFilter) {
         try {
-          await backend.replaceSessionFilter(sessionId, cloneSessionFilter(filter));
+          await replaceFilter(sessionId, cloneSessionFilter(filter));
           if (
             logsStore.sessionId !== sessionId ||
             generation !== targetGeneration
@@ -592,7 +593,7 @@ export function createLogsStore() {
         this.applyColumns(view.columns);
         // 不同步的面不跟随后端过滤变更：Session 保存的过滤只在加载时当初始值。
         if (
-          backend.capabilities.filterPersistence &&
+          backend.replaceSessionFilter &&
           !sameFilter(this.appliedFilter, view.filter)
         ) {
           await this.reloadFilter(view.filter);

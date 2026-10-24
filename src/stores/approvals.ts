@@ -14,9 +14,11 @@ export const approvalsStore = reactive({
   resolving: new Set<number>(),
 
   async refresh(): Promise<void> {
+    const list = backend.listHttpApprovals;
+    if (!list) return;
     this.loading = true;
     try {
-      this.items = await backend.listHttpApprovals();
+      this.items = await list();
       this.count = this.items.length;
     } catch (error) {
       reportError(error, "获取接口审批列表失败");
@@ -59,9 +61,11 @@ export const approvalsStore = reactive({
   },
 
   async resolve(id: number, request: ResolveApprovalRequest): Promise<void> {
+    const resolve = backend.resolveHttpApproval;
+    if (!resolve) return;
     this.resolving.add(id);
     try {
-      await backend.resolveHttpApproval(id, request);
+      await resolve(id, request);
       await this.refresh();
     } catch (error) {
       await this.refresh();

@@ -27,6 +27,7 @@ import SessionExportShareWindow from "./SessionExportShareWindow.vue";
 import InterceptorSnapshotWindow from "./InterceptorSnapshotWindow.vue";
 import ReplayWindow from "./ReplayWindow.vue";
 import type { ReplayDraft } from "../utils/replay";
+import { getBackend } from "../api/runtime-backend";
 
 /** 内置浏览器窗口：同一 URL 复用已有窗口。 */
 export function openBrowser(url: string): void {
@@ -46,6 +47,8 @@ export function openBrowser(url: string): void {
 }
 
 export function openReplay(prefill?: ReplayDraft): void {
+  // 后端没有 replay 接口时，任何入口都不应打开发送请求窗口。
+  if (!getBackend().replay) return;
   windowsStore.open(`replay-${crypto.randomUUID()}`, {
     title: "发送请求",
     component: ReplayWindow,
@@ -280,7 +283,7 @@ export function openTextDiff(): void {
 
 export function openCertManager(): void {
   windowsStore.open("cert-manager", {
-    title: "证书管理",
+    title: "如何连接到ProxyCrab抓包",
     component: CertManagerWindow,
     width: 640,
     height: 600,

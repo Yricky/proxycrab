@@ -198,16 +198,13 @@ onBeforeUnmount(() => {
         </div>
       </section>
       <p v-else class="connection-empty text-secondary">{{ loading ? '正在读取订阅状态…' : mutating ? '正在更新订阅…' : '开启后生成订阅链接和二维码。' }}</p>
-
       <p v-if="state?.enabled && !proxyStore.running" class="connection-warning"><Io5Warning :size="14" />ProxyCrab 代理尚未启动，启动后才能转发流量。</p>
-      <p class="connection-note text-secondary">关闭后返回 404，已导入的配置仍可用；重启重置开关，规则文件保留。</p>
     </div>
 
     <section v-if="configBackend" class="config-section">
       <div class="config-heading">
         <div class="config-title">
           <h3>规则文件</h3>
-          <span class="config-path mono">clash/config.yaml</span>
         </div>
         <div class="config-actions">
           <span v-if="configDirty" class="config-dirty">未保存</span>
@@ -216,7 +213,6 @@ onBeforeUnmount(() => {
           <button class="btn primary" :disabled="!configDirty || configLoading || configSaving" @click="saveConfig"><Io5Save :size="14" />{{ configSaving ? "保存中…" : "保存" }}</button>
         </div>
       </div>
-      <p class="config-hint text-secondary" v-pre>完整 Clash YAML；下载时 {{server}} / {{port}} 会替换为所选 IP 和当前代理端口，保存时用示例值校验。</p>
       <p v-if="configError" class="config-error">{{ configError }}</p>
       <p v-else-if="configExternal && configDirty" class="config-warning">文件已在外部更新；保存会覆盖外部修改，重新载入会丢弃当前修改。</p>
       <div v-if="configLoading && !configSaved" class="config-loading text-secondary">正在读取规则文件…</div>

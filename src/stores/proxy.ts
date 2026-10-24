@@ -157,15 +157,15 @@ export const proxyStore = reactive({
     } catch (error) {
       reportError(error, "获取代理配置失败");
     }
-    // The readonly share page reuses proxy status for live log polling, but
-    // its proxy toolbar is hidden and local interfaces are outside the share
-    // API's deliberately narrow read surface.
-    if (!backend.capabilities.readonly) await this.refreshLocalIps();
+    // 分享页复用代理状态做日志轮询，但没有 listLocalIps 接口，不查询本机 IP。
+    if (backend.listLocalIps) await this.refreshLocalIps();
   },
 
   async refreshLocalIps(): Promise<void> {
+    const listLocalIps = backend.listLocalIps;
+    if (!listLocalIps) return;
     try {
-      this.localIps = await backend.listLocalIps();
+      this.localIps = await listLocalIps();
     } catch (error) {
       reportError(error, "获取本机 IP 列表失败");
     }

@@ -22,6 +22,10 @@ import { DIMENSION_OPTIONS, type PermissionGroupDimension } from "../utils/permi
 type SettingsPage = "general" | "management";
 const WINDOW_ID = "settings";
 const backend = useBackend();
+// 审批能力由后端是否提供审批接口表达：没有审批接口时只能配置 allow / deny。
+const permissionModes: PermissionMode[] = backend.listHttpApprovals
+  ? ["allow", "approval", "deny"]
+  : ["allow", "deny"];
 const page = ref<SettingsPage>("general");
 
 const currentPath = ref("");
@@ -109,7 +113,7 @@ async function loadIdentity(id: string): Promise<void> {
     const next = Object.fromEntries(
       result.permissions.map((entry) => [
         entry.action_id,
-        backend.capabilities.permissionModes.includes(entry.mode) ? entry.mode : "deny",
+        permissionModes.includes(entry.mode) ? entry.mode : "deny",
       ]),
     ) as Record<string, PermissionMode>;
     selectedIdentityId.value = id;
@@ -375,7 +379,7 @@ onBeforeUnmount(() => {
               v-model="permissions"
               :catalog="catalog"
               :dimension="dimension"
-              :allowed-modes="backend.capabilities.permissionModes"
+              :allowed-modes="permissionModes"
               :disabled="savingPermissions"
             />
           </section>

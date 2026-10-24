@@ -59,3 +59,17 @@ test("share subscriptions refresh changed script labels without exposing source 
   await vi.advanceTimersByTimeAsync(1500);
   expect(fetchMock).toHaveBeenCalledTimes(requests);
 });
+
+test("share backend leaves write-side methods undefined so the UI hides their entries", () => {
+  const backend = createShareBackend("http://localhost", "test-share-token", {
+    session: { id: 1, name: "shared", created_at: 0, description: null },
+    view: { session_id: 1, columns: [], filter: { option: null, input: "" } },
+    proxy_status: { status: "stopped" },
+    api_port: 18089,
+  });
+  expect(backend.replay).toBeUndefined();
+  expect(backend.replaceSessionView).toBeUndefined();
+  expect(backend.replaceSessionFilter).toBeUndefined();
+  expect(backend.listHttpApprovals).toBeUndefined();
+  expect(backend.listLocalIps).toBeUndefined();
+});

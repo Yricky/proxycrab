@@ -28,14 +28,12 @@ import type {
   LogIdsRequest,
   LogViewsRequest,
   ManagerError,
-  PendingApproval,
   PermissionEntry,
   PermissionIdentitySummary,
   ReplaceSessionInterceptorsRequest,
   ReplaceSessionViewRequest,
   ReplayRequestPayload,
   ReplayResult,
-  ResolveApprovalRequest,
   RoutingSelection,
   SessionShareState,
   ScriptRequest,
@@ -127,13 +125,6 @@ export function createHttpBackend(
     `/api/${scope}/${encodeURIComponent(name)}`;
 
   return {
-    capabilities: {
-      target: "cli",
-      approvals: false,
-      permissionModes: ["allow", "deny"],
-      readonly: false,
-      filterPersistence: true,
-    },
     fetchBody: (target, side, maxSize) =>
       fetchBodyFromBase(baseUrl, target, side, maxSize, authorization(token)),
     downloadBody: (target, side, filename) =>
@@ -383,10 +374,5 @@ export function createHttpBackend(
       call<CreatedApiKey>("/ui-api/api-keys", json("POST", { name })),
     deleteHttpApiKey: (id: string) =>
       call(`/ui-api/api-keys/${encodeURIComponent(id)}`, json("DELETE")),
-    listHttpApprovals: async () => [] as PendingApproval[],
-    resolveHttpApproval: async (_id: number, _requestValue: ResolveApprovalRequest) => {
-      throw new BackendError({ code: "unsupported", message: "CLI 不支持接口审批" });
-    },
-
   };
 }

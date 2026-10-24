@@ -36,7 +36,8 @@ const props = defineProps<{ logs: LogsStore }>();
 const logsStore = props.logs;
 
 const backend = useBackend();
-const readonly = backend.capabilities.readonly;
+// 分享后端没有 Session 写入接口，表格据此进入只读模式。
+const readonly = backend.replaceSessionView === undefined;
 
 // 加载环形进度条：与 spinner 同尺寸（28px）、同配色，半径 12。
 const PROGRESS_CIRCUMFERENCE = 2 * Math.PI * 12;
@@ -65,8 +66,11 @@ const hoverHit = ref<HitTarget | null>(null);
 const unseenIds = ref<Set<number>>(new Set());
 const following = ref(true);
 
-/** Local width overrides (view column index → px) for live resize. */
-const widthOverrides = ref<Record<number, number>>({});
+/**
+ * Local width overrides (stable column key → px) for live resize. 有 Session 写入接口时
+ * 松手后写回视图；只读分享页没有写入接口，覆盖只保留在当前页面内存里。
+ */
+const widthOverrides = ref<Record<string, number>>({});
 
 const columnScripts = ref<Script[]>([]);
 
@@ -93,7 +97,9 @@ const headerTitle = computed(() => {
 });
 
 function columnWidth(index: number): number {
-  if (widthOverrides.value[index] !== undefined) return widthOverrides.value[index];
+  const key = columns.value[index]?.key;
+  const override = key === undefined ? undefined : widthOverrides.value[key];
+  if (override !== undefined) return override;
   const w = columns.value[index]?.width;
   return w && w > 0 ? w : 160;
 }
@@ -295,7 +301,7 @@ async function copyFocusedShareLink(id: number): Promise<void> {
     const [current, status, addresses] = await Promise.all([
       backend.getSessionShare(sessionId),
       backend.getHttpServiceStatus(),
-      backend.listLocalIps(),
+      backend.listLocalIps?.() ?? [],
     ]);
     if (!status.running) {
       appStore.toast("HTTP 服务未运行，无法生成分享链接", "error");
@@ -413,10 +419,11 @@ async function updateColumns(
   errorMessage: string,
 ): Promise<void> {
   const sessionId = logsStore.sessionId;
-  if (sessionId === null) return;
+  const replaceView = backend.replaceSessionView;
+  if (sessionId === null || !replaceView) return;
   try {
     const view = await backend.getSessionView(sessionId);
-    await backend.replaceSessionView(sessionId, { columns: update(view.columns) });
+    await replaceView(sessionId, { columns: update(view.columns) });
     widthOverrides.value = {};
     await logsStore.refreshView();
   } catch (error) {
@@ -497,10 +504,13 @@ function startResize(index: number, event: PointerEvent): void {
   event.stopPropagation();
   const startX = event.clientX;
   const startWidth = columnWidth(index);
+  const columnKey = columns.value[index]?.key;
   let width = startWidth;
   const onMove = (e: PointerEvent) => {
     width = Math.max(startWidth + e.clientX - startX, MIN_COLUMN_WIDTH);
-    widthOverrides.value = { ...widthOverrides.value, [index]: width };
+    if (columnKey !== undefined) {
+      widthOverrides.value = { ...widthOverrides.value, [columnKey]: width };
+    }
   };
   const onUp = () => {
     window.removeEventListener("pointermove", onMove);
@@ -516,7 +526,9 @@ function startResize(index: number, event: PointerEvent): void {
 
 async function persistWidth(payloadIndex: number, width: number): Promise<void> {
   const sessionId = logsStore.sessionId;
-  if (sessionId === null) return;
+  const replaceView = backend.replaceSessionView;
+  // 没有 Session 写入接口（只读分享页）时，宽度只由 widthOverrides 本地生效。
+  if (sessionId === null || !replaceView) return;
   const column = columns.value[payloadIndex];
   if (!column) return;
   try {
@@ -525,7 +537,7 @@ async function persistWidth(payloadIndex: number, width: number): Promise<void> 
     if (!current) return;
     const next = [...view.columns];
     next[payloadIndex] = { ...current, width };
-    await backend.replaceSessionView(sessionId, { columns: next });
+    await replaceView(sessionId, { columns: next });
   } catch (error) {
     reportError(error, "保存列宽失败");
   }
@@ -1009,7 +1021,7 @@ function drawHeader(ctx: CanvasRenderingContext2D, colors: Palette): void {
     );
   }
 
-  if (!readonly && hoverHit.value?.type === "resize") {
+  if (hoverHit.value?.type === "resize") {
     let boundary = ID_COLUMN_WIDTH;
     for (let index = 0; index <= hoverHit.value.index; index += 1) {
       boundary += columnWidth(index);
@@ -1319,13 +1331,12 @@ function hitTest(x: number, y: number): HitTarget | null {
 
   const globalX = x + scrollLeft.value;
   if (y < HEADER_HEIGHT && x < targetLayout.bodyWidth) {
-    if (!readonly) {
-      let boundary = ID_COLUMN_WIDTH;
-      for (let index = 0; index < columns.value.length; index += 1) {
-        boundary += columnWidth(index);
-        if (Math.abs(globalX - boundary) <= RESIZE_HIT_WIDTH / 2) {
-          return { type: "resize", index };
-        }
+    // 列宽允许只读分享页本地调整，因此不跟随 readonly 关闭。
+    let boundary = ID_COLUMN_WIDTH;
+    for (let index = 0; index < columns.value.length; index += 1) {
+      boundary += columnWidth(index);
+      if (Math.abs(globalX - boundary) <= RESIZE_HIT_WIDTH / 2) {
+        return { type: "resize", index };
       }
     }
     if (globalX < ID_COLUMN_WIDTH) return { type: "header-id" };

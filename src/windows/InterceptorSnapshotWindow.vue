@@ -138,7 +138,7 @@ const urlSegments = computed(() =>
           </span>
           <span class="summary-spacer" />
           <button
-            v-if="request"
+            v-if="request && backend.replay"
             class="btn icon"
             title="重放此快照请求"
             @click="replaySnapshot"
