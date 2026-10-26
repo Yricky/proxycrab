@@ -12,14 +12,13 @@ export const sessionsStore = reactive({
 
   async refresh(): Promise<void> {
     try {
-      const [sessions, archivedSessions, active] = await Promise.all([
+      const [sessionList, archivedSessions] = await Promise.all([
         backend.listSessions(),
         backend.listArchivedSessions(),
-        backend.getActiveSession(),
       ]);
-      this.sessions = sessions;
+      this.sessions = sessionList.sessions;
       this.archivedSessions = archivedSessions;
-      this.activeSessionId = active.session_id;
+      this.activeSessionId = sessionList.active_session_id;
     } catch (error) {
       reportError(error, "获取会话列表失败");
     }
@@ -28,14 +27,13 @@ export const sessionsStore = reactive({
   async init(): Promise<void> {
     this.loading = true;
     try {
-      const [sessions, archivedSessions, active] = await Promise.all([
+      const [sessionList, archivedSessions] = await Promise.all([
         backend.listSessions(),
         backend.listArchivedSessions(),
-        backend.getActiveSession(),
       ]);
-      this.sessions = sessions;
+      this.sessions = sessionList.sessions;
       this.archivedSessions = archivedSessions;
-      this.activeSessionId = active.session_id;
+      this.activeSessionId = sessionList.active_session_id;
     } catch (error) {
       reportError(error, "初始化会话失败");
     } finally {
@@ -45,14 +43,13 @@ export const sessionsStore = reactive({
 
   async syncFromBackend(): Promise<void> {
     try {
-      const [sessions, archivedSessions, active] = await Promise.all([
+      const [sessionList, archivedSessions] = await Promise.all([
         backend.listSessions(),
         backend.listArchivedSessions(),
-        backend.getActiveSession(),
       ]);
-      this.sessions = sessions;
+      this.sessions = sessionList.sessions;
       this.archivedSessions = archivedSessions;
-      this.activeSessionId = active.session_id;
+      this.activeSessionId = sessionList.active_session_id;
     } catch (error) {
       reportError(error, "同步会话状态失败");
     }

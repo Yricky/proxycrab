@@ -20,8 +20,8 @@ use proxy_crab_mgr::{
         InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest, LogViewsPayload,
         LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
         ReplaceSessionViewRequest, ReplayRequestPayload, ReplayResult, RoutingSelection,
-        ScriptRequest, SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery,
-        UpdateAgentsPresetRequest, UpdateScriptRequest, UpdateSessionRequest,
+        ScriptRequest, SessionInterceptorsPayload, SessionViewPayload, SessionsPayload,
+        SystemLogsQuery, UpdateAgentsPresetRequest, UpdateScriptRequest, UpdateSessionRequest,
     },
     har_share::{EnableHarShareRequest, HarShareService, HarShareState},
     http::{HttpServerHandle, start_http_server_with_routes},
@@ -258,9 +258,7 @@ async fn stop_proxy(state: State<'_, BackendState>) -> Result<ProxyStatus, Manag
 }
 
 #[tauri::command]
-async fn list_sessions(
-    state: State<'_, BackendState>,
-) -> Result<Vec<SessionMetadata>, ManagerError> {
+async fn list_sessions(state: State<'_, BackendState>) -> Result<SessionsPayload, ManagerError> {
     state.manager().sessions().await
 }
 
@@ -269,11 +267,6 @@ async fn list_archived_sessions(
     state: State<'_, BackendState>,
 ) -> Result<Vec<SessionMetadata>, ManagerError> {
     state.manager().archived_sessions().await
-}
-
-#[tauri::command]
-async fn get_active_session(state: State<'_, BackendState>) -> Result<ActiveSession, ManagerError> {
-    state.manager().active_session().await
 }
 
 #[tauri::command]
@@ -1158,7 +1151,6 @@ pub fn run() {
             stop_proxy,
             list_sessions,
             list_archived_sessions,
-            get_active_session,
             replace_active_session,
             create_session,
             update_session,

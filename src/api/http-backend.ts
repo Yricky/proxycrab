@@ -188,7 +188,6 @@ export function createHttpBackend(
       call(`/api/archived-sessions/${id}/restore`, json("POST")),
     deleteArchivedSession: (id: number) =>
       call(`/api/archived-sessions/${id}`, json("DELETE")),
-    getActiveSession: () => call("/api/active-session"),
     replaceActiveSession: (active: ActiveSession) =>
       call("/api/active-session", json("PUT", active)),
     getSessionShare: (sessionId: number) =>

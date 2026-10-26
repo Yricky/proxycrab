@@ -142,7 +142,6 @@ export function createTauriBackend(): Backend {
     archiveSession: (id: number) => call("archive_session", { id }),
     restoreSession: (id: number) => call("restore_session", { id }),
     deleteArchivedSession: (id: number) => call("delete_archived_session", { id }),
-    getActiveSession: () => call("get_active_session"),
     replaceActiveSession: (active: ActiveSession) =>
       call("replace_active_session", { active }),
     getSessionShare: (sessionId: number) =>

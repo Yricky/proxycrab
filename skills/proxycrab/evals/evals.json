@@ -77,8 +77,8 @@
     },
     {
       "id": 14,
-      "prompt": "List the available ProxyCrab Sessions and tell me which custom table columns are configured for each one.",
-      "expected_output": "The agent uses session-list.mjs and reports the column names returned with each Session, including custom-column script names, without making separate manual Session-view calls.",
+      "prompt": "List the available ProxyCrab Sessions, identify which one is active, and tell me which custom table columns are configured for each one.",
+      "expected_output": "The agent uses session-list.mjs, reads its { sessions, active_session_id } output, identifies the active Session by ID (or explicitly reports none when active_session_id is null), and reports column names from each sessions entry, including custom-column script names. It does not call the removed GET /api/active-session or make separate manual Session-view calls.",
       "files": []
     },
     {

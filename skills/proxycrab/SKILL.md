@@ -94,7 +94,8 @@ and response scripts; see [Lua metadata rules](references/lua-api.md#script-disp
 | Select or clear the routing script | `scripts/routing-select.mjs` |
 | Download the current public CA certificate | `scripts/certificate-download.mjs --out PATH` (no proxy setup required) |
 | Inspect, enable, or disable a temporary Clash subscription, or read/update its YAML | `scripts/clash-subscription.mjs`; see `references/http-api.md#clash-subscription` |
-| Inspect or change the active Session | `GET` or `PUT /api/active-session` |
+| Inspect the active Session | `scripts/session-list.mjs` (`active_session_id`) |
+| Change the active Session | `PUT /api/active-session` |
 | Archive, restore, or permanently delete a Session | Read `references/http-api.md` and use the archived-Session endpoints |
 | Inspect transparent forwarding | `scripts/bypass-list.mjs` |
 | Use a low-frequency endpoint | Read `references/http-api.md` and call it directly |
@@ -115,7 +116,9 @@ proxy. Existing configurations imported into Clash remain usable.
 
 ## Standard capture-debugging workflow
 
-1. List Sessions with their configured table column names and identify the user's intended Session:
+1. List Sessions with their configured table column names and identify the user's intended Session.
+   The script returns `{ sessions: [...], active_session_id }`; match the ID to an item in `sessions`.
+   A `null` ID means no Session is active:
 
    ```bash
    node <skill-dir>/scripts/session-list.mjs

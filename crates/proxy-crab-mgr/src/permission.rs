@@ -110,7 +110,6 @@ pub static API_ACTIONS: &[ApiAction] = &[
     action!("POST", "/api/sessions/{id}/archive", Deny),
     action!("POST", "/api/archived-sessions/{id}/restore", Approval),
     action!("DELETE", "/api/archived-sessions/{id}", Deny),
-    action!("GET", "/api/active-session", Allow),
     action!("PUT", "/api/active-session", Approval),
     action!("PUT", "/api/sessions/{id}", Approval),
     action!("PUT", "/api/sessions/{id}/filter", Approval),

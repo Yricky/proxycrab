@@ -82,6 +82,7 @@ impl HarShareService {
         if manager
             .sessions()
             .await?
+            .sessions
             .iter()
             .any(|session| session.id == session_id)
         {

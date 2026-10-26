@@ -190,6 +190,12 @@ pub struct ActiveSession {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionsPayload {
+    pub sessions: Vec<SessionMetadata>,
+    pub active_session_id: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionQuery {
     pub session_id: Option<u64>,
 }

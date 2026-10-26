@@ -127,6 +127,7 @@ impl SessionShareService {
         if manager
             .sessions()
             .await?
+            .sessions
             .iter()
             .any(|session| session.id == session_id)
         {
@@ -293,6 +294,7 @@ async fn authorize_share(
     match state.manager.sessions().await {
         Ok(sessions)
             if sessions
+                .sessions
                 .iter()
                 .any(|session| session.id == scope.session_id) =>
         {
@@ -312,6 +314,7 @@ async fn bootstrap(
         .manager
         .sessions()
         .await?
+        .sessions
         .into_iter()
         .find(|session| session.id == scope.session_id)
         .ok_or_else(ShareApiError::unavailable)?;

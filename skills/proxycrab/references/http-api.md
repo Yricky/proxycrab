@@ -331,7 +331,22 @@ Agents using this skill should leave lifecycle control to the user unless explic
 
 ### `GET /api/sessions`
 
-Returns `SessionMetadata[]`.
+Returns a `SessionsPayload`:
+
+```json
+{
+  "sessions": [
+    { "id": 3, "name": "checkout-debug", "created_at": 1234567890, "description": null }
+  ],
+  "active_session_id": 3
+}
+```
+
+`sessions` contains non-archived `SessionMetadata` entries. `active_session_id` is `null` when no
+Session is active, including an empty workspace (`{ "sessions": [], "active_session_id": null }`).
+This object replaces the former array response and the former `GET /api/active-session` endpoint;
+that GET endpoint is removed. `scripts/session-list.mjs` emits the same object with `columns`
+added to each Session.
 
 ### `POST /api/sessions`
 
@@ -458,13 +473,10 @@ Restore does not make the Session active.
 
 Permanently deletes an archived Session and returns `{}`.
 
-### `GET /api/active-session`
-
-Returns `{ "session_id": 3 }` or `{ "session_id": null }`.
-
 ### `PUT /api/active-session`
 
-Accepts and returns the same shape. A non-null Session ID must exist. Changing or clearing the
+Accepts and returns `{ "session_id": 3 }` or `{ "session_id": null }`. Read the current active ID
+through `GET /api/sessions`. A non-null Session ID must exist. Changing or clearing the
 active Session is allowed while the proxy runs. An actual change closes every established proxy
 connection, CONNECT tunnel, Upgrade/WebSocket, and upstream pooled connection before returning;
 the listener remains running. Setting the current value again is a no-op for connections.

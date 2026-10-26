@@ -182,9 +182,11 @@ export function createShareBackend(
     saveFile: saveFileInWebview,
     getConfig: async () => config,
     getProxyStatus: () => call("/share-api/proxy/status"),
-    listSessions: async () => [bootstrap.session],
+    listSessions: async () => ({
+      sessions: [bootstrap.session],
+      active_session_id: bootstrap.session.id,
+    }),
     listArchivedSessions: async () => [],
-    getActiveSession: async () => ({ session_id: bootstrap.session.id }),
     getLogIds: (value) => call("/share-api/logs/ids", json(value)),
     getLogViews: (value) => call("/share-api/logs/views", json(value)),
     validateFilterRegex: (pattern) =>

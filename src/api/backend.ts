@@ -48,6 +48,7 @@ import type {
   ScriptRequest,
   SessionFilter,
   SessionMetadata,
+  SessionsPayload,
   SessionShareState,
   EnableHarShareRequest,
   HarShareState,
@@ -142,14 +143,13 @@ export interface Backend {
   listLocalIps?(): Promise<string[]>;
 
   // sessions
-  listSessions(): Promise<SessionMetadata[]>;
+  listSessions(): Promise<SessionsPayload>;
   listArchivedSessions(): Promise<SessionMetadata[]>;
   createSession(request: CreateSessionRequest): Promise<SessionMetadata>;
   updateSession(id: number, request: UpdateSessionRequest): Promise<SessionMetadata>;
   archiveSession(id: number): Promise<SessionMetadata>;
   restoreSession(id: number): Promise<SessionMetadata>;
   deleteArchivedSession(id: number): Promise<void>;
-  getActiveSession(): Promise<ActiveSession>;
   replaceActiveSession(active: ActiveSession): Promise<ActiveSession>;
   getSessionShare(sessionId: number): Promise<SessionShareState>;
   enableSessionShare(sessionId: number): Promise<SessionShareState>;

@@ -16,11 +16,12 @@ run(async () => {
     printHelp(`
 Usage: node session-list.mjs [--base-url URL]
 
-List all ProxyCrab Sessions and their configured table column names.
+List all ProxyCrab Sessions, their configured table column names, and active_session_id.
+Outputs { sessions: [...], active_session_id: number | null }.
 `);
     return;
   }
-  const sessions = await apiRequest(args, "/api/sessions");
+  const { sessions, active_session_id } = await apiRequest(args, "/api/sessions");
   const sessionsWithColumns = await Promise.all(
     sessions.map(async (session) => {
       const view = await apiRequest(args, `/api/session-view${sessionQuery(session.id)}`);
@@ -30,5 +31,5 @@ List all ProxyCrab Sessions and their configured table column names.
       };
     }),
   );
-  printJson(sessionsWithColumns);
+  printJson({ sessions: sessionsWithColumns, active_session_id });
 });

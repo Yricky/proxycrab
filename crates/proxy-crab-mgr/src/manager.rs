@@ -35,8 +35,8 @@ use crate::{
         LogViewsRequest, ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest,
         ReplaceSessionViewRequest, ReplayBodyPayload, ReplayRequestPayload, ReplayResult,
         RequestDetail, ResponseDetail, RoutingSelection, ScriptRequest, SessionInterceptorItem,
-        SessionInterceptorsPayload, SessionViewPayload, SystemLogsQuery, UpdateAgentsPresetRequest,
-        UpdateScriptRequest, UpdateSessionRequest,
+        SessionInterceptorsPayload, SessionViewPayload, SessionsPayload, SystemLogsQuery,
+        UpdateAgentsPresetRequest, UpdateScriptRequest, UpdateSessionRequest,
     },
     har::{self, HarCapture},
 };
@@ -72,9 +72,8 @@ pub trait ProxyCrabManager: Send + Sync {
     async fn proxy_status(&self) -> ManagerResult<ProxyStatus>;
     async fn start_proxy(&self) -> ManagerResult<ProxyStatus>;
     async fn stop_proxy(&self) -> ManagerResult<ProxyStatus>;
-    async fn sessions(&self) -> ManagerResult<Vec<SessionMetadata>>;
+    async fn sessions(&self) -> ManagerResult<SessionsPayload>;
     async fn archived_sessions(&self) -> ManagerResult<Vec<SessionMetadata>>;
-    async fn active_session(&self) -> ManagerResult<ActiveSession>;
     async fn replace_active_session(&self, active: ActiveSession) -> ManagerResult<ActiveSession>;
     async fn create_session(&self, request: CreateSessionRequest)
     -> ManagerResult<SessionMetadata>;
@@ -555,18 +554,15 @@ impl ProxyCrabManager for MitmManager {
         self.runtime.stop_proxy().await.map_err(map_error)
     }
 
-    async fn sessions(&self) -> ManagerResult<Vec<SessionMetadata>> {
-        Ok(self.runtime.sessions())
+    async fn sessions(&self) -> ManagerResult<SessionsPayload> {
+        Ok(SessionsPayload {
+            sessions: self.runtime.sessions(),
+            active_session_id: self.runtime.active_session_id(),
+        })
     }
 
     async fn archived_sessions(&self) -> ManagerResult<Vec<SessionMetadata>> {
         Ok(self.runtime.archived_sessions())
-    }
-
-    async fn active_session(&self) -> ManagerResult<ActiveSession> {
-        Ok(ActiveSession {
-            session_id: self.runtime.active_session_id(),
-        })
     }
 
     async fn replace_active_session(&self, active: ActiveSession) -> ManagerResult<ActiveSession> {

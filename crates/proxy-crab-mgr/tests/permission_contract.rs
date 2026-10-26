@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 77);
+    assert_eq!(actions.len(), 76);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -38,7 +38,6 @@ fn permission_catalog_contains_every_unique_route_action() {
 #[test]
 fn permission_catalog_has_the_confirmed_default_matrix() {
     let allow = BTreeSet::from([
-        "GET /api/active-session",
         "GET /api/agents.md",
         "GET /api/archived-sessions",
         "GET /api/assets",
@@ -148,6 +147,7 @@ fn permission_lookup_uses_both_method_and_route_template() {
     assert!(find_api_action("PUT", "/api/config").is_none());
     assert!(find_api_action("PUT", "/api/workspace").is_none());
     assert!(find_api_action("GET", "/api/workspace").is_none());
+    assert!(find_api_action("GET", "/api/active-session").is_none());
     assert_eq!(
         find_api_action("POST", "/api/session-har-shares")
             .unwrap()

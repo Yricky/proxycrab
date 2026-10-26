@@ -194,14 +194,14 @@ browser UI.
 | `/api/config` | `GET` |
 | `/api/proxy/status` | `GET` |
 | `/api/proxy/start`, `/api/proxy/stop` | `POST` |
-| `/api/sessions` | `GET`, `POST` |
+| `/api/sessions` | `GET` list plus nullable active Session ID, `POST` create |
 | `/api/sessions/{id}` | `PUT` |
 | `/api/sessions/{id}/filter` | `PUT` save only the Session filter |
 | `/api/sessions/{id}/archive` | `POST` inactive Session archive |
 | `/api/archived-sessions` | `GET` archived metadata |
 | `/api/archived-sessions/{id}/restore` | `POST` restore |
 | `/api/archived-sessions/{id}` | `DELETE` permanent archived-only deletion |
-| `/api/active-session` | `GET`, `PUT` nullable active Session |
+| `/api/active-session` | `PUT` nullable active Session |
 | `/api/session-shares` | `POST` idempotently enable a scoped read-only link (default: `approval`) |
 | `/api/session-shares/{id}` | `GET` current state (default: `allow`); `DELETE` disable immediately (default: `approval`) |
 | `/api/session-har-shares` | `POST` idempotently enable a frozen HAR download link (default: `approval`) |
@@ -724,9 +724,16 @@ Session for the whole tunnel. Lua returns `true` to capture into the current act
 Invalid returns and runtime errors emit a system warning and bypass. With no selected script, the
 active Session captures all traffic; with no active Session, traffic bypasses.
 
-`GET /api/active-session` returns `{"session_id":1}` or `{"session_id":null}`. `PUT` accepts the
-same shape, validates non-null IDs, and is allowed while the proxy runs. `AppConfig.active_session_id`
-is read through `GET /api/config`; changing it over HTTP uses `PUT /api/active-session`. An actual
+`GET /api/sessions` returns `{"sessions":[...],"active_session_id":1}`, with non-archived
+`SessionMetadata` entries under `sessions`. When no Session is active, `active_session_id` is `null`;
+an empty workspace returns `{"sessions":[],"active_session_id":null}`. This object replaces the
+former array response, and `GET /api/active-session` has been removed. The Tauri `list_sessions`
+command uses the same payload; there is no separate `get_active_session` command. The Skill's
+`session-list.mjs` keeps this structure and adds configured `columns` to each Session.
+
+`PUT /api/active-session` accepts and returns `{"session_id":1}` or `{"session_id":null}`,
+validates non-null IDs, and is allowed while the proxy runs. `AppConfig.active_session_id`
+is also read through `GET /api/config`. An actual
 active-Session change closes every
 established HTTP connection, CONNECT/MITM tunnel, Upgrade/WebSocket, transparent tunnel, and
 upstream pool before the call returns while leaving the listener running. Changing routing

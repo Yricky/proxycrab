@@ -1,11 +1,12 @@
 {
   "name": "proxy-crab-t",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "format": "prettier --write \"src/**/*.{ts,mts,vue,css,html}\" vite.config.ts vitest.config.ts && cargo fmt --all",
     "test:unit": "vitest run",
     "preview": "vite preview",
     "tauri": "tauri"
@@ -23,6 +24,7 @@
     "@tauri-apps/cli": "^2.12.1",
     "@types/qrcode": "^1.5.6",
     "@vitejs/plugin-vue": "^6.0.9",
+    "prettier": "^3.9.10",
     "typescript": "~6.0.3",
     "vite": "^8.3.4",
     "vitest": "^5.0.3",

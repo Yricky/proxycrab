@@ -284,10 +284,7 @@ fn router_with_changes_and_extra(
             "/api/archived-sessions/{id}",
             axum::routing::delete(delete_archived_session),
         )
-        .route(
-            "/api/active-session",
-            get(active_session).put(replace_active_session),
-        )
+        .route("/api/active-session", put(replace_active_session))
         .route("/api/sessions/{id}", put(update_session))
         .route("/api/session-shares", post(enable_session_share))
         .route(
@@ -792,10 +789,6 @@ async fn sessions(State(manager): State<ManagerState>) -> ApiResult {
 
 async fn archived_sessions(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.archived_sessions().await?)
-}
-
-async fn active_session(State(manager): State<ManagerState>) -> ApiResult {
-    success(manager.active_session().await?)
 }
 
 async fn replace_active_session(
@@ -1826,7 +1819,7 @@ mod tests {
         },
         storage::{BodySide, BodySource, BodySourceData, CaptureStore},
     };
-    use serde_json::Value;
+    use serde_json::{Value, json};
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
@@ -2779,20 +2772,77 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn active_session_http_api_is_nullable_and_validates_session_ids() {
+    async fn sessions_http_api_includes_nullable_active_session_and_replaces_old_get() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime
+        let app = router(MitmManager::new(runtime.clone()), allow_all());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            body["data"],
+            json!({"sessions": [], "active_session_id": null})
+        );
+
+        let first = runtime
             .create_session(NewSession {
-                name: Some("capture".into()),
+                name: Some("first".into()),
                 ..Default::default()
             })
             .unwrap();
-        runtime
-            .replace_active_session(Some(session.id))
-            .await
+        let second = runtime
+            .create_session(NewSession {
+                name: Some("second".into()),
+                ..Default::default()
+            })
             .unwrap();
-        let app = router(MitmManager::new(runtime), allow_all());
+
+        // Creation leaves the active ID null; PUT still selects, switches, and clears it.
+        for active_id in [None, Some(first.id), Some(second.id), None] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri("/api/active-session")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({"session_id": active_id}).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["data"], json!({"session_id": active_id}));
+
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/sessions")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["data"]["active_session_id"], json!(active_id));
+            assert_eq!(body["data"]["sessions"], json!([first, second]));
+        }
 
         let response = app
             .clone()
@@ -2804,23 +2854,10 @@ mod tests {
             )
             .await
             .unwrap();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["data"]["session_id"], session.id);
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/active-session")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"session_id":null}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::METHOD_NOT_ALLOWED
+        );
 
         let response = app
             .oneshot(
@@ -2905,7 +2942,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/api/active-session")
+                    .uri("/api/sessions")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2913,7 +2950,7 @@ mod tests {
             .unwrap();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["data"]["session_id"], Value::Null);
+        assert_eq!(body["data"]["active_session_id"], Value::Null);
 
         // 需要活跃会话时显式切换。
         let response = app
@@ -2933,7 +2970,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/active-session")
+                    .uri("/api/sessions")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2941,7 +2978,7 @@ mod tests {
             .unwrap();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["data"]["session_id"], session_id);
+        assert_eq!(body["data"]["active_session_id"], session_id);
     }
 
     #[tokio::test]
@@ -3252,7 +3289,7 @@ mod tests {
             ),
             ("POST", "/api/logs/views", r#"{"logs":[]}"#),
             ("GET", "/api/session-view", ""),
-            ("GET", "/api/active-session", ""),
+            ("GET", "/api/sessions", ""),
             ("GET", "/api/breakpoints", ""),
             ("PUT", "/api/session-view", r#"{"columns":[]}"#),
             ("PUT", filter_uri.as_str(), r#"{"option":null,"input":""}"#),

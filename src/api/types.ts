@@ -62,6 +62,11 @@ export interface SessionMetadata {
   description: string | null;
 }
 
+export interface SessionsPayload {
+  sessions: SessionMetadata[];
+  active_session_id: number | null;
+}
+
 export interface Script {
   name: string;
   display_name?: string | null;
