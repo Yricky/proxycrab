@@ -42,10 +42,23 @@ use crate::{
 };
 use tokio::sync::{Semaphore, watch};
 
+pub(crate) mod redaction;
+use redaction::{ReadPolicy, ReadRedactor};
+
 const MAX_BLOCKING_MANAGEMENT_TASKS: usize = 8;
 
 #[async_trait]
 pub trait ProxyCrabManager: Send + Sync {
+    fn reader(&self, script: Option<&str>, api: &str) -> ManagerResult<Arc<dyn ProxyCrabManager>>;
+    async fn redaction_scripts(&self) -> ManagerResult<Vec<Script>>;
+    async fn redaction_script(&self, name: String) -> ManagerResult<Script>;
+    async fn create_redaction_script(&self, request: ScriptRequest) -> ManagerResult<()>;
+    async fn update_redaction_script(
+        &self,
+        name: String,
+        request: UpdateScriptRequest,
+    ) -> ManagerResult<()>;
+    async fn delete_redaction_script(&self, name: String) -> ManagerResult<()>;
     fn subscribe_proxy_status_changes(&self) -> watch::Receiver<u64>;
     async fn asset(&self, id: String) -> ManagerResult<Asset>;
     async fn begin_asset_upload(
@@ -228,10 +241,12 @@ pub trait ProxyCrabManager: Send + Sync {
     async fn clear_bypass_entries(&self) -> ManagerResult<DeleteCount>;
 }
 
+#[derive(Clone)]
 pub struct MitmManager {
+    read_policy: Option<ReadPolicy>,
     runtime: Arc<ProxyCrab>,
     agents: Arc<AgentsStore>,
-    clash_subscription: ClashSubscription,
+    clash_subscription: Arc<ClashSubscription>,
     blocking_tasks: Arc<Semaphore>,
 }
 
@@ -263,8 +278,9 @@ impl MitmManager {
         if let Err(error) = agents.initialize() {
             tracing::error!("failed to initialize AGENTS.md presets: {error}");
         }
-        let clash_subscription = ClashSubscription::new(runtime.workspace().root());
+        let clash_subscription = Arc::new(ClashSubscription::new(runtime.workspace().root()));
         Arc::new(Self {
+            read_policy: None,
             runtime,
             agents,
             clash_subscription,
@@ -431,20 +447,107 @@ impl MitmManager {
         body_access: F,
         matched_ids: &mut Vec<u64>,
         in_progress_ids: &mut Vec<u64>,
-    ) where
+        redactor: Option<&ReadRedactor>,
+        runtime: &Arc<ProxyCrab>,
+    ) -> ManagerResult<()>
+    where
         F: FnOnce() -> CaptureBodyAccess,
     {
-        if Self::matches_filter(filter, item, body_access) {
+        let mut sanitized = None;
+        let mut sanitized_bodies = None;
+        let mut sanitized_view = None;
+        if let Some(redactor) = redactor {
+            match filter {
+                PreparedFilter::Column {
+                    column: FilterColumn::Uri,
+                    ..
+                } => {
+                    let mut value = item.clone();
+                    value.request.uri = redactor.uri(&item.request.uri)?;
+                    sanitized = Some(value);
+                }
+                PreparedFilter::Script { .. }
+                | PreparedFilter::Column {
+                    column: FilterColumn::Script { .. },
+                    ..
+                } => {
+                    let view = redactor.view(runtime, item)?;
+                    sanitized_bodies = Some(view.body_access());
+                    sanitized = Some(view.summary());
+                    sanitized_view = Some(view);
+                }
+                _ => {}
+            }
+        }
+        let matched = Self::matches_filter(filter, sanitized.as_ref().unwrap_or(item), || {
+            sanitized_bodies.unwrap_or_else(body_access)
+        });
+        if let Some(view) = sanitized_view {
+            view.ensure_success().map_err(|_| redaction::failed())?;
+        }
+        if matched {
             matched_ids.push(item.id);
         }
         if item.outcome == CaptureOutcome::InProgress && active_ids.contains(&item.id) {
             in_progress_ids.push(item.id);
         }
+        Ok(())
     }
 }
 
 #[async_trait]
 impl ProxyCrabManager for MitmManager {
+    fn reader(&self, script: Option<&str>, api: &str) -> ManagerResult<Arc<dyn ProxyCrabManager>> {
+        let mut reader = self.clone();
+        reader.read_policy = script
+            .map(|name| {
+                self.runtime
+                    .script(ScriptKind::Redaction, name)
+                    .map(|script| ReadPolicy {
+                        script,
+                        api: api.into(),
+                    })
+                    .map_err(|_| redaction::failed())
+            })
+            .transpose()?;
+        Ok(Arc::new(reader))
+    }
+    async fn redaction_scripts(&self) -> ManagerResult<Vec<Script>> {
+        self.runtime
+            .scripts(ScriptKind::Redaction)
+            .map_err(map_error)
+    }
+    async fn redaction_script(&self, name: String) -> ManagerResult<Script> {
+        self.runtime
+            .script(ScriptKind::Redaction, &name)
+            .map_err(map_error)
+    }
+    async fn create_redaction_script(&self, request: ScriptRequest) -> ManagerResult<()> {
+        self.runtime
+            .create_script(
+                ScriptKind::Redaction,
+                Script {
+                    name: request.name,
+                    content: request.content,
+                },
+            )
+            .map_err(map_error)
+    }
+    async fn update_redaction_script(
+        &self,
+        name: String,
+        request: UpdateScriptRequest,
+    ) -> ManagerResult<()> {
+        self.runtime
+            .update_script(ScriptKind::Redaction, &name, request.content)
+            .map_err(map_error)
+    }
+    async fn delete_redaction_script(&self, name: String) -> ManagerResult<()> {
+        self.runtime
+            .delete_script(ScriptKind::Redaction, &name)
+            .map_err(map_error)
+    }
+
     fn subscribe_proxy_status_changes(&self) -> watch::Receiver<u64> {
         self.runtime.subscribe_proxy_status_changes()
     }
@@ -644,8 +747,22 @@ impl ProxyCrabManager for MitmManager {
         let requested_ids = request.ids;
         let min_id = request.min_id;
         let max_id = request.max_id;
+        let policy = self.read_policy.clone();
         self.run_blocking("log ID", move || {
             let prepared = Self::prepare_filter(&runtime, &filter)?;
+            let needs_redaction = matches!(
+                &prepared,
+                PreparedFilter::Script { .. }
+                    | PreparedFilter::Column {
+                        column: FilterColumn::Uri | FilterColumn::Script { .. },
+                        ..
+                    }
+            );
+            let redactor = if needs_redaction {
+                ReadRedactor::prepare(&policy)?
+            } else {
+                None
+            };
             let mut matched_ids = Vec::with_capacity(limit);
             let mut in_progress_ids = Vec::new();
             if let Some(ids) = requested_ids {
@@ -670,7 +787,9 @@ impl ProxyCrabManager for MitmManager {
                             || Self::capture_body_access(&runtime, item),
                             &mut matched_ids,
                             &mut in_progress_ids,
-                        );
+                            redactor.as_ref(),
+                            &runtime,
+                        )?;
                     }
                 }
             } else if limit == 0 {
@@ -687,7 +806,9 @@ impl ProxyCrabManager for MitmManager {
                         || Self::capture_body_access(&runtime, &item),
                         &mut matched_ids,
                         &mut in_progress_ids,
-                    );
+                        redactor.as_ref(),
+                        &runtime,
+                    )?;
                 }
             } else {
                 let mut min_id = min_id;
@@ -709,7 +830,9 @@ impl ProxyCrabManager for MitmManager {
                             || Self::capture_body_access(&runtime, &item),
                             &mut matched_ids,
                             &mut in_progress_ids,
-                        );
+                            redactor.as_ref(),
+                            &runtime,
+                        )?;
                         if matched_ids.len() == limit {
                             break 'scan;
                         }
@@ -742,7 +865,9 @@ impl ProxyCrabManager for MitmManager {
         }
         let session_id = self.session_id(request.session_id)?;
         let runtime = self.runtime.clone();
+        let policy = self.read_policy.clone();
         self.run_blocking("log view", move || {
+            let redactor = ReadRedactor::prepare(&policy)?;
             let columns = match request.view {
                 Some(view) => view.columns,
                 None => runtime.session_view(session_id).map_err(map_error)?.columns,
@@ -787,12 +912,23 @@ impl ProxyCrabManager for MitmManager {
                     });
                     continue;
                 };
-                if client_updated_at.is_some_and(|updated_at| item.updated_at <= updated_at) {
+                if redactor.is_none()
+                    && client_updated_at.is_some_and(|updated_at| item.updated_at <= updated_at)
+                {
                     continue;
                 }
 
-                let bodies =
-                    (!scripts.is_empty()).then(|| Self::capture_body_access(&runtime, item));
+                let view = redactor
+                    .as_ref()
+                    .map(|r| r.view(&runtime, item))
+                    .transpose()?;
+                let output = view.as_ref().map(|v| v.summary());
+                let item = output.as_ref().unwrap_or(item);
+                let bodies = (!scripts.is_empty()).then(|| {
+                    view.as_ref()
+                        .map(|v| v.body_access())
+                        .unwrap_or_else(|| Self::capture_body_access(&runtime, item))
+                });
                 let mut cells = Vec::with_capacity(columns.len());
                 for (column_index, column) in columns.iter().enumerate() {
                     if let Some(value) = Self::render_builtin_cell(column, item) {
@@ -829,6 +965,9 @@ impl ProxyCrabManager for MitmManager {
                             });
                         }
                     }
+                }
+                if let Some(view) = &view {
+                    view.ensure_success().map_err(|_| redaction::failed())?;
                 }
                 rows.push(LogViewRow {
                     id,
@@ -962,10 +1101,16 @@ impl ProxyCrabManager for MitmManager {
                     .collect::<ManagerResult<Vec<_>>>()
             })
             .await?;
+        let policy = self.read_policy.clone();
+        let redactor = self
+            .run_blocking("HAR redaction prepare", move || {
+                ReadRedactor::prepare(&policy)
+            })
+            .await?;
         Ok(LogExport {
             session_id,
             filename: format!("proxycrab-session-{session_id}.har"),
-            body: har::stream(captures),
+            body: har::stream(captures, redactor, self.blocking_tasks.clone()),
         })
     }
 
@@ -1046,11 +1191,17 @@ impl ProxyCrabManager for MitmManager {
     async fn log(&self, session_id: Option<u64>, id: u64) -> ManagerResult<LogDetail> {
         let session_id = self.session_id(session_id)?;
         let runtime = self.runtime.clone();
+        let policy = self.read_policy.clone();
         self.run_blocking("log read", move || {
+            let redactor = ReadRedactor::prepare(&policy)?;
             let detail = runtime
                 .capture(session_id, id)
                 .map_err(map_error)?
                 .ok_or_else(|| ManagerError::not_found(format!("log {id} not found")))?;
+            let detail = match redactor {
+                Some(r) => r.detail(&runtime, detail)?,
+                None => detail,
+            };
             Ok(log_detail_from_capture(detail))
         })
         .await
@@ -1064,12 +1215,26 @@ impl ProxyCrabManager for MitmManager {
     ) -> ManagerResult<BodySource> {
         let session_id = self.session_id(session_id)?;
         let runtime = self.runtime.clone();
+        let policy = self.read_policy.clone();
         self.run_blocking("log body source", move || {
+            let redactor = ReadRedactor::prepare(&policy)?;
             if !runtime.has_capture(session_id, id).map_err(map_error)? {
                 return Err(ManagerError::new(
                     ErrorCode::LogNotFound,
                     format!("log {id} not found"),
                 ));
+            }
+            if let Some(redactor) = redactor {
+                let summary = runtime
+                    .captures(session_id, &[id])
+                    .map_err(map_error)?
+                    .pop()
+                    .ok_or_else(|| ManagerError::not_found("log not found"))?;
+                return redactor
+                    .view(&runtime, &summary)?
+                    .body_source(side)
+                    .map_err(|_| redaction::failed())?
+                    .ok_or_else(|| ManagerError::new(ErrorCode::BodyNotFound, "body not found"));
             }
             runtime
                 .capture_body_source(session_id, id, side)
@@ -1090,7 +1255,22 @@ impl ProxyCrabManager for MitmManager {
     ) -> ManagerResult<BodySource> {
         let session_id = self.session_id(session_id)?;
         let runtime = self.runtime.clone();
+        let policy = self.read_policy.clone();
         self.run_blocking("interceptor snapshot body source", move || {
+            let redactor = ReadRedactor::prepare(&policy)?;
+            if let Some(redactor) = redactor {
+                let (_, view) =
+                    redactor.snapshot(&runtime, session_id, capture_id, execution_id)?;
+                return view
+                    .body_source(side)
+                    .map_err(|_| redaction::failed())?
+                    .ok_or_else(|| {
+                        ManagerError::new(
+                            ErrorCode::SnapshotBodyNotFound,
+                            "snapshot body not found",
+                        )
+                    });
+            }
             runtime
                 .interceptor_snapshot_body_source(session_id, capture_id, execution_id, side)
                 .map_err(|error| ManagerError::new(ErrorCode::BodyReadFailed, error.to_string()))?
@@ -1134,7 +1314,14 @@ impl ProxyCrabManager for MitmManager {
     ) -> ManagerResult<InterceptorSnapshot> {
         let session_id = self.session_id(session_id)?;
         let runtime = self.runtime.clone();
+        let policy = self.read_policy.clone();
         self.run_blocking("interceptor snapshot", move || {
+            let redactor = ReadRedactor::prepare(&policy)?;
+            if let Some(redactor) = redactor {
+                let (snapshot, view) =
+                    redactor.snapshot(&runtime, session_id, capture_id, execution_id)?;
+                return redaction::snapshot_output(snapshot, &view);
+            }
             runtime
                 .interceptor_snapshot(session_id, capture_id, execution_id)
                 .map_err(map_error)?
@@ -1150,17 +1337,47 @@ impl ProxyCrabManager for MitmManager {
 
     async fn breakpoints(&self, query: BreakpointQuery) -> ManagerResult<Vec<BreakpointSummary>> {
         let session_id = self.session_id(query.session_id)?;
-        Ok(self.runtime.breakpoints(&BreakpointListFilter {
-            session_id,
-            phase: query.phase,
-            interceptor_name: query.interceptor_name,
-        }))
+        let runtime = self.runtime.clone();
+        let policy = self.read_policy.clone();
+        self.run_blocking("breakpoint list", move || {
+            let redactor = ReadRedactor::prepare(&policy)?;
+            let mut rows = runtime.breakpoints(&BreakpointListFilter {
+                session_id,
+                phase: query.phase,
+                interceptor_name: query.interceptor_name,
+            });
+            if let Some(redactor) = redactor {
+                for row in &mut rows {
+                    row.uri = redactor.uri(&row.uri)?;
+                }
+            }
+            Ok(rows)
+        })
+        .await
     }
 
     async fn breakpoint(&self, id: u64) -> ManagerResult<BreakpointDetailPayload> {
         let runtime = self.runtime.clone();
+        let policy = self.read_policy.clone();
         self.run_blocking("breakpoint read", move || {
-            let detail = runtime.breakpoint(id).map_err(map_error)?;
+            let redactor = ReadRedactor::prepare(&policy)?;
+            let mut detail = runtime.breakpoint(id).map_err(map_error)?;
+            if let Some(redactor) = redactor {
+                let live_runtime = runtime.clone();
+                let view = redactor.with_sources(detail.capture.summary.clone(), move |side| {
+                    live_runtime.breakpoint_body_source(id, side)
+                })?;
+                detail.capture.request_body = redaction::payload(
+                    view.body_source(BodySide::Request)
+                        .map_err(|_| redaction::failed())?,
+                )?;
+                detail.capture.response_body = redaction::payload(
+                    view.body_source(BodySide::Response)
+                        .map_err(|_| redaction::failed())?,
+                )?;
+                detail.capture.summary = view.summary();
+                detail.breakpoint.uri = detail.capture.summary.request.uri.clone();
+            }
             Ok(BreakpointDetailPayload {
                 breakpoint: detail.breakpoint,
                 log: log_detail_from_capture(detail.capture),
@@ -1171,7 +1388,20 @@ impl ProxyCrabManager for MitmManager {
 
     async fn breakpoint_body_source(&self, id: u64, side: BodySide) -> ManagerResult<BodySource> {
         let runtime = self.runtime.clone();
+        let policy = self.read_policy.clone();
         self.run_blocking("breakpoint body source", move || {
+            let redactor = ReadRedactor::prepare(&policy)?;
+            if let Some(redactor) = redactor {
+                let detail = runtime.breakpoint(id).map_err(map_error)?;
+                let live_runtime = runtime.clone();
+                return redactor
+                    .with_sources(detail.capture.summary, move |side| {
+                        live_runtime.breakpoint_body_source(id, side)
+                    })?
+                    .body_source(side)
+                    .map_err(|_| redaction::failed())?
+                    .ok_or_else(|| ManagerError::new(ErrorCode::BodyNotFound, "body not found"));
+            }
             runtime
                 .breakpoint_body_source(id, side)
                 .map_err(map_error)?
@@ -1187,9 +1417,19 @@ impl ProxyCrabManager for MitmManager {
         id: u64,
         request: ExtendBreakpointRequest,
     ) -> ManagerResult<BreakpointSummary> {
-        self.runtime
-            .extend_breakpoint(id, request.timeout_ms)
-            .map_err(map_error)
+        let runtime = self.runtime.clone();
+        let policy = self.read_policy.clone();
+        self.run_blocking("breakpoint extend", move || {
+            let redactor = ReadRedactor::prepare(&policy)?;
+            let mut result = runtime
+                .extend_breakpoint(id, request.timeout_ms)
+                .map_err(map_error)?;
+            if let Some(redactor) = redactor {
+                result.uri = redactor.uri(&result.uri)?;
+            }
+            Ok(result)
+        })
+        .await
     }
 
     async fn release_breakpoint(&self, id: u64) -> ManagerResult<()> {
@@ -1202,10 +1442,16 @@ impl ProxyCrabManager for MitmManager {
         request: ExecuteTemporaryScriptRequest,
     ) -> ManagerResult<TemporaryExecutionResult> {
         let runtime = self.runtime.clone();
+        let policy = self.read_policy.clone();
         self.run_blocking("breakpoint script", move || {
-            runtime
+            let redactor = ReadRedactor::prepare(&policy)?;
+            let mut result = runtime
                 .execute_breakpoint_script(id, &request.content)
-                .map_err(map_error)
+                .map_err(map_error)?;
+            if let Some(redactor) = redactor {
+                result.breakpoint.uri = redactor.uri(&result.breakpoint.uri)?;
+            }
+            Ok(result)
         })
         .await
     }
@@ -1214,6 +1460,10 @@ impl ProxyCrabManager for MitmManager {
         let session_id = self.session_id(session_id)?;
         let view = self.runtime.session_view(session_id).map_err(map_error)?;
         Ok(SessionViewPayload {
+            redaction_revision: self
+                .read_policy
+                .as_ref()
+                .map(|p| proxy_crab_mitm::model::script_content_hash(&p.script.content)),
             session_id,
             columns: view.columns,
             filter: view.filter,
@@ -1230,6 +1480,10 @@ impl ProxyCrabManager for MitmManager {
             .replace_session_filter(session_id, filter)
             .map_err(map_error)?;
         Ok(SessionViewPayload {
+            redaction_revision: self
+                .read_policy
+                .as_ref()
+                .map(|p| proxy_crab_mitm::model::script_content_hash(&p.script.content)),
             session_id,
             columns: view.columns,
             filter: view.filter,
@@ -1247,6 +1501,10 @@ impl ProxyCrabManager for MitmManager {
             .replace_session_columns(session_id, request.columns)
             .map_err(map_error)?;
         Ok(SessionViewPayload {
+            redaction_revision: self
+                .read_policy
+                .as_ref()
+                .map(|p| proxy_crab_mitm::model::script_content_hash(&p.script.content)),
             session_id,
             columns: view.columns,
             filter: view.filter,
@@ -1336,7 +1594,9 @@ impl ProxyCrabManager for MitmManager {
     ) -> ManagerResult<bool> {
         let session_id = self.session_id(request.session_id)?;
         let runtime = self.runtime.clone();
+        let policy = self.read_policy.clone();
         self.run_blocking("filter script", move || {
+            let redactor = ReadRedactor::prepare(&policy)?;
             let script = runtime
                 .script(ScriptKind::Filter, &name)
                 .map_err(map_error)?;
@@ -1348,10 +1608,20 @@ impl ProxyCrabManager for MitmManager {
                 })?;
             let evaluator = FilterEvaluator::new(&script.content, &script.name)
                 .map_err(|error| ManagerError::bad_request(error.to_string()))?;
-            let bodies = Self::capture_body_access(&runtime, &detail.summary);
-            evaluator
-                .evaluate_with_bodies(&request.input, &detail.summary, bodies)
-                .map_err(|error| ManagerError::bad_request(error.to_string()))
+            let view = redactor
+                .as_ref()
+                .map(|r| r.view(&runtime, &detail.summary))
+                .transpose()?;
+            let summary = view.as_ref().map(|v| v.summary()).unwrap_or(detail.summary);
+            let bodies = view
+                .as_ref()
+                .map(|v| v.body_access())
+                .unwrap_or_else(|| Self::capture_body_access(&runtime, &summary));
+            let result = evaluator.evaluate_with_bodies(&request.input, &summary, bodies);
+            if let Some(view) = &view {
+                view.ensure_success().map_err(|_| redaction::failed())?;
+            }
+            result.map_err(|error| ManagerError::bad_request(error.to_string()))
         })
         .await
     }
@@ -1601,12 +1871,19 @@ impl ProxyCrabManager for MitmManager {
     async fn bypass_entries(&self, query: BypassQuery) -> ManagerResult<BypassPage> {
         let limit = query.limit.unwrap_or(200).clamp(1, 1000);
         let runtime = self.runtime.clone();
+        let policy = self.read_policy.clone();
         self.run_blocking("bypass read", move || {
+            let redactor = ReadRedactor::prepare(&policy)?;
             let mut rows = runtime
                 .bypass_entries(limit + 1, query.before_id)
                 .map_err(map_error)?;
             let has_more = rows.len() > limit;
             rows.truncate(limit);
+            if let Some(redactor) = redactor {
+                for row in &mut rows {
+                    row.uri = redactor.uri(&row.uri)?;
+                }
+            }
             Ok(BypassPage { rows, has_more })
         })
         .await
@@ -1814,6 +2091,8 @@ mod tests {
 
     #[test]
     fn log_id_in_progress_requires_current_activity_membership() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
         let item = CaptureSummary {
             id: 7,
             session_id: 3,
@@ -1835,7 +2114,10 @@ mod tests {
             CaptureBodyAccess::unavailable,
             &mut matched,
             &mut in_progress,
-        );
+            None,
+            &runtime,
+        )
+        .unwrap();
         assert_eq!(matched, vec![7]);
         assert!(in_progress.is_empty());
 
@@ -1846,7 +2128,10 @@ mod tests {
             CaptureBodyAccess::unavailable,
             &mut Vec::new(),
             &mut in_progress,
-        );
+            None,
+            &runtime,
+        )
+        .unwrap();
         assert_eq!(in_progress, vec![7]);
     }
 

@@ -146,25 +146,77 @@ struct LoadedBody {
 
 pub(crate) type HarStream = Pin<Box<dyn Stream<Item = ManagerResult<Bytes>> + Send>>;
 
-pub(crate) fn stream(captures: Vec<HarCapture>) -> HarStream {
+pub(crate) fn stream(
+    captures: Vec<HarCapture>,
+    redactor: Option<crate::manager::redaction::ReadRedactor>,
+    limiter: std::sync::Arc<tokio::sync::Semaphore>,
+) -> HarStream {
     let prefix = futures::stream::once(async { Ok::<_, ManagerError>(envelope_prefix()) });
-    let entries = futures::stream::iter(captures.into_iter().enumerate()).then(
-        |(index, capture)| async move {
-            let entry = entry(capture).await?;
-            let serialized = serde_json::to_vec(&entry)
-                .map_err(|error| ManagerError::internal(error.to_string()))?;
-            if index == 0 {
-                Ok(Bytes::from(serialized))
-            } else {
-                let mut chunk = Vec::with_capacity(serialized.len() + 1);
-                chunk.push(b',');
-                chunk.extend_from_slice(&serialized);
-                Ok(Bytes::from(chunk))
+    let entries =
+        futures::stream::iter(captures.into_iter().enumerate()).then(move |(index, capture)| {
+            let redactor = redactor.clone();
+            let limiter = limiter.clone();
+            async move {
+                let capture = if let Some(redactor) = redactor {
+                    let permit = limiter
+                        .acquire_owned()
+                        .await
+                        .map_err(|_| crate::manager::redaction::failed())?;
+                    tokio::task::spawn_blocking(move || {
+                        let _permit = permit;
+                        let sources = [capture.request_body, capture.response_body];
+                        let view = redactor.with_sources(capture.summary, move |side| {
+                            Ok(sources[match side {
+                                proxy_crab_mitm::storage::BodySide::Request => 0,
+                                proxy_crab_mitm::storage::BodySide::Response => 1,
+                            }]
+                            .clone())
+                        })?;
+                        let request_body = view
+                            .body_source(proxy_crab_mitm::storage::BodySide::Request)
+                            .map_err(|_| crate::manager::redaction::failed())?;
+                        let response_body = view
+                            .body_source(proxy_crab_mitm::storage::BodySide::Response)
+                            .map_err(|_| crate::manager::redaction::failed())?;
+                        Ok::<_, ManagerError>(HarCapture {
+                            summary: view.summary(),
+                            request_body,
+                            response_body,
+                        })
+                    })
+                    .await
+                    .map_err(|_| crate::manager::redaction::failed())??
+                } else {
+                    capture
+                };
+                let entry = entry(capture).await?;
+                let serialized = serde_json::to_vec(&entry)
+                    .map_err(|error| ManagerError::internal(error.to_string()))?;
+                if index == 0 {
+                    Ok(Bytes::from(serialized))
+                } else {
+                    let mut chunk = Vec::with_capacity(serialized.len() + 1);
+                    chunk.push(b',');
+                    chunk.extend_from_slice(&serialized);
+                    Ok(Bytes::from(chunk))
+                }
             }
-        },
-    );
+        });
     let suffix = futures::stream::once(async { Ok::<_, ManagerError>(Bytes::from_static(b"]}}")) });
-    Box::pin(prefix.chain(entries).chain(suffix))
+    Box::pin(
+        prefix
+            .chain(entries)
+            .chain(suffix)
+            .scan(false, |failed, item| {
+                let output = if *failed {
+                    None
+                } else {
+                    *failed = item.is_err();
+                    Some(item)
+                };
+                futures::future::ready(output)
+            }),
+    )
 }
 
 fn envelope_prefix() -> Bytes {
@@ -473,13 +525,17 @@ mod tests {
     use super::{HarCapture, stream};
 
     async fn collect(captures: Vec<HarCapture>) -> Vec<u8> {
-        stream(captures)
-            .try_fold(Vec::new(), |mut output, chunk| async move {
-                output.extend_from_slice(&chunk);
-                Ok(output)
-            })
-            .await
-            .unwrap()
+        stream(
+            captures,
+            None,
+            std::sync::Arc::new(tokio::sync::Semaphore::new(8)),
+        )
+        .try_fold(Vec::new(), |mut output, chunk| async move {
+            output.extend_from_slice(&chunk);
+            Ok(output)
+        })
+        .await
+        .unwrap()
     }
 
     fn capture(response_headers: HeaderValues) -> CaptureSummary {
@@ -607,17 +663,21 @@ mod tests {
     #[tokio::test]
     async fn emits_the_envelope_before_reading_entry_bodies() {
         let directory = tempfile::tempdir().unwrap();
-        let mut output = stream(vec![HarCapture {
-            summary: capture(HeaderValues::new()),
-            request_body: None,
-            response_body: Some(BodySource {
-                data: BodySourceData::File(directory.path().join("missing-body")),
-                path: None,
-                stored_size: 1,
-                content_type: Some("text/plain".into()),
-                content_encodings: Vec::new(),
-            }),
-        }]);
+        let mut output = stream(
+            vec![HarCapture {
+                summary: capture(HeaderValues::new()),
+                request_body: None,
+                response_body: Some(BodySource {
+                    data: BodySourceData::File(directory.path().join("missing-body")),
+                    path: None,
+                    stored_size: 1,
+                    content_type: Some("text/plain".into()),
+                    content_encodings: Vec::new(),
+                }),
+            }],
+            None,
+            std::sync::Arc::new(tokio::sync::Semaphore::new(8)),
+        );
 
         let prefix = output.try_next().await.unwrap().unwrap();
         assert!(prefix.starts_with(br#"{"log":{"version":"1.2""#));

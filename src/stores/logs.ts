@@ -731,6 +731,7 @@ export function createLogsStore() {
       this.stopPolling();
       scope.stop();
       window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
+      window.removeEventListener("proxycrab-redaction-changed", onRedactionChanged);
       window.removeEventListener("column-scripts-changed", onColumnScriptsChanged);
       window.removeEventListener("filter-scripts-changed", onFilterScriptsChanged);
     },
@@ -747,6 +748,11 @@ export function createLogsStore() {
   }
 
   // 列脚本改变的是单元格内容，重算视图即可；过滤脚本会改变匹配结果，需要整体重扫。
+  function onRedactionChanged(): void {
+    logsStore.clearRows();
+    void logsStore.reloadFilter(cloneSessionFilter(logsStore.appliedFilter));
+  }
+
   function onColumnScriptsChanged(): void {
     void logsStore.refreshView();
   }
@@ -785,6 +791,7 @@ export function createLogsStore() {
   });
 
   window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
+  window.addEventListener("proxycrab-redaction-changed", onRedactionChanged);
   window.addEventListener("column-scripts-changed", onColumnScriptsChanged);
   window.addEventListener("filter-scripts-changed", onFilterScriptsChanged);
 

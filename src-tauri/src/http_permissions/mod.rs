@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use proxy_crab_mgr::{
     dto::{ErrorCode, ManagerError},
     permission::{
-        ApiAction, PermissionAction, PermissionDenied, PermissionManager, PermissionMode,
-        api_actions,
+        ApiAction, ManagementCredential, PermissionAction, PermissionDenied, PermissionManager,
+        PermissionMode, api_actions,
     },
 };
 
@@ -46,6 +46,14 @@ impl HttpPermissionService {
 
     pub fn identity_permissions(&self, id: &str) -> Result<IdentityPermissions, ManagerError> {
         self.store.identity_permissions(id)
+    }
+
+    pub fn set_redaction(
+        &self,
+        id: &str,
+        script: Option<String>,
+    ) -> Result<IdentityPermissions, ManagerError> {
+        self.store.set_redaction(id, script)
     }
 
     pub fn replace_permissions(
@@ -88,6 +96,24 @@ impl HttpPermissionService {
 
 #[async_trait]
 impl PermissionManager for HttpPermissionService {
+    async fn redaction_script(
+        &self,
+        credential: &ManagementCredential,
+    ) -> Result<Option<String>, PermissionDenied> {
+        let identity = self
+            .store
+            .authenticate(credential)
+            .map_err(|_| PermissionDenied::unauthorized("invalid_api_key", "invalid API key"))?;
+        self.store
+            .identity_permissions(&identity.summary.id)
+            .map(|view| view.redaction_script)
+            .map_err(|_| {
+                PermissionDenied::internal(
+                    "permission_check_failed",
+                    "cannot load redaction binding",
+                )
+            })
+    }
     async fn check_permission(&self, action: PermissionAction) -> Option<PermissionDenied> {
         let identity = match self.store.authenticate(&action.credential) {
             Ok(identity) => identity,
@@ -192,13 +218,43 @@ mod tests {
 
     use super::HttpPermissionService;
 
+    #[tokio::test]
+    async fn redaction_binding_resolves_per_authenticated_identity() {
+        use proxy_crab_mgr::permission::{ManagementCredential, PermissionManager};
+        let directory = tempdir().unwrap();
+        let service = HttpPermissionService::open(directory.path(), Arc::new(|_| {})).unwrap();
+        let key = service.create_api_key("bound".into()).unwrap();
+        service
+            .set_redaction("local", Some("local-mask".into()))
+            .unwrap();
+        service
+            .set_redaction(&key.identity.id, Some("token-mask".into()))
+            .unwrap();
+        assert_eq!(
+            service
+                .redaction_script(&ManagementCredential::LocalLoopback)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("local-mask")
+        );
+        assert_eq!(
+            service
+                .redaction_script(&ManagementCredential::Bearer(key.api_key))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("token-mask")
+        );
+    }
+
     #[test]
     fn desktop_catalog_exposes_asset_and_share_management_actions() {
         let directory = tempdir().unwrap();
         let service = HttpPermissionService::open(directory.path(), Arc::new(|_| {})).unwrap();
         let catalog = service.catalog();
 
-        assert_eq!(catalog.len(), 77);
+        assert_eq!(catalog.len(), 83);
         assert!(catalog.iter().any(|action| {
             action.id == "GET /api/assets" && action.route_template == "/api/assets"
         }));

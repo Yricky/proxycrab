@@ -80,6 +80,12 @@ impl PermissionDenied {
 
 #[async_trait]
 pub trait PermissionManager: Send + Sync {
+    async fn redaction_script(
+        &self,
+        _credential: &ManagementCredential,
+    ) -> Result<Option<String>, PermissionDenied> {
+        Ok(None)
+    }
     async fn check_permission(&self, action: PermissionAction) -> Option<PermissionDenied>;
 }
 
@@ -95,6 +101,13 @@ macro_rules! action {
 }
 
 pub static API_ACTIONS: &[ApiAction] = &[
+    action!("GET", "/api/redaction-scripts", Allow),
+    action!("POST", "/api/redaction-scripts", Allow),
+    action!("GET", "/api/redaction-scripts/{name}", Deny),
+    action!("PUT", "/api/redaction-scripts/{name}", Approval),
+    action!("DELETE", "/api/redaction-scripts/{name}", Approval),
+    action!("PUT", "/api/session-shares/{id}/redaction", Approval),
+    action!("PUT", "/api/session-har-shares/{id}/redaction", Approval),
     action!("GET", "/api/agents.md", Allow),
     action!("GET", "/api/assets", Allow),
     action!("GET", "/api/assets/{*asset_id}", Allow),

@@ -59,7 +59,14 @@ impl Workspace {
         let root = root.into();
         fs::create_dir_all(root.join(SESSIONS_DIRECTORY))?;
         fs::create_dir_all(root.join(ARCHIVED_SESSIONS_DIRECTORY))?;
-        for directory in ["column", "filter", "routing", "request", "response"] {
+        for directory in [
+            "column",
+            "filter",
+            "routing",
+            "request",
+            "response",
+            "redaction",
+        ] {
             fs::create_dir_all(root.join("scripts").join(directory))?;
         }
         let lock = OpenOptions::new()
@@ -459,6 +466,7 @@ impl Workspace {
 
     fn script_dir(&self, kind: ScriptKind) -> PathBuf {
         let directory = match kind {
+            ScriptKind::Redaction => "redaction",
             ScriptKind::Column => "column",
             ScriptKind::Filter => "filter",
             ScriptKind::Routing => "routing",

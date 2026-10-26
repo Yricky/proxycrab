@@ -17,8 +17,8 @@ management HTTP API and resolve them in interceptors with `get_asset(id)`.
 
 ## Script display names
 
-All five script kinds (custom columns, filters, routing, request interceptors, and response
-interceptors) support an optional display name in the leading Lua comment header:
+All six script kinds (custom columns, filters, routing, request interceptors, response
+interceptors, and redaction) support an optional display name in the leading Lua comment header:
 
 ```lua
 -- #display_name: 鉴权token
@@ -505,3 +505,59 @@ resp.body:replace_with_string('{"ok":true,"source":"proxycrab"}')
 
 When changing body format, update relevant metadata such as `content-type`. The HTTP stack may
 reconcile transfer framing, but scripts should not rely on stale semantic headers.
+
+## Read-time redaction scripts
+
+Redaction is a read policy bound to a local management identity, ordinary API key, Session share,
+or HAR share. An unbound identity receives the original data. A bound missing/broken script causes
+`redaction_failed`; there is no fallback to original content. Forwarding, live interceptor execution,
+and persisted captures never run redaction. Interceptor modification history and executed source are
+outside this policy; historical snapshots and their bodies are redacted independently.
+
+The globals are `req`, `resp` (nil when absent), and `context`:
+
+```lua
+-- #display_name: Hide credentials
+if context.req.header == "loaded" and req and req.headers then
+  req.headers:remove("authorization")
+  req.headers:remove("cookie")
+end
+if resp and context.resp.header == "loaded" then
+  resp.headers:remove("set-cookie")
+end
+if resp and context.resp.body == "loaded" then
+  local value = resp.body:as_json()
+  if value then
+    value.token = "[redacted]"
+    resp.body:replace_with_string(json.encode(value))
+  end
+end
+```
+
+`context.api` is the route template (for example `/api/logs/{id}`, `/share-api/logs/views`, or
+`/session.har`), without IDs or query tokens. `context.req.header`, `context.req.body`,
+`context.resp.header`, and `context.resp.body` each contain `unloaded`, `loaded`, or `redacted`.
+Header state includes request URI and message metadata. Body availability implies header
+availability. Unloaded fields are nil. URI built-in filtering and URI-only summaries provide only
+`req.uri`; `req.headers`, `req.body`, `req.method`, and `resp` are nil. Other built-in filters and
+empty filters do not execute redaction. Custom-column filters and filter scripts operate on the
+redacted input, with bodies loaded only when accessed.
+
+Within a redactor, getters always return the original value for this record/snapshot, including
+reads after writes and reads of already-redacted parts. Only parts `loaded` at invocation start
+accept writes. Header `get/get_all/all/set/append/remove`, request `uri` assignment, and Body
+`as_string/as_json/replace_with_string` are supported. Method, status and HTTP version are read-only.
+Successful completion (including early return/no edits) marks every loaded part redacted and commits
+all writes. Failure commits none and refuses output. Header decisions that depend on a later body
+cannot be deferred by early return. Body replacement normalizes output encoding/length metadata;
+original encoding metadata is retained privately for decoding original bytes. A successfully read
+original text Body is cached for the flow and reused by later stages and output, so subsequent file
+appends cannot change the data already examined by the script. Text body decoding
+errors and size-limit errors fail the read. Binary `as_string/as_json` returns nil; replacing the
+body with a string is supported without reading its original bytes.
+
+Each API request compiles its selected script once and isolates globals between records/stages.
+States and output are scoped to a record/snapshot in that request. HAR pins the script version for
+the download and redacts entries before deriving query strings, cookies, redirect URLs and body
+fields. A failing HAR entry terminates the stream; earlier successfully redacted entries may already
+have been sent. No cross-request or cross-snapshot result cache is used.

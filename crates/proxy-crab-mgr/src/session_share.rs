@@ -34,11 +34,14 @@ use crate::{
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EnableSessionShareRequest {
+    #[serde(default)]
+    pub redaction_script: Option<String>,
     pub session_id: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SessionShareState {
+    pub redaction_script: Option<String>,
     pub session_id: u64,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,12 +104,14 @@ fn scope_proxy_status(
 
 #[derive(Clone)]
 struct ShareEntry {
+    redaction_script: Option<String>,
     token: String,
     digest: [u8; 32],
 }
 
 #[derive(Debug, Clone)]
 struct ShareScope {
+    redaction_script: Option<String>,
     session_id: u64,
 }
 
@@ -146,11 +151,13 @@ impl SessionShareService {
         let entries = self.entries.lock().expect("session share lock poisoned");
         Ok(match entries.get(&session_id) {
             Some(entry) => SessionShareState {
+                redaction_script: entry.redaction_script.clone(),
                 session_id,
                 enabled: true,
                 token: Some(entry.token.clone()),
             },
             None => SessionShareState {
+                redaction_script: None,
                 session_id,
                 enabled: false,
                 token: None,
@@ -163,10 +170,23 @@ impl SessionShareService {
         manager: &Arc<dyn ProxyCrabManager>,
         session_id: u64,
     ) -> Result<SessionShareState, ManagerError> {
+        self.enable_with_script(manager, session_id, None).await
+    }
+
+    pub async fn enable_with_script(
+        &self,
+        manager: &Arc<dyn ProxyCrabManager>,
+        session_id: u64,
+        redaction_script: Option<String>,
+    ) -> Result<SessionShareState, ManagerError> {
         Self::ensure_session(manager, session_id).await?;
+        if let Some(name) = &redaction_script {
+            manager.redaction_script(name.clone()).await?;
+        }
         let mut entries = self.entries.lock().expect("session share lock poisoned");
         if let Some(entry) = entries.get(&session_id) {
             return Ok(SessionShareState {
+                redaction_script: entry.redaction_script.clone(),
                 session_id,
                 enabled: true,
                 token: Some(entry.token.clone()),
@@ -178,15 +198,36 @@ impl SessionShareService {
             .map_err(|error| ManagerError::internal(format!("generate share token: {error}")))?;
         let token = format!("pcrab_share_{}", URL_SAFE_NO_PAD.encode(bytes));
         let entry = ShareEntry {
+            redaction_script: redaction_script.clone(),
             token: token.clone(),
             digest: Sha256::digest(token.as_bytes()).into(),
         };
         entries.insert(session_id, entry);
         Ok(SessionShareState {
+            redaction_script,
             session_id,
             enabled: true,
             token: Some(token),
         })
+    }
+
+    pub async fn set_redaction(
+        &self,
+        manager: &Arc<dyn ProxyCrabManager>,
+        session_id: u64,
+        script: Option<String>,
+    ) -> Result<SessionShareState, ManagerError> {
+        if let Some(name) = &script {
+            manager.redaction_script(name.clone()).await?;
+        }
+        {
+            let mut entries = self.entries.lock().expect("session share lock poisoned");
+            entries
+                .get_mut(&session_id)
+                .ok_or_else(|| ManagerError::not_found("share is not enabled"))?
+                .redaction_script = script;
+        }
+        self.status(manager, session_id).await
     }
 
     pub async fn disable(
@@ -200,6 +241,7 @@ impl SessionShareService {
             .expect("session share lock poisoned")
             .remove(&session_id);
         Ok(SessionShareState {
+            redaction_script: None,
             session_id,
             enabled: false,
             token: None,
@@ -215,7 +257,8 @@ impl SessionShareService {
         entries
             .iter()
             .find(|(_, entry)| bool::from(entry.digest.ct_eq(&digest)))
-            .map(|(session_id, _)| ShareScope {
+            .map(|(session_id, entry)| ShareScope {
+                redaction_script: entry.redaction_script.clone(),
                 session_id: *session_id,
             })
             .ok_or(ShareAuthError::Invalid)
@@ -310,8 +353,10 @@ async fn bootstrap(
     State(state): State<Arc<ShareState>>,
     Extension(scope): Extension<ShareScope>,
 ) -> Result<Json<serde_json::Value>, ShareApiError> {
-    let session = state
+    let manager = state
         .manager
+        .reader(scope.redaction_script.as_deref(), "/share-api/bootstrap")?;
+    let session = manager
         .sessions()
         .await?
         .sessions
@@ -319,9 +364,9 @@ async fn bootstrap(
         .find(|session| session.id == scope.session_id)
         .ok_or_else(ShareApiError::unavailable)?;
     let (view, proxy_status, config) = tokio::try_join!(
-        state.manager.session_view(Some(scope.session_id)),
-        state.manager.proxy_status(),
-        state.manager.config(),
+        manager.session_view(Some(scope.session_id)),
+        manager.proxy_status(),
+        manager.config(),
     )?;
     success(SessionShareBootstrap {
         session,
@@ -390,7 +435,10 @@ async fn session_view(
     State(state): State<Arc<ShareState>>,
     Extension(scope): Extension<ShareScope>,
 ) -> Result<Json<serde_json::Value>, ShareApiError> {
-    success(state.manager.session_view(Some(scope.session_id)).await?)
+    let manager = state
+        .manager
+        .reader(scope.redaction_script.as_deref(), "/share-api/session-view")?;
+    success(manager.session_view(Some(scope.session_id)).await?)
 }
 
 async fn log_ids(
@@ -398,8 +446,11 @@ async fn log_ids(
     Extension(scope): Extension<ShareScope>,
     Json(mut request): Json<LogIdsRequest>,
 ) -> Result<Json<serde_json::Value>, ShareApiError> {
+    let manager = state
+        .manager
+        .reader(scope.redaction_script.as_deref(), "/share-api/logs/ids")?;
     request.session_id = Some(scope.session_id);
-    success(state.manager.log_ids(request).await?)
+    success(manager.log_ids(request).await?)
 }
 
 async fn log_views(
@@ -407,8 +458,11 @@ async fn log_views(
     Extension(scope): Extension<ShareScope>,
     Json(mut request): Json<LogViewsRequest>,
 ) -> Result<Json<serde_json::Value>, ShareApiError> {
+    let manager = state
+        .manager
+        .reader(scope.redaction_script.as_deref(), "/share-api/logs/views")?;
     request.session_id = Some(scope.session_id);
-    success(state.manager.log_views(request).await?)
+    success(manager.log_views(request).await?)
 }
 
 async fn log(
@@ -416,7 +470,10 @@ async fn log(
     Extension(scope): Extension<ShareScope>,
     Path(id): Path<u64>,
 ) -> Result<Json<serde_json::Value>, ShareApiError> {
-    success(state.manager.log(Some(scope.session_id), id).await?)
+    let manager = state
+        .manager
+        .reader(scope.redaction_script.as_deref(), "/share-api/logs/{id}")?;
+    success(manager.log(Some(scope.session_id), id).await?)
 }
 
 async fn log_body(
@@ -426,6 +483,10 @@ async fn log_body(
     Query(query): Query<BodyQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ShareApiError> {
+    let manager = state.manager.reader(
+        scope.redaction_script.as_deref(),
+        "/share-api/logs/{id}/body",
+    )?;
     if query.max_size == Some(0) {
         return Err(ShareApiError(ManagerError::bad_request(
             "max_size must be greater than zero",
@@ -442,14 +503,12 @@ async fn log_body(
     };
     let source = match query.execution_id {
         Some(execution_id) => {
-            state
-                .manager
+            manager
                 .interceptor_snapshot_body_source(Some(scope.session_id), id, execution_id, side)
                 .await?
         }
         None => {
-            state
-                .manager
+            manager
                 .log_body_source(Some(scope.session_id), id, side)
                 .await?
         }
@@ -491,9 +550,12 @@ async fn log_interceptor_snapshot(
     Extension(scope): Extension<ShareScope>,
     Path((id, execution_id)): Path<(u64, u64)>,
 ) -> Result<Json<serde_json::Value>, ShareApiError> {
+    let manager = state.manager.reader(
+        scope.redaction_script.as_deref(),
+        "/share-api/logs/{id}/interceptors/{execution_id}/snapshot",
+    )?;
     success(
-        state
-            .manager
+        manager
             .interceptor_snapshot(Some(scope.session_id), id, execution_id)
             .await?,
     )
@@ -781,6 +843,7 @@ mod tests {
         assert_eq!(
             service.status(&manager, session.id).await.unwrap(),
             SessionShareState {
+                redaction_script: None,
                 session_id: session.id,
                 enabled: false,
                 token: None,
@@ -798,6 +861,7 @@ mod tests {
         assert_eq!(
             service.disable(&manager, session.id).await.unwrap(),
             SessionShareState {
+                redaction_script: None,
                 session_id: session.id,
                 enabled: false,
                 token: None,

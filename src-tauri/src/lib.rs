@@ -75,8 +75,12 @@ async fn get_session_share(
 async fn enable_session_share(
     state: State<'_, BackendState>,
     session_id: u64,
+    redaction_script: Option<String>,
 ) -> Result<SessionShareState, ManagerError> {
-    state.shares.enable(&state.manager(), session_id).await
+    state
+        .shares
+        .enable_with_script(&state.manager(), session_id, redaction_script)
+        .await
 }
 
 #[tauri::command]
@@ -1178,6 +1182,14 @@ pub fn run() {
             get_column_script,
             update_column_script,
             delete_column_script,
+            list_redaction_scripts,
+            create_redaction_script,
+            get_redaction_script,
+            update_redaction_script,
+            delete_redaction_script,
+            set_http_identity_redaction,
+            set_session_share_redaction,
+            set_har_share_redaction,
             list_filter_scripts,
             create_filter_script,
             get_filter_script,
@@ -1279,4 +1291,78 @@ mod tests {
             "IPs must be sorted and deduplicated: {ips:?}"
         );
     }
+}
+
+#[tauri::command]
+async fn list_redaction_scripts(
+    state: State<'_, BackendState>,
+) -> Result<Vec<Script>, ManagerError> {
+    state.manager().redaction_scripts().await
+}
+
+#[tauri::command]
+async fn create_redaction_script(
+    state: State<'_, BackendState>,
+    request: ScriptRequest,
+) -> Result<(), ManagerError> {
+    state.manager().create_redaction_script(request).await
+}
+
+#[tauri::command]
+async fn get_redaction_script(
+    state: State<'_, BackendState>,
+    name: String,
+) -> Result<Script, ManagerError> {
+    state.manager().redaction_script(name).await
+}
+
+#[tauri::command]
+async fn update_redaction_script(
+    state: State<'_, BackendState>,
+    name: String,
+    request: UpdateScriptRequest,
+) -> Result<(), ManagerError> {
+    state.manager().update_redaction_script(name, request).await
+}
+
+#[tauri::command]
+async fn delete_redaction_script(
+    state: State<'_, BackendState>,
+    name: String,
+) -> Result<(), ManagerError> {
+    state.manager().delete_redaction_script(name).await
+}
+
+#[tauri::command]
+async fn set_http_identity_redaction(
+    state: State<'_, BackendState>,
+    id: String,
+    redaction_script: Option<String>,
+) -> Result<IdentityPermissions, ManagerError> {
+    if let Some(name) = &redaction_script {
+        state.manager().redaction_script(name.clone()).await?;
+    }
+    state.permissions()?.set_redaction(&id, redaction_script)
+}
+#[tauri::command]
+async fn set_session_share_redaction(
+    state: State<'_, BackendState>,
+    session_id: u64,
+    redaction_script: Option<String>,
+) -> Result<SessionShareState, ManagerError> {
+    state
+        .shares
+        .set_redaction(&state.manager(), session_id, redaction_script)
+        .await
+}
+#[tauri::command]
+async fn set_har_share_redaction(
+    state: State<'_, BackendState>,
+    session_id: u64,
+    redaction_script: Option<String>,
+) -> Result<HarShareState, ManagerError> {
+    state
+        .har_shares
+        .set_redaction(&state.manager(), session_id, redaction_script)
+        .await
 }

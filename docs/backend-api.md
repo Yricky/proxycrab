@@ -73,8 +73,9 @@ in memory only, and disappears on restart. No decision within 30 seconds returns
 API keys and their permission tables follow the active workspace in
 `http_api_permissions.json`. Full keys are shown only once; the file stores a salted SHA-256 digest
 and is owner-only on Unix. A corrupt or unreadable permissions file prevents the HTTP service from
-starting and never falls back to allow-all. Existing requests already waiting for approval are not
-recomputed when permissions change or a key is deleted.
+starting and never falls back to allow-all. Unknown action identifiers are removed during
+normalization and reported at error level instead of blocking startup. Existing requests already
+waiting for approval are not recomputed when permissions change or a key is deleted.
 
 Public CLI UI and read-only Session assets can load through a non-loopback address, but every remote
 `/api/*` request must include `Authorization`. Remote CORS
@@ -547,7 +548,7 @@ address, and original millisecond timestamps. Interceptor source and execution h
 embedded. Query parameters, redirects, and cookies are populated on a best-effort basis while the
 original headers are always retained.
 
-HAR generation performs no redaction. Authorization headers, Cookie/Set-Cookie values, and request and
+Unbound HAR generation performs no redaction; a bound HAR Token applies its redaction script during download. Authorization headers, Cookie/Set-Cookie values, and request and
 response bodies can contain credentials or personal data; treat the file as sensitive.
 
 ### Read one complete log
@@ -935,3 +936,42 @@ The unified in-memory ring stores only:
 - `message`
 
 Entries are not persisted and are consumed through incremental polling.
+
+## Redaction library and bindings
+
+The desktop and CLI owner UI expose a global redaction script library and one script selector for
+each local identity/API key, Session share and HAR share. Normal capture and forwarding are unaffected.
+
+| Endpoint | Contract |
+| --- | --- |
+| `GET /api/redaction-scripts` | List scripts (default permission: allow) |
+| `POST /api/redaction-scripts` | Create `{ "name": "mask", "content": "..." }` (allow) |
+| `GET /api/redaction-scripts/{name}` | Read script (deny) |
+| `PUT /api/redaction-scripts/{name}` | Replace `{ "content": "..." }` (approval) |
+| `DELETE /api/redaction-scripts/{name}` | Delete script; existing bindings remain and fail closed (approval) |
+| `PUT /api/session-shares/{id}/redaction` | Set `{ "redaction_script": "mask" }`, or null to unbind an enabled share (approval) |
+| `PUT /api/session-har-shares/{id}/redaction` | Same for enabled HAR shares (approval) |
+
+`POST /api/session-shares` and `POST /api/session-har-shares` accept optional `redaction_script`
+on initial creation. Re-enabling an enabled share remains idempotent; use the binding endpoint to
+change its policy. Share-state responses include nullable `redaction_script`.
+Owner-only CLI `PUT /ui-api/permissions/identities/{id}/redaction` accepts the same binding object;
+the desktop command is `set_http_identity_redaction`. Identity permission reads include the binding,
+and permission-table updates preserve it. The CLI UI access token and ordinary Tauri IPC reads are
+unbound; desktop Body previews currently use local management HTTP and therefore use the local
+identity's binding. Native download commands use their existing trusted IPC path.
+
+Redaction applies to log details, body reads, snapshot details/bodies, URL/custom-column view cells,
+URI/custom filters, filter debugging, breakpoint details/bodies/summary URLs, bypass URLs and HAR.
+It does not sanitize interceptor modification history, script source, tags, system logs or Asset
+raw downloads. Column output is not post-processed; column scripts receive sanitized inputs.
+
+Every read resolves a script version. Missing/failed bound scripts return HTTP 500
+`redaction_failed` with a fixed message; script-controlled errors are not included. Body execution
+is lazy and failures are propagated even if a downstream column/filter catches the body error.
+Bound view requests re-render requested rows even when `updated_at` is unchanged. Session-view
+responses include `redaction_revision` when bound; share clients invalidate membership, rows and
+open detail/body views when it changes. HAR downloads execute the pinned version while streaming,
+and abort on a failing entry without emitting that entry's original contents.
+
+See the Lua reference's **Read-time redaction scripts** section for the three-state context contract.

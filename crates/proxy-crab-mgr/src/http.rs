@@ -64,6 +64,26 @@ type ApiResult = Result<Json<Value>, ApiError>;
 #[derive(Clone, Copy)]
 struct InProcessLocalRequest;
 
+struct ReadManager(ManagerState);
+impl FromRequestParts<ManagerState> for ReadManager {
+    type Rejection = ApiError;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &ManagerState,
+    ) -> Result<Self, Self::Rejection> {
+        let name = parts
+            .extensions
+            .get::<crate::dto::RedactionBinding>()
+            .and_then(|b| b.redaction_script.as_deref());
+        let api = parts
+            .extensions
+            .get::<MatchedPath>()
+            .map(|p| p.as_str())
+            .unwrap_or(parts.uri.path());
+        Ok(Self(state.reader(name, api)?))
+    }
+}
+
 struct ApiJson<T>(T);
 struct ApiPath<T>(T);
 struct ApiQuery<T>(T);
@@ -267,6 +287,24 @@ fn router_with_changes_and_extra(
         .with_state(manager.clone())
         .merge(crate::clash_subscription::router(manager.clone()));
     Router::new()
+        .route(
+            "/api/redaction-scripts",
+            get(redaction_scripts).post(create_redaction_script),
+        )
+        .route(
+            "/api/redaction-scripts/{name}",
+            get(redaction_script)
+                .put(update_redaction_script)
+                .delete(delete_redaction_script),
+        )
+        .route(
+            "/api/session-shares/{id}/redaction",
+            put(set_session_share_redaction),
+        )
+        .route(
+            "/api/session-har-shares/{id}/redaction",
+            put(set_har_share_redaction),
+        )
         .route("/api/agents.md", get(agents_markdown))
         .route("/api/assets", get(assets))
         .route("/api/assets/{*asset_id}", get(asset).post(upload_asset))
@@ -514,7 +552,7 @@ async fn authorize_request(
 
     let permission = PermissionAction {
         action,
-        credential,
+        credential: credential.clone(),
         actual_path,
         query,
         source,
@@ -527,6 +565,12 @@ async fn authorize_request(
     if let Some(denied) = permissions.check_permission(permission).await {
         return permission_denied_response(denied);
     }
+    let binding = match permissions.redaction_script(&credential).await {
+        Ok(redaction_script) => crate::dto::RedactionBinding { redaction_script },
+        Err(error) => return permission_denied_response(error),
+    };
+    let mut request = request;
+    request.extensions_mut().insert(binding);
     next.run(request).await
 }
 
@@ -626,6 +670,11 @@ async fn publish_successful_http_changes(
 
 fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Option<HttpApiChange> {
     let resources = match (method, path) {
+        (&Method::POST | &Method::PUT | &Method::DELETE, value)
+            if value.starts_with("/api/redaction-scripts") || value.ends_with("/redaction") =>
+        {
+            vec![HttpApiResource::All]
+        }
         (&Method::POST, "/api/sessions") => {
             vec![HttpApiResource::Sessions, HttpApiResource::ActiveSession]
         }
@@ -818,7 +867,11 @@ async fn enable_session_share(
     Extension(shares): Extension<Arc<SessionShareService>>,
     ApiJson(request): ApiJson<EnableSessionShareRequest>,
 ) -> ApiResult {
-    success(shares.enable(&manager, request.session_id).await?)
+    success(
+        shares
+            .enable_with_script(&manager, request.session_id, request.redaction_script)
+            .await?,
+    )
 }
 
 async fn get_session_share(
@@ -884,14 +937,14 @@ async fn delete_archived_session(
 }
 
 async fn log_ids(
-    State(manager): State<ManagerState>,
+    ReadManager(manager): ReadManager,
     ApiJson(request): ApiJson<LogIdsRequest>,
 ) -> ApiResult {
     success(manager.log_ids(request).await?)
 }
 
 async fn log_views(
-    State(manager): State<ManagerState>,
+    ReadManager(manager): ReadManager,
     ApiJson(request): ApiJson<LogViewsRequest>,
 ) -> ApiResult {
     success(manager.log_views(request).await?)
@@ -1004,7 +1057,7 @@ async fn asset(
 }
 
 async fn log(
-    State(manager): State<ManagerState>,
+    ReadManager(manager): ReadManager,
     ApiPath(id): ApiPath<u64>,
     ApiQuery(query): ApiQuery<SessionQuery>,
 ) -> ApiResult {
@@ -1012,7 +1065,7 @@ async fn log(
 }
 
 async fn log_body(
-    State(manager): State<ManagerState>,
+    ReadManager(manager): ReadManager,
     ApiPath(id): ApiPath<u64>,
     ApiQuery(query): ApiQuery<BodyQuery>,
     headers: HeaderMap,
@@ -1059,7 +1112,7 @@ async fn log_interceptor_content(
 }
 
 async fn log_interceptor_snapshot(
-    State(manager): State<ManagerState>,
+    ReadManager(manager): ReadManager,
     ApiPath((id, execution_id)): ApiPath<(u64, u64)>,
     ApiQuery(query): ApiQuery<SessionQuery>,
 ) -> ApiResult {
@@ -1071,18 +1124,18 @@ async fn log_interceptor_snapshot(
 }
 
 async fn breakpoints(
-    State(manager): State<ManagerState>,
+    ReadManager(manager): ReadManager,
     ApiQuery(query): ApiQuery<BreakpointQuery>,
 ) -> ApiResult {
     success(manager.breakpoints(query).await?)
 }
 
-async fn breakpoint(State(manager): State<ManagerState>, ApiPath(id): ApiPath<u64>) -> ApiResult {
+async fn breakpoint(ReadManager(manager): ReadManager, ApiPath(id): ApiPath<u64>) -> ApiResult {
     success(manager.breakpoint(id).await?)
 }
 
 async fn breakpoint_body(
-    State(manager): State<ManagerState>,
+    ReadManager(manager): ReadManager,
     ApiPath(id): ApiPath<u64>,
     ApiQuery(query): ApiQuery<BodyQuery>,
     headers: HeaderMap,
@@ -1096,7 +1149,7 @@ async fn breakpoint_body(
 }
 
 async fn extend_breakpoint(
-    State(manager): State<ManagerState>,
+    ReadManager(manager): ReadManager,
     ApiPath(id): ApiPath<u64>,
     ApiJson(request): ApiJson<ExtendBreakpointRequest>,
 ) -> ApiResult {
@@ -1112,7 +1165,7 @@ async fn release_breakpoint(
 }
 
 async fn execute_breakpoint_script(
-    State(manager): State<ManagerState>,
+    ReadManager(manager): ReadManager,
     ApiPath(id): ApiPath<u64>,
     ApiJson(request): ApiJson<ExecuteTemporaryScriptRequest>,
 ) -> ApiResult {
@@ -1120,7 +1173,7 @@ async fn execute_breakpoint_script(
 }
 
 async fn session_view(
-    State(manager): State<ManagerState>,
+    ReadManager(manager): ReadManager,
     ApiQuery(query): ApiQuery<SessionQuery>,
 ) -> ApiResult {
     success(manager.session_view(query.session_id).await?)
@@ -1238,7 +1291,7 @@ async fn delete_filter_script(
 }
 
 async fn debug_filter_script(
-    State(manager): State<ManagerState>,
+    ReadManager(manager): ReadManager,
     ApiPath(name): ApiPath<String>,
     ApiJson(request): ApiJson<DebugFilterScriptRequest>,
 ) -> ApiResult {
@@ -1407,7 +1460,7 @@ async fn clear_system_logs(State(manager): State<ManagerState>) -> ApiResult {
 }
 
 async fn bypass_entries(
-    State(manager): State<ManagerState>,
+    ReadManager(manager): ReadManager,
     ApiQuery(query): ApiQuery<BypassQuery>,
 ) -> ApiResult {
     success(manager.bypass_entries(query).await?)
@@ -1749,7 +1802,8 @@ impl ErrorCode {
             Self::InternalError
             | Self::BodyReadFailed
             | Self::AssetStoreFailed
-            | Self::ReplayFailed => StatusCode::INTERNAL_SERVER_ERROR,
+            | Self::ReplayFailed
+            | Self::RedactionFailed => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -1833,6 +1887,96 @@ mod tests {
         manager::{MitmManager, ProxyCrabManager},
         permission::{ManagementCredential, PermissionAction, PermissionDenied, PermissionManager},
     };
+
+    struct BoundReads;
+    #[async_trait]
+    impl PermissionManager for BoundReads {
+        async fn check_permission(&self, _action: PermissionAction) -> Option<PermissionDenied> {
+            None
+        }
+        async fn redaction_script(
+            &self,
+            credential: &ManagementCredential,
+        ) -> Result<Option<String>, PermissionDenied> {
+            Ok(match credential {
+                ManagementCredential::LocalLoopback => Some("local-mask".into()),
+                ManagementCredential::Bearer(_) => Some("token-mask".into()),
+            })
+        }
+    }
+    #[tokio::test]
+    async fn redaction_management_reads_use_local_or_bearer_binding() {
+        let dir = tempdir().unwrap();
+        let runtime = ProxyCrab::open(dir.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
+        let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
+        let id = store
+            .begin(
+                "client",
+                &RequestData {
+                    method: "GET".into(),
+                    uri: "https://example.com/secret".into(),
+                    version: "HTTP/1.1".into(),
+                    headers: HeaderValues::new(),
+                    tags: Default::default(),
+                },
+                "request",
+            )
+            .unwrap();
+        let manager = MitmManager::new(runtime);
+        for name in ["local-mask", "token-mask"] {
+            manager.create_redaction_script(crate::dto::ScriptRequest { name: name.into(), content: format!("assert(context.api == '/api/logs/{{id}}'); req.uri = 'https://example.com/{name}'") }).await.unwrap();
+        }
+        let app = router(manager.clone(), Arc::new(BoundReads));
+        for (auth, expected) in [
+            (None, "local-mask"),
+            (Some("Bearer test-key"), "token-mask"),
+        ] {
+            let mut request =
+                Request::builder().uri(format!("/api/logs/{id}?session_id={}", session.id));
+            if let Some(auth) = auth {
+                request = request.header("authorization", auth);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            let payload: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(
+                payload["data"]["request"]["uri"],
+                format!("https://example.com/{expected}")
+            );
+        }
+        manager
+            .delete_redaction_script("local-mask".into())
+            .await
+            .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/logs/{id}?session_id={}", session.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let text = String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(text.contains("redaction_failed") && !text.contains("secret"));
+    }
 
     struct AllowAll;
 
@@ -4285,4 +4429,65 @@ mod tests {
         assert_eq!(body["data"][0]["id"], "fixtures/a.json");
         assert_eq!(body["data"][0]["content_type"], "application/json");
     }
+}
+
+async fn redaction_scripts(State(manager): State<ManagerState>) -> ApiResult {
+    success(manager.redaction_scripts().await?)
+}
+
+async fn create_redaction_script(
+    State(manager): State<ManagerState>,
+    ApiJson(request): ApiJson<ScriptRequest>,
+) -> ApiResult {
+    manager.create_redaction_script(request).await?;
+    success(json!({}))
+}
+
+async fn redaction_script(
+    State(manager): State<ManagerState>,
+    ApiPath(name): ApiPath<String>,
+) -> ApiResult {
+    success(manager.redaction_script(name).await?)
+}
+
+async fn update_redaction_script(
+    State(manager): State<ManagerState>,
+    ApiPath(name): ApiPath<String>,
+    ApiJson(request): ApiJson<UpdateScriptRequest>,
+) -> ApiResult {
+    manager.update_redaction_script(name, request).await?;
+    success(json!({}))
+}
+
+async fn delete_redaction_script(
+    State(manager): State<ManagerState>,
+    ApiPath(name): ApiPath<String>,
+) -> ApiResult {
+    manager.delete_redaction_script(name).await?;
+    success(json!({}))
+}
+
+async fn set_session_share_redaction(
+    State(manager): State<ManagerState>,
+    Extension(shares): Extension<Arc<SessionShareService>>,
+    ApiPath(id): ApiPath<u64>,
+    ApiJson(binding): ApiJson<crate::dto::RedactionBinding>,
+) -> ApiResult {
+    success(
+        shares
+            .set_redaction(&manager, id, binding.redaction_script)
+            .await?,
+    )
+}
+async fn set_har_share_redaction(
+    State(manager): State<ManagerState>,
+    Extension(shares): Extension<Arc<HarShareService>>,
+    ApiPath(id): ApiPath<u64>,
+    ApiJson(binding): ApiJson<crate::dto::RedactionBinding>,
+) -> ApiResult {
+    success(
+        shares
+            .set_redaction(&manager, id, binding.redaction_script)
+            .await?,
+    )
 }

@@ -86,6 +86,14 @@ impl CliPermissionService {
         self.store.identity_permissions(id)
     }
 
+    pub fn set_redaction(
+        &self,
+        id: &str,
+        script: Option<String>,
+    ) -> Result<IdentityPermissions, ManagerError> {
+        self.store.set_redaction(id, script)
+    }
+
     pub fn replace_permissions(
         &self,
         id: &str,
@@ -105,6 +113,31 @@ impl CliPermissionService {
 
 #[async_trait]
 impl PermissionManager for CliPermissionService {
+    async fn redaction_script(
+        &self,
+        credential: &ManagementCredential,
+    ) -> Result<Option<String>, PermissionDenied> {
+        if self
+            .ui_access
+            .as_ref()
+            .is_some_and(|access| access.allows(credential))
+        {
+            return Ok(None);
+        }
+        let identity = self
+            .store
+            .authenticate(credential)
+            .map_err(|_| PermissionDenied::unauthorized("invalid_api_key", "invalid API key"))?;
+        self.store
+            .identity_permissions(&identity.summary.id)
+            .map(|view| view.redaction_script)
+            .map_err(|_| {
+                PermissionDenied::internal(
+                    "permission_check_failed",
+                    "cannot load redaction binding",
+                )
+            })
+    }
     async fn check_permission(&self, action: PermissionAction) -> Option<PermissionDenied> {
         if self
             .ui_access
@@ -199,6 +232,47 @@ mod tests {
             body_preview: None,
             body_preview_truncated: false,
         }
+    }
+
+    #[tokio::test]
+    async fn redaction_binding_resolves_per_authenticated_identity() {
+        use proxy_crab_mgr::permission::{ManagementCredential, PermissionManager};
+        let directory = tempdir().unwrap();
+        let service = CliPermissionService::open(
+            directory.path(),
+            Some(Arc::new(UiAccess::new("pcrab_ui_test"))),
+        )
+        .unwrap();
+        let key = service.create_api_key("bound".into()).unwrap();
+        service
+            .set_redaction("local", Some("local-mask".into()))
+            .unwrap();
+        service
+            .set_redaction(&key.identity.id, Some("token-mask".into()))
+            .unwrap();
+        assert_eq!(
+            service
+                .redaction_script(&ManagementCredential::LocalLoopback)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("local-mask")
+        );
+        assert_eq!(
+            service
+                .redaction_script(&ManagementCredential::Bearer(key.api_key))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("token-mask")
+        );
+        assert!(
+            service
+                .redaction_script(&ManagementCredential::Bearer("pcrab_ui_test".into()))
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]

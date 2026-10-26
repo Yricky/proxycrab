@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
+    RedactionFailed,
     BadRequest,
     NotFound,
     LogNotFound,
@@ -48,6 +49,7 @@ impl ErrorCode {
     /// The stable snake_case wire representation.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::RedactionFailed => "redaction_failed",
             Self::BadRequest => "bad_request",
             Self::NotFound => "not_found",
             Self::LogNotFound => "log_not_found",
@@ -303,6 +305,8 @@ impl std::fmt::Debug for LogExport {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionViewPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redaction_revision: Option<String>,
     pub session_id: u64,
     pub columns: Vec<Column>,
     pub filter: SessionFilter,
@@ -579,4 +583,10 @@ pub enum ReplayBodyPayload {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReplayResult {
     pub log_id: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedactionBinding {
+    pub redaction_script: Option<String>,
 }

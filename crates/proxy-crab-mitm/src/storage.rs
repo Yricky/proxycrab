@@ -952,6 +952,48 @@ impl CaptureStore {
     }
 }
 
+/// Bounded detail rendering for a read-time transformed body source.
+pub fn read_body_payload(source: BodySource) -> Result<BodyPayload> {
+    if source.stored_size == 0 {
+        return Ok(BodyPayload::Empty);
+    }
+    if source.stored_size > BODY_DETAIL_LIMIT {
+        return Ok(BodyPayload::Large {
+            size: source.stored_size,
+        });
+    }
+    let bytes = match source.data {
+        BodySourceData::File(path) => fs::read(path)?,
+        BodySourceData::Bytes(bytes) => bytes,
+    };
+    let bytes = if source.content_encodings.is_empty() {
+        bytes
+    } else {
+        match decode_body(
+            &bytes,
+            &source.content_encodings.join(","),
+            BODY_DETAIL_LIMIT,
+        ) {
+            Ok(bytes) => bytes,
+            Err(DecodeBodyError::TooLarge) => {
+                return Ok(BodyPayload::Large {
+                    size: source.stored_size,
+                });
+            }
+            Err(DecodeBodyError::Failed) => {
+                return Ok(BodyPayload::Binary {
+                    size: source.stored_size,
+                });
+            }
+        }
+    };
+    let mut headers = HeaderValues::new();
+    if let Some(content_type) = source.content_type {
+        headers.insert("content-type".into(), vec![content_type]);
+    }
+    Ok(body_payload(&bytes, &headers, source.stored_size))
+}
+
 pub(crate) fn body_payload(bytes: &[u8], headers: &HeaderValues, stored_size: u64) -> BodyPayload {
     if bytes.len() as u64 > BODY_DETAIL_LIMIT {
         return BodyPayload::Large { size: stored_size };

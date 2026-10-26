@@ -146,8 +146,8 @@ export function createTauriBackend(): Backend {
       call("replace_active_session", { active }),
     getSessionShare: (sessionId: number) =>
       call<SessionShareState>("get_session_share", { sessionId }),
-    enableSessionShare: (sessionId: number) =>
-      call<SessionShareState>("enable_session_share", { sessionId }),
+    enableSessionShare: (sessionId: number, redactionScript?: string | null) =>
+      call<SessionShareState>("enable_session_share", { sessionId, redactionScript }),
     disableSessionShare: (sessionId: number) =>
       call<SessionShareState>("disable_session_share", { sessionId }),
     getHarShare: (sessionId: number) =>
@@ -187,6 +187,15 @@ export function createTauriBackend(): Backend {
       call("replace_session_view", { sessionId, request }),
     replaceSessionFilter: (sessionId, filter) =>
       call("replace_session_filter", { sessionId, filter }),
+
+    listRedactionScripts: () => call("list_redaction_scripts"),
+    getRedactionScript: (name) => call("get_redaction_script", { name }),
+    createRedactionScript: (request) => call("create_redaction_script", { request }),
+    updateRedactionScript: (name, request) => call("update_redaction_script", { name, request }),
+    deleteRedactionScript: (name) => call("delete_redaction_script", { name }),
+    setHttpIdentityRedaction: (id, redactionScript) => call("set_http_identity_redaction", { id, redactionScript }),
+    setSessionShareRedaction: (sessionId, redactionScript) => call("set_session_share_redaction", { sessionId, redactionScript }),
+    setHarShareRedaction: (sessionId, redactionScript) => call("set_har_share_redaction", { sessionId, redactionScript }),
 
     listColumnScripts: () => call("list_column_scripts"),
     createColumnScript: (request: ScriptRequest) => call("create_column_script", { request }),

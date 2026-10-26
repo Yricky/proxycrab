@@ -6,6 +6,7 @@ import type { InterceptorExecution, InterceptorKind } from "../api/types";
 import LogDetailWindow from "./LogDetailWindow.vue";
 import InterceptorManagerWindow from "./InterceptorManagerWindow.vue";
 import ColumnManagerWindow from "./ColumnManagerWindow.vue";
+import RedactionManagerWindow from "./RedactionManagerWindow.vue";
 import FilterManagerWindow from "./FilterManagerWindow.vue";
 import Base64Window from "./Base64Window.vue";
 import JwtWindow from "./JwtWindow.vue";
@@ -333,4 +334,8 @@ export function openAgentsPresets(): void {
     width: 980,
     height: 620,
   });
+}
+
+export function openRedactionManager(): void {
+  windowsStore.open("redaction-manager", { title: "脱敏脚本管理器", component: RedactionManagerWindow, width: 1000, height: 600 });
 }

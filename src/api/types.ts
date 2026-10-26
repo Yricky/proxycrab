@@ -298,6 +298,7 @@ export interface ActiveSession {
 }
 
 export interface SessionShareState {
+  redaction_script?: string | null;
   session_id: number;
   enabled: boolean;
   token?: string;
@@ -306,12 +307,14 @@ export interface SessionShareState {
 export type HarShareScope = "all" | "filtered";
 
 export interface EnableHarShareRequest {
+  redaction_script?: string | null;
   session_id: number;
   scope: HarShareScope;
   log_ids: number[];
 }
 
 export interface HarShareState {
+  redaction_script?: string | null;
   session_id: number;
   enabled: boolean;
   scope?: HarShareScope;
@@ -379,6 +382,7 @@ export interface LogViewsPayload {
 }
 
 export interface SessionViewPayload {
+  redaction_revision?: string | null;
   session_id: number;
   columns: Column[];
   filter: SessionFilter;
@@ -591,6 +595,7 @@ export interface PermissionEntry {
 }
 
 export interface IdentityPermissions {
+  redaction_script?: string | null;
   identity: PermissionIdentitySummary;
   permissions: PermissionEntry[];
 }

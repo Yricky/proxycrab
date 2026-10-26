@@ -36,7 +36,7 @@ To give a script a friendly UI label, add `-- #display_name: 鉴权token` to its
 single-line comment header. Keep the original file/API `name` and all `script_name` references;
 changing a label is a content update, never a rename. Missing or empty metadata falls back to the
 original name, and the first declaration wins. This applies to column, filter, routing, request,
-and response scripts; see [Lua metadata rules](references/lua-api.md#script-display-names).
+response, and redaction scripts; see [Lua metadata rules](references/lua-api.md#script-display-names).
 
 ## Preconditions
 
@@ -349,3 +349,19 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
   and interceptor execution semantics.
 - Read `references/best-practices.md` when planning a longer investigation or writing a diagnostic
   report.
+
+## Read-time redaction
+
+Management reads may be transformed by the selected identity's bound Lua redaction script. An
+unbound identity returns original data; a failed/missing bound script refuses the read. Do not retry
+with another credential or remove a binding to bypass that failure. Ordinary captures are unchanged.
+The owner can manage bindings in settings and Session sharing; HAR policies run during download.
+
+Use `scripts/redaction-upsert.mjs --name NAME --file SCRIPT.lua` to create/update an authorized
+redaction script. Use `scripts/share-redaction-set.mjs --session ID --kind page|har --name NAME`
+(or `--clear true` only when explicitly requested) to change an enabled share's binding. Binding
+changes do not print the share token. Listing and creating scripts are allowed by default, replacing
+or deleting one needs owner approval, and reading one script's source is denied by default; the
+upsert script creates first and treats a conflict as an update instead of reading the script. Never
+change permissions automatically. See the HTTP and Lua references for
+`context.api`, the three-state data model, lazy Body access, and the intentionally excluded history.

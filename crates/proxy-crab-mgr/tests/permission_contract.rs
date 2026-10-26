@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 76);
+    assert_eq!(actions.len(), 83);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -38,6 +38,8 @@ fn permission_catalog_contains_every_unique_route_action() {
 #[test]
 fn permission_catalog_has_the_confirmed_default_matrix() {
     let allow = BTreeSet::from([
+        "GET /api/redaction-scripts",
+        "POST /api/redaction-scripts",
         "GET /api/agents.md",
         "GET /api/archived-sessions",
         "GET /api/assets",
@@ -77,6 +79,10 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "POST /api/replay",
     ]);
     let approval = BTreeSet::from([
+        "PUT /api/redaction-scripts/{name}",
+        "DELETE /api/redaction-scripts/{name}",
+        "PUT /api/session-shares/{id}/redaction",
+        "PUT /api/session-har-shares/{id}/redaction",
         "PUT /api/clash-subscription",
         "DELETE /api/clash-subscription",
         "POST /api/archived-sessions/{id}/restore",
@@ -107,6 +113,7 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "DELETE /api/session-har-shares/{id}",
     ]);
     let deny = BTreeSet::from([
+        "GET /api/redaction-scripts/{name}",
         "DELETE /api/archived-sessions/{id}",
         "DELETE /api/bypass",
         "DELETE /api/bypass/{id}",

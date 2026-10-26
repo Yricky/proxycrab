@@ -192,10 +192,10 @@ export function createHttpBackend(
       call("/api/active-session", json("PUT", active)),
     getSessionShare: (sessionId: number) =>
       call<SessionShareState>(`/api/session-shares/${sessionId}`),
-    enableSessionShare: (sessionId: number) =>
+    enableSessionShare: (sessionId: number, redactionScript?: string | null) =>
       call<SessionShareState>(
         "/api/session-shares",
-        json("POST", { session_id: sessionId }),
+        json("POST", { session_id: sessionId, redaction_script: redactionScript }),
       ),
     disableSessionShare: (sessionId: number) =>
       call<SessionShareState>(
@@ -280,6 +280,15 @@ export function createHttpBackend(
       call(query("/api/session-view", { session_id: sessionId }), json("PUT", requestValue)),
     replaceSessionFilter: (sessionId, filter) =>
       call(`/api/sessions/${sessionId}/filter`, json("PUT", filter)),
+
+    listRedactionScripts: () => call("/api/redaction-scripts"),
+    getRedactionScript: (name) => call(scriptPath("redaction-scripts", name)),
+    createRedactionScript: (request) => call("/api/redaction-scripts", json("POST", request)),
+    updateRedactionScript: (name, request) => call(scriptPath("redaction-scripts", name), json("PUT", request)),
+    deleteRedactionScript: (name) => call(scriptPath("redaction-scripts", name), json("DELETE")),
+    setHttpIdentityRedaction: (id, redactionScript) => call(`/ui-api/permissions/identities/${encodeURIComponent(id)}/redaction`, json("PUT", { redaction_script: redactionScript })),
+    setSessionShareRedaction: (id, redactionScript) => call(`/api/session-shares/${id}/redaction`, json("PUT", { redaction_script: redactionScript })),
+    setHarShareRedaction: (id, redactionScript) => call(`/api/session-har-shares/${id}/redaction`, json("PUT", { redaction_script: redactionScript })),
 
     listColumnScripts: () => call("/api/column-scripts"),
     createColumnScript: (requestValue: ScriptRequest) =>

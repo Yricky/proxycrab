@@ -157,6 +157,10 @@ pub fn router(
             "/ui-api/permissions/identities/{id}",
             get(identity_permissions).put(replace_permissions),
         )
+        .route(
+            "/ui-api/permissions/identities/{id}/redaction",
+            put(set_identity_redaction),
+        )
         .route("/ui-api/api-keys", post(create_api_key))
         .route("/ui-api/api-keys/{id}", delete(delete_api_key))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize_ui))
@@ -391,4 +395,21 @@ fn manager_error(error: ManagerError) -> Response {
 
 fn error_response(status: StatusCode, error: ManagerError) -> Response {
     (status, Json(json!({ "ok": false, "error": error }))).into_response()
+}
+
+async fn set_identity_redaction(
+    State(state): State<Arc<UiState>>,
+    Path(id): Path<String>,
+    Json(binding): Json<proxy_crab_mgr::dto::RedactionBinding>,
+) -> Response {
+    if let Some(name) = &binding.redaction_script {
+        if let Err(error) = state.manager.redaction_script(name.clone()).await {
+            return result::<()>(Err(error));
+        }
+    }
+    result(
+        state
+            .permissions
+            .set_redaction(&id, binding.redaction_script),
+    )
 }

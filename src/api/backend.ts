@@ -152,7 +152,7 @@ export interface Backend {
   deleteArchivedSession(id: number): Promise<void>;
   replaceActiveSession(active: ActiveSession): Promise<ActiveSession>;
   getSessionShare(sessionId: number): Promise<SessionShareState>;
-  enableSessionShare(sessionId: number): Promise<SessionShareState>;
+  enableSessionShare(sessionId: number, redactionScript?: string | null): Promise<SessionShareState>;
   disableSessionShare(sessionId: number): Promise<SessionShareState>;
   getHarShare(sessionId: number): Promise<HarShareState>;
   enableHarShare(request: EnableHarShareRequest): Promise<HarShareState>;
@@ -198,6 +198,16 @@ export interface Backend {
     sessionId: number,
     filter: SessionFilter,
   ): Promise<SessionViewPayload>;
+
+  // Owner-managed redaction library and identity/share bindings.
+  listRedactionScripts?(): Promise<Script[]>;
+  getRedactionScript?(name: string): Promise<Script>;
+  createRedactionScript?(request: ScriptRequest): Promise<void>;
+  updateRedactionScript?(name: string, request: UpdateScriptRequest): Promise<void>;
+  deleteRedactionScript?(name: string): Promise<void>;
+  setHttpIdentityRedaction?(id: string, redactionScript: string | null): Promise<IdentityPermissions>;
+  setSessionShareRedaction?(sessionId: number, redactionScript: string | null): Promise<SessionShareState>;
+  setHarShareRedaction?(sessionId: number, redactionScript: string | null): Promise<HarShareState>;
 
   // column scripts
   listColumnScripts(): Promise<Script[]>;

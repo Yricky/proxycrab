@@ -35,6 +35,8 @@ pub enum HarShareScope {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnableHarShareRequest {
+    #[serde(default)]
+    pub redaction_script: Option<String>,
     pub session_id: u64,
     pub scope: HarShareScope,
     pub log_ids: Vec<u64>,
@@ -42,6 +44,7 @@ pub struct EnableHarShareRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct HarShareState {
+    pub redaction_script: Option<String>,
     pub session_id: u64,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,6 +56,7 @@ pub struct HarShareState {
 
 #[derive(Clone)]
 struct HarShareEntry {
+    redaction_script: Option<String>,
     token: String,
     digest: [u8; 32],
     scope: HarShareScope,
@@ -61,6 +65,7 @@ struct HarShareEntry {
 
 #[derive(Debug, Clone)]
 struct HarDownloadScope {
+    redaction_script: Option<String>,
     session_id: u64,
     log_ids: Vec<u64>,
 }
@@ -111,6 +116,9 @@ impl HarShareService {
         request: EnableHarShareRequest,
     ) -> Result<HarShareState, ManagerError> {
         Self::ensure_session(manager, request.session_id).await?;
+        if let Some(name) = &request.redaction_script {
+            manager.redaction_script(name.clone()).await?;
+        }
         let mut entries = self.entries.lock().expect("HAR share lock poisoned");
         if let Some(entry) = entries.get(&request.session_id) {
             return Ok(Self::enabled_state(request.session_id, entry));
@@ -122,6 +130,7 @@ impl HarShareService {
         })?;
         let token = format!("pcrab_har_{}", URL_SAFE_NO_PAD.encode(bytes));
         let entry = HarShareEntry {
+            redaction_script: request.redaction_script,
             token: token.clone(),
             digest: Sha256::digest(token.as_bytes()).into(),
             scope: request.scope,
@@ -135,6 +144,25 @@ impl HarShareService {
         let state = Self::enabled_state(request.session_id, &entry);
         entries.insert(request.session_id, entry);
         Ok(state)
+    }
+
+    pub async fn set_redaction(
+        &self,
+        manager: &Arc<dyn ProxyCrabManager>,
+        session_id: u64,
+        script: Option<String>,
+    ) -> Result<HarShareState, ManagerError> {
+        if let Some(name) = &script {
+            manager.redaction_script(name.clone()).await?;
+        }
+        {
+            let mut entries = self.entries.lock().expect("HAR share lock poisoned");
+            entries
+                .get_mut(&session_id)
+                .ok_or_else(|| ManagerError::not_found("HAR share is not enabled"))?
+                .redaction_script = script;
+        }
+        self.status(manager, session_id).await
     }
 
     pub async fn disable(
@@ -152,6 +180,7 @@ impl HarShareService {
 
     fn enabled_state(session_id: u64, entry: &HarShareEntry) -> HarShareState {
         HarShareState {
+            redaction_script: entry.redaction_script.clone(),
             session_id,
             enabled: true,
             scope: Some(entry.scope),
@@ -162,6 +191,7 @@ impl HarShareService {
 
     fn disabled_state(session_id: u64) -> HarShareState {
         HarShareState {
+            redaction_script: None,
             session_id,
             enabled: false,
             scope: None,
@@ -180,6 +210,7 @@ impl HarShareService {
             .iter()
             .find(|(_, entry)| bool::from(entry.digest.ct_eq(&digest)))
             .map(|(session_id, entry)| HarDownloadScope {
+                redaction_script: entry.redaction_script.clone(),
                 session_id: *session_id,
                 log_ids: entry.log_ids.clone(),
             })
@@ -226,8 +257,11 @@ async fn download(
     HarShareService::ensure_session(&state.manager, scope.session_id)
         .await
         .map_err(HarShareError::Manager)?;
-    let export = state
+    let reader = state
         .manager
+        .reader(scope.redaction_script.as_deref(), "/session.har")
+        .map_err(HarShareError::Manager)?;
+    let export = reader
         .export_logs(ExportLogsRequest {
             format: "har".into(),
             session_id: Some(scope.session_id),
@@ -333,6 +367,7 @@ mod tests {
             .enable(
                 &manager,
                 EnableHarShareRequest {
+                    redaction_script: None,
                     session_id,
                     scope: HarShareScope::Filtered,
                     log_ids: vec![9, 3, 9],
@@ -344,6 +379,7 @@ mod tests {
             .enable(
                 &manager,
                 EnableHarShareRequest {
+                    redaction_script: None,
                     session_id,
                     scope: HarShareScope::All,
                     log_ids: vec![],
@@ -375,6 +411,7 @@ mod tests {
             .enable(
                 &manager,
                 EnableHarShareRequest {
+                    redaction_script: None,
                     session_id,
                     scope: HarShareScope::All,
                     log_ids: vec![],
@@ -449,6 +486,7 @@ mod tests {
             .enable(
                 &manager,
                 EnableHarShareRequest {
+                    redaction_script: None,
                     session_id,
                     scope: HarShareScope::All,
                     log_ids: vec![],
@@ -485,6 +523,7 @@ mod tests {
             .enable(
                 &manager,
                 EnableHarShareRequest {
+                    redaction_script: None,
                     session_id: u64::MAX,
                     scope: HarShareScope::All,
                     log_ids: vec![],

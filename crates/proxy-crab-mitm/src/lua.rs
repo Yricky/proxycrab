@@ -28,6 +28,7 @@ use crate::{
 };
 
 mod codec;
+pub mod redaction;
 
 pub const INSTRUCTION_LIMIT: u32 = 100_000;
 pub const MEMORY_LIMIT: usize = 16 * 1024 * 1024;
@@ -80,6 +81,7 @@ pub fn validate_script(kind: ScriptKind, source: &str) -> Result<()> {
     // `@` 前缀让 Lua 将 chunk 名视为文件名，错误消息直接显示 `xxx.lua:行号`
     // 而非内部的 `[string "xxx.lua"]` 包装格式。
     let name = match kind {
+        ScriptKind::Redaction => "@redaction.lua",
         ScriptKind::Column => "@column.lua",
         ScriptKind::Filter => "@filter.lua",
         ScriptKind::Routing => "@routing.lua",
@@ -547,6 +549,7 @@ fn log_json_warnings(
         return;
     }
     let kind = match kind {
+        ScriptKind::Redaction => "redaction script",
         ScriptKind::Column => "column script",
         ScriptKind::Filter => "filter script",
         ScriptKind::Routing => "routing script",

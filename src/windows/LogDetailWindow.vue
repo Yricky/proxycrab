@@ -62,6 +62,7 @@ const extensionSeconds = ref(60);
 let autoRefreshTimer: number | undefined;
 let breakpointRefreshTimer: number | undefined;
 let loadInFlight = false;
+let loadGeneration = 0;
 const AUTO_REFRESH_INTERVAL = 2000;
 
 const stale = computed(
@@ -78,30 +79,47 @@ const active = computed(
     proxyStore.isNetlogActive(detail.value.session_id, detail.value.id),
 );
 
+function onRedactionChanged(): void {
+  loadGeneration += 1;
+  detail.value = null;
+  bodyRevision.value += 1;
+  void load();
+}
+onMounted(() => window.addEventListener("proxycrab-redaction-changed", onRedactionChanged));
+onBeforeUnmount(() => window.removeEventListener("proxycrab-redaction-changed", onRedactionChanged));
+
 async function load(silent = false): Promise<void> {
   if (loadInFlight) return;
   loadInFlight = true;
+  const generation = loadGeneration;
   if (!silent) loading.value = true;
   loadError.value = null;
   try {
     if (props.breakpointId !== undefined && breakpoint.value !== null) {
       const payload = await backend.getBreakpoint(props.breakpointId);
+      if (generation !== loadGeneration) return;
       breakpoint.value = payload.breakpoint;
       detail.value = payload.log;
     } else if (props.breakpointId !== undefined && detail.value === null) {
       const payload = await backend.getBreakpoint(props.breakpointId);
+      if (generation !== loadGeneration) return;
       breakpoint.value = payload.breakpoint;
       detail.value = payload.log;
       activeTab.value = payload.breakpoint.phase;
     } else if (props.sessionId !== undefined && props.logId !== undefined) {
-      detail.value = await backend.getLog(props.sessionId, props.logId);
+      const next = await backend.getLog(props.sessionId, props.logId);
+      if (generation !== loadGeneration) return;
+      detail.value = next;
     } else if (detail.value) {
-      detail.value = await backend.getLog(
+      const next = await backend.getLog(
         detail.value.session_id,
         detail.value.id,
       );
+      if (generation !== loadGeneration) return;
+      detail.value = next;
     }
   } catch (error) {
+    if (generation !== loadGeneration) return;
     if (
       silent &&
       error instanceof BackendError &&
@@ -110,10 +128,12 @@ async function load(silent = false): Promise<void> {
     ) {
       breakpoint.value = null;
       try {
-        detail.value = await backend.getLog(
+        const next = await backend.getLog(
           detail.value.session_id,
           detail.value.id,
         );
+        if (generation !== loadGeneration) return;
+        detail.value = next;
       } catch {
         // Keep the last live snapshot while the resumed request finishes persisting.
       }
@@ -123,6 +143,7 @@ async function load(silent = false): Promise<void> {
   } finally {
     loading.value = false;
     loadInFlight = false;
+    if (generation !== loadGeneration) void load();
   }
 }
 

@@ -11,6 +11,7 @@ import type {
 } from "../api/types";
 import ApiKeySecretDialog from "../components/ApiKeySecretDialog.vue";
 import CustomSelect, { type CustomSelectOption } from "../components/CustomSelect.vue";
+import RedactionSelect from "../components/RedactionSelect.vue";
 import PermissionEditor from "../components/PermissionEditor.vue";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
@@ -37,6 +38,8 @@ const catalog = ref<ApiActionView[]>([]);
 const dimension = ref<PermissionGroupDimension>("function");
 const identities = ref<PermissionIdentitySummary[]>([]);
 const selectedIdentityId = ref<string | null>(null);
+const redactionScript = ref<string | null>(null);
+const savingRedaction = ref(false);
 const permissions = ref<Record<string, PermissionMode>>({});
 const loadedPermissions = ref<Record<string, PermissionMode>>({});
 const loadingPermissions = ref(false);
@@ -106,10 +109,22 @@ async function refreshManagement(preferredId?: string): Promise<void> {
   }
 }
 
+async function setRedaction(value: string | null): Promise<void> {
+  if (!selectedIdentityId.value || !backend.setHttpIdentityRedaction) return;
+  savingRedaction.value = true;
+  try {
+    const result = await backend.setHttpIdentityRedaction(selectedIdentityId.value, value);
+    redactionScript.value = result.redaction_script ?? null;
+    appStore.toast("脱敏脚本绑定已保存", "success");
+  } catch (error) { reportError(error, "保存脱敏脚本绑定失败"); }
+  finally { savingRedaction.value = false; }
+}
+
 async function loadIdentity(id: string): Promise<void> {
   loadingPermissions.value = true;
   try {
     const result = await backend.getHttpIdentityPermissions(id);
+    redactionScript.value = result.redaction_script ?? null;
     const next = Object.fromEntries(
       result.permissions.map((entry) => [
         entry.action_id,
@@ -332,6 +347,7 @@ onBeforeUnmount(() => {
                 新建
               </button>
             </div>
+            <RedactionSelect v-if="selectedIdentityId && backend.setHttpIdentityRedaction && backend.listRedactionScripts" :model-value="redactionScript" :disabled="loadingPermissions || savingRedaction" @update:model-value="setRedaction" />
             <div v-if="selectedIdentity?.kind === 'api_key'" class="identity-detail">
               <span>创建于 {{ formatDateTime(selectedIdentity.created_at ?? 0) }}</span>
               <span>最近使用 {{ selectedIdentity.last_used_at ? formatDateTime(selectedIdentity.last_used_at) : "从未" }}</span>

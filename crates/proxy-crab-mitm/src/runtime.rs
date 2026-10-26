@@ -796,7 +796,10 @@ impl ProxyCrab {
             let entries = match kind {
                 ScriptKind::RequestInterceptor => &mut next.request,
                 ScriptKind::ResponseInterceptor => &mut next.response,
-                ScriptKind::Column | ScriptKind::Filter | ScriptKind::Routing => return Ok(()),
+                ScriptKind::Column
+                | ScriptKind::Filter
+                | ScriptKind::Routing
+                | ScriptKind::Redaction => return Ok(()),
             };
             entries.retain(|entry| entry.name != name);
             if next != *previous {

@@ -13,6 +13,7 @@ import {
   openCertManager,
   openColumnManager,
   openFilterManager,
+  openRedactionManager,
   openJwt,
   openQrCode,
   openReplay,
@@ -270,6 +271,9 @@ onBeforeUnmount(() => {
           >
             <Io5CodeSlash :size="14" />
             <span>过滤脚本</span>
+          </button>
+          <button v-if="backend.listRedactionScripts" class="tb-menu-item" @click="runMenuAction(openRedactionManager)">
+            <Io5ShieldCheckmark :size="15" /><span>脱敏脚本</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openRoutingManager)">
             <Io5RadioButtonOn :size="14" />

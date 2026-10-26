@@ -9,6 +9,13 @@ import type { ApiActionView } from "../api/types";
 
 /** 动作 id（`METHOD /route/template`）→ 中文文案。 */
 export const ACTION_LABELS: Record<string, string> = {
+  "GET /api/redaction-scripts": "列出脱敏脚本",
+  "POST /api/redaction-scripts": "创建脱敏脚本",
+  "GET /api/redaction-scripts/{name}": "读取脱敏脚本",
+  "PUT /api/redaction-scripts/{name}": "更新脱敏脚本",
+  "DELETE /api/redaction-scripts/{name}": "删除脱敏脚本",
+  "PUT /api/session-shares/{id}/redaction": "绑定分享脱敏脚本",
+  "PUT /api/session-har-shares/{id}/redaction": "绑定 HAR 脱敏脚本",
   "GET /api/agents.md": "读取 Agent 指令",
   "GET /api/assets/{*asset_id}": "读取资源",
   "POST /api/assets/{*asset_id}": "上传资源",
@@ -93,7 +100,7 @@ export const FUNCTION_GROUPS: FunctionGroupDef[] = [
   { key: "sessions", label: "Session", prefixes: ["/api/sessions", "/api/session-shares", "/api/session-har-shares", "/api/archived-sessions", "/api/active-session"] },
   { key: "logs", label: "抓包日志", prefixes: ["/api/logs/"] },
   { key: "views", label: "Session 视图", prefixes: ["/api/session-view", "/api/session-interceptors"] },
-  { key: "scripts", label: "脚本与拦截器", prefixes: ["/api/column-scripts", "/api/filter-scripts", "/api/routing-scripts", "/api/routing-script-selection", "/api/interceptors"] },
+  { key: "scripts", label: "脚本与拦截器", prefixes: ["/api/redaction-scripts", "/api/column-scripts", "/api/filter-scripts", "/api/routing-scripts", "/api/routing-script-selection", "/api/interceptors"] },
   { key: "breakpoints", label: "断点", prefixes: ["/api/breakpoints"] },
   { key: "bypass", label: "Bypass 流量", prefixes: ["/api/bypass"] },
   { key: "ca", label: "CA 证书", prefixes: ["/api/ca"] },

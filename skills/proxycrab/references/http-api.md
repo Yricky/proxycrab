@@ -434,7 +434,7 @@ The owner UI builds `http://<local-ip>:<api-port>/session.har?token=…`. A GET 
 `proxycrab-session-<id>.har` directly. Only successful captures with responses are emitted;
 in-progress, failed, and synthetic TLS CONNECT records in the frozen selection are skipped. An
 empty selection downloads a valid empty HAR. The download contains complete stored headers and
-bodies with no redaction, so treat the URL and file as sensitive. Disabling, process exit, or
+bodies, applying the HAR Token’s bound redaction script when present. Treat the URL as a credential. Disabling, process exit, or
 archiving the Session makes the link unavailable. This browser token is not an Agent Bearer
 credential. HAR JSON is streamed one capture entry at a time and has no `Content-Length`; a body or
 storage failure after HTTP 200 interrupts the download and leaves a partial file that must be
@@ -1281,3 +1281,42 @@ Routing and capture lifecycle details:
 - `updated_at` is a monotonic Unix-millisecond version of the complete capture. Metadata and body
   writes advance it even within the same wall-clock millisecond.
 - Interceptor changes made before a runtime error remain applied and are recorded.
+
+## Redaction library and bindings
+
+The desktop and CLI owner UI expose a global redaction script library and one script selector for
+each local identity/API key, Session share and HAR share. Normal capture and forwarding are unaffected.
+
+| Endpoint | Contract |
+| --- | --- |
+| `GET /api/redaction-scripts` | List scripts (default permission: allow) |
+| `POST /api/redaction-scripts` | Create `{ "name": "mask", "content": "..." }` (allow) |
+| `GET /api/redaction-scripts/{name}` | Read script (deny) |
+| `PUT /api/redaction-scripts/{name}` | Replace `{ "content": "..." }` (approval) |
+| `DELETE /api/redaction-scripts/{name}` | Delete script; existing bindings remain and fail closed (approval) |
+| `PUT /api/session-shares/{id}/redaction` | Set `{ "redaction_script": "mask" }`, or null to unbind an enabled share (approval) |
+| `PUT /api/session-har-shares/{id}/redaction` | Same for enabled HAR shares (approval) |
+
+`POST /api/session-shares` and `POST /api/session-har-shares` accept optional `redaction_script`
+on initial creation. Re-enabling an enabled share remains idempotent; use the binding endpoint to
+change its policy. Share-state responses include nullable `redaction_script`.
+Owner-only CLI `PUT /ui-api/permissions/identities/{id}/redaction` accepts the same binding object;
+the desktop command is `set_http_identity_redaction`. Identity permission reads include the binding,
+and permission-table updates preserve it. The CLI UI access token and ordinary Tauri IPC reads are
+unbound; desktop Body previews currently use local management HTTP and therefore use the local
+identity's binding. Native download commands use their existing trusted IPC path.
+
+Redaction applies to log details, body reads, snapshot details/bodies, URL/custom-column view cells,
+URI/custom filters, filter debugging, breakpoint details/bodies/summary URLs, bypass URLs and HAR.
+It does not sanitize interceptor modification history, script source, tags, system logs or Asset
+raw downloads. Column output is not post-processed; column scripts receive sanitized inputs.
+
+Every read resolves a script version. Missing/failed bound scripts return HTTP 500
+`redaction_failed` with a fixed message; script-controlled errors are not included. Body execution
+is lazy and failures are propagated even if a downstream column/filter catches the body error.
+Bound view requests re-render requested rows even when `updated_at` is unchanged. Session-view
+responses include `redaction_revision` when bound; share clients invalidate membership, rows and
+open detail/body views when it changes. HAR downloads execute the pinned version while streaming,
+and abort on a failing entry without emitting that entry's original contents.
+
+See the Lua reference's **Read-time redaction scripts** section for the three-state context contract.

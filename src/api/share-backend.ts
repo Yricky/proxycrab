@@ -113,6 +113,7 @@ export function createShareBackend(
     subscribeChanges: async (handler) => {
       let stopped = false;
       let columns = JSON.stringify(bootstrap.view.columns);
+      let redactionRevision = bootstrap.view.redaction_revision ?? null;
       let columnScripts = "";
       let filterScripts = "";
       let proxyRevision: string | undefined;
@@ -126,6 +127,11 @@ export function createShareBackend(
             call<Script[]>("/share-api/filter-scripts"),
           ]);
           if (stopped) return;
+          const revision = view.redaction_revision ?? null;
+          if (revision !== redactionRevision) {
+            redactionRevision = revision;
+            window.dispatchEvent(new CustomEvent("proxycrab-redaction-changed"));
+          }
           const next = JSON.stringify(view.columns);
           if (next !== columns) {
             columns = next;
@@ -141,7 +147,11 @@ export function createShareBackend(
             filterScripts = nextFilterScripts;
             handler({ resources: ["filter_scripts"], session_id: bootstrap.session.id });
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof BackendError && error.code === "redaction_failed" && redactionRevision !== "failed") {
+            redactionRevision = "failed";
+            window.dispatchEvent(new CustomEvent("proxycrab-redaction-changed"));
+          }
           // The request helper announces terminal share errors; network errors retry.
         }
       };

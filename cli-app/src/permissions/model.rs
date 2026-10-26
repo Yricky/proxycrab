@@ -17,12 +17,16 @@ pub struct PermissionFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalPermissionRecord {
+    #[serde(default)]
+    pub redaction_script: Option<String>,
     pub permissions: BTreeMap<String, PermissionMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApiKeyRecord {
+    #[serde(default)]
+    pub redaction_script: Option<String>,
     pub id: String,
     pub name: String,
     pub prefix: String,
@@ -58,6 +62,7 @@ pub struct PermissionEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IdentityPermissions {
+    pub redaction_script: Option<String>,
     pub identity: PermissionIdentitySummary,
     pub permissions: Vec<PermissionEntry>,
 }

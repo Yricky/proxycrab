@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useBackend } from "../api";
 import type { BodyTarget } from "../api/body";
 import type {
@@ -34,21 +34,30 @@ const props = defineProps<{
 const backend = useBackend();
 const snapshot = ref<InterceptorSnapshotPayload | null>(null);
 const loading = ref(true);
+const loadVersion = ref(0);
 const loadError = ref<string | null>(null);
 
+function onRedactionChanged(): void { snapshot.value = null; void load(); }
+onMounted(() => window.addEventListener("proxycrab-redaction-changed", onRedactionChanged));
+onBeforeUnmount(() => window.removeEventListener("proxycrab-redaction-changed", onRedactionChanged));
+
 async function load(): Promise<void> {
+  const version = ++loadVersion.value;
   loading.value = true;
   loadError.value = null;
   try {
-    snapshot.value = await backend.getInterceptorSnapshot(
+    const next = await backend.getInterceptorSnapshot(
       props.sessionId,
       props.logId,
       props.execution.execution_id,
     );
+    if (version !== loadVersion.value) return;
+    snapshot.value = next;
   } catch (error) {
+    if (version !== loadVersion.value) return;
     loadError.value = error instanceof Error ? error.message : String(error);
   } finally {
-    loading.value = false;
+    if (version === loadVersion.value) loading.value = false;
   }
 }
 
@@ -182,6 +191,7 @@ const urlSegments = computed(() =>
           v-else
           class="body-panel"
           label="快照 Body"
+          :revision="loadVersion"
           :body="snapshotBody"
           :headers="headers"
           :side="side"

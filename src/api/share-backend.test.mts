@@ -77,3 +77,43 @@ test("share backend returns scoped session state and leaves write-side methods u
   expect(backend.listHttpApprovals).toBeUndefined();
   expect(backend.listLocalIps).toBeUndefined();
 });
+
+test("share policy revisions invalidate views once and detect failed/recovered bindings", async () => {
+  vi.useFakeTimers();
+  const dispatchEvent = vi.fn();
+  vi.stubGlobal("window", { setInterval, clearInterval, setTimeout, clearTimeout, dispatchEvent });
+  const bootstrap: ShareBootstrap = {
+    session: { id: 1, name: "shared", created_at: 0, description: null },
+    view: { session_id: 1, columns: [], filter: { option: null, input: "" }, redaction_revision: "v1" },
+    proxy_status: { status: "stopped" }, api_port: 18089,
+  };
+  let revision: string | null = "v1";
+  vi.stubGlobal("fetch", async (input: URL, init: RequestInit) => {
+    const path = new URL(input).pathname;
+    if (path === "/share-api/proxy/changes") return new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    });
+    if (path === "/share-api/session-view") {
+      if (revision === "failed") return new Response(JSON.stringify({ ok: false, error: { code: "redaction_failed", message: "failed" } }), { status: 500 });
+      return new Response(JSON.stringify({ ok: true, data: { ...bootstrap.view, redaction_revision: revision } }));
+    }
+    return new Response(JSON.stringify({ ok: true, data: [] }));
+  });
+  const stop = await createShareBackend("http://localhost", "test", bootstrap).subscribeChanges(() => {});
+  try {
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(dispatchEvent).not.toHaveBeenCalled();
+    revision = "v2";
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+    expect(dispatchEvent.mock.calls[0]?.[0].type).toBe("proxycrab-redaction-changed");
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+    revision = "failed";
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(dispatchEvent).toHaveBeenCalledTimes(2);
+    revision = null;
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(dispatchEvent).toHaveBeenCalledTimes(3);
+  } finally { stop(); }
+});

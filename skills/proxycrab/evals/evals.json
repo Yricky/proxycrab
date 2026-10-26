@@ -258,6 +258,18 @@
       "prompt": "Explain how to download a complete Body larger than 1 GiB from ProxyCrab UI, and how to save the exact interceptor-entry snapshot from a read-only Session share. Does formatting JSON change the downloaded bytes, and does this change body-get.mjs limits?",
       "expected_output": "The agent points to the Body toolbar download button without requiring preview loading, explains that downloads preserve complete HTTP-decoded bytes (not formatted JSON or parsed protobuf/gRPC), and distinguishes native desktop streaming saves from browser-managed Blob downloads subject to browser resources. It states that share Body reads honor execution_id within the token's Session and missing snapshots do not fall back to final bodies. Names prefer Content-Disposition then capture/execution/side and MIME suffix. Existing API authentication, parameters, raw responses, and the script's 16 MiB default or explicit max-size remain unchanged.",
       "files": []
+    },
+    {
+      "id": 44,
+      "prompt": "Create a read-time redaction script that hides Authorization and cookies, and bind it to the enabled Session 7 page share. Preserve the HAR binding and live capture behavior.",
+      "expected_output": "Uses context.req.header/context.resp.header loaded guards and handles URI-only req.headers=nil, creates the redaction library entry, updates only /api/session-shares/7/redaction, does not print the share token, and explains that modifications history is out of scope.",
+      "files": []
+    },
+    {
+      "id": 45,
+      "prompt": "A bound ProxyCrab body read returns redaction_failed. Diagnose the failure without changing credentials or policies.",
+      "expected_output": "Reports the bound read failure without automatically switching credentials, removing the policy, or using raw Assets/history to bypass it; asks the owner to diagnose the intended script.",
+      "files": []
     }
   ]
 }

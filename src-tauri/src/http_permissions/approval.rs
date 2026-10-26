@@ -393,7 +393,7 @@ mod tests {
                 .unwrap(),
             Some(ApprovalOutcome::Deny)
         );
-        assert_eq!(api_actions().len(), 77);
+        assert_eq!(api_actions().len(), 83);
     }
 
     #[tokio::test(start_paused = true)]

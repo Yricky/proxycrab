@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
+import RedactionSelect from "../components/RedactionSelect.vue";
 import { useBackend } from "../api";
 import type {
   HarShareScope,
@@ -21,6 +22,8 @@ const pageShare = ref<SessionShareState | null>(null);
 const harShare = ref<HarShareState | null>(null);
 const pageLinks = ref<string[]>([]);
 const harLinks = ref<string[]>([]);
+const pageRedaction = ref<string | null>(null);
+const harRedaction = ref<string | null>(null);
 const harScope = ref<HarShareScope>("all");
 const loading = ref(false);
 const pageMutating = ref(false);
@@ -54,6 +57,8 @@ async function load(): Promise<void> {
     ]);
     if (sequence !== loadSequence) return;
     pageShare.value = nextPageShare;
+    if (nextPageShare.enabled) pageRedaction.value = nextPageShare.redaction_script ?? null;
+    if (nextHarShare.enabled) harRedaction.value = nextHarShare.redaction_script ?? null;
     harShare.value = nextHarShare;
     if (nextHarShare.scope) harScope.value = nextHarShare.scope;
     serviceRunning.value = status.running;
@@ -66,6 +71,20 @@ async function load(): Promise<void> {
   }
 }
 
+async function setRedaction(kind: "page" | "har", value: string | null): Promise<void> {
+  const target = kind === "page" ? pageRedaction : harRedaction;
+  const share = kind === "page" ? pageShare : harShare;
+  const busy = kind === "page" ? pageMutating : harMutating;
+  if (!share.value?.enabled) { target.value = value; return; }
+  busy.value = true;
+  try {
+    if (kind === "page") pageShare.value = await backend.setSessionShareRedaction!(props.sessionId, value);
+    else harShare.value = await backend.setHarShareRedaction!(props.sessionId, value);
+    target.value = value;
+  } catch (error) { reportError(error, "保存脱敏脚本绑定失败"); }
+  finally { busy.value = false; }
+}
+
 async function togglePageShare(): Promise<void> {
   if (pageMutating.value || !pageShare.value) return;
   pageMutating.value = true;
@@ -75,7 +94,7 @@ async function togglePageShare(): Promise<void> {
       pageLinks.value = [];
       appStore.toast("链接分享已关闭", "success");
     } else {
-      await backend.enableSessionShare(props.sessionId);
+      await backend.enableSessionShare(props.sessionId, pageRedaction.value);
       await load();
       appStore.toast("链接分享已开启", "success");
     }
@@ -129,6 +148,7 @@ async function toggleHarShare(): Promise<void> {
         session_id: props.sessionId,
         scope: harScope.value,
         log_ids: logIds,
+        redaction_script: harRedaction.value,
       });
       await load();
       appStore.toast(`HAR 分享已开启，已固化 ${logIds.length} 条记录`, "success");
@@ -205,6 +225,7 @@ onBeforeUnmount(() => {
         />
       </header>
 
+      <RedactionSelect v-if="backend.setSessionShareRedaction && backend.listRedactionScripts" :model-value="pageRedaction" :disabled="loading || pageMutating" @update:model-value="setRedaction('page', $event)" />
       <div v-if="loading && !pageShare" class="share-empty">正在读取分享状态…</div>
       <template v-else-if="pageShare?.enabled">
         <div v-if="pageLinks.length" class="share-links">
@@ -248,9 +269,8 @@ onBeforeUnmount(() => {
         />
       </header>
 
-      <div class="har-warning" role="note">
-        HAR 不会脱敏，可能包含 Authorization、Cookie、请求体、响应体及其他敏感信息，请谨慎分享。
-      </div>
+      <RedactionSelect v-if="backend.setHarShareRedaction && backend.listRedactionScripts" :model-value="harRedaction" :disabled="loading || harMutating" @update:model-value="setRedaction('har', $event)" />
+      <div v-if="!harRedaction" class="har-warning" role="note">未绑定脱敏脚本，HAR 将包含原始请求和响应内容。</div>
 
       <div v-if="loading && !harShare" class="share-empty">正在读取分享状态…</div>
       <template v-else-if="harShare?.enabled">

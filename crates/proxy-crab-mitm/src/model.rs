@@ -223,6 +223,7 @@ impl Serialize for Script {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ScriptKind {
+    Redaction,
     Column,
     Filter,
     Routing,

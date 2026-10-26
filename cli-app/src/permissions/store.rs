@@ -133,9 +133,41 @@ impl PermissionStore {
         let state = self.state.lock().map_err(lock_error)?;
         let (identity, permissions) = identity_record(&state, id)?;
         Ok(IdentityPermissions {
+            redaction_script: if id == LOCAL_IDENTITY_ID {
+                state.local.redaction_script.clone()
+            } else {
+                state
+                    .api_keys
+                    .iter()
+                    .find(|r| r.id == id)
+                    .and_then(|r| r.redaction_script.clone())
+            },
             identity,
             permissions: permission_entries(permissions),
         })
+    }
+
+    pub fn set_redaction(
+        &self,
+        id: &str,
+        script: Option<String>,
+    ) -> Result<IdentityPermissions, ManagerError> {
+        {
+            let mut state = self.state.lock().map_err(lock_error)?;
+            let mut next = state.clone();
+            if id == LOCAL_IDENTITY_ID {
+                next.local.redaction_script = script;
+            } else {
+                next.api_keys
+                    .iter_mut()
+                    .find(|r| r.id == id)
+                    .ok_or_else(|| ManagerError::not_found("API key not found"))?
+                    .redaction_script = script;
+            }
+            self.save_locked(&next)?;
+            *state = next;
+        }
+        self.identity_permissions(id)
     }
 
     pub fn replace_permissions(
@@ -160,6 +192,15 @@ impl PermissionStore {
         *state = next;
         let (identity, permissions) = identity_record(&state, id)?;
         Ok(IdentityPermissions {
+            redaction_script: if id == LOCAL_IDENTITY_ID {
+                state.local.redaction_script.clone()
+            } else {
+                state
+                    .api_keys
+                    .iter()
+                    .find(|r| r.id == id)
+                    .and_then(|r| r.redaction_script.clone())
+            },
             identity,
             permissions: permission_entries(permissions),
         })
@@ -183,6 +224,7 @@ impl PermissionStore {
         let salt = random_bytes(16)?;
         let hash = key_hash(&salt, &api_key);
         let record = ApiKeyRecord {
+            redaction_script: None,
             id,
             name: name.to_owned(),
             prefix,
@@ -224,6 +266,7 @@ impl Default for PermissionFile {
         Self {
             version: PERMISSION_FILE_VERSION,
             local: LocalPermissionRecord {
+                redaction_script: None,
                 permissions: api_actions()
                     .iter()
                     .map(|action| (action.id.to_owned(), PermissionMode::Allow))
@@ -243,7 +286,7 @@ fn validate_and_normalize(state: &mut PermissionFile) -> Result<bool, ManagerErr
     }
     let known = known_action_ids();
     let mut changed = remove_obsolete_permissions(&mut state.local.permissions);
-    validate_permission_keys(&state.local.permissions, &known)?;
+    changed |= remove_unknown_permissions(&mut state.local.permissions, &known);
     changed |= add_missing_defaults(&mut state.local.permissions);
     let mut ids = BTreeSet::new();
     let mut names = BTreeSet::new();
@@ -280,7 +323,7 @@ fn validate_and_normalize(state: &mut PermissionFile) -> Result<bool, ManagerErr
             ));
         }
         changed |= remove_obsolete_permissions(&mut record.permissions);
-        validate_permission_keys(&record.permissions, &known)?;
+        changed |= remove_unknown_permissions(&mut record.permissions, &known);
         changed |= add_missing_defaults(&mut record.permissions);
     }
     Ok(changed)
@@ -294,16 +337,20 @@ fn remove_obsolete_permissions(permissions: &mut BTreeMap<String, PermissionMode
     permissions.len() != before
 }
 
-fn validate_permission_keys(
-    permissions: &BTreeMap<String, PermissionMode>,
+fn remove_unknown_permissions(
+    permissions: &mut BTreeMap<String, PermissionMode>,
     known: &BTreeSet<String>,
-) -> Result<(), ManagerError> {
-    if let Some(unknown) = permissions.keys().find(|id| !known.contains(*id)) {
-        return Err(ManagerError::internal(format!(
-            "permission file contains unknown action {unknown}"
-        )));
-    }
-    Ok(())
+) -> bool {
+    let mut removed = false;
+    permissions.retain(|id, _| {
+        let known_action = known.contains(id);
+        if !known_action {
+            tracing::error!("permission file contains unknown action {id}");
+            removed = true;
+        }
+        known_action
+    });
+    removed
 }
 
 fn add_missing_defaults(permissions: &mut BTreeMap<String, PermissionMode>) -> bool {
@@ -500,8 +547,44 @@ fn lock_error<T>(_: std::sync::PoisonError<T>) -> ManagerError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
+
+    use proxy_crab_mitm::log_buffer::{BufferLayer, LogBuffer};
     use tempfile::tempdir;
+    use tracing_subscriber::prelude::*;
+
+    use super::*;
+
+    #[test]
+    fn redaction_binding_persists_and_permission_updates_preserve_it() {
+        let directory = tempdir().unwrap();
+        let store = PermissionStore::open(directory.path()).unwrap();
+        let key = store.create_api_key("redacted".into()).unwrap();
+        for id in [LOCAL_IDENTITY_ID, key.identity.id.as_str()] {
+            let bound = store.set_redaction(id, Some("mask".into())).unwrap();
+            assert_eq!(bound.redaction_script.as_deref(), Some("mask"));
+            store.replace_permissions(id, bound.permissions).unwrap();
+        }
+        drop(store);
+        let store = PermissionStore::open(directory.path()).unwrap();
+        for id in [LOCAL_IDENTITY_ID, key.identity.id.as_str()] {
+            assert_eq!(
+                store
+                    .identity_permissions(id)
+                    .unwrap()
+                    .redaction_script
+                    .as_deref(),
+                Some("mask")
+            );
+            assert!(
+                store
+                    .set_redaction(id, None)
+                    .unwrap()
+                    .redaction_script
+                    .is_none()
+            );
+        }
+    }
 
     #[test]
     fn missing_file_creates_local_allow_all() {
@@ -527,6 +610,38 @@ mod tests {
         let error = PermissionStore::open(directory.path()).err().unwrap();
         assert!(error.message.contains("failed to parse permission file"));
         assert_eq!(fs::read(&path).unwrap(), b"not json");
+    }
+
+    #[test]
+    fn unknown_actions_are_logged_and_removed() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join(PERMISSION_FILE_NAME);
+        fs::write(
+            &path,
+            r#"{"version":1,"local":{"permissions":{"GET /api/unknown":"allow"}},"api_keys":[]}"#,
+        )
+        .unwrap();
+        let buffer = Arc::new(LogBuffer::default());
+        let subscriber = tracing_subscriber::registry().with(BufferLayer::new(buffer.clone()));
+        let identity = tracing::subscriber::with_default(subscriber, || {
+            let store = PermissionStore::open(directory.path()).unwrap();
+            store
+                .authenticate(&ManagementCredential::LocalLoopback)
+                .unwrap()
+        });
+
+        assert!(!identity.permissions.contains_key("GET /api/unknown"));
+        assert!(
+            !fs::read_to_string(&path)
+                .unwrap()
+                .contains("GET /api/unknown")
+        );
+        assert!(buffer.query(None, 8).iter().any(|log| {
+            log.level == "ERROR"
+                && log
+                    .message
+                    .contains("permission file contains unknown action GET /api/unknown")
+        }));
     }
 
     #[test]
