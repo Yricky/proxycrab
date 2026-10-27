@@ -15,9 +15,7 @@ import {
 
 test("column keys distinguish built-ins and scripts", () => {
   expect(columnGroupKey({ kind: "uri" })).toBe("uri");
-  expect(columnGroupKey({ kind: "script", script_name: "host" })).toBe(
-    "script:host",
-  );
+  expect(columnGroupKey({ kind: "script", script_name: "host" })).toBe("script:host");
 });
 
 test("pagination cursors do not depend on response order", () => {
@@ -74,17 +72,12 @@ test("groups include special rows and sort lexically in either direction", () =>
     "value",
     false,
   );
-  expect(
-    ascending
-      .filter((entry) => entry.kind === "value")
-      .map((entry) => entry.label),
-  ).toEqual(["a", "b"]);
-  expect(
-    ascending.find((entry) => entry.kind === "empty")?.exactPattern,
-  ).toBe("^$");
-  expect(
-    ascending.find((entry) => entry.kind === "error")?.exactPattern,
-  ).toBeNull();
+  expect(ascending.filter((entry) => entry.kind === "value").map((entry) => entry.label)).toEqual([
+    "a",
+    "b",
+  ]);
+  expect(ascending.find((entry) => entry.kind === "empty")?.exactPattern).toBe("^$");
+  expect(ascending.find((entry) => entry.kind === "error")?.exactPattern).toBeNull();
 
   const descending = filterAndSortGroups(
     new Map([
@@ -105,16 +98,8 @@ test("prefix regex escapes metacharacters without an end anchor", () => {
 });
 
 test("segments keep delimiter runs as prefixes of the following segment", () => {
-  expect(splitGroupSegments("http://host/path1", "/")).toEqual([
-    "http:",
-    "//host",
-    "/path1",
-  ]);
-  expect(splitGroupSegments("/api/user/list", "/")).toEqual([
-    "/api",
-    "/user",
-    "/list",
-  ]);
+  expect(splitGroupSegments("http://host/path1", "/")).toEqual(["http:", "//host", "/path1"]);
+  expect(splitGroupSegments("/api/user/list", "/")).toEqual(["/api", "/user", "/list"]);
   expect(splitGroupSegments("api/user", "/")).toEqual(["api", "/user"]);
   expect(splitGroupSegments("GET", "/")).toEqual(["GET"]);
   expect(splitGroupSegments("a::b:::c", "::")).toEqual(["a", "::b", ":::c"]);
@@ -154,9 +139,7 @@ test("tree rows aggregate counts and expand lazily", () => {
     ["other", 4],
   ]);
   const collapsed = buildGroupRows(values, 0, 0, "", "count", true, "/", new Set());
-  expect(
-    collapsed.map((row) => [row.kind, row.label, row.count, row.depth]),
-  ).toEqual([
+  expect(collapsed.map((row) => [row.kind, row.label, row.count, row.depth])).toEqual([
     ["group", "http:", 6, 0],
     ["value", "other", 4, 0],
   ]);
@@ -172,9 +155,7 @@ test("tree rows aggregate counts and expand lazily", () => {
     "/",
     new Set(["group:http:", "group:http://a"]),
   );
-  expect(
-    expanded.map((row) => [row.kind, row.label, row.count, row.depth]),
-  ).toEqual([
+  expect(expanded.map((row) => [row.kind, row.label, row.count, row.depth])).toEqual([
     ["group", "http:", 6, 0],
     ["group", "//b", 3, 1],
     ["group", "//a", 3, 1],
@@ -186,9 +167,7 @@ test("tree rows aggregate counts and expand lazily", () => {
   expect(leaf?.pattern).toBe(String.raw`^http://a/x$`);
   expect(leaf?.tooltip).toBe("http://a/x");
   expect(leaf?.ancestors).toEqual(["group:http:", "group:http://a"]);
-  expect(expanded.find((row) => row.label === "//a")?.pattern).toBe(
-    "^http://a",
-  );
+  expect(expanded.find((row) => row.label === "//a")?.pattern).toBe("^http://a");
 });
 
 test("a value that prefixes another value becomes a group row only", () => {
@@ -227,9 +206,7 @@ test("tree search filters by full value and force-expands branches", () => {
     new Set(),
   );
   // Special rows stay only when their label matches, like the flat list.
-  expect(
-    rows.map((row) => [row.kind, row.label, row.count, row.depth]),
-  ).toEqual([
+  expect(rows.map((row) => [row.kind, row.label, row.count, row.depth])).toEqual([
     ["group", "/api", 1, 0],
     ["value", "/user", 1, 1],
   ]);

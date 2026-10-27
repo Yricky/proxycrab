@@ -52,8 +52,7 @@ export function parseUrlSegments(uri: string): UrlSegment[] | null {
   const authority = /^(\[[^\]]+\]|[^\s:/?#]+)(?::(\d{1,5}))?$/.exec(uri);
   if (authority) {
     const segments: UrlSegment[] = [{ text: authority[1], cls: "url-host" }];
-    if (authority[2])
-      segments.push({ text: `:${authority[2]}`, cls: "url-path" });
+    if (authority[2]) segments.push({ text: `:${authority[2]}`, cls: "url-path" });
     return segments;
   }
   return null;

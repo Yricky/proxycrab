@@ -93,9 +93,7 @@ test("copyText falls back to execCommand outside a secure context", async () => 
 test("copyText reports a failed legacy copy and still removes the textarea", async () => {
   const legacy = legacyDocument(false);
 
-  await expect(copyText("secret", undefined, legacy.document)).rejects.toThrow(
-    /clipboard/i,
-  );
+  await expect(copyText("secret", undefined, legacy.document)).rejects.toThrow(/clipboard/i);
 
   expect(legacy.textarea.removed).toBe(true);
 });

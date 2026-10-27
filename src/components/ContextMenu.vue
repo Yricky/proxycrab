@@ -20,10 +20,7 @@ function run(item: (typeof contextMenuState.items)[number]): void {
         class="ctx-menu"
         :style="{ left: contextMenuState.x + 'px', top: contextMenuState.y + 'px' }"
       >
-        <template
-          v-for="(item, i) in contextMenuState.items"
-          :key="i"
-        >
+        <template v-for="(item, i) in contextMenuState.items" :key="i">
           <div v-if="item.dividerBefore" class="ctx-divider" />
           <button
             class="ctx-item"

@@ -131,8 +131,7 @@ export const proxyStore = reactive({
     // Keep the (stopped) toolbar port in sync with AppConfig, unless the user
     // is mid-edit (portText already diverged from the persisted value).
     const syncedPort = String(this.persistedPort);
-    const unmodified =
-      this.persistedPort === null || this.portText === syncedPort;
+    const unmodified = this.persistedPort === null || this.portText === syncedPort;
     if (this.status.status !== "running" && unmodified) {
       try {
         const config = await backend.getConfig();

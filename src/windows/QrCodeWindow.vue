@@ -91,9 +91,7 @@ onBeforeUnmount(() => {
       <button class="btn" :disabled="!qrCodeDataUrl" @click="download">
         <Io5Download :size="14" /> 下载 PNG
       </button>
-      <button class="btn" :disabled="!text" @click="clearAll">
-        <Io5Trash :size="14" /> 清空
-      </button>
+      <button class="btn" :disabled="!text" @click="clearAll"><Io5Trash :size="14" /> 清空</button>
       <span class="qr-spacer" />
       <span class="text-secondary">容错等级</span>
       <select v-model="level" class="select">

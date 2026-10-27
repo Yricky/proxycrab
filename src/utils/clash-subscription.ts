@@ -1,9 +1,18 @@
 export function clashServerAddresses(addresses: string[]): string[] {
   return [...new Set(addresses)].filter((address) => {
     const parts = address.split(".");
-    if (parts.length !== 4 || parts.some((part) => !/^(0|[1-9]\d{0,2})$/.test(part) || Number(part) > 255)) return false;
+    if (
+      parts.length !== 4 ||
+      parts.some((part) => !/^(0|[1-9]\d{0,2})$/.test(part) || Number(part) > 255)
+    )
+      return false;
     const first = Number(parts[0]);
-    return first !== 0 && first !== 127 && !(first >= 224 && first <= 239) && address !== "255.255.255.255";
+    return (
+      first !== 0 &&
+      first !== 127 &&
+      !(first >= 224 && first <= 239) &&
+      address !== "255.255.255.255"
+    );
   });
 }
 

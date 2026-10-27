@@ -30,9 +30,7 @@ const config: ScriptLibraryConfig = {
     return null;
   },
   deleteMessage: (entry, dirty) =>
-    `确定删除${kindLabel.value}「${scriptTitle(entry)}」吗？${
-      dirty ? "它包含未保存的更改。" : ""
-    }${
+    `确定删除${kindLabel.value}「${scriptTitle(entry)}」吗？${dirty ? "它包含未保存的更改。" : ""}${
       entry.usage_count
         ? `它正在被 ${entry.usage_count} 个会话使用，删除后会从这些会话的链路中移除。`
         : "当前没有会话引用它。"

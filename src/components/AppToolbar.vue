@@ -140,9 +140,7 @@ onBeforeUnmount(() => {
     <div class="tb-group tb-proxy">
       <div
         class="proxy-control"
-        :class="
-          proxyStore.running ? 'running' : proxyStore.canToggle ? 'ready' : 'off'
-        "
+        :class="proxyStore.running ? 'running' : proxyStore.canToggle ? 'ready' : 'off'"
       >
         <div ref="ipSegment" class="proxy-seg proxy-ip">
           <button
@@ -176,9 +174,7 @@ onBeforeUnmount(() => {
         <div class="proxy-seg proxy-btn-seg">
           <button
             class="proxy-toggle-btn"
-            :class="
-              proxyStore.running ? 'running' : proxyStore.canToggle ? 'ready' : 'off'
-            "
+            :class="proxyStore.running ? 'running' : proxyStore.canToggle ? 'ready' : 'off'"
             :disabled="!proxyStore.canToggle"
             :title="proxyStore.running ? '停止代理' : '启动代理'"
             @click="onToggle"
@@ -272,7 +268,11 @@ onBeforeUnmount(() => {
             <Io5CodeSlash :size="14" />
             <span>过滤脚本</span>
           </button>
-          <button v-if="backend.listRedactionScripts" class="tb-menu-item" @click="runMenuAction(openRedactionManager)">
+          <button
+            v-if="backend.listRedactionScripts"
+            class="tb-menu-item"
+            @click="runMenuAction(openRedactionManager)"
+          >
             <Io5ShieldCheckmark :size="15" /><span>脱敏脚本</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openRoutingManager)">
@@ -434,14 +434,25 @@ onBeforeUnmount(() => {
   font-weight: 700;
   cursor: pointer;
 }
-.approval-trigger:hover { background: color-mix(in srgb, var(--warning) 21%, transparent); }
-.approval-hand { transform-origin: 50% 80%; animation: approval-wave 0.8s ease-in-out infinite alternate; }
+.approval-trigger:hover {
+  background: color-mix(in srgb, var(--warning) 21%, transparent);
+}
+.approval-hand {
+  transform-origin: 50% 80%;
+  animation: approval-wave 0.8s ease-in-out infinite alternate;
+}
 @keyframes approval-wave {
-  from { transform: rotate(-30deg); }
-  to { transform: rotate(30deg); }
+  from {
+    transform: rotate(-30deg);
+  }
+  to {
+    transform: rotate(30deg);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-  .approval-hand { animation: none; }
+  .approval-hand {
+    animation: none;
+  }
 }
 .tb-menu-wrap {
   position: relative;

@@ -1,10 +1,6 @@
 // 重放草稿与预填、headers 表格规范化、header 警告的纯逻辑。
 
-import type {
-  BodySourceType,
-  InterceptorSnapshotPayload,
-  LogDetail,
-} from "../api/types";
+import type { BodySourceType, InterceptorSnapshotPayload, LogDetail } from "../api/types";
 
 export type ReplayBodySpec =
   | { type: "text"; text: string; charset: "utf8" }
@@ -23,15 +19,7 @@ export interface ReplayDraft {
   body: ReplayBodySpec | null;
 }
 
-export const REPLAY_METHODS = [
-  "GET",
-  "POST",
-  "PUT",
-  "DELETE",
-  "PATCH",
-  "HEAD",
-  "OPTIONS",
-] as const;
+export const REPLAY_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"] as const;
 
 /** 日志详情页预填：最终值；body 非空时用 body_ref 指向该日志的请求 body。 */
 export function prefillFromLog(detail: LogDetail): ReplayDraft {
@@ -104,13 +92,8 @@ export function kvRowsToTuples(rows: KvRow[]): Array<[string, string]> {
     .map((row) => [row.name, row.value]);
 }
 
-export function headerValue(
-  headers: Array<[string, string]>,
-  name: string,
-): string | null {
-  const found = headers.find(
-    ([key]) => key.toLowerCase() === name.toLowerCase(),
-  );
+export function headerValue(headers: Array<[string, string]>, name: string): string | null {
+  const found = headers.find(([key]) => key.toLowerCase() === name.toLowerCase());
   return found ? found[1] : null;
 }
 

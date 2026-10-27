@@ -22,10 +22,7 @@ const monacoWorkersShimPlugin = {
   name: "monaco-workers-shim",
   enforce: "pre" as const,
   resolveId(id: string, importer?: string) {
-    if (
-      id.endsWith("internal/common/workers.js") &&
-      importer?.includes("monaco-editor")
-    ) {
+    if (id.endsWith("internal/common/workers.js") && importer?.includes("monaco-editor")) {
       return `${projectRoot}/src/monaco-workers-shim.ts`;
     }
   },
@@ -44,8 +41,14 @@ export default defineConfig({
   resolve: {
     alias: [
       // monaco-editor 的 exports map 未暴露 css 子路径，通过别名直取
-      { find: "monaco-editor/codicon.css", replacement: `${projectRoot}/node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css` },
-      { find: "monaco-editor/codicon-modifiers.css", replacement: `${projectRoot}/node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon-modifiers.css` },
+      {
+        find: "monaco-editor/codicon.css",
+        replacement: `${projectRoot}/node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css`,
+      },
+      {
+        find: "monaco-editor/codicon-modifiers.css",
+        replacement: `${projectRoot}/node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon-modifiers.css`,
+      },
       // workers.js 会副作用引入全部 editor contrib，替换为最小实现（见 shim 注释）。
       // 该引用是 monaco 包内的相对路径，alias 无法正确处理，需用 resolveId 钩子。
       // （见 monacoWorkersShimPlugin）

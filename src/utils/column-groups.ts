@@ -12,9 +12,7 @@ export interface ColumnGroupEntry {
 }
 
 export function columnGroupKey(column: FilterColumn): string {
-  return column.kind === "script"
-    ? `script:${column.script_name}`
-    : column.kind;
+  return column.kind === "script" ? `script:${column.script_name}` : column.kind;
 }
 
 export function copyFilterColumn(column: FilterColumn): FilterColumn {
@@ -126,9 +124,7 @@ export function filterAndSortGroups(
   const direction = descending ? -1 : 1;
   return filtered.sort((left, right) => {
     const primary =
-      sort === "count"
-        ? left.count - right.count
-        : left.label.localeCompare(right.label);
+      sort === "count" ? left.count - right.count : left.label.localeCompare(right.label);
     if (primary !== 0) return primary * direction;
     return left.label.localeCompare(right.label) * direction;
   });
@@ -162,9 +158,7 @@ function compareTreeNodes(
   const direction = descending ? -1 : 1;
   return (left, right) => {
     const primary =
-      sort === "count"
-        ? left.count - right.count
-        : left.segment.localeCompare(right.segment);
+      sort === "count" ? left.count - right.count : left.segment.localeCompare(right.segment);
     if (primary !== 0) return primary * direction;
     return left.segment.localeCompare(right.segment) * direction;
   };
@@ -188,25 +182,20 @@ export function buildGroupRows(
   expanded: ReadonlySet<string>,
 ): ColumnGroupRow[] {
   if (delimiter.length === 0) {
-    return filterAndSortGroups(
-      values,
-      emptyCount,
-      errorCount,
-      query,
-      sort,
-      descending,
-    ).map((entry) => ({
-      key: entry.key,
-      kind: entry.kind,
-      depth: 0,
-      label: entry.label,
-      tooltip: entry.label,
-      count: entry.count,
-      pattern: entry.exactPattern,
-      hasChildren: false,
-      expanded: false,
-      ancestors: [],
-    }));
+    return filterAndSortGroups(values, emptyCount, errorCount, query, sort, descending).map(
+      (entry) => ({
+        key: entry.key,
+        kind: entry.kind,
+        depth: 0,
+        label: entry.label,
+        tooltip: entry.label,
+        count: entry.count,
+        pattern: entry.exactPattern,
+        hasChildren: false,
+        expanded: false,
+        ancestors: [],
+      }),
+    );
   }
 
   const needle = query.toLocaleLowerCase();
@@ -262,16 +251,11 @@ export function buildGroupRows(
   }
 
   const compare = compareTreeNodes(sort, descending);
-  const visit = (
-    nodes: Map<string, GroupTreeNode>,
-    depth: number,
-    ancestors: string[],
-  ): void => {
+  const visit = (nodes: Map<string, GroupTreeNode>, depth: number, ancestors: string[]): void => {
     for (const node of [...nodes.values()].sort(compare)) {
       const isGroup = node.children.size > 0;
       const key = isGroup ? `group:${node.prefix}` : `value:${node.prefix}`;
-      const isExpanded =
-        isGroup && (needle.length > 0 || expanded.has(key));
+      const isExpanded = isGroup && (needle.length > 0 || expanded.has(key));
       rows.push({
         key,
         kind: isGroup ? "group" : "value",
@@ -279,9 +263,7 @@ export function buildGroupRows(
         label: node.segment,
         tooltip: node.prefix,
         count: node.count,
-        pattern: isGroup
-          ? prefixColumnRegex(node.prefix)
-          : exactColumnRegex(node.prefix),
+        pattern: isGroup ? prefixColumnRegex(node.prefix) : exactColumnRegex(node.prefix),
         hasChildren: isGroup,
         expanded: isExpanded,
         ancestors,

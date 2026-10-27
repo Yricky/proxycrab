@@ -68,11 +68,7 @@ export const sessionsStore = reactive({
     }
   },
 
-  async update(
-    id: number,
-    name: string,
-    description: string | null,
-  ): Promise<boolean> {
+  async update(id: number, name: string, description: string | null): Promise<boolean> {
     try {
       await backend.updateSession(id, {
         name,

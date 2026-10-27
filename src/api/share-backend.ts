@@ -100,15 +100,7 @@ export function createShareBackend(
     },
     fetchBody: (target, side, maxSize) => {
       if (target.kind === "breakpoint") return unsupported("fetch breakpoint body")();
-      return fetchBodyFromBase(
-        baseUrl,
-        target,
-        side,
-        maxSize,
-        undefined,
-        "/share-api",
-        token,
-      );
+      return fetchBodyFromBase(baseUrl, target, side, maxSize, undefined, "/share-api", token);
     },
     subscribeChanges: async (handler) => {
       let stopped = false;
@@ -148,7 +140,11 @@ export function createShareBackend(
             handler({ resources: ["filter_scripts"], session_id: bootstrap.session.id });
           }
         } catch (error) {
-          if (error instanceof BackendError && error.code === "redaction_failed" && redactionRevision !== "failed") {
+          if (
+            error instanceof BackendError &&
+            error.code === "redaction_failed" &&
+            redactionRevision !== "failed"
+          ) {
             redactionRevision = "failed";
             window.dispatchEvent(new CustomEvent("proxycrab-redaction-changed"));
           }
@@ -199,14 +195,10 @@ export function createShareBackend(
     listArchivedSessions: async () => [],
     getLogIds: (value) => call("/share-api/logs/ids", json(value)),
     getLogViews: (value) => call("/share-api/logs/views", json(value)),
-    validateFilterRegex: (pattern) =>
-      call("/share-api/validate-filter-regex", json({ pattern })),
+    validateFilterRegex: (pattern) => call("/share-api/validate-filter-regex", json({ pattern })),
     getLog: (_sessionId, id) => call<LogDetail>(`/share-api/logs/${id}`),
     getInterceptorContent: async (_sessionId, id, executionId) => {
-      const url = new URL(
-        `/share-api/logs/${id}/interceptors/${executionId}/content`,
-        baseUrl,
-      );
+      const url = new URL(`/share-api/logs/${id}/interceptors/${executionId}/content`, baseUrl);
       url.searchParams.append("token", token);
       let response: Response;
       try {

@@ -85,12 +85,7 @@ watch(
         </div>
         <label class="picker-search">
           <Io5Search :size="14" />
-          <input
-            ref="input"
-            v-model="query"
-            placeholder="搜索全局脚本"
-            spellcheck="false"
-          />
+          <input ref="input" v-model="query" placeholder="搜索全局脚本" spellcheck="false" />
         </label>
         <div class="picker-list">
           <div v-if="atCapacity" class="picker-state">本侧已达到 12 个拦截器上限</div>

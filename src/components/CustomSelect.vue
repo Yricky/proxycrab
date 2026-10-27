@@ -29,9 +29,7 @@ const trigger = ref<HTMLButtonElement | null>(null);
 const open = ref(false);
 const activeIndex = ref(-1);
 
-const selected = computed(() =>
-  props.options.find((option) => option.value === props.modelValue),
-);
+const selected = computed(() => props.options.find((option) => option.value === props.modelValue));
 
 function firstEnabled(start: number, direction: 1 | -1): number {
   if (props.options.length === 0) return -1;
@@ -127,12 +125,20 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
       @keydown="onKeydown"
     >
       <span class="select-copy">
-        <span :class="{ placeholder: !selected && displayValue === undefined }">{{ displayValue ?? selected?.label ?? placeholder }}</span>
+        <span :class="{ placeholder: !selected && displayValue === undefined }">{{
+          displayValue ?? selected?.label ?? placeholder
+        }}</span>
         <small v-if="selected?.description">{{ selected.description }}</small>
       </span>
       <Io5ChevronDown :size="13" />
     </button>
-    <div v-if="open" class="select-menu" :class="{ 'menu-up': placement === 'up' }" role="listbox" :aria-label="ariaLabel">
+    <div
+      v-if="open"
+      class="select-menu"
+      :class="{ 'menu-up': placement === 'up' }"
+      role="listbox"
+      :aria-label="ariaLabel"
+    >
       <button
         v-for="(option, index) in options"
         :key="option.value"
@@ -160,23 +166,117 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
 </template>
 
 <style scoped>
-.custom-select { position: relative; min-width: 0; }
-.select-trigger { width: 100%; min-height: 30px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-panel); color: var(--text); font: inherit; text-align: left; cursor: pointer; outline: none; }
-.select-trigger:hover:not(:disabled) { border-color: var(--border-strong); background: var(--bg-hover); }
-.select-trigger:focus-visible, .open .select-trigger { border-color: var(--accent); }
-.select-trigger > svg { flex: none; color: var(--text-secondary); transition: transform 0.12s; }
-.open .select-trigger > svg { transform: rotate(180deg); }
-.select-copy { min-width: 0; display: flex; flex-direction: column; }
-.select-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.select-copy small { overflow: hidden; color: var(--text-faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.placeholder { color: var(--text-faint); }
-.select-menu { position: absolute; z-index: 100006; top: calc(100% + 4px); left: 0; right: 0; min-width: 150px; max-height: 280px; overflow-y: auto; padding: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg-elevated); box-shadow: var(--shadow-popup); }
-.select-menu.menu-up { top: auto; bottom: calc(100% + 4px); }
-.select-option { width: 100%; min-height: 30px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 7px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
-.select-option.active:not(:disabled) { background: var(--bg-hover); }
-.select-option.selected { color: var(--accent); }
-.select-option:disabled { color: var(--text-faint); cursor: default; }
-.select-option > svg { flex: none; }
-.select-footer { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
-.disabled { opacity: 0.55; }
+.custom-select {
+  position: relative;
+  min-width: 0;
+}
+.select-trigger {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+}
+.select-trigger:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+.select-trigger:focus-visible,
+.open .select-trigger {
+  border-color: var(--accent);
+}
+.select-trigger > svg {
+  flex: none;
+  color: var(--text-secondary);
+  transition: transform 0.12s;
+}
+.open .select-trigger > svg {
+  transform: rotate(180deg);
+}
+.select-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.select-copy > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select-copy small {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.placeholder {
+  color: var(--text-faint);
+}
+.select-menu {
+  position: absolute;
+  z-index: 100006;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  min-width: 150px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popup);
+}
+.select-menu.menu-up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+.select-option {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.select-option.active:not(:disabled) {
+  background: var(--bg-hover);
+}
+.select-option.selected {
+  color: var(--accent);
+}
+.select-option:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+.select-option > svg {
+  flex: none;
+}
+.select-footer {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.disabled {
+  opacity: 0.55;
+}
 </style>

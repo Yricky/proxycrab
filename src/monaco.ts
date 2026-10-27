@@ -57,7 +57,6 @@ self.MonacoEnvironment = {
   },
 };
 
-
 // 应用自定义主题：编辑器背景对齐 base.css 的 --bg-app 色板，
 // 避免浅色模式下 Monaco 默认纯白背景与 --bg-panel 白色面板融为一体而无法区分。
 // 颜色值需与 src/styles/base.css 中的 --bg-app 保持同步。

@@ -10,11 +10,7 @@ import { confirmState, settleConfirm } from "../stores/dialog";
         <div class="confirm-message">{{ confirmState.message }}</div>
         <div class="confirm-actions">
           <button class="btn" @click="settleConfirm('cancel')">取消</button>
-          <button
-            v-if="confirmState.secondaryText"
-            class="btn"
-            @click="settleConfirm('secondary')"
-          >
+          <button v-if="confirmState.secondaryText" class="btn" @click="settleConfirm('secondary')">
             {{ confirmState.secondaryText }}
           </button>
           <button

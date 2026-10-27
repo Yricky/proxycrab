@@ -138,18 +138,28 @@ watch(configDraft, () => {
   if (configError.value) configError.value = "";
 });
 
-watch(() => props.url, async (value, _previous, onCleanup) => {
-  let stale = false;
-  onCleanup(() => { stale = true; });
-  qrCode.value = "";
-  if (!value) return;
-  try {
-    const image = await QRCode.toDataURL(value, { errorCorrectionLevel: "M", margin: 2, width: 200 });
-    if (!stale) qrCode.value = image;
-  } catch (error) {
-    if (!stale) reportError(error, "生成订阅二维码失败");
-  }
-}, { immediate: true });
+watch(
+  () => props.url,
+  async (value, _previous, onCleanup) => {
+    let stale = false;
+    onCleanup(() => {
+      stale = true;
+    });
+    qrCode.value = "";
+    if (!value) return;
+    try {
+      const image = await QRCode.toDataURL(value, {
+        errorCorrectionLevel: "M",
+        margin: 2,
+        width: 200,
+      });
+      if (!stale) qrCode.value = image;
+    } catch (error) {
+      if (!stale) reportError(error, "生成订阅二维码失败");
+    }
+  },
+  { immediate: true },
+);
 
 onMounted(() => {
   if (configBackend) {
@@ -172,7 +182,9 @@ onBeforeUnmount(() => {
           <p class="text-secondary">将订阅导入 Clash，把流量转发到 ProxyCrab。</p>
         </div>
         <button
-          class="switch" :class="{ on: state?.enabled }" type="button"
+          class="switch"
+          :class="{ on: state?.enabled }"
+          type="button"
           :aria-pressed="state?.enabled ?? false"
           :aria-label="state?.enabled ? '关闭 Clash 订阅' : '开启 Clash 订阅'"
           :title="state?.enabled ? '关闭 Clash 订阅' : '开启 Clash 订阅'"
@@ -187,9 +199,13 @@ onBeforeUnmount(() => {
           <p class="text-secondary">其他设备需能访问所选 IP。扫描二维码或复制链接导入订阅。</p>
           <div class="subscription-link">
             <span class="mono">{{ url }}</span>
-            <button class="btn icon" title="复制 Clash 订阅链接" @click="copyUrl"><Io5Copy :size="14" /></button>
+            <button class="btn icon" title="复制 Clash 订阅链接" @click="copyUrl">
+              <Io5Copy :size="14" />
+            </button>
           </div>
-          <button class="btn primary import-button" @click="importClash"><Io5OpenOutline :size="14" />导入 Clash</button>
+          <button class="btn primary import-button" @click="importClash">
+            <Io5OpenOutline :size="14" />导入 Clash
+          </button>
           <p class="text-secondary">导入后选择该订阅，并在 Clash 中开启系统代理。</p>
         </div>
         <div class="subscription-qr">
@@ -197,8 +213,18 @@ onBeforeUnmount(() => {
           <span v-else class="text-faint">二维码生成中…</span>
         </div>
       </section>
-      <p v-else class="connection-empty text-secondary">{{ loading ? '正在读取订阅状态…' : mutating ? '正在更新订阅…' : '开启后生成订阅链接和二维码。' }}</p>
-      <p v-if="state?.enabled && !proxyStore.running" class="connection-warning"><Io5Warning :size="14" />ProxyCrab 代理尚未启动，启动后才能转发流量。</p>
+      <p v-else class="connection-empty text-secondary">
+        {{
+          loading
+            ? "正在读取订阅状态…"
+            : mutating
+              ? "正在更新订阅…"
+              : "开启后生成订阅链接和二维码。"
+        }}
+      </p>
+      <p v-if="state?.enabled && !proxyStore.running" class="connection-warning">
+        <Io5Warning :size="14" />ProxyCrab 代理尚未启动，启动后才能转发流量。
+      </p>
     </div>
 
     <section v-if="configBackend" class="config-section">
@@ -208,14 +234,33 @@ onBeforeUnmount(() => {
         </div>
         <div class="config-actions">
           <span v-if="configDirty" class="config-dirty">未保存</span>
-          <button class="btn icon" title="重新载入规则文件" :disabled="configLoading || configSaving" @click="reloadConfig"><Io5Reload :size="14" /></button>
-          <button class="btn" :disabled="configLoading || configSaving" @click="resetConfig">恢复默认</button>
-          <button class="btn primary" :disabled="!configDirty || configLoading || configSaving" @click="saveConfig"><Io5Save :size="14" />{{ configSaving ? "保存中…" : "保存" }}</button>
+          <button
+            class="btn icon"
+            title="重新载入规则文件"
+            :disabled="configLoading || configSaving"
+            @click="reloadConfig"
+          >
+            <Io5Reload :size="14" />
+          </button>
+          <button class="btn" :disabled="configLoading || configSaving" @click="resetConfig">
+            恢复默认
+          </button>
+          <button
+            class="btn primary"
+            :disabled="!configDirty || configLoading || configSaving"
+            @click="saveConfig"
+          >
+            <Io5Save :size="14" />{{ configSaving ? "保存中…" : "保存" }}
+          </button>
         </div>
       </div>
       <p v-if="configError" class="config-error">{{ configError }}</p>
-      <p v-else-if="configExternal && configDirty" class="config-warning">文件已在外部更新；保存会覆盖外部修改，重新载入会丢弃当前修改。</p>
-      <div v-if="configLoading && !configSaved" class="config-loading text-secondary">正在读取规则文件…</div>
+      <p v-else-if="configExternal && configDirty" class="config-warning">
+        文件已在外部更新；保存会覆盖外部修改，重新载入会丢弃当前修改。
+      </p>
+      <div v-if="configLoading && !configSaved" class="config-loading text-secondary">
+        正在读取规则文件…
+      </div>
       <div v-else class="config-editor">
         <MonacoEditor v-model="configDraft" language="yaml" :options="configEditorOptions" />
       </div>
@@ -224,33 +269,187 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.connection-root { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); overflow: hidden; min-height: 0; flex: 1; }
-.connection-top { flex: 0 1 auto; min-height: 0; max-height: 48%; overflow: auto; display: flex; flex-direction: column; gap: var(--space-3); }
-.connection-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
-h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
-p { margin: 0; font-size: 12px; }
-.subscription-content { display: grid; grid-template-columns: minmax(0, 1fr) 160px; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-.subscription-info { min-width: 0; }
-.subscription-link { display: flex; align-items: center; gap: 4px; margin-top: var(--space-2); padding: 4px 4px 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-panel); }
-.subscription-link span { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: text; font-size: 11px; }
-.subscription-link .btn { flex: none; }
-.import-button { margin: var(--space-2) 0; }
-.subscription-qr { width: 160px; height: 160px; display: grid; place-items: center; background: #fff; border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; font-size: 11px; }
-.subscription-qr img { display: block; width: 158px; height: 158px; }
-.connection-empty { padding: var(--space-3) 0; border-top: 1px solid var(--border); }
-.connection-warning { display: flex; align-items: flex-start; gap: var(--space-1); color: var(--warning); }
-.connection-warning svg { flex: none; margin-top: 2px; }
-.connection-note { font-size: 11px; }
-.config-section { flex: 1 1 52%; min-height: 160px; display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--border); }
-.config-heading { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
-.config-title { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.config-title h3 { margin: 0; }
-.config-path { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); font-size: 10px; user-select: text; }
-.config-actions { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; }
-.config-dirty { color: var(--warning); font-size: 11px; }
-.config-hint { flex: none; font-size: 11px; line-height: 1.45; }
-.config-error { flex: none; color: var(--danger); font-size: 11px; line-height: 1.45; user-select: text; }
-.config-warning { flex: none; color: var(--warning); font-size: 11px; line-height: 1.45; }
-.config-loading { flex: 1; min-height: 0; display: grid; place-items: center; border: 1px solid var(--border); border-radius: var(--radius-md); font-size: 11px; }
-.config-editor { flex: 1; min-height: 0; display: flex; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.connection-root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  overflow: hidden;
+  min-height: 0;
+  flex: 1;
+}
+.connection-top {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 48%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.connection-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+p {
+  margin: 0;
+  font-size: 12px;
+}
+.subscription-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.subscription-info {
+  min-width: 0;
+}
+.subscription-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: var(--space-2);
+  padding: 4px 4px 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+.subscription-link span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+  font-size: 11px;
+}
+.subscription-link .btn {
+  flex: none;
+}
+.import-button {
+  margin: var(--space-2) 0;
+}
+.subscription-qr {
+  width: 160px;
+  height: 160px;
+  display: grid;
+  place-items: center;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  font-size: 11px;
+}
+.subscription-qr img {
+  display: block;
+  width: 158px;
+  height: 158px;
+}
+.connection-empty {
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border);
+}
+.connection-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  color: var(--warning);
+}
+.connection-warning svg {
+  flex: none;
+  margin-top: 2px;
+}
+.connection-note {
+  font-size: 11px;
+}
+.config-section {
+  flex: 1 1 52%;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.config-heading {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.config-title {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.config-title h3 {
+  margin: 0;
+}
+.config-path {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: 10px;
+  user-select: text;
+}
+.config-actions {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.config-dirty {
+  color: var(--warning);
+  font-size: 11px;
+}
+.config-hint {
+  flex: none;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.config-error {
+  flex: none;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.45;
+  user-select: text;
+}
+.config-warning {
+  flex: none;
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.config-loading {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 11px;
+}
+.config-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
 </style>

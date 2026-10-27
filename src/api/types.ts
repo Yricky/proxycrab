@@ -11,14 +11,7 @@ export interface ManagerError {
 // ---------- model.rs ----------
 
 export type ColumnKind =
-  | "method"
-  | "uri"
-  | "code"
-  | "source"
-  | "stage"
-  | "created_at"
-  | "updated_at"
-  | "script";
+  "method" | "uri" | "code" | "source" | "stage" | "created_at" | "updated_at" | "script";
 
 export type Column =
   | { kind: "method"; width: number }
@@ -118,12 +111,7 @@ export interface ReplaceSessionInterceptorsRequest {
 export type CaptureOutcome = "in_progress" | "success" | "failed" | "tunneled";
 
 export type ErrorStage =
-  | "connect"
-  | "tls_handshake"
-  | "request_body"
-  | "interceptor"
-  | "upstream"
-  | "response_body";
+  "connect" | "tls_handshake" | "request_body" | "interceptor" | "upstream" | "response_body";
 
 export interface CaptureError {
   stage: ErrorStage;
@@ -139,9 +127,7 @@ export type BodyPayload =
   | { type: "large"; size: number };
 
 export type BodySourceType =
-  | { type: "original" }
-  | { type: "string"; content: string }
-  | { type: "asset"; asset_id: string };
+  { type: "original" } | { type: "string"; content: string } | { type: "asset"; asset_id: string };
 
 export interface RequestInterceptorSnapshot {
   method: string;

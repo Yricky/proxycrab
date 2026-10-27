@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import {
-  Io5ChevronDown,
-  Io5OpenOutline,
-  Io5Play,
-  Io5Warning,
-} from "vue-icons-plus/io5";
+import { Io5ChevronDown, Io5OpenOutline, Io5Play, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import type { AssetMetadata } from "../api/types";
 import { proxyStore } from "../stores/proxy";
@@ -71,9 +66,7 @@ if (props.prefill) {
 
 const methodOptions = REPLAY_METHODS.map((value) => ({ value, label: value }));
 const methodDisplay = computed(() =>
-  methodChoice.value === CUSTOM_METHOD
-    ? customMethod.value || "自定义…"
-    : undefined,
+  methodChoice.value === CUSTOM_METHOD ? customMethod.value || "自定义…" : undefined,
 );
 const method = computed(() =>
   methodChoice.value === CUSTOM_METHOD
@@ -102,9 +95,7 @@ watch(pickerOpen, (open) => {
   if (open) document.addEventListener("pointerdown", onDocumentPointerDown);
   else document.removeEventListener("pointerdown", onDocumentPointerDown);
 });
-onBeforeUnmount(() =>
-  document.removeEventListener("pointerdown", onDocumentPointerDown),
-);
+onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPointerDown));
 
 // ---------- 资源 ----------
 const assets = ref<AssetMetadata[]>([]);
@@ -128,8 +119,7 @@ if (bodyMode.value === "asset") void ensureAssets();
 // ---------- 警告 ----------
 const tuples = computed(() => kvRowsToTuples(rows.value));
 const knownBodySize = computed<number | null>(() => {
-  if (bodyMode.value === "text")
-    return new TextEncoder().encode(bodyText.value).length;
+  if (bodyMode.value === "text") return new TextEncoder().encode(bodyText.value).length;
   if (bodyMode.value === "asset" && assetId.value) {
     const meta = assets.value.find((item) => item.id === assetId.value);
     return meta ? meta.size : null;
@@ -140,41 +130,29 @@ const hasBody = computed(
   () =>
     (bodyMode.value === "text" && bodyText.value.length > 0) ||
     (bodyMode.value === "asset" && assetId.value !== null) ||
-    (bodyMode.value === "body_ref" &&
-      bodyRefSession.value !== null &&
-      bodyRefLog.value !== null),
+    (bodyMode.value === "body_ref" && bodyRefSession.value !== null && bodyRefLog.value !== null),
 );
-const lengthIssue = computed(() =>
-  contentLengthIssue(tuples.value, knownBodySize.value),
-);
+const lengthIssue = computed(() => contentLengthIssue(tuples.value, knownBodySize.value));
 const missingContentType = computed(
   () => hasBody.value && headerValue(tuples.value, "content-type") === null,
 );
 
 function upsertHeader(name: string, value: string): void {
-  const committed = rows.value.filter(
-    (row) => row.name !== "" || row.value !== "",
-  );
-  const found = committed.find(
-    (row) => row.name.toLowerCase() === name.toLowerCase(),
-  );
+  const committed = rows.value.filter((row) => row.name !== "" || row.value !== "");
+  const found = committed.find((row) => row.name.toLowerCase() === name.toLowerCase());
   if (found) found.value = value;
   else committed.push({ name, value });
   rows.value = committed;
 }
 function fixContentLength(): void {
-  if (knownBodySize.value !== null)
-    upsertHeader("content-length", String(knownBodySize.value));
+  if (knownBodySize.value !== null) upsertHeader("content-length", String(knownBodySize.value));
 }
 function fixContentType(): void {
   if (bodyMode.value === "text") {
     upsertHeader("content-type", guessContentType(bodyText.value));
   } else if (bodyMode.value === "asset" && assetId.value) {
     const meta = assets.value.find((item) => item.id === assetId.value);
-    upsertHeader(
-      "content-type",
-      meta?.content_type || "application/octet-stream",
-    );
+    upsertHeader("content-type", meta?.content_type || "application/octet-stream");
   } else {
     upsertHeader("content-type", "application/octet-stream");
   }
@@ -189,11 +167,7 @@ const executeError = ref<string | null>(null);
 function buildBody(): ReplayBodySpec | undefined {
   if (bodyMode.value === "text" && bodyText.value.length > 0)
     return { type: "text", text: bodyText.value, charset: "utf8" };
-  if (
-    bodyMode.value === "body_ref" &&
-    bodyRefSession.value !== null &&
-    bodyRefLog.value !== null
-  )
+  if (bodyMode.value === "body_ref" && bodyRefSession.value !== null && bodyRefLog.value !== null)
     return {
       type: "body_ref",
       session_id: bodyRefSession.value,
@@ -205,9 +179,7 @@ function buildBody(): ReplayBodySpec | undefined {
   return undefined;
 }
 
-const canCompose = computed(
-  () => method.value !== "" && /^https?:\/\//.test(url.value),
-);
+const canCompose = computed(() => method.value !== "" && /^https?:\/\//.test(url.value));
 const noSession = computed(() => sessionsStore.sessions.length === 0);
 const sendDisabled = computed(
   () => executing.value || !canCompose.value || !proxyStore.running || noSession.value,
@@ -261,14 +233,9 @@ const bodyModeLabels: Record<BodyMode, string> = {
 const bodyModes: BodyMode[] = ["none", "text", "body_ref", "asset"];
 const bodyExtra = computed(() => {
   if (bodyMode.value === "asset" && assetId.value) return assetId.value;
-  if (
-    bodyMode.value === "body_ref" &&
-    bodyRefSession.value !== null &&
-    bodyRefLog.value !== null
-  )
+  if (bodyMode.value === "body_ref" && bodyRefSession.value !== null && bodyRefLog.value !== null)
     return `#${bodyRefSession.value}/#${bodyRefLog.value} ${bodyRefSide.value === "request" ? "请求" : "响应"} body`;
-  if (bodyMode.value === "text" && knownBodySize.value !== null)
-    return `${knownBodySize.value} B`;
+  if (bodyMode.value === "text" && knownBodySize.value !== null) return `${knownBodySize.value} B`;
   return null;
 });
 </script>
@@ -289,17 +256,13 @@ const bodyExtra = computed(() => {
               : "Content-Length 与实际 body 大小不符"
           }}
           <button class="btn notice-btn" @click="fixContentLength">
-            {{
-              lengthIssue === "missing" ? "自动补上" : `修正为 ${knownBodySize}`
-            }}
+            {{ lengthIssue === "missing" ? "自动补上" : `修正为 ${knownBodySize}` }}
           </button>
         </span>
         <span v-if="missingContentType" class="notice-item">
           <Io5Warning :size="12" class="warning-icon" />
           缺少 Content-Type
-          <button class="btn notice-btn" @click="fixContentType">
-            按内容补齐
-          </button>
+          <button class="btn notice-btn" @click="fixContentType">按内容补齐</button>
         </span>
         <span class="summary-spacer" />
         <span v-if="resultLogId !== null" class="notice-item result-ok">
@@ -308,9 +271,7 @@ const bodyExtra = computed(() => {
             <Io5OpenOutline :size="12" /> 查看详情
           </button>
         </span>
-        <span v-else-if="executeError" class="notice-item text-danger">{{
-          executeError
-        }}</span>
+        <span v-else-if="executeError" class="notice-item text-danger">{{ executeError }}</span>
       </div>
     </header>
 
@@ -350,12 +311,7 @@ const bodyExtra = computed(() => {
           {{ executing ? "发送中…" : "发送" }}
           <Io5ChevronDown :size="11" />
         </button>
-        <div
-          v-if="pickerOpen"
-          class="session-picker"
-          role="menu"
-          aria-label="选择会话"
-        >
+        <div v-if="pickerOpen" class="session-picker" role="menu" aria-label="选择会话">
           <SessionListItem
             v-for="session in sessionsStore.sessions"
             :key="session.id"
@@ -387,9 +343,7 @@ const bodyExtra = computed(() => {
       <section class="card body-card">
         <div class="card-title">
           请求体
-          <span v-if="bodyExtra" class="card-title-extra mono">{{
-            bodyExtra
-          }}</span>
+          <span v-if="bodyExtra" class="card-title-extra mono">{{ bodyExtra }}</span>
           <span class="summary-spacer" />
           <span class="mode-tabs">
             <button

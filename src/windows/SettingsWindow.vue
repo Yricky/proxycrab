@@ -116,8 +116,11 @@ async function setRedaction(value: string | null): Promise<void> {
     const result = await backend.setHttpIdentityRedaction(selectedIdentityId.value, value);
     redactionScript.value = result.redaction_script ?? null;
     appStore.toast("脱敏脚本绑定已保存", "success");
-  } catch (error) { reportError(error, "保存脱敏脚本绑定失败"); }
-  finally { savingRedaction.value = false; }
+  } catch (error) {
+    reportError(error, "保存脱敏脚本绑定失败");
+  } finally {
+    savingRedaction.value = false;
+  }
 }
 
 async function loadIdentity(id: string): Promise<void> {
@@ -190,10 +193,7 @@ async function savePermissions(): Promise<void> {
       action_id: action.id,
       mode: permissions.value[action.id] ?? action.default_mode,
     }));
-    const result = await backend.replaceHttpIdentityPermissions(
-      selectedIdentityId.value,
-      entries,
-    );
+    const result = await backend.replaceHttpIdentityPermissions(selectedIdentityId.value, entries);
     const next = Object.fromEntries(
       result.permissions.map((entry) => [entry.action_id, entry.mode]),
     ) as Record<string, PermissionMode>;
@@ -240,7 +240,12 @@ async function deleteSelectedKey(): Promise<void> {
 
 function onHttpApiChange(event: Event): void {
   const { resources } = (event as CustomEvent<HttpApiChange>).detail;
-  if (!resources.includes("all") && !resources.includes("workspace") && !resources.includes("config")) return;
+  if (
+    !resources.includes("all") &&
+    !resources.includes("workspace") &&
+    !resources.includes("config")
+  )
+    return;
   void refreshWorkspace();
 }
 
@@ -292,7 +297,12 @@ onBeforeUnmount(() => {
             <span>当前工作区</span>
             <div class="field-row">
               <code>{{ currentPath || "—" }}</code>
-              <button v-if="backend.host?.switchWorkspace" class="btn primary" :disabled="switchingWorkspace" @click="switchWorkspace">
+              <button
+                v-if="backend.host?.switchWorkspace"
+                class="btn primary"
+                :disabled="switchingWorkspace"
+                @click="switchWorkspace"
+              >
                 切换工作区
               </button>
             </div>
@@ -308,7 +318,9 @@ onBeforeUnmount(() => {
           </div>
           <div class="service-state" :class="{ failed: serviceStatus?.error }">
             <span class="status-dot" />
-            <span>{{ serviceStatus?.running ? "运行中" : serviceStatus?.error ? "启动失败" : "未运行" }}</span>
+            <span>{{
+              serviceStatus?.running ? "运行中" : serviceStatus?.error ? "启动失败" : "未运行"
+            }}</span>
             <code>{{ serviceUrl }}</code>
           </div>
         </header>
@@ -318,7 +330,9 @@ onBeforeUnmount(() => {
           <div>
             <strong>管理接口未启动</strong>
             <span>{{ serviceStatus.error }}</span>
-            <small v-if="!permissionConfigError">权限仍可配置，服务将在问题修复并重启应用后使用新设置。</small>
+            <small v-if="!permissionConfigError"
+              >权限仍可配置，服务将在问题修复并重启应用后使用新设置。</small
+            >
           </div>
         </div>
         <div v-if="permissionConfigError" class="service-error permission-error">
@@ -326,7 +340,10 @@ onBeforeUnmount(() => {
           <div>
             <strong>权限配置不可用</strong>
             <span>{{ permissionConfigError }}</span>
-            <small>请修复工作区中的 http_api_permissions.json 后重启应用。ProxyCrab 不会自动覆盖损坏的配置。</small>
+            <small
+              >请修复工作区中的 http_api_permissions.json 后重启应用。ProxyCrab
+              不会自动覆盖损坏的配置。</small
+            >
           </div>
         </div>
 
@@ -347,10 +364,26 @@ onBeforeUnmount(() => {
                 新建
               </button>
             </div>
-            <RedactionSelect v-if="selectedIdentityId && backend.setHttpIdentityRedaction && backend.listRedactionScripts" :model-value="redactionScript" :disabled="loadingPermissions || savingRedaction" @update:model-value="setRedaction" />
+            <RedactionSelect
+              v-if="
+                selectedIdentityId &&
+                backend.setHttpIdentityRedaction &&
+                backend.listRedactionScripts
+              "
+              :model-value="redactionScript"
+              :disabled="loadingPermissions || savingRedaction"
+              @update:model-value="setRedaction"
+            />
             <div v-if="selectedIdentity?.kind === 'api_key'" class="identity-detail">
               <span>创建于 {{ formatDateTime(selectedIdentity.created_at ?? 0) }}</span>
-              <span>最近使用 {{ selectedIdentity.last_used_at ? formatDateTime(selectedIdentity.last_used_at) : "从未" }}</span>
+              <span
+                >最近使用
+                {{
+                  selectedIdentity.last_used_at
+                    ? formatDateTime(selectedIdentity.last_used_at)
+                    : "从未"
+                }}</span
+              >
               <span class="mono">前缀 {{ selectedIdentity.prefix }}</span>
               <button class="btn danger compact" @click="deleteSelectedKey">
                 <Io5Trash :size="13" />
@@ -403,61 +436,266 @@ onBeforeUnmount(() => {
       </template>
     </main>
 
-    <ApiKeySecretDialog
-      v-if="showCreateDialog"
-      :identities="identities"
-      @close="onCreateClosed"
-    />
+    <ApiKeySecretDialog v-if="showCreateDialog" :identities="identities" @close="onCreateClosed" />
   </div>
 </template>
 
 <style scoped>
-.settings-root { flex: 1; min-height: 0; display: flex; background: var(--bg-app); }
-.settings-sidebar { width: 154px; flex: none; padding: 10px 8px; border-right: 1px solid var(--border); background: var(--bg-panel); }
-.settings-sidebar button { width: 100%; height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
-.settings-sidebar button:hover { background: var(--bg-hover); color: var(--text); }
-.settings-sidebar button.active { background: var(--bg-selected); color: var(--accent); font-weight: 600; }
-.settings-content { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 0 22px 24px; }
-.page-header { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--border); }
-.page-header h2 { margin: 0; font-size: 16px; }
-.page-header p { margin: 2px 0 0; color: var(--text-secondary); font-size: 11px; }
-.settings-section { max-width: 680px; padding-top: 20px; }
-.settings-section h3, .permission-heading h3 { margin: 0; font-size: 12px; }
-.settings-field { display: flex; flex-direction: column; gap: 5px; margin-top: 14px; color: var(--text-secondary); font-size: 11px; }
-.settings-field code { overflow-wrap: anywhere; color: var(--text); font: 12px/1.5 var(--font-mono); user-select: text; }
-.field-row { display: flex; align-items: center; gap: 8px; }
-.field-row code { flex: 1; min-width: 0; }
-.field-row .btn { flex: none; }
-.service-state { display: flex; align-items: center; gap: 7px; color: var(--success); font-size: 11px; }
-.service-state code { color: var(--text-secondary); font: 10px var(--font-mono); user-select: text; }
-.status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.service-state.failed { color: var(--danger); }
-.service-error { display: flex; align-items: flex-start; gap: 10px; margin-top: 18px; padding: 12px; border-left: 3px solid var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); color: var(--danger); }
-.service-error > svg { flex: none; margin-top: 1px; }
-.service-error div { display: flex; flex-direction: column; }
-.service-error span { margin-top: 3px; overflow-wrap: anywhere; font: 11px/1.5 var(--font-mono); user-select: text; }
-.service-error small { margin-top: 5px; color: var(--text-secondary); }
-.permission-error { margin-top: 10px; }
-.identity-section { padding: 16px 0; border-bottom: 1px solid var(--border); }
-.identity-picker { display: flex; align-items: stretch; gap: 8px; }
-.identity-select { width: min(420px, calc(100% - 82px)); }
-.identity-detail { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; margin-top: 9px; color: var(--text-secondary); font-size: 10px; }
-.identity-detail .danger { margin-left: auto; }
-.identity-hint { margin: 7px 0 0; color: var(--text-faint); font-size: 10px; }
-.permission-section { padding-top: 14px; }
-.permission-heading { position: sticky; z-index: 2; top: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 42px; margin: -14px 0 0; padding: 10px 0 7px; background: var(--bg-app); }
-.permission-heading > div { display: flex; align-items: baseline; gap: 8px; }
-.permission-heading .permission-heading-actions { align-items: center; }
-.dimension-switch { display: inline-flex; padding: 2px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-panel); }
-.dimension-btn { min-width: 44px; height: 24px; padding: 0 8px; border: 0; border-radius: calc(var(--radius-md) - 2px); background: transparent; color: var(--text-secondary); font: inherit; font-size: 11px; cursor: pointer; }
-.dimension-btn:hover { color: var(--text); }
-.dimension-btn.active { background: var(--bg-selected); color: var(--accent); font-weight: 600; }
-.dirty-label { color: var(--warning); font-size: 10px; }
-.permission-loading { padding: 28px; color: var(--text-faint); text-align: center; }
-.compact { min-height: 25px; padding: 2px 8px; font-size: 11px; }
+.settings-root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--bg-app);
+}
+.settings-sidebar {
+  width: 154px;
+  flex: none;
+  padding: 10px 8px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.settings-sidebar button {
+  width: 100%;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.settings-sidebar button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.settings-sidebar button.active {
+  background: var(--bg-selected);
+  color: var(--accent);
+  font-weight: 600;
+}
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 22px 24px;
+}
+.page-header {
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.page-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.page-header p {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.settings-section {
+  max-width: 680px;
+  padding-top: 20px;
+}
+.settings-section h3,
+.permission-heading h3 {
+  margin: 0;
+  font-size: 12px;
+}
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 14px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.settings-field code {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font: 12px/1.5 var(--font-mono);
+  user-select: text;
+}
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.field-row code {
+  flex: 1;
+  min-width: 0;
+}
+.field-row .btn {
+  flex: none;
+}
+.service-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--success);
+  font-size: 11px;
+}
+.service-state code {
+  color: var(--text-secondary);
+  font: 10px var(--font-mono);
+  user-select: text;
+}
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.service-state.failed {
+  color: var(--danger);
+}
+.service-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 12px;
+  border-left: 3px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: var(--danger);
+}
+.service-error > svg {
+  flex: none;
+  margin-top: 1px;
+}
+.service-error div {
+  display: flex;
+  flex-direction: column;
+}
+.service-error span {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  font: 11px/1.5 var(--font-mono);
+  user-select: text;
+}
+.service-error small {
+  margin-top: 5px;
+  color: var(--text-secondary);
+}
+.permission-error {
+  margin-top: 10px;
+}
+.identity-section {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.identity-picker {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.identity-select {
+  width: min(420px, calc(100% - 82px));
+}
+.identity-detail {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 9px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.identity-detail .danger {
+  margin-left: auto;
+}
+.identity-hint {
+  margin: 7px 0 0;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+.permission-section {
+  padding-top: 14px;
+}
+.permission-heading {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  margin: -14px 0 0;
+  padding: 10px 0 7px;
+  background: var(--bg-app);
+}
+.permission-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.permission-heading .permission-heading-actions {
+  align-items: center;
+}
+.dimension-switch {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+.dimension-btn {
+  min-width: 44px;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: calc(var(--radius-md) - 2px);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.dimension-btn:hover {
+  color: var(--text);
+}
+.dimension-btn.active {
+  background: var(--bg-selected);
+  color: var(--accent);
+  font-weight: 600;
+}
+.dirty-label {
+  color: var(--warning);
+  font-size: 10px;
+}
+.permission-loading {
+  padding: 28px;
+  color: var(--text-faint);
+  text-align: center;
+}
+.compact {
+  min-height: 25px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
 @media (max-width: 660px) {
-  .settings-sidebar { width: 122px; }
-  .settings-content { padding-right: 14px; padding-left: 14px; }
-  .management-header { align-items: flex-start; flex-direction: column; justify-content: center; gap: 5px; }
+  .settings-sidebar {
+    width: 122px;
+  }
+  .settings-content {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+  .management-header {
+    align-items: flex-start;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+  }
 }
 </style>

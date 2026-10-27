@@ -1,11 +1,6 @@
 import { reactive } from "vue";
 import type { Backend } from "../api/backend";
-import type {
-  CaptureOutcome,
-  Column,
-  FilterColumn,
-  LogViewRow,
-} from "../api/types";
+import type { CaptureOutcome, Column, FilterColumn, LogViewRow } from "../api/types";
 import {
   columnGroupKey,
   copyFilterColumn,
@@ -99,10 +94,7 @@ function cacheKey(sessionId: number, column: FilterColumn): string {
   return `${sessionId}:${columnGroupKey(column)}`;
 }
 
-export function getColumnGroupCache(
-  sessionId: number,
-  column: FilterColumn,
-): ColumnGroupCache {
+export function getColumnGroupCache(sessionId: number, column: FilterColumn): ColumnGroupCache {
   const key = cacheKey(sessionId, column);
   const existing = columnGroupsState.caches.get(key);
   if (existing) return existing;

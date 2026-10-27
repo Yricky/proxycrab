@@ -24,11 +24,7 @@ export function anchoredScrollTop(
   rowHeight: number,
   maxScrollTop: number,
 ): number {
-  return clamp(
-    scrollTop + (nextIndex - previousIndex) * rowHeight,
-    0,
-    maxScrollTop,
-  );
+  return clamp(scrollTop + (nextIndex - previousIndex) * rowHeight, 0, maxScrollTop);
 }
 
 export function reconcileUnseenIds(

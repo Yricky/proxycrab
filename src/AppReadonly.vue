@@ -43,16 +43,9 @@ function syncCapturePolling(): void {
   }
 }
 
-watch(
-  [
-    () => proxyStore.running,
-    () => sessionsStore.activeSessionId,
-    () => logs.sessionId,
-  ],
-  () => {
-    syncCapturePolling();
-  },
-);
+watch([() => proxyStore.running, () => sessionsStore.activeSessionId, () => logs.sessionId], () => {
+  syncCapturePolling();
+});
 
 onMounted(async () => {
   await startHttpApiSync();

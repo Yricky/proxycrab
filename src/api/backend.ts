@@ -104,16 +104,8 @@ export interface Backend {
   };
   readonly host?: HostOperations;
 
-  fetchBody(
-    target: BodyTarget,
-    side: BodySide,
-    maxSize?: number,
-  ): Promise<LoadedBody>;
-  downloadBody?(
-    target: BodyTarget,
-    side: BodySide,
-    filename: string,
-  ): Promise<boolean>;
+  fetchBody(target: BodyTarget, side: BodySide, maxSize?: number): Promise<LoadedBody>;
+  downloadBody?(target: BodyTarget, side: BodySide, filename: string): Promise<boolean>;
   subscribeChanges(handler: (change: HttpApiChange) => void): Promise<Unsubscribe>;
   subscribeApprovalChanges(handler: (count: number) => void): Promise<Unsubscribe>;
   openExternal(url: string): Promise<void>;
@@ -128,10 +120,7 @@ export interface Backend {
   getConfig(): Promise<AppConfig>;
   getAgentsPresets(): Promise<AgentsPresetState>;
   createAgentsPreset(request: CreateAgentsPresetRequest): Promise<AgentsPresetState>;
-  updateAgentsPreset(
-    id: string,
-    request: UpdateAgentsPresetRequest,
-  ): Promise<AgentsPresetState>;
+  updateAgentsPreset(id: string, request: UpdateAgentsPresetRequest): Promise<AgentsPresetState>;
   activateAgentsPreset(id: string): Promise<AgentsPresetState>;
   deleteAgentsPreset(id: string): Promise<AgentsPresetState>;
   reimportDefaultAgentsPresets(): Promise<AgentsPresetState>;
@@ -152,7 +141,10 @@ export interface Backend {
   deleteArchivedSession(id: number): Promise<void>;
   replaceActiveSession(active: ActiveSession): Promise<ActiveSession>;
   getSessionShare(sessionId: number): Promise<SessionShareState>;
-  enableSessionShare(sessionId: number, redactionScript?: string | null): Promise<SessionShareState>;
+  enableSessionShare(
+    sessionId: number,
+    redactionScript?: string | null,
+  ): Promise<SessionShareState>;
   disableSessionShare(sessionId: number): Promise<SessionShareState>;
   getHarShare(sessionId: number): Promise<HarShareState>;
   enableHarShare(request: EnableHarShareRequest): Promise<HarShareState>;
@@ -163,10 +155,7 @@ export interface Backend {
   getLogViews(request: LogViewsRequest): Promise<LogViewsPayload>;
   validateFilterRegex(pattern: string): Promise<string | null>;
   getLog(sessionId: number | null, id: number): Promise<LogDetail>;
-  replay?(
-    sessionId: number,
-    request: ReplayRequestPayload,
-  ): Promise<ReplayResult>;
+  replay?(sessionId: number, request: ReplayRequestPayload): Promise<ReplayResult>;
   listAssets(): Promise<AssetMetadata[]>;
   getInterceptorContent(
     sessionId: number | null,
@@ -180,10 +169,7 @@ export interface Backend {
   ): Promise<InterceptorSnapshotPayload>;
   listBreakpoints(query: BreakpointQuery): Promise<BreakpointSummary[]>;
   getBreakpoint(id: number): Promise<BreakpointDetailPayload>;
-  extendBreakpoint(
-    id: number,
-    request: ExtendBreakpointRequest,
-  ): Promise<BreakpointSummary>;
+  extendBreakpoint(id: number, request: ExtendBreakpointRequest): Promise<BreakpointSummary>;
   releaseBreakpoint(id: number): Promise<void>;
   executeBreakpointScript(
     id: number,
@@ -194,10 +180,7 @@ export interface Backend {
     sessionId: number | null,
     request: ReplaceSessionViewRequest,
   ): Promise<SessionViewPayload>;
-  replaceSessionFilter?(
-    sessionId: number,
-    filter: SessionFilter,
-  ): Promise<SessionViewPayload>;
+  replaceSessionFilter?(sessionId: number, filter: SessionFilter): Promise<SessionViewPayload>;
 
   // Owner-managed redaction library and identity/share bindings.
   listRedactionScripts?(): Promise<Script[]>;
@@ -205,8 +188,14 @@ export interface Backend {
   createRedactionScript?(request: ScriptRequest): Promise<void>;
   updateRedactionScript?(name: string, request: UpdateScriptRequest): Promise<void>;
   deleteRedactionScript?(name: string): Promise<void>;
-  setHttpIdentityRedaction?(id: string, redactionScript: string | null): Promise<IdentityPermissions>;
-  setSessionShareRedaction?(sessionId: number, redactionScript: string | null): Promise<SessionShareState>;
+  setHttpIdentityRedaction?(
+    id: string,
+    redactionScript: string | null,
+  ): Promise<IdentityPermissions>;
+  setSessionShareRedaction?(
+    sessionId: number,
+    redactionScript: string | null,
+  ): Promise<SessionShareState>;
   setHarShareRedaction?(sessionId: number, redactionScript: string | null): Promise<HarShareState>;
 
   // column scripts
@@ -276,5 +265,4 @@ export interface Backend {
   deleteHttpApiKey(id: string): Promise<void>;
   listHttpApprovals?(): Promise<PendingApproval[]>;
   resolveHttpApproval?(id: number, request: ResolveApprovalRequest): Promise<void>;
-
 }

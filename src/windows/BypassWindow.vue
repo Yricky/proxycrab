@@ -23,21 +23,15 @@ function isDeletable(entry: BypassEntry): boolean {
 
 const selectedDeletableCount = computed(
   () =>
-    [...bypassStore.selectedIds].filter(
-      (id) => {
-        const row = bypassStore.rows.find((entry) => entry.id === id);
-        return row !== undefined && isDeletable(row);
-      },
-    ).length,
+    [...bypassStore.selectedIds].filter((id) => {
+      const row = bypassStore.rows.find((entry) => entry.id === id);
+      return row !== undefined && isDeletable(row);
+    }).length,
 );
 
 function outcomeLabel(entry: BypassEntry): string {
   if (isStale(entry)) return "已失效";
-  return entry.outcome === "in_progress"
-    ? "转发中"
-    : entry.outcome === "success"
-      ? "完成"
-      : "失败";
+  return entry.outcome === "in_progress" ? "转发中" : entry.outcome === "success" ? "完成" : "失败";
 }
 
 function reasonLabel(reason: string): string {
@@ -117,16 +111,10 @@ onBeforeUnmount(() => {
       <button class="btn icon" title="刷新" @click="bypassStore.refresh">
         <Io5Refresh :size="14" />
       </button>
-      <button
-        class="btn"
-        v-if="selectedDeletableCount > 0"
-        @click="removeSelected"
-      >
+      <button class="btn" v-if="selectedDeletableCount > 0" @click="removeSelected">
         删除选中
       </button>
-      <button class="btn danger" @click="clearTerminal">
-        <Io5Trash :size="14" />清空
-      </button>
+      <button class="btn danger" @click="clearTerminal"><Io5Trash :size="14" />清空</button>
     </div>
 
     <div class="bp-header bp-grid">
@@ -159,7 +147,11 @@ onBeforeUnmount(() => {
           <span>{{ reasonLabel((item as BypassEntry).reason) }}</span>
           <span
             class="badge"
-            :class="isStale(item as BypassEntry) ? 'outcome-stale' : `outcome-${(item as BypassEntry).outcome}`"
+            :class="
+              isStale(item as BypassEntry)
+                ? 'outcome-stale'
+                : `outcome-${(item as BypassEntry).outcome}`
+            "
           >
             {{ outcomeLabel(item as BypassEntry) }}
           </span>

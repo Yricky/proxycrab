@@ -71,20 +71,10 @@ function onAddressKeydown(event: KeyboardEvent): void {
 <template>
   <div class="browser-root">
     <div class="browser-toolbar">
-      <button
-        class="nav-btn"
-        :disabled="!canGoBack"
-        title="后退"
-        @click="goBack"
-      >
+      <button class="nav-btn" :disabled="!canGoBack" title="后退" @click="goBack">
         <Io5ArrowBack :size="14" />
       </button>
-      <button
-        class="nav-btn"
-        :disabled="!canGoForward"
-        title="前进"
-        @click="goForward"
-      >
+      <button class="nav-btn" :disabled="!canGoForward" title="前进" @click="goForward">
         <Io5ArrowForward :size="14" />
       </button>
       <button class="nav-btn" title="刷新" @click="refresh">
@@ -105,12 +95,7 @@ function onAddressKeydown(event: KeyboardEvent): void {
         <Io5OpenOutline :size="14" />
       </button>
     </div>
-    <iframe
-      :key="frameKey"
-      class="browser-frame"
-      :src="currentUrl"
-      title="browser"
-    />
+    <iframe :key="frameKey" class="browser-frame" :src="currentUrl" title="browser" />
   </div>
 </template>
 

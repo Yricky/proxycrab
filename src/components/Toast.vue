@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { appStore } from "../stores/app";
-import { Io5CheckmarkCircle, Io5CloseCircle, Io5Close, Io5InformationCircle } from "vue-icons-plus/io5";
+import {
+  Io5CheckmarkCircle,
+  Io5CloseCircle,
+  Io5Close,
+  Io5InformationCircle,
+} from "vue-icons-plus/io5";
 </script>
 
 <template>
@@ -10,7 +15,9 @@ import { Io5CheckmarkCircle, Io5CloseCircle, Io5Close, Io5InformationCircle } fr
       <Io5CloseCircle v-else-if="toast.kind === 'error'" :size="15" class="toast-icon" />
       <Io5InformationCircle v-else :size="15" class="toast-icon" />
       <span class="toast-message">{{ toast.message }}</span>
-      <button class="btn icon" @click="appStore.dismissToast(toast.id)"><Io5Close :size="13" /></button>
+      <button class="btn icon" @click="appStore.dismissToast(toast.id)">
+        <Io5Close :size="13" />
+      </button>
     </div>
   </div>
 </template>

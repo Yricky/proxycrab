@@ -53,9 +53,7 @@ const prettyContent = computed(() => {
 // 与 pretty 开关解耦，否则切到「原文」后按钮会消失。
 const formattable = computed(() => prettyContent.value !== (props.content ?? ""));
 
-const displayContent = computed(() =>
-  pretty.value ? prettyContent.value : (props.content ?? ""),
-);
+const displayContent = computed(() => (pretty.value ? prettyContent.value : (props.content ?? "")));
 
 const sizeLabel = computed(() =>
   formatBytes(new TextEncoder().encode(displayContent.value).length),

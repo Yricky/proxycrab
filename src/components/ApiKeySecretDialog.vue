@@ -79,9 +79,7 @@ function close(): void {
               @keyup.enter="create"
             />
           </label>
-          <span v-if="name && validationError" class="validation-error">{{
-            validationError
-          }}</span>
+          <span v-if="name && validationError" class="validation-error">{{ validationError }}</span>
           <footer>
             <button class="btn" :disabled="creating" @click="close">取消</button>
             <button
@@ -118,9 +116,7 @@ function close(): void {
             <span>我已保存此 API Key</span>
           </label>
           <footer>
-            <button class="btn primary" :disabled="!acknowledged" @click="close">
-              完成
-            </button>
+            <button class="btn primary" :disabled="!acknowledged" @click="close">完成</button>
           </footer>
         </template>
       </div>
@@ -129,22 +125,109 @@ function close(): void {
 </template>
 
 <style scoped>
-.key-mask { position: fixed; inset: 0; z-index: 100007; display: grid; place-items: center; background: rgba(0, 0, 0, 0.38); }
-.key-dialog { width: min(480px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--bg-elevated); box-shadow: var(--shadow-window); }
-header { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 16px; }
-header > svg { flex: none; margin-top: 2px; color: var(--accent); }
-header .created-icon { color: var(--success); }
-header div { display: flex; flex-direction: column; }
-header strong { font-size: 14px; }
-header span { color: var(--text-secondary); font-size: 11px; }
-.key-field { display: flex; flex-direction: column; gap: 5px; color: var(--text-secondary); font-size: 11px; }
-.key-field .input { color: var(--text); font-size: 13px; }
-.validation-error { display: block; margin-top: 5px; color: var(--danger); font-size: 11px; }
-.secret-warning { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; padding: 8px 10px; border-left: 3px solid var(--warning); background: color-mix(in srgb, var(--warning) 10%, transparent); color: var(--warning); font-size: 11px; }
-.secret-warning svg { flex: none; }
-.secret-row { display: flex; align-items: stretch; gap: 8px; }
-.secret-row code { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-app); font: 11px/1.5 var(--font-mono); user-select: text; }
-.acknowledge { display: flex; align-items: center; gap: 7px; margin-top: 13px; font-size: 12px; cursor: pointer; }
-.acknowledge input { accent-color: var(--accent); }
-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.key-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 100007;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.38);
+}
+.key-dialog {
+  width: min(480px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-window);
+}
+header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+header > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+header .created-icon {
+  color: var(--success);
+}
+header div {
+  display: flex;
+  flex-direction: column;
+}
+header strong {
+  font-size: 14px;
+}
+header span {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.key-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.key-field .input {
+  color: var(--text);
+  font-size: 13px;
+}
+.validation-error {
+  display: block;
+  margin-top: 5px;
+  color: var(--danger);
+  font-size: 11px;
+}
+.secret-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  color: var(--warning);
+  font-size: 11px;
+}
+.secret-warning svg {
+  flex: none;
+}
+.secret-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.secret-row code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-app);
+  font: 11px/1.5 var(--font-mono);
+  user-select: text;
+}
+.acknowledge {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 13px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.acknowledge input {
+  accent-color: var(--accent);
+}
+footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
 </style>

@@ -19,16 +19,10 @@ export function fullCurl(detail: LogDetail): string {
   }
   const body = detail.request.body;
   if (body.type === "text" || body.type === "json") {
-    const content =
-      body.type === "text"
-        ? body.content
-        : (JSON.stringify(body.content) ?? "null");
+    const content = body.type === "text" ? body.content : (JSON.stringify(body.content) ?? "null");
     lines[lines.length - 1] += " \\";
     lines.push(`  --data-raw ${shellQuote(content)}`);
-  } else if (
-    (body.type === "binary" || body.type === "large") &&
-    body.size > 0
-  ) {
+  } else if ((body.type === "binary" || body.type === "large") && body.size > 0) {
     lines.unshift("# Body 未内联：请将原始 Body 通过 stdin 传给 curl。");
     lines[lines.length - 1] += " \\";
     lines.push("  --data-binary @-");

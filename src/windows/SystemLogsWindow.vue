@@ -125,7 +125,9 @@ onUnmounted(() => {
     <VirtualList v-else :items="filteredEntries" :item-height="24">
       <template #default="{ item }">
         <div class="sl-row mono">
-          <span class="sl-time text-faint">{{ formatDateTime((item as SystemLogEntry).timestamp) }}</span>
+          <span class="sl-time text-faint">{{
+            formatDateTime((item as SystemLogEntry).timestamp)
+          }}</span>
           <span class="badge sl-level" :class="levelClass((item as SystemLogEntry).level)">
             {{ (item as SystemLogEntry).level }}
           </span>

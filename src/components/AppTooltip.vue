@@ -20,7 +20,10 @@ function open(event: PointerEvent): void {
     const rect = target.getBoundingClientRect();
     const width = 240;
     position.value = {
-      left: Math.max(8, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 8)),
+      left: Math.max(
+        8,
+        Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 8),
+      ),
       top: rect.bottom + 8,
     };
     visible.value = true;

@@ -188,9 +188,7 @@ export function createLogsStore() {
         id,
         created_at: 0,
         updated_at: 0,
-        outcome: proxyStore.isNetlogActive(logsStore.sessionId, id)
-          ? "in_progress"
-          : "success",
+        outcome: proxyStore.isNetlogActive(logsStore.sessionId, id) ? "in_progress" : "success",
         cells: this.columns.map(() => "…"),
       };
     },
@@ -329,13 +327,7 @@ export function createLogsStore() {
       const unique = [...new Set(ids)];
       const targetRowGeneration = rowGeneration;
       const request = hydrateQueue.then(() =>
-        this.hydrateNow(
-          sessionId,
-          targetGeneration,
-          targetRowGeneration,
-          unique,
-          force,
-        ),
+        this.hydrateNow(sessionId, targetGeneration, targetRowGeneration, unique, force),
       );
       hydrateQueue = request.catch(() => undefined);
       await request;
@@ -564,17 +556,11 @@ export function createLogsStore() {
       if (replaceFilter) {
         try {
           await replaceFilter(sessionId, cloneSessionFilter(filter));
-          if (
-            logsStore.sessionId !== sessionId ||
-            generation !== targetGeneration
-          ) {
+          if (logsStore.sessionId !== sessionId || generation !== targetGeneration) {
             return false;
           }
         } catch (error) {
-          if (
-            logsStore.sessionId === sessionId &&
-            generation === targetGeneration
-          ) {
+          if (logsStore.sessionId === sessionId && generation === targetGeneration) {
             this.syncAppliedFilter(previous);
             reportError(error, "保存过滤条件失败");
           }
@@ -592,10 +578,7 @@ export function createLogsStore() {
         if (logsStore.sessionId !== sessionId) return;
         this.applyColumns(view.columns);
         // 不同步的面不跟随后端过滤变更：Session 保存的过滤只在加载时当初始值。
-        if (
-          backend.replaceSessionFilter &&
-          !sameFilter(this.appliedFilter, view.filter)
-        ) {
+        if (backend.replaceSessionFilter && !sameFilter(this.appliedFilter, view.filter)) {
           await this.reloadFilter(view.filter);
         } else {
           this.setViewportIds([...viewportIds]);
@@ -697,12 +680,7 @@ export function createLogsStore() {
         if (logsStore.sessionId !== sessionId) return;
         this.applyColumns(view.columns, true);
         this.setViewportIds([...viewportIds]);
-        await this.hydrateFor(
-          sessionId,
-          generation,
-          proxyStore.activeNetlogIds(sessionId),
-          true,
-        );
+        await this.hydrateFor(sessionId, generation, proxyStore.activeNetlogIds(sessionId), true);
       } catch (error) {
         reportError(error, "刷新日志列失败");
       }
@@ -736,7 +714,6 @@ export function createLogsStore() {
       window.removeEventListener("filter-scripts-changed", onFilterScriptsChanged);
     },
   });
-
 
   function onHttpApiChange(event: Event): void {
     const change = (event as CustomEvent<HttpApiChange>).detail;

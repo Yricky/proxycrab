@@ -15,9 +15,7 @@ import { skillStore } from "../stores/skill";
 const draftPaths = ref<string[]>([]);
 const newPath = ref("");
 
-const savedPaths = computed(() =>
-  (skillStore.state?.paths ?? []).map((path) => path.parent_path),
-);
+const savedPaths = computed(() => (skillStore.state?.paths ?? []).map((path) => path.parent_path));
 const dirty = computed(
   () =>
     draftPaths.value.length !== savedPaths.value.length ||

@@ -27,8 +27,7 @@ const vResizeObserver: Directive<HTMLElement, (rect: DOMRectReadOnly) => void> =
   unmounted(el) {
     (
       (el as unknown as Record<string, ResizeObserver | undefined>).__vlResizeObserver as
-        | ResizeObserver
-        | undefined
+        ResizeObserver | undefined
     )?.disconnect();
   },
 };

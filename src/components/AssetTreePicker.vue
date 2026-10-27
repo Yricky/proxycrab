@@ -88,9 +88,7 @@ function formatSize(size: number): string {
 
 <template>
   <div class="asset-tree">
-    <div v-if="visibleNodes.length === 0" class="empty-hint text-faint">
-      工作区暂无资源
-    </div>
+    <div v-if="visibleNodes.length === 0" class="empty-hint text-faint">工作区暂无资源</div>
     <button
       v-for="node in visibleNodes"
       :key="node.path"
@@ -98,9 +96,7 @@ function formatSize(size: number): string {
       :class="{ active: node.asset !== null && selected === node.asset.id }"
       :style="{ paddingLeft: `${8 + node.depth * 14}px` }"
       :title="
-        node.asset
-          ? `${node.asset.content_type} · ${formatSize(node.asset.size)}`
-          : node.path
+        node.asset ? `${node.asset.content_type} · ${formatSize(node.asset.size)}` : node.path
       "
       @click="node.asset === null ? toggle(node.path) : (selected = node.asset.id)"
     >
@@ -111,9 +107,7 @@ function formatSize(size: number): string {
       </template>
       <Io5DocumentOutline v-else :size="13" />
       <span class="asset-name">{{ node.name }}</span>
-      <span v-if="node.asset" class="asset-size text-faint">{{
-        formatSize(node.asset.size)
-      }}</span>
+      <span v-if="node.asset" class="asset-size text-faint">{{ formatSize(node.asset.size) }}</span>
     </button>
   </div>
 </template>

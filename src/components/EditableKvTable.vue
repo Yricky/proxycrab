@@ -5,15 +5,12 @@ import { normalizeKvRows, type KvRow } from "../utils/replay";
 
 const rows = defineModel<KvRow[]>({ required: true });
 
-const nonEmpty = (list: KvRow[]) =>
-  list.filter((row) => row.name !== "" || row.value !== "");
+const nonEmpty = (list: KvRow[]) => list.filter((row) => row.name !== "" || row.value !== "");
 
 // 展示态始终以恰好一个末尾空行结尾；与外部 v-model 同步时去掉空行。
 const display = ref<KvRow[]>(normalizeKvRows(rows.value));
 watch(rows, (value) => {
-  if (
-    JSON.stringify(nonEmpty(value)) !== JSON.stringify(nonEmpty(display.value))
-  ) {
+  if (JSON.stringify(nonEmpty(value)) !== JSON.stringify(nonEmpty(display.value))) {
     display.value = normalizeKvRows(value);
   }
 });
@@ -64,8 +61,7 @@ function onHandlePointerDown(index: number, event: PointerEvent): void {
     const target = document
       .elementFromPoint(move.clientX, move.clientY)
       ?.closest("tr[data-kv-index]");
-    if (!(target instanceof HTMLElement) || !tableRef.value?.contains(target))
-      return;
+    if (!(target instanceof HTMLElement) || !tableRef.value?.contains(target)) return;
     const to = Number(target.dataset.kvIndex);
     const from = dragIndex.value;
     if (from === null || Number.isNaN(to) || to === from) return;

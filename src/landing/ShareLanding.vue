@@ -50,9 +50,36 @@ onBeforeUnmount(() => window.removeEventListener(SHARE_INVALID_EVENT, invalidate
 </template>
 
 <style scoped>
-.share-state { height: 100%; display: grid; place-items: center; padding: 24px; background: var(--bg-app); }
-.share-card { width: min(440px, 100%); padding: 28px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-panel); box-shadow: var(--shadow-window); }
-.brand { margin-bottom: 12px; color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-h1 { margin: 0; font-size: 20px; }
-p { margin: 12px 0 0; color: var(--danger); font-size: 13px; }
+.share-state {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg-app);
+}
+.share-card {
+  width: min(440px, 100%);
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-window);
+}
+.brand {
+  margin-bottom: 12px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+h1 {
+  margin: 0;
+  font-size: 20px;
+}
+p {
+  margin: 12px 0 0;
+  color: var(--danger);
+  font-size: 13px;
+}
 </style>

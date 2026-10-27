@@ -79,10 +79,11 @@ type TableColumn = Column & { key: string; name: string };
 
 const columns = computed<TableColumn[]>(() =>
   logsStore.columns.map((column) => {
-    const key =
-      column.kind === "script" ? `script:${column.script_name}` : column.kind;
+    const key = column.kind === "script" ? `script:${column.script_name}` : column.kind;
     const name =
-      column.kind === "script" ? scriptLabelFor(columnScripts.value, column.script_name) : column.kind;
+      column.kind === "script"
+        ? scriptLabelFor(columnScripts.value, column.script_name)
+        : column.kind;
     return { ...column, key, name };
   }),
 );
@@ -130,18 +131,12 @@ const layout = computed<CanvasLayout>(() => {
   let vertical = false;
   for (let i = 0; i < 2; i += 1) {
     const bodyWidth = Math.max(0, width - (vertical ? SCROLLBAR_SIZE : 0));
-    const bodyHeight = Math.max(
-      0,
-      height - HEADER_HEIGHT - (horizontal ? SCROLLBAR_SIZE : 0),
-    );
+    const bodyHeight = Math.max(0, height - HEADER_HEIGHT - (horizontal ? SCROLLBAR_SIZE : 0));
     horizontal = totalWidth.value > bodyWidth;
     vertical = contentHeight > bodyHeight;
   }
   const bodyWidth = Math.max(0, width - (vertical ? SCROLLBAR_SIZE : 0));
-  const bodyHeight = Math.max(
-    0,
-    height - HEADER_HEIGHT - (horizontal ? SCROLLBAR_SIZE : 0),
-  );
+  const bodyHeight = Math.max(0, height - HEADER_HEIGHT - (horizontal ? SCROLLBAR_SIZE : 0));
   return {
     bodyWidth,
     bodyHeight,
@@ -161,11 +156,7 @@ const visibleIds = computed(() => {
   return rowIds.value.slice(start, end);
 });
 
-watch(
-  visibleIds,
-  (ids) => logsStore.setViewportIds(ids),
-  { immediate: true },
-);
+watch(visibleIds, (ids) => logsStore.setViewportIds(ids), { immediate: true });
 
 function toggleSort(): void {
   logsStore.sortDesc = !logsStore.sortDesc;
@@ -392,7 +383,8 @@ async function refreshColumnScripts(): Promise<void> {
 
 function onScriptChange(event: Event): void {
   const { resources } = (event as CustomEvent<HttpApiChange>).detail;
-  if (resources.includes("all") || resources.includes("column_scripts")) void refreshColumnScripts();
+  if (resources.includes("all") || resources.includes("column_scripts"))
+    void refreshColumnScripts();
 }
 
 async function columnChoices(): Promise<ColumnChoice[]> {
@@ -441,11 +433,15 @@ async function showColumnMenu(index: number, x: number, y: number): Promise<void
   const currentKey = currentChoiceKey(index);
   const column = columns.value[index];
   const items: MenuItem[] = [
-    ...(column?.kind === "script" ? [{
-      label: "编辑脚本",
-      icon: Io5Create,
-      action: () => openColumnManager(column.script_name, logsStore.sessionId),
-    }] : []),
+    ...(column?.kind === "script"
+      ? [
+          {
+            label: "编辑脚本",
+            icon: Io5Create,
+            action: () => openColumnManager(column.script_name, logsStore.sessionId),
+          },
+        ]
+      : []),
     {
       label: "移除列",
       icon: Io5Trash,
@@ -671,29 +667,21 @@ function palette(): Palette {
   };
 }
 
-function roundedRect(
-  ctx: CanvasRenderingContext2D,
-  rect: Rect,
-  radius: number,
-): void {
+function roundedRect(ctx: CanvasRenderingContext2D, rect: Rect, radius: number): void {
   const r = Math.min(radius, rect.width / 2, rect.height / 2);
   ctx.beginPath();
   ctx.moveTo(rect.x + r, rect.y);
   ctx.arcTo(rect.x + rect.width, rect.y, rect.x + rect.width, rect.y + rect.height, r);
-  ctx.arcTo(
-    rect.x + rect.width,
-    rect.y + rect.height,
-    rect.x,
-    rect.y + rect.height,
-    r,
-  );
+  ctx.arcTo(rect.x + rect.width, rect.y + rect.height, rect.x, rect.y + rect.height, r);
   ctx.arcTo(rect.x, rect.y + rect.height, rect.x, rect.y, r);
   ctx.arcTo(rect.x, rect.y, rect.x + rect.width, rect.y, r);
   ctx.closePath();
 }
 
 function pointInRect(x: number, y: number, rect: Rect | null): boolean {
-  return !!rect && x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+  return (
+    !!rect && x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height
+  );
 }
 
 function verticalThumb(targetLayout = layout.value): Rect | null {
@@ -701,19 +689,14 @@ function verticalThumb(targetLayout = layout.value): Rect | null {
   const contentHeight = rowIds.value.length * ROW_HEIGHT;
   const height = Math.min(
     targetLayout.bodyHeight,
-    Math.max(
-      MIN_THUMB_SIZE,
-      (targetLayout.bodyHeight * targetLayout.bodyHeight) / contentHeight,
-    ),
+    Math.max(MIN_THUMB_SIZE, (targetLayout.bodyHeight * targetLayout.bodyHeight) / contentHeight),
   );
   const travel = Math.max(0, targetLayout.bodyHeight - height);
   return {
     x: targetLayout.bodyWidth,
     y:
       HEADER_HEIGHT +
-      (targetLayout.maxScrollTop > 0
-        ? (scrollTop.value / targetLayout.maxScrollTop) * travel
-        : 0),
+      (targetLayout.maxScrollTop > 0 ? (scrollTop.value / targetLayout.maxScrollTop) * travel : 0),
     width: SCROLLBAR_SIZE,
     height,
   };
@@ -723,17 +706,12 @@ function horizontalThumb(targetLayout = layout.value): Rect | null {
   if (!targetLayout.horizontal || targetLayout.bodyWidth <= 0) return null;
   const width = Math.min(
     targetLayout.bodyWidth,
-    Math.max(
-      MIN_THUMB_SIZE,
-      (targetLayout.bodyWidth * targetLayout.bodyWidth) / totalWidth.value,
-    ),
+    Math.max(MIN_THUMB_SIZE, (targetLayout.bodyWidth * targetLayout.bodyWidth) / totalWidth.value),
   );
   const travel = Math.max(0, targetLayout.bodyWidth - width);
   return {
     x:
-      targetLayout.maxScrollLeft > 0
-        ? (scrollLeft.value / targetLayout.maxScrollLeft) * travel
-        : 0,
+      targetLayout.maxScrollLeft > 0 ? (scrollLeft.value / targetLayout.maxScrollLeft) * travel : 0,
     y: HEADER_HEIGHT + targetLayout.bodyHeight,
     width,
     height: SCROLLBAR_SIZE,
@@ -749,12 +727,7 @@ function setScrollOffsets(left: number, top: number, updateFollowing = true): vo
 }
 
 function fullyVisibleRange(ids = rowIds.value): { start: number; end: number } {
-  return fullyVisibleRowRange(
-    scrollTop.value,
-    layout.value.bodyHeight,
-    ROW_HEIGHT,
-    ids.length,
-  );
+  return fullyVisibleRowRange(scrollTop.value, layout.value.bodyHeight, ROW_HEIGHT, ids.length);
 }
 
 function maxIdFullyVisible(ids = rowIds.value): boolean {
@@ -783,11 +756,7 @@ function updateVisibilityState(): void {
 function scrollToMax(): void {
   unseenIds.value = new Set();
   following.value = true;
-  setScrollOffsets(
-    scrollLeft.value,
-    logsStore.sortDesc ? 0 : layout.value.maxScrollTop,
-    false,
-  );
+  setScrollOffsets(scrollLeft.value, logsStore.sortDesc ? 0 : layout.value.maxScrollTop, false);
 }
 
 function resetFollowState(): void {
@@ -799,10 +768,7 @@ function resetFollowState(): void {
 }
 
 watch(
-  [
-    () => logsStore.sessionId,
-    () => JSON.stringify(logsStore.appliedFilter),
-  ],
+  [() => logsStore.sessionId, () => JSON.stringify(logsStore.appliedFilter)],
   resetFollowState,
   { immediate: true, flush: "sync" },
 );
@@ -1068,11 +1034,7 @@ function drawRows(ctx: CanvasRenderingContext2D, colors: Palette): void {
   ctx.font = `12px ${colors.monoFont}`;
   ctx.textBaseline = "middle";
 
-  const start = clamp(
-    Math.floor(scrollTop.value / ROW_HEIGHT),
-    0,
-    rowIds.value.length,
-  );
+  const start = clamp(Math.floor(scrollTop.value / ROW_HEIGHT), 0, rowIds.value.length);
   const end = clamp(
     Math.ceil((scrollTop.value + targetLayout.bodyHeight) / ROW_HEIGHT) + 1,
     start,
@@ -1195,12 +1157,7 @@ function drawScrollbars(ctx: CanvasRenderingContext2D, colors: Palette): void {
 
   if (targetLayout.vertical) {
     ctx.fillStyle = colors.app;
-    ctx.fillRect(
-      targetLayout.bodyWidth,
-      HEADER_HEIGHT,
-      SCROLLBAR_SIZE,
-      targetLayout.bodyHeight,
-    );
+    ctx.fillRect(targetLayout.bodyWidth, HEADER_HEIGHT, SCROLLBAR_SIZE, targetLayout.bodyHeight);
   }
   if (vertical) {
     roundedRect(ctx, vertical, SCROLLBAR_SIZE / 2);
@@ -1314,9 +1271,7 @@ function hitTest(x: number, y: number): HitTarget | null {
     y >= HEADER_HEIGHT &&
     y <= HEADER_HEIGHT + targetLayout.bodyHeight
   ) {
-    return pointInRect(x, y, vertical)
-      ? { type: "vertical-thumb" }
-      : { type: "vertical-track" };
+    return pointInRect(x, y, vertical) ? { type: "vertical-thumb" } : { type: "vertical-track" };
   }
   const horizontal = horizontalThumb(targetLayout);
   if (
@@ -1354,9 +1309,7 @@ function hitTest(x: number, y: number): HitTarget | null {
     y < HEADER_HEIGHT + targetLayout.bodyHeight &&
     x < targetLayout.bodyWidth
   ) {
-    const rowIndex = Math.floor(
-      (scrollTop.value + y - HEADER_HEIGHT) / ROW_HEIGHT,
-    );
+    const rowIndex = Math.floor((scrollTop.value + y - HEADER_HEIGHT) / ROW_HEIGHT);
     if (rowIndex < 0 || rowIndex >= rowIds.value.length) return null;
     if (globalX < ID_COLUMN_WIDTH) return { type: "row", rowIndex, cellIndex: -1 };
     let columnX = ID_COLUMN_WIDTH;
@@ -1396,10 +1349,7 @@ function onPointerMove(event: PointerEvent): void {
       panState.moved = true;
     }
     if (panState.moved) {
-      setScrollOffsets(
-        panState.scrollStartLeft - dx,
-        panState.scrollStartTop - dy,
-      );
+      setScrollOffsets(panState.scrollStartLeft - dx, panState.scrollStartTop - dy);
     }
     return;
   }
@@ -1409,9 +1359,7 @@ function onPointerMove(event: PointerEvent): void {
     const delta = pointer - dragState.pointerStart;
     const scroll =
       dragState.scrollStart +
-      (dragState.thumbRange > 0
-        ? (delta / dragState.thumbRange) * dragState.scrollRange
-        : 0);
+      (dragState.thumbRange > 0 ? (delta / dragState.thumbRange) * dragState.scrollRange : 0);
     setScrollOffsets(
       dragState.axis === "x" ? scroll : scrollLeft.value,
       dragState.axis === "y" ? scroll : scrollTop.value,
@@ -1433,11 +1381,7 @@ function onPointerLeave(): void {
   scheduleDraw();
 }
 
-function beginScrollbarDrag(
-  axis: "x" | "y",
-  event: PointerEvent,
-  thumb: Rect,
-): void {
+function beginScrollbarDrag(axis: "x" | "y", event: PointerEvent, thumb: Rect): void {
   const targetLayout = layout.value;
   const point = canvasPoint(event);
   dragState = {
@@ -1446,9 +1390,7 @@ function beginScrollbarDrag(
     scrollStart: axis === "x" ? scrollLeft.value : scrollTop.value,
     scrollRange: axis === "x" ? targetLayout.maxScrollLeft : targetLayout.maxScrollTop,
     thumbRange:
-      axis === "x"
-        ? targetLayout.bodyWidth - thumb.width
-        : targetLayout.bodyHeight - thumb.height,
+      axis === "x" ? targetLayout.bodyWidth - thumb.width : targetLayout.bodyHeight - thumb.height,
     pointerId: event.pointerId,
   };
   capturedPointerId = event.pointerId;
@@ -1464,10 +1406,7 @@ function jumpScrollbar(axis: "x" | "y", event: PointerEvent, thumb: Rect): void 
     setScrollOffsets(targetLayout.maxScrollLeft * ratio, scrollTop.value);
   } else {
     const travel = targetLayout.bodyHeight - thumb.height;
-    const ratio =
-      travel > 0
-        ? (point.y - HEADER_HEIGHT - thumb.height / 2) / travel
-        : 0;
+    const ratio = travel > 0 ? (point.y - HEADER_HEIGHT - thumb.height / 2) / travel : 0;
     setScrollOffsets(scrollLeft.value, targetLayout.maxScrollTop * ratio);
   }
 }
@@ -1479,10 +1418,7 @@ function onPointerDown(event: PointerEvent): void {
   if (
     event.pointerType === "touch" &&
     !panState &&
-    (!hit ||
-      (hit.type !== "resize" &&
-        !hit.type.endsWith("thumb") &&
-        !hit.type.endsWith("track")))
+    (!hit || (hit.type !== "resize" && !hit.type.endsWith("thumb") && !hit.type.endsWith("track")))
   ) {
     panState = {
       pointerId: event.pointerId,
@@ -1610,11 +1546,7 @@ function onWheel(event: WheelEvent): void {
 
 watchEffect(() => {
   const targetLayout = layout.value;
-  const start = clamp(
-    Math.floor(scrollTop.value / ROW_HEIGHT),
-    0,
-    rowIds.value.length,
-  );
+  const start = clamp(Math.floor(scrollTop.value / ROW_HEIGHT), 0, rowIds.value.length);
   const end = clamp(
     Math.ceil((scrollTop.value + targetLayout.bodyHeight) / ROW_HEIGHT) + 1,
     start,

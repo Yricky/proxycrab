@@ -119,10 +119,8 @@ export function createHttpBackend(
   token: string,
   bootstrap: CliBootstrap,
 ): Backend {
-  const call = <T>(path: string, init?: RequestInit) =>
-    request<T>(baseUrl, token, path, init);
-  const scriptPath = (scope: string, name: string) =>
-    `/api/${scope}/${encodeURIComponent(name)}`;
+  const call = <T>(path: string, init?: RequestInit) => request<T>(baseUrl, token, path, init);
+  const scriptPath = (scope: string, name: string) => `/api/${scope}/${encodeURIComponent(name)}`;
 
   return {
     fetchBody: (target, side, maxSize) =>
@@ -146,7 +144,9 @@ export function createHttpBackend(
         }
       };
       void poll();
-      return () => { stopped = true; };
+      return () => {
+        stopped = true;
+      };
     },
     subscribeApprovalChanges: async () => () => undefined,
     openExternal: async (url) => {
@@ -184,10 +184,8 @@ export function createHttpBackend(
     updateSession: (id: number, requestValue: UpdateSessionRequest) =>
       call(`/api/sessions/${id}`, json("PUT", requestValue)),
     archiveSession: (id: number) => call(`/api/sessions/${id}/archive`, json("POST")),
-    restoreSession: (id: number) =>
-      call(`/api/archived-sessions/${id}/restore`, json("POST")),
-    deleteArchivedSession: (id: number) =>
-      call(`/api/archived-sessions/${id}`, json("DELETE")),
+    restoreSession: (id: number) => call(`/api/archived-sessions/${id}/restore`, json("POST")),
+    deleteArchivedSession: (id: number) => call(`/api/archived-sessions/${id}`, json("DELETE")),
     replaceActiveSession: (active: ActiveSession) =>
       call("/api/active-session", json("PUT", active)),
     getSessionShare: (sessionId: number) =>
@@ -198,25 +196,14 @@ export function createHttpBackend(
         json("POST", { session_id: sessionId, redaction_script: redactionScript }),
       ),
     disableSessionShare: (sessionId: number) =>
-      call<SessionShareState>(
-        `/api/session-shares/${sessionId}`,
-        json("DELETE"),
-      ),
-    getHarShare: (sessionId: number) =>
-      call<HarShareState>(`/api/session-har-shares/${sessionId}`),
+      call<SessionShareState>(`/api/session-shares/${sessionId}`, json("DELETE")),
+    getHarShare: (sessionId: number) => call<HarShareState>(`/api/session-har-shares/${sessionId}`),
     enableHarShare: (requestValue: EnableHarShareRequest) =>
-      call<HarShareState>(
-        "/api/session-har-shares",
-        json("POST", requestValue),
-      ),
+      call<HarShareState>("/api/session-har-shares", json("POST", requestValue)),
     disableHarShare: (sessionId: number) =>
-      call<HarShareState>(
-        `/api/session-har-shares/${sessionId}`,
-        json("DELETE"),
-      ),
+      call<HarShareState>(`/api/session-har-shares/${sessionId}`, json("DELETE")),
 
-    getLogIds: (requestValue: LogIdsRequest) =>
-      call("/api/logs/ids", json("POST", requestValue)),
+    getLogIds: (requestValue: LogIdsRequest) => call("/api/logs/ids", json("POST", requestValue)),
     getLogViews: (requestValue: LogViewsRequest) =>
       call("/api/logs/views", json("POST", requestValue)),
     validateFilterRegex: (pattern: string) =>
@@ -270,8 +257,7 @@ export function createHttpBackend(
     getBreakpoint: (id: number) => call(`/api/breakpoints/${id}`),
     extendBreakpoint: (id: number, requestValue: ExtendBreakpointRequest) =>
       call(`/api/breakpoints/${id}/extend`, json("POST", requestValue)),
-    releaseBreakpoint: (id: number) =>
-      call(`/api/breakpoints/${id}/release`, json("POST")),
+    releaseBreakpoint: (id: number) => call(`/api/breakpoints/${id}/release`, json("POST")),
     executeBreakpointScript: (id: number, requestValue: ExecuteTemporaryScriptRequest) =>
       call(`/api/breakpoints/${id}/execute`, json("POST", requestValue)),
     getSessionView: (sessionId: number | null) =>
@@ -284,11 +270,24 @@ export function createHttpBackend(
     listRedactionScripts: () => call("/api/redaction-scripts"),
     getRedactionScript: (name) => call(scriptPath("redaction-scripts", name)),
     createRedactionScript: (request) => call("/api/redaction-scripts", json("POST", request)),
-    updateRedactionScript: (name, request) => call(scriptPath("redaction-scripts", name), json("PUT", request)),
+    updateRedactionScript: (name, request) =>
+      call(scriptPath("redaction-scripts", name), json("PUT", request)),
     deleteRedactionScript: (name) => call(scriptPath("redaction-scripts", name), json("DELETE")),
-    setHttpIdentityRedaction: (id, redactionScript) => call(`/ui-api/permissions/identities/${encodeURIComponent(id)}/redaction`, json("PUT", { redaction_script: redactionScript })),
-    setSessionShareRedaction: (id, redactionScript) => call(`/api/session-shares/${id}/redaction`, json("PUT", { redaction_script: redactionScript })),
-    setHarShareRedaction: (id, redactionScript) => call(`/api/session-har-shares/${id}/redaction`, json("PUT", { redaction_script: redactionScript })),
+    setHttpIdentityRedaction: (id, redactionScript) =>
+      call(
+        `/ui-api/permissions/identities/${encodeURIComponent(id)}/redaction`,
+        json("PUT", { redaction_script: redactionScript }),
+      ),
+    setSessionShareRedaction: (id, redactionScript) =>
+      call(
+        `/api/session-shares/${id}/redaction`,
+        json("PUT", { redaction_script: redactionScript }),
+      ),
+    setHarShareRedaction: (id, redactionScript) =>
+      call(
+        `/api/session-har-shares/${id}/redaction`,
+        json("PUT", { redaction_script: redactionScript }),
+      ),
 
     listColumnScripts: () => call("/api/column-scripts"),
     createColumnScript: (requestValue: ScriptRequest) =>
@@ -296,8 +295,7 @@ export function createHttpBackend(
     getColumnScript: (name: string) => call(scriptPath("column-scripts", name)),
     updateColumnScript: (name: string, requestValue: UpdateScriptRequest) =>
       call(scriptPath("column-scripts", name), json("PUT", requestValue)),
-    deleteColumnScript: (name: string) =>
-      call(scriptPath("column-scripts", name), json("DELETE")),
+    deleteColumnScript: (name: string) => call(scriptPath("column-scripts", name), json("DELETE")),
 
     listFilterScripts: () => call("/api/filter-scripts"),
     createFilterScript: (requestValue: ScriptRequest) =>
@@ -305,8 +303,7 @@ export function createHttpBackend(
     getFilterScript: (name: string) => call(scriptPath("filter-scripts", name)),
     updateFilterScript: (name: string, requestValue: UpdateScriptRequest) =>
       call(scriptPath("filter-scripts", name), json("PUT", requestValue)),
-    deleteFilterScript: (name: string) =>
-      call(scriptPath("filter-scripts", name), json("DELETE")),
+    deleteFilterScript: (name: string) => call(scriptPath("filter-scripts", name), json("DELETE")),
     debugFilterScript: (name: string, requestValue: DebugFilterScriptRequest) =>
       call(`${scriptPath("filter-scripts", name)}/debug`, json("POST", requestValue)),
 
@@ -322,8 +319,7 @@ export function createHttpBackend(
     replaceRoutingSelection: (selection: RoutingSelection) =>
       call("/api/routing-script-selection", json("PUT", selection)),
 
-    listInterceptors: (kind: InterceptorKind) =>
-      call(query("/api/interceptors", { kind })),
+    listInterceptors: (kind: InterceptorKind) => call(query("/api/interceptors", { kind })),
     createInterceptor: (requestValue: InterceptorCreateRequest) =>
       call("/api/interceptors", json("POST", requestValue)),
     getInterceptor: (kind: InterceptorKind, name: string) =>
@@ -340,10 +336,11 @@ export function createHttpBackend(
     replaceSessionInterceptors: (
       sessionId: number | null,
       requestValue: ReplaceSessionInterceptorsRequest,
-    ) => call(
-      query("/api/session-interceptors", { session_id: sessionId }),
-      json("PUT", requestValue),
-    ),
+    ) =>
+      call(
+        query("/api/session-interceptors", { session_id: sessionId }),
+        json("PUT", requestValue),
+      ),
 
     getCertificate: () => call("/api/ca"),
     clashSubscription: {
@@ -362,8 +359,7 @@ export function createHttpBackend(
     getBypassEntries: (requestValue: BypassQuery) =>
       call(query("/api/bypass", requestValue as unknown as Record<string, unknown>)),
     deleteBypassEntry: (id: number) => call(`/api/bypass/${id}`, json("DELETE")),
-    deleteBypassEntries: (ids: number[]) =>
-      call("/api/bypass/delete", json("POST", { ids })),
+    deleteBypassEntries: (ids: number[]) => call("/api/bypass/delete", json("POST", { ids })),
     clearBypassEntries: () => call("/api/bypass", json("DELETE")),
 
     getHttpServiceError: async () => bootstrap.http_service.error,

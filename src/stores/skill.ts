@@ -9,8 +9,7 @@ export const skillStore = reactive({
   get warning(): boolean {
     const state = this.state;
     return Boolean(
-      state &&
-        (!state.configured || state.config_error || state.paths.some((path) => path.error)),
+      state && (!state.configured || state.config_error || state.paths.some((path) => path.error)),
     );
   },
 

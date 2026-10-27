@@ -8,8 +8,9 @@ export function setNativeClipboardWriter(writer: ClipboardWriter | undefined): v
 
 export async function copyText(
   value: string,
-  clipboard: Pick<Clipboard, "writeText"> | undefined =
-    typeof navigator === "undefined" ? undefined : navigator.clipboard,
+  clipboard: Pick<Clipboard, "writeText"> | undefined = typeof navigator === "undefined"
+    ? undefined
+    : navigator.clipboard,
   documentRef: Document | undefined = typeof document === "undefined" ? undefined : document,
 ): Promise<void> {
   if (nativeClipboardWriter) {

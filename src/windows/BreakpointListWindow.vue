@@ -62,9 +62,7 @@ async function releaseAll(): Promise<void> {
       snapshot.map((item) => backend.releaseBreakpoint(item.id)),
     );
     const released = new Set(
-      snapshot
-        .filter((_, index) => results[index]?.status === "fulfilled")
-        .map((item) => item.id),
+      snapshot.filter((_, index) => results[index]?.status === "fulfilled").map((item) => item.id),
     );
     removeReleased(released);
     const failed = snapshot.length - released.size;
@@ -131,20 +129,93 @@ onMounted(() => void breakpointsStore.refresh());
 </template>
 
 <style scoped>
-.breakpoint-list { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.list-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 8px 8px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
-.list-head div { display: flex; align-items: baseline; gap: 8px; }
-.list-head span, .count { color: var(--text-secondary); font-size: 11px; }
-.list-head .list-actions { align-items: center; }
-.release-all, .release-one { min-height: 24px; padding: 2px 9px; font-size: 11px; }
-.rows { flex: 1; min-height: 0; overflow: auto; padding: 8px; }
-.row { width: 100%; display: grid; grid-template-columns: 64px minmax(0, 1fr) 42px 64px auto; align-items: center; gap: 8px; border: 0; border-radius: var(--radius-md); padding: 6px 8px 6px 10px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
-.row:hover { background: var(--bg-hover); }
-.row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
-.method { color: var(--warning); font-weight: 700; }
-.uri { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.position { color: var(--text-faint); font-size: 11px; }
-.remaining { color: var(--warning); font-size: 11px; text-align: right; }
-.release-one { justify-self: end; }
-.empty { flex: 1; display: grid; place-items: center; color: var(--text-faint); font-size: 12px; }
+.breakpoint-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.list-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.list-head div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.list-head span,
+.count {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.list-head .list-actions {
+  align-items: center;
+}
+.release-all,
+.release-one {
+  min-height: 24px;
+  padding: 2px 9px;
+  font-size: 11px;
+}
+.rows {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+.row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 42px 64px auto;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  padding: 6px 8px 6px 10px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.row:hover {
+  background: var(--bg-hover);
+}
+.row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.method {
+  color: var(--warning);
+  font-weight: 700;
+}
+.uri {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.position {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.remaining {
+  color: var(--warning);
+  font-size: 11px;
+  text-align: right;
+}
+.release-one {
+  justify-self: end;
+}
+.empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  font-size: 12px;
+}
 </style>

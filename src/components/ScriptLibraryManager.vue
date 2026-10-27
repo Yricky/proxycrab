@@ -205,7 +205,7 @@ async function confirmDiscard(): Promise<boolean> {
   if (!dirty.value) return true;
   return confirmDialog({
     title: "放弃未保存更改",
-    message: `${config.sidebarTitle}「${selectedScript.value ? scriptTitle(selectedScript.value) : selectedName.value ?? ""}」包含未保存的更改，确定放弃吗？`,
+    message: `${config.sidebarTitle}「${selectedScript.value ? scriptTitle(selectedScript.value) : (selectedName.value ?? "")}」包含未保存的更改，确定放弃吗？`,
     confirmText: "放弃",
     danger: true,
   });
@@ -407,10 +407,9 @@ onBeforeUnmount(() => {
           @click="selectScript(script)"
         >
           <span class="slm-script-name mono" :title="scriptTitle(script)">{{ script.name }}</span>
-          <span
-            v-if="config.selection && activeName === script.name"
-            class="slm-active"
-          >生效中</span>
+          <span v-if="config.selection && activeName === script.name" class="slm-active"
+            >生效中</span
+          >
           <span class="slm-row-actions">
             <button class="btn icon danger" title="删除" @click.stop="removeScript(script)">
               <Io5Trash :size="14" />
@@ -427,7 +426,9 @@ onBeforeUnmount(() => {
       </div>
       <template v-if="selectedScript">
         <div class="slm-editor-toolbar">
-          <span class="slm-current-name mono" :title="scriptTitle(selectedScript)">{{ scriptLabel(selectedScript) }}</span>
+          <span class="slm-current-name mono" :title="scriptTitle(selectedScript)">{{
+            scriptLabel(selectedScript)
+          }}</span>
           <span v-if="usageBadge" class="slm-usage">{{ usageBadge }}</span>
           <span v-if="dirty" class="slm-dirty">未保存</span>
           <span

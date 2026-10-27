@@ -61,11 +61,7 @@ function isManagerError(value: unknown): value is ManagerError {
   );
 }
 
-async function call<T>(
-  command: string,
-  args?: InvokeArgs,
-  options?: InvokeOptions,
-): Promise<T> {
+async function call<T>(command: string, args?: InvokeArgs, options?: InvokeOptions): Promise<T> {
   try {
     return await invoke<T>(command, args, options);
   } catch (error) {
@@ -115,8 +111,7 @@ export function createTauriBackend(): Backend {
       call("save_file", request.data, {
         headers: { "x-proxycrab-filename": encodeURIComponent(request.filename) },
       }),
-    downloadBody: (target, side, filename) =>
-      call("download_body", { target, side, filename }),
+    downloadBody: (target, side, filename) => call("download_body", { target, side, filename }),
 
     getWorkspace: () => call("get_workspace"),
     getConfig: () => call("get_config"),
@@ -142,27 +137,22 @@ export function createTauriBackend(): Backend {
     archiveSession: (id: number) => call("archive_session", { id }),
     restoreSession: (id: number) => call("restore_session", { id }),
     deleteArchivedSession: (id: number) => call("delete_archived_session", { id }),
-    replaceActiveSession: (active: ActiveSession) =>
-      call("replace_active_session", { active }),
+    replaceActiveSession: (active: ActiveSession) => call("replace_active_session", { active }),
     getSessionShare: (sessionId: number) =>
       call<SessionShareState>("get_session_share", { sessionId }),
     enableSessionShare: (sessionId: number, redactionScript?: string | null) =>
       call<SessionShareState>("enable_session_share", { sessionId, redactionScript }),
     disableSessionShare: (sessionId: number) =>
       call<SessionShareState>("disable_session_share", { sessionId }),
-    getHarShare: (sessionId: number) =>
-      call<HarShareState>("get_har_share", { sessionId }),
+    getHarShare: (sessionId: number) => call<HarShareState>("get_har_share", { sessionId }),
     enableHarShare: (request: EnableHarShareRequest) =>
       call<HarShareState>("enable_har_share", { request }),
-    disableHarShare: (sessionId: number) =>
-      call<HarShareState>("disable_har_share", { sessionId }),
+    disableHarShare: (sessionId: number) => call<HarShareState>("disable_har_share", { sessionId }),
 
     getLogIds: (request: LogIdsRequest) => call("get_log_ids", { request }),
     getLogViews: (request: LogViewsRequest) => call("get_log_views", { request }),
-    validateFilterRegex: (pattern: string) =>
-      call("validate_filter_regex", { pattern }),
-    getLog: (sessionId: number | null, id: number) =>
-      call<LogDetail>("get_log", { sessionId, id }),
+    validateFilterRegex: (pattern: string) => call("validate_filter_regex", { pattern }),
+    getLog: (sessionId: number | null, id: number) => call<LogDetail>("get_log", { sessionId, id }),
     replay: (sessionId: number, request: ReplayRequestPayload) =>
       call<ReplayResult>("replay", { sessionId, request }),
     listAssets: () => call<AssetMetadata[]>("list_assets"),
@@ -181,8 +171,7 @@ export function createTauriBackend(): Backend {
     releaseBreakpoint: (id: number) => call("release_breakpoint", { id }),
     executeBreakpointScript: (id: number, request: ExecuteTemporaryScriptRequest) =>
       call("execute_breakpoint_script", { id, request }),
-    getSessionView: (sessionId: number | null) =>
-      call("get_session_view", { sessionId }),
+    getSessionView: (sessionId: number | null) => call("get_session_view", { sessionId }),
     replaceSessionView: (sessionId: number | null, request: ReplaceSessionViewRequest) =>
       call("replace_session_view", { sessionId, request }),
     replaceSessionFilter: (sessionId, filter) =>
@@ -193,9 +182,12 @@ export function createTauriBackend(): Backend {
     createRedactionScript: (request) => call("create_redaction_script", { request }),
     updateRedactionScript: (name, request) => call("update_redaction_script", { name, request }),
     deleteRedactionScript: (name) => call("delete_redaction_script", { name }),
-    setHttpIdentityRedaction: (id, redactionScript) => call("set_http_identity_redaction", { id, redactionScript }),
-    setSessionShareRedaction: (sessionId, redactionScript) => call("set_session_share_redaction", { sessionId, redactionScript }),
-    setHarShareRedaction: (sessionId, redactionScript) => call("set_har_share_redaction", { sessionId, redactionScript }),
+    setHttpIdentityRedaction: (id, redactionScript) =>
+      call("set_http_identity_redaction", { id, redactionScript }),
+    setSessionShareRedaction: (sessionId, redactionScript) =>
+      call("set_session_share_redaction", { sessionId, redactionScript }),
+    setHarShareRedaction: (sessionId, redactionScript) =>
+      call("set_har_share_redaction", { sessionId, redactionScript }),
 
     listColumnScripts: () => call("list_column_scripts"),
     createColumnScript: (request: ScriptRequest) => call("create_column_script", { request }),
@@ -214,8 +206,7 @@ export function createTauriBackend(): Backend {
       call("debug_filter_script", { name, request }),
 
     listRoutingScripts: () => call("list_routing_scripts"),
-    createRoutingScript: (request: ScriptRequest) =>
-      call("create_routing_script", { request }),
+    createRoutingScript: (request: ScriptRequest) => call("create_routing_script", { request }),
     getRoutingScript: (name: string) => call("get_routing_script", { name }),
     updateRoutingScript: (name: string, request: UpdateScriptRequest) =>
       call("update_routing_script", { name, request }),
@@ -262,20 +253,17 @@ export function createTauriBackend(): Backend {
 
     getHttpServiceError: () => call("get_http_service_error"),
     getHttpServiceStatus: () => call<HttpServiceStatus>("get_http_service_status"),
-    getHttpPermissionCatalog: () =>
-      call<ApiActionView[]>("get_http_permission_catalog"),
+    getHttpPermissionCatalog: () => call<ApiActionView[]>("get_http_permission_catalog"),
     listHttpPermissionIdentities: () =>
       call<PermissionIdentitySummary[]>("list_http_permission_identities"),
     getHttpIdentityPermissions: (id: string) =>
       call<IdentityPermissions>("get_http_identity_permissions", { id }),
     replaceHttpIdentityPermissions: (id: string, permissions: PermissionEntry[]) =>
       call<IdentityPermissions>("replace_http_identity_permissions", { id, permissions }),
-    createHttpApiKey: (name: string) =>
-      call<CreatedApiKey>("create_http_api_key", { name }),
+    createHttpApiKey: (name: string) => call<CreatedApiKey>("create_http_api_key", { name }),
     deleteHttpApiKey: (id: string) => call("delete_http_api_key", { id }),
     listHttpApprovals: () => call<PendingApproval[]>("list_http_approvals"),
     resolveHttpApproval: (id: number, request: ResolveApprovalRequest) =>
       call("resolve_http_approval", { id, request }),
-
   };
 }

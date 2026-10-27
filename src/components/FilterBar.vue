@@ -33,11 +33,7 @@ import {
   setGroupDelimiter,
   toggleGroupExpanded,
 } from "../stores/column-groups";
-import {
-  buildGroupRows,
-  type ColumnGroupRow,
-  type ColumnGroupSort,
-} from "../utils/column-groups";
+import { buildGroupRows, type ColumnGroupRow, type ColumnGroupSort } from "../utils/column-groups";
 
 interface BuiltinColumnChoice {
   kind: Exclude<FilterColumn["kind"], "script">;
@@ -80,19 +76,16 @@ const regexError = ref<string | null>(null);
 const regexValidating = ref(false);
 let validationSequence = 0;
 
-const filterActive = computed(
-  () => props.filter.option !== null && props.filter.input.length > 0,
-);
-const dirty = computed(
-  () => JSON.stringify(draft.value) !== JSON.stringify(props.filter),
-);
+const filterActive = computed(() => props.filter.option !== null && props.filter.input.length > 0);
+const dirty = computed(() => JSON.stringify(draft.value) !== JSON.stringify(props.filter));
 const selectedColumn = computed(() =>
   draft.value.option?.kind === "column" ? draft.value.option.column : null,
 );
 const targetLabel = computed(() => {
   const option = draft.value.option;
   if (!option) return "未选择";
-  if (option.kind === "script") return `过滤脚本 · ${scriptLabelFor(filterScripts.value, option.script_name)}`;
+  if (option.kind === "script")
+    return `过滤脚本 · ${scriptLabelFor(filterScripts.value, option.script_name)}`;
   if (option.column.kind === "script") {
     return `自定义列 · ${scriptLabelFor(columnScripts.value, option.column.script_name)}`;
   }
@@ -139,8 +132,7 @@ watch(
 
 watch(
   () => ({
-    enabled:
-      draft.value.option?.kind === "column" && draft.value.option.regex,
+    enabled: draft.value.option?.kind === "column" && draft.value.option.regex,
     input: draft.value.input,
   }),
   async ({ enabled, input }) => {
@@ -181,8 +173,7 @@ async function refreshScripts(): Promise<void> {
 }
 
 async function refreshAfterScriptChange(): Promise<void> {
-  const reopenGroups =
-    groupOpen.value && selectedColumn.value?.kind === "script";
+  const reopenGroups = groupOpen.value && selectedColumn.value?.kind === "script";
   if (reopenGroups) closeGroupPopup();
   invalidateScriptColumnGroups();
   await refreshScripts();
@@ -386,11 +377,7 @@ onBeforeUnmount(() => {
           <div class="fb-section-heading">
             <span>列</span>
             <label class="fb-regex" @click.stop>
-              <input
-                type="checkbox"
-                :checked="columnRegex"
-                @change="setRegex"
-              />
+              <input type="checkbox" :checked="columnRegex" @change="setRegex" />
               <span>正则表达式</span>
             </label>
           </div>
@@ -415,18 +402,16 @@ onBeforeUnmount(() => {
             class="fb-option"
             :class="{
               selected:
-                selectedColumn?.kind === 'script' &&
-                selectedColumn.script_name === script.name,
+                selectedColumn?.kind === 'script' && selectedColumn.script_name === script.name,
             }"
             @click="selectColumn({ kind: 'script', script_name: script.name })"
           >
             <Io5CodeSlash :size="13" class="fb-option-icon" />
-            <span class="fb-option-name" :title="scriptTitle(script)">{{ scriptLabel(script) }}</span>
+            <span class="fb-option-name" :title="scriptTitle(script)">{{
+              scriptLabel(script)
+            }}</span>
             <Io5Checkmark
-              v-if="
-                selectedColumn?.kind === 'script' &&
-                selectedColumn.script_name === script.name
-              "
+              v-if="selectedColumn?.kind === 'script' && selectedColumn.script_name === script.name"
               :size="13"
               class="fb-option-check"
             />
@@ -441,19 +426,16 @@ onBeforeUnmount(() => {
             :key="`filter:${script.name}`"
             class="fb-option"
             :class="{
-              selected:
-                draft.option?.kind === 'script' &&
-                draft.option.script_name === script.name,
+              selected: draft.option?.kind === 'script' && draft.option.script_name === script.name,
             }"
             @click="selectFilterScript(script.name)"
           >
             <Io5CodeSlash :size="13" class="fb-option-icon" />
-            <span class="fb-option-name" :title="scriptTitle(script)">{{ scriptLabel(script) }}</span>
+            <span class="fb-option-name" :title="scriptTitle(script)">{{
+              scriptLabel(script)
+            }}</span>
             <Io5Checkmark
-              v-if="
-                draft.option?.kind === 'script' &&
-                draft.option.script_name === script.name
-              "
+              v-if="draft.option?.kind === 'script' && draft.option.script_name === script.name"
               :size="13"
               class="fb-option-check"
             />
@@ -489,12 +471,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="fb-input-wrap">
-      <Io5AlertCircle
-        v-if="regexError"
-        :size="15"
-        class="fb-regex-error"
-        :title="regexError"
-      />
+      <Io5AlertCircle v-if="regexError" :size="15" class="fb-regex-error" :title="regexError" />
       <Io5ReturnDownBack
         v-else-if="dirty && draft.option && !applying"
         :size="15"

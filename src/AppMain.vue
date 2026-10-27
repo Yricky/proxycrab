@@ -45,24 +45,16 @@ function syncCapturePolling(): void {
   }
 }
 
-watch(
-  [
-    () => proxyStore.running,
-    () => sessionsStore.activeSessionId,
-    () => logs.sessionId,
-  ],
-  () => {
-    syncCapturePolling();
-  },
-);
+watch([() => proxyStore.running, () => sessionsStore.activeSessionId, () => logs.sessionId], () => {
+  syncCapturePolling();
+});
 
 // 正在查看的会话失效（被归档/删除）时，回落到活跃会话，再不行取第一个。
 watch(
   () => sessionsStore.sessions,
   (sessions) => {
     if (logs.sessionId !== null && sessions.some((s) => s.id === logs.sessionId)) return;
-    const fallback =
-      sessions.find((s) => s.id === sessionsStore.activeSessionId) ?? sessions[0];
+    const fallback = sessions.find((s) => s.id === sessionsStore.activeSessionId) ?? sessions[0];
     logs.view(fallback?.id ?? null);
   },
   { deep: true },

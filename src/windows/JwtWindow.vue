@@ -50,7 +50,9 @@ function prettyJson(value: unknown, fallback: string): string {
 }
 
 const headerView = computed(() => prettyJson(decoded.value.headerJson, decoded.value.headerText));
-const payloadView = computed(() => prettyJson(decoded.value.payloadJson, decoded.value.payloadText));
+const payloadView = computed(() =>
+  prettyJson(decoded.value.payloadJson, decoded.value.payloadText),
+);
 
 // 编辑器内容经 ref 同步：用户编辑回写令牌时跳过一次回声，避免重排版式打断输入
 const headerEditorText = ref("");
@@ -336,39 +338,66 @@ async function copy(key: string, value: string): Promise<void> {
             <span class="jwt-label jwt-sec-title">Header</span>
             <span v-if="decoded.alg" class="jwt-alg-tag">{{ decoded.alg }}</span>
             <span class="jwt-spacer" />
-            <button class="btn icon" title="复制解码后的 Header" @click="copy('header', headerView)">
+            <button
+              class="btn icon"
+              title="复制解码后的 Header"
+              @click="copy('header', headerView)"
+            >
               <Io5Checkmark v-if="copiedKey === 'header'" :size="12" class="text-success" />
               <Io5Copy v-else :size="12" />
             </button>
           </div>
           <div v-if="decoded.ok" class="jwt-editor">
-            <MonacoEditor :model-value="headerEditorText" language="json" :options="editorOptions"
-              @update:model-value="onHeaderEdit" />
+            <MonacoEditor
+              :model-value="headerEditorText"
+              language="json"
+              :options="editorOptions"
+              @update:model-value="onHeaderEdit"
+            />
           </div>
           <div v-else class="jwt-empty text-faint">粘贴令牌后自动解码</div>
-          <div v-if="headerEditError" class="jwt-edit-error text-warning">{{ headerEditError }}</div>
+          <div v-if="headerEditError" class="jwt-edit-error text-warning">
+            {{ headerEditError }}
+          </div>
         </section>
 
         <section class="jwt-sec jwt-sec-payload">
           <div class="jwt-head">
             <span class="jwt-label jwt-sec-title">Payload</span>
             <div v-if="claimChips.length" class="jwt-claims">
-              <span v-for="c in claimChips" :key="c.key" class="jwt-claim" :class="c.cls" :title="c.title">
-                <span class="jc-key mono">{{ c.key }}</span>{{ c.text }}
+              <span
+                v-for="c in claimChips"
+                :key="c.key"
+                class="jwt-claim"
+                :class="c.cls"
+                :title="c.title"
+              >
+                <span class="jc-key mono">{{ c.key }}</span
+                >{{ c.text }}
               </span>
             </div>
             <span class="jwt-spacer" />
-            <button class="btn icon" title="复制解码后的 Payload" @click="copy('payload', payloadView)">
+            <button
+              class="btn icon"
+              title="复制解码后的 Payload"
+              @click="copy('payload', payloadView)"
+            >
               <Io5Checkmark v-if="copiedKey === 'payload'" :size="12" class="text-success" />
               <Io5Copy v-else :size="12" />
             </button>
           </div>
           <div v-if="decoded.ok" class="jwt-editor">
-            <MonacoEditor :model-value="payloadEditorText" language="json" :options="editorOptions"
-              @update:model-value="onPayloadEdit" />
+            <MonacoEditor
+              :model-value="payloadEditorText"
+              language="json"
+              :options="editorOptions"
+              @update:model-value="onPayloadEdit"
+            />
           </div>
           <div v-else class="jwt-empty text-faint">粘贴令牌后自动解码</div>
-          <div v-if="payloadEditError" class="jwt-edit-error text-warning">{{ payloadEditError }}</div>
+          <div v-if="payloadEditError" class="jwt-edit-error text-warning">
+            {{ payloadEditError }}
+          </div>
         </section>
 
         <section class="jwt-sec jwt-sec-sig">
@@ -378,12 +407,21 @@ async function copy(key: string, value: string): Promise<void> {
               <Io5CheckmarkCircle v-if="outcome?.status === 'verified'" :size="12" />
               <Io5CloseCircle v-else-if="outcome?.status === 'invalid'" :size="12" />
               <Io5Warning
-                v-else-if="outcome?.status === 'key-error' || outcome?.status === 'unsupported' || outcome?.status === 'unsecured'"
-                :size="15" />
+                v-else-if="
+                  outcome?.status === 'key-error' ||
+                  outcome?.status === 'unsupported' ||
+                  outcome?.status === 'unsecured'
+                "
+                :size="15"
+              />
               <span class="jwt-result-text">{{ resultText || "输入密钥后自动验证签名" }}</span>
             </div>
             <span class="jwt-spacer" />
-            <button class="btn icon" title="复制签名原文" @click="copy('signature', decoded.signatureRaw)">
+            <button
+              class="btn icon"
+              title="复制签名原文"
+              @click="copy('signature', decoded.signatureRaw)"
+            >
               <Io5Checkmark v-if="copiedKey === 'signature'" :size="12" class="text-success" />
               <Io5Copy v-else :size="12" />
             </button>
@@ -399,8 +437,15 @@ async function copy(key: string, value: string): Promise<void> {
               <div class="jf-line jf-indent">
                 base64UrlEncode(<span class="c-h">header</span>) + <span class="jf-dim">"."</span> +
               </div>
-              <div class="jf-line jf-indent">base64UrlEncode(<span class="c-p">payload</span>),</div>
-              <textarea v-model="keyText" class="jwt-key mono" :placeholder="keyPlaceholder" spellcheck="false" />
+              <div class="jf-line jf-indent">
+                base64UrlEncode(<span class="c-p">payload</span>),
+              </div>
+              <textarea
+                v-model="keyText"
+                class="jwt-key mono"
+                :placeholder="keyPlaceholder"
+                spellcheck="false"
+              />
               <div class="jf-line">)</div>
             </div>
             <label v-if="isHmac" class="jwt-b64 text-secondary">

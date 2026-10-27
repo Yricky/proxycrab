@@ -75,14 +75,21 @@ async function setRedaction(kind: "page" | "har", value: string | null): Promise
   const target = kind === "page" ? pageRedaction : harRedaction;
   const share = kind === "page" ? pageShare : harShare;
   const busy = kind === "page" ? pageMutating : harMutating;
-  if (!share.value?.enabled) { target.value = value; return; }
+  if (!share.value?.enabled) {
+    target.value = value;
+    return;
+  }
   busy.value = true;
   try {
-    if (kind === "page") pageShare.value = await backend.setSessionShareRedaction!(props.sessionId, value);
+    if (kind === "page")
+      pageShare.value = await backend.setSessionShareRedaction!(props.sessionId, value);
     else harShare.value = await backend.setHarShareRedaction!(props.sessionId, value);
     target.value = value;
-  } catch (error) { reportError(error, "保存脱敏脚本绑定失败"); }
-  finally { busy.value = false; }
+  } catch (error) {
+    reportError(error, "保存脱敏脚本绑定失败");
+  } finally {
+    busy.value = false;
+  }
 }
 
 async function togglePageShare(): Promise<void> {
@@ -225,7 +232,12 @@ onBeforeUnmount(() => {
         />
       </header>
 
-      <RedactionSelect v-if="backend.setSessionShareRedaction && backend.listRedactionScripts" :model-value="pageRedaction" :disabled="loading || pageMutating" @update:model-value="setRedaction('page', $event)" />
+      <RedactionSelect
+        v-if="backend.setSessionShareRedaction && backend.listRedactionScripts"
+        :model-value="pageRedaction"
+        :disabled="loading || pageMutating"
+        @update:model-value="setRedaction('page', $event)"
+      />
       <div v-if="loading && !pageShare" class="share-empty">正在读取分享状态…</div>
       <template v-else-if="pageShare?.enabled">
         <div v-if="pageLinks.length" class="share-links">
@@ -269,8 +281,12 @@ onBeforeUnmount(() => {
         />
       </header>
 
-      <RedactionSelect v-if="backend.setHarShareRedaction && backend.listRedactionScripts" :model-value="harRedaction" :disabled="loading || harMutating" @update:model-value="setRedaction('har', $event)" />
-      <div v-if="!harRedaction" class="har-warning" role="note">未绑定脱敏脚本，HAR 将包含原始请求和响应内容。</div>
+      <RedactionSelect
+        v-if="backend.setHarShareRedaction && backend.listRedactionScripts"
+        :model-value="harRedaction"
+        :disabled="loading || harMutating"
+        @update:model-value="setRedaction('har', $event)"
+      />
 
       <div v-if="loading && !harShare" class="share-empty">正在读取分享状态…</div>
       <template v-else-if="harShare?.enabled">
@@ -300,11 +316,7 @@ onBeforeUnmount(() => {
       </template>
       <template v-else>
         <div class="scope-picker" role="group" aria-label="HAR 分享范围">
-          <button
-            type="button"
-            :class="{ active: harScope === 'all' }"
-            @click="harScope = 'all'"
-          >
+          <button type="button" :class="{ active: harScope === 'all' }" @click="harScope = 'all'">
             全部结果
           </button>
           <button
@@ -407,15 +419,6 @@ onBeforeUnmount(() => {
   margin: 8px 0 0;
   color: var(--warning);
   font-size: 11px;
-}
-.har-warning {
-  margin-top: 14px;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--warning) 10%, transparent);
-  color: var(--warning);
-  font-size: 11px;
-  line-height: 1.5;
 }
 .snapshot-summary {
   margin: 14px 0 0;

@@ -43,8 +43,10 @@ export function bodyFilename(target: BodyTarget, side: BodySide, headers: Header
   const parameters = new Map<string, string>();
   const pattern = /;\s*([\w*]+)\s*=\s*(?:"((?:\\.|[^"\\])*)"|([^;]*))/g;
   for (const match of disposition.matchAll(pattern)) {
-    parameters.set(match[1].toLowerCase(), match[2] !== undefined
-      ? match[2].replace(/\\(.)/g, "$1") : match[3].trim());
+    parameters.set(
+      match[1].toLowerCase(),
+      match[2] !== undefined ? match[2].replace(/\\(.)/g, "$1") : match[3].trim(),
+    );
   }
   const encoded = parameters.get("filename*");
   if (encoded) {
@@ -53,14 +55,17 @@ export function bodyFilename(target: BodyTarget, side: BodySide, headers: Header
       try {
         const name = safeFilename(decodeURIComponent(match[1]));
         if (name) return name;
-      } catch { /* Fall back to filename or the capture identifier. */ }
+      } catch {
+        /* Fall back to filename or the capture identifier. */
+      }
     }
   }
   const name = safeFilename(parameters.get("filename") ?? "");
   if (name) return name;
   const media = header("content-type").split(";", 1)[0].trim().toLowerCase();
-  const extension = extensions[media]
-    ?? (media.endsWith("+json") ? "json" : media.endsWith("+xml") ? "xml" : "bin");
+  const extension =
+    extensions[media] ??
+    (media.endsWith("+json") ? "json" : media.endsWith("+xml") ? "xml" : "bin");
   const prefix = target.kind === "breakpoint" ? "breakpoint" : "log";
   const execution = target.kind === "interceptor" ? `-execution-${target.executionId}` : "";
   return `${prefix}-${target.id}${execution}-${side}.${extension}`;

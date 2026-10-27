@@ -41,9 +41,7 @@ onBeforeUnmount(() => observer?.disconnect());
 
 <template>
   <div ref="root" class="seg-url mono" :class="{ expanded }" :title="title">
-    <span v-for="(seg, i) in segments" :key="i" :class="seg.cls">{{
-      seg.text
-    }}</span>
+    <span v-for="(seg, i) in segments" :key="i" :class="seg.cls">{{ seg.text }}</span>
     <button
       v-if="overflows"
       class="seg-toggle"
@@ -84,8 +82,7 @@ onBeforeUnmount(() => observer?.disconnect());
 .seg-toggle:hover {
   border-color: var(--accent);
   /* --bg-selected 为半透明色，叠在实心底色上避免透出下层 URL 文字 */
-  background: linear-gradient(var(--bg-selected), var(--bg-selected)),
-    var(--bg-app);
+  background: linear-gradient(var(--bg-selected), var(--bg-selected)), var(--bg-app);
 }
 
 .seg-url.expanded .seg-toggle {

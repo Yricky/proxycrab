@@ -15,7 +15,7 @@ test("formatDateTimeWithZone includes the local GMT offset", () => {
   const hours = String(Math.floor(absoluteOffset / 60)).padStart(2, "0");
   const minutes = String(absoluteOffset % 60).padStart(2, "0");
 
-  expect(
-    formatDateTimeWithZone(local.getTime()),
-  ).toBe(`2026-08-31 14:30:25 GMT${sign}${hours}:${minutes}`);
+  expect(formatDateTimeWithZone(local.getTime())).toBe(
+    `2026-08-31 14:30:25 GMT${sign}${hours}:${minutes}`,
+  );
 });

@@ -30,11 +30,7 @@ withDefaults(
         <span
           v-if="active"
           class="session-item-active"
-          :title="
-            activeConnections > 0
-              ? `活跃会话，${activeConnections} 条活跃连接`
-              : '活跃会话'
-          "
+          :title="activeConnections > 0 ? `活跃会话，${activeConnections} 条活跃连接` : '活跃会话'"
         >
           <span v-if="activeConnections > 0" class="activity-badge session-item-badge">
             {{ formatActivityCount(activeConnections) }}
@@ -44,11 +40,7 @@ withDefaults(
       </div>
       <div class="session-item-meta">
         <span>{{ formatRelativeTime(session.created_at) }}</span>
-        <span
-          v-if="session.description"
-          class="session-item-desc"
-          :title="session.description"
-        >
+        <span v-if="session.description" class="session-item-desc" :title="session.description">
           {{ session.description }}
         </span>
       </div>

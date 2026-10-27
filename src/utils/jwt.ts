@@ -152,7 +152,10 @@ export function decodeToken(token: string): DecodedJwt {
   }
   const headerJson = tryJson(headerText);
   const payloadJson = tryJson(payloadText);
-  const alg = (headerJson && typeof headerJson === "object" ? (headerJson as { alg?: unknown }).alg : undefined) ?? "";
+  const alg =
+    (headerJson && typeof headerJson === "object"
+      ? (headerJson as { alg?: unknown }).alg
+      : undefined) ?? "";
   const unsecured = parts.length === 2 || String(alg) === "none";
   return {
     ok: true,
@@ -172,13 +175,7 @@ export function decodeToken(token: string): DecodedJwt {
 // ---------- 验签 ----------
 
 export type VerifyStatus =
-  | "verified"
-  | "invalid"
-  | "waiting"
-  | "key-error"
-  | "unsupported"
-  | "unsecured"
-  | "token-error";
+  "verified" | "invalid" | "waiting" | "key-error" | "unsupported" | "unsecured" | "token-error";
 
 export interface VerifyOutcome {
   status: VerifyStatus;
@@ -274,20 +271,40 @@ async function importJwkKey(alg: string, jwk: JsonWebKey): Promise<CryptoKey> {
   const hash = HASH_BY_ALG[alg] ?? "SHA-256";
   if (alg.startsWith("HS")) {
     if (jwk.kty !== "oct" || !jwk.k) throw new Error("HS 算法需要 kty=oct 的 JWK（含 k）");
-    return crypto.subtle.importKey("jwk", normalizeJwk(jwk, alg), { name: "HMAC", hash }, false, ["verify"]);
+    return crypto.subtle.importKey("jwk", normalizeJwk(jwk, alg), { name: "HMAC", hash }, false, [
+      "verify",
+    ]);
   }
   if (alg.startsWith("RS") || alg.startsWith("PS")) {
-    if (jwk.kty !== "RSA" || !jwk.n || !jwk.e) throw new Error("RSA 算法需要 kty=RSA 的 JWK（含 n/e）");
-    return crypto.subtle.importKey("jwk", normalizeJwk(jwk, alg), asymmetricImportParams(alg), false, ["verify"]);
+    if (jwk.kty !== "RSA" || !jwk.n || !jwk.e)
+      throw new Error("RSA 算法需要 kty=RSA 的 JWK（含 n/e）");
+    return crypto.subtle.importKey(
+      "jwk",
+      normalizeJwk(jwk, alg),
+      asymmetricImportParams(alg),
+      false,
+      ["verify"],
+    );
   }
   if (alg.startsWith("ES")) {
-    if (jwk.kty !== "EC" || !jwk.crv || !jwk.x || !jwk.y) throw new Error("ES 算法需要 kty=EC 的 JWK（含 crv/x/y）");
-    return crypto.subtle.importKey("jwk", normalizeJwk(jwk, alg), asymmetricImportParams(alg), false, ["verify"]);
+    if (jwk.kty !== "EC" || !jwk.crv || !jwk.x || !jwk.y)
+      throw new Error("ES 算法需要 kty=EC 的 JWK（含 crv/x/y）");
+    return crypto.subtle.importKey(
+      "jwk",
+      normalizeJwk(jwk, alg),
+      asymmetricImportParams(alg),
+      false,
+      ["verify"],
+    );
   }
   throw new Error(`不支持通过 JWK 导入的算法：${alg}`);
 }
 
-async function importVerificationKey(alg: string, keyText: string, secretBase64: boolean): Promise<CryptoKey> {
+async function importVerificationKey(
+  alg: string,
+  keyText: string,
+  secretBase64: boolean,
+): Promise<CryptoKey> {
   const trimmed = keyText.trim();
 
   if (trimmed.startsWith("{")) {
@@ -313,12 +330,20 @@ async function importVerificationKey(alg: string, keyText: string, secretBase64:
     } else {
       keyBytes = textEncoder.encode(trimmed);
     }
-    return crypto.subtle.importKey("raw", toArrayBuffer(keyBytes), { name: "HMAC", hash: HASH_BY_ALG[alg] ?? "SHA-256" }, false, ["verify"]);
+    return crypto.subtle.importKey(
+      "raw",
+      toArrayBuffer(keyBytes),
+      { name: "HMAC", hash: HASH_BY_ALG[alg] ?? "SHA-256" },
+      false,
+      ["verify"],
+    );
   }
 
   const pemKind = detectPem(trimmed);
   if (pemKind === null) {
-    throw new Error("密钥格式无法识别：请粘贴 HMAC 密钥、PEM 公钥（-----BEGIN ... PUBLIC KEY-----）或 JWK JSON");
+    throw new Error(
+      "密钥格式无法识别：请粘贴 HMAC 密钥、PEM 公钥（-----BEGIN ... PUBLIC KEY-----）或 JWK JSON",
+    );
   }
   if (pemKind === "cert") {
     throw new Error("不支持 X.509 证书，请粘贴 PEM 公钥或 JWK JSON");
@@ -328,10 +353,14 @@ async function importVerificationKey(alg: string, keyText: string, secretBase64:
     if (!alg.startsWith("RS") && !alg.startsWith("PS")) {
       throw new Error(`RSA PKCS#1 公钥不能用于 ${alg}，请选择 RS/PS 系列算法`);
     }
-    return crypto.subtle.importKey("jwk", pkcs1ToJwk(der), asymmetricImportParams(alg), false, ["verify"]);
+    return crypto.subtle.importKey("jwk", pkcs1ToJwk(der), asymmetricImportParams(alg), false, [
+      "verify",
+    ]);
   }
   // SPKI（BEGIN PUBLIC KEY / BEGIN EC PUBLIC KEY）
-  return crypto.subtle.importKey("spki", toArrayBuffer(der), asymmetricImportParams(alg), false, ["verify"]);
+  return crypto.subtle.importKey("spki", toArrayBuffer(der), asymmetricImportParams(alg), false, [
+    "verify",
+  ]);
 }
 
 function keyErrorMessage(error: unknown): string {
@@ -355,7 +384,12 @@ function keyErrorMessage(error: unknown): string {
  * 密钥格式按算法族自动判断：HS 系列用明文密钥（secretBase64 时按 Base64 解码）；
  * RS/PS/ES 系列支持 PEM 公钥与 JWK。
  */
-export async function verifySignature(token: string, alg: string, keyText: string, secretBase64 = false): Promise<VerifyOutcome> {
+export async function verifySignature(
+  token: string,
+  alg: string,
+  keyText: string,
+  secretBase64 = false,
+): Promise<VerifyOutcome> {
   const decoded = decodeToken(token);
   if (!decoded.ok) {
     return { status: "token-error", message: decoded.error || "令牌格式无效" };
@@ -384,7 +418,12 @@ export async function verifySignature(token: string, alg: string, keyText: strin
   try {
     const key = await importVerificationKey(alg, keyText, secretBase64);
     // Web Crypto 的 ECDSA 签名即为裸 r||s（P1363），无需转换
-    const verified = await crypto.subtle.verify(verifyParams(alg), key, toArrayBuffer(signature), toArrayBuffer(signingInput));
+    const verified = await crypto.subtle.verify(
+      verifyParams(alg),
+      key,
+      toArrayBuffer(signature),
+      toArrayBuffer(signingInput),
+    );
     return verified
       ? { status: "verified", message: "签名有效（Signature Verified）" }
       : { status: "invalid", message: "签名无效（Signature Invalid）" };

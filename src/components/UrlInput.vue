@@ -17,9 +17,7 @@ function onInput(event: Event): void {
 <template>
   <div class="url-input">
     <div class="url-input-highlight" aria-hidden="true">
-      <span v-for="(seg, i) in segments" :key="i" :class="seg.cls">{{
-        seg.text
-      }}</span>
+      <span v-for="(seg, i) in segments" :key="i" :class="seg.cls">{{ seg.text }}</span>
     </div>
     <textarea
       v-model="model"

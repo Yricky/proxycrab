@@ -15,12 +15,7 @@ import { proxyStore } from "../stores/proxy";
 import { isInactiveInProgress } from "../utils/capture-outcome";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import BodyViewer from "../components/BodyViewer.vue";
-import {
-  Io5Checkmark,
-  Io5ChevronDown,
-  Io5Copy,
-  Io5Warning,
-} from "vue-icons-plus/io5";
+import { Io5Checkmark, Io5ChevronDown, Io5Copy, Io5Warning } from "vue-icons-plus/io5";
 import {
   openInterceptorSnapshot,
   openModificationValue,
@@ -31,10 +26,7 @@ import { openDropdownMenu } from "../stores/dialog";
 import { fullCurl } from "../utils/curl";
 import { prefillFromLog } from "../utils/replay";
 import { copyText as writeClipboardText } from "../utils/clipboard";
-import {
-  urlSegments as buildUrlSegments,
-  type UrlSegment,
-} from "../utils/url-segments";
+import { urlSegments as buildUrlSegments, type UrlSegment } from "../utils/url-segments";
 import SegmentedUrl from "../components/SegmentedUrl.vue";
 import type { BodyTarget } from "../api/body";
 import { BsFillSendFill } from "vue-icons-plus/bs";
@@ -75,8 +67,7 @@ const stale = computed(
 );
 const active = computed(
   () =>
-    detail.value !== null &&
-    proxyStore.isNetlogActive(detail.value.session_id, detail.value.id),
+    detail.value !== null && proxyStore.isNetlogActive(detail.value.session_id, detail.value.id),
 );
 
 function onRedactionChanged(): void {
@@ -86,7 +77,9 @@ function onRedactionChanged(): void {
   void load();
 }
 onMounted(() => window.addEventListener("proxycrab-redaction-changed", onRedactionChanged));
-onBeforeUnmount(() => window.removeEventListener("proxycrab-redaction-changed", onRedactionChanged));
+onBeforeUnmount(() =>
+  window.removeEventListener("proxycrab-redaction-changed", onRedactionChanged),
+);
 
 async function load(silent = false): Promise<void> {
   if (loadInFlight) return;
@@ -111,27 +104,16 @@ async function load(silent = false): Promise<void> {
       if (generation !== loadGeneration) return;
       detail.value = next;
     } else if (detail.value) {
-      const next = await backend.getLog(
-        detail.value.session_id,
-        detail.value.id,
-      );
+      const next = await backend.getLog(detail.value.session_id, detail.value.id);
       if (generation !== loadGeneration) return;
       detail.value = next;
     }
   } catch (error) {
     if (generation !== loadGeneration) return;
-    if (
-      silent &&
-      error instanceof BackendError &&
-      error.code === "not_found" &&
-      detail.value
-    ) {
+    if (silent && error instanceof BackendError && error.code === "not_found" && detail.value) {
       breakpoint.value = null;
       try {
-        const next = await backend.getLog(
-          detail.value.session_id,
-          detail.value.id,
-        );
+        const next = await backend.getLog(detail.value.session_id, detail.value.id);
         if (generation !== loadGeneration) return;
         detail.value = next;
       } catch {
@@ -231,10 +213,7 @@ function scheduleAutoRefresh(): void {
 
 function handleWindowFocus(): void {
   if (props.breakpointId !== undefined) {
-    if (
-      !stale.value &&
-      (breakpoint.value || detail.value?.outcome === "in_progress")
-    ) {
+    if (!stale.value && (breakpoint.value || detail.value?.outcome === "in_progress")) {
       void load(true);
     }
     return;
@@ -278,8 +257,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("focus", handleWindowFocus);
   window.removeEventListener("blur", handleWindowBlur);
   if (copiedTimer !== undefined) window.clearTimeout(copiedTimer);
-  if (breakpointRefreshTimer !== undefined)
-    window.clearInterval(breakpointRefreshTimer);
+  if (breakpointRefreshTimer !== undefined) window.clearInterval(breakpointRefreshTimer);
 });
 
 // ---------- tabs ----------
@@ -477,9 +455,7 @@ function modificationDetail(mod: InterceptorModification): string {
     case "header_set":
       return `${mod.name}: ${mod.value}`;
     case "header_remove":
-      return mod.values.length > 0
-        ? `${mod.name}（原值：${mod.values.join(", ")}）`
-        : mod.name;
+      return mod.values.length > 0 ? `${mod.name}（原值：${mod.values.join(", ")}）` : mod.name;
     case "body_replace_string":
       return mod.content;
     case "body_replace_asset":
@@ -509,11 +485,7 @@ function modificationRows(execution: InterceptorExecution): ModRow[] {
   });
 }
 
-function openModDetail(
-  execution: InterceptorExecution,
-  index: number,
-  row: ModRow,
-): void {
+function openModDetail(execution: InterceptorExecution, index: number, row: ModRow): void {
   if (!row.truncated || !detail.value) return;
   openModificationValue(
     `${detail.value.session_id}-${detail.value.id}-${execution.execution_id}-${index}`,
@@ -526,11 +498,7 @@ async function openExecution(execution: InterceptorExecution): Promise<void> {
   if (!detail.value) return;
   const { session_id: sessionId, id } = detail.value;
   try {
-    const { content } = await backend.getInterceptorContent(
-      sessionId,
-      id,
-      execution.execution_id,
-    );
+    const { content } = await backend.getInterceptorContent(sessionId, id, execution.execution_id);
     openReadonlyViewer(
       `script-snapshot-${sessionId}-${id}-${execution.execution_id}`,
       `${scriptTitle(execution)} — 历史脚本`,
@@ -567,15 +535,10 @@ function headerCount(headers: HeaderItem[]): string {
       <header class="summary">
         <div class="summary-line">
           <span>{{ detail.request.version }}</span>
-          <span
-            class="outcome-chip"
-            :class="stale ? 'o-stale' : 'o-' + detail.outcome"
-          >
+          <span class="outcome-chip" :class="stale ? 'o-stale' : 'o-' + detail.outcome">
             <span class="o-dot" />{{ outcomeLabel(detail.outcome) }}
           </span>
-          <span class="method-chip" :class="methodClass">{{
-            detail.request.method
-          }}</span>
+          <span class="method-chip" :class="methodClass">{{ detail.request.method }}</span>
           <span
             v-if="detail.response"
             class="status-chip mono"
@@ -584,27 +547,15 @@ function headerCount(headers: HeaderItem[]): string {
             {{ detail.response.status }} {{ detail.response.status_text }}
           </span>
           <span class="meta-item">
-            <span class="meta-label">来源</span
-            >{{ detail.source_addr ?? "未知" }}
+            <span class="meta-label">来源</span>{{ detail.source_addr ?? "未知" }}
           </span>
-          <span class="meta-item">
-            <span class="meta-label">阶段</span>{{ detail.stage }}
-          </span>
+          <span class="meta-item"> <span class="meta-label">阶段</span>{{ detail.stage }} </span>
           <span v-if="loading" class="refreshing text-faint">刷新中…</span>
           <span class="summary-spacer" />
-          <button
-            v-if="backend.replay"
-            class="btn icon"
-            title="重放此请求"
-            @click="replayCurrent"
-          >
+          <button v-if="backend.replay" class="btn icon" title="重放此请求" @click="replayCurrent">
             <BsFillSendFill :size="14" />
           </button>
-          <button
-            class="btn icon copy-menu-button"
-            title="复制"
-            @click="openCopyMenu"
-          >
+          <button class="btn icon copy-menu-button" title="复制" @click="openCopyMenu">
             <Io5Checkmark
               v-if="copiedKey === 'url' || copiedKey === 'curl'"
               :size="14"
@@ -614,18 +565,12 @@ function headerCount(headers: HeaderItem[]): string {
             <Io5ChevronDown :size="10" />
           </button>
         </div>
-        <SegmentedUrl
-          class="url"
-          :segments="urlSegments"
-          :title="detail.request.uri"
-        />
+        <SegmentedUrl class="url" :segments="urlSegments" :title="detail.request.uri" />
         <!-- 错误横幅 -->
         <div v-if="detail.error" class="error-banner">
           <Io5Warning :size="14" class="error-icon" />
           <div class="error-body">
-            <div class="error-head mono">
-              {{ detail.error.stage }} · {{ detail.error.kind }}
-            </div>
+            <div class="error-head mono">{{ detail.error.stage }} · {{ detail.error.kind }}</div>
             <div class="error-message mono">{{ detail.error.message }}</div>
           </div>
         </div>
@@ -652,11 +597,7 @@ function headerCount(headers: HeaderItem[]): string {
           <button class="btn" @click="scriptPanelOpen = !scriptPanelOpen">
             {{ scriptPanelOpen ? "收起临时脚本" : "执行临时脚本" }}
           </button>
-          <button
-            class="btn primary"
-            :disabled="releasing"
-            @click="releaseBreakpoint"
-          >
+          <button class="btn primary" :disabled="releasing" @click="releaseBreakpoint">
             {{ releasing ? "放行中…" : "放行" }}
           </button>
         </div>
@@ -666,11 +607,7 @@ function headerCount(headers: HeaderItem[]): string {
           </div>
           <div class="temporary-footer">
             <span>能力与当前阶段一致；临时脚本中不可再次调用 breakpoint()</span>
-            <button
-              class="btn primary"
-              :disabled="executingScript"
-              @click="executeTemporaryScript"
-            >
+            <button class="btn primary" :disabled="executingScript" @click="executeTemporaryScript">
               {{ executingScript ? "执行中…" : "应用修改（保持断点）" }}
             </button>
           </div>
@@ -694,10 +631,7 @@ function headerCount(headers: HeaderItem[]): string {
 
       <!-- 请求 -->
       <div v-show="activeTab === 'request'" class="tab-page">
-        <div
-          class="pane-top"
-          :style="{ width: `calc(${leftRatio * 100}% - 3px)` }"
-        >
+        <div class="pane-top" :style="{ width: `calc(${leftRatio * 100}% - 3px)` }">
           <section v-if="queryParams.length > 0" class="card">
             <div class="card-title">
               Query 参数
@@ -716,9 +650,7 @@ function headerCount(headers: HeaderItem[]): string {
           <section class="card">
             <div class="card-title">
               请求头
-              <span class="count-badge">{{
-                headerCount(detail.request.headers)
-              }}</span>
+              <span class="count-badge">{{ headerCount(detail.request.headers) }}</span>
             </div>
             <table v-if="detail.request.headers.length > 0" class="kv-table">
               <tbody>
@@ -732,11 +664,7 @@ function headerCount(headers: HeaderItem[]): string {
           </section>
         </div>
 
-        <div
-          class="splitter"
-          title="拖动调整区域大小"
-          @pointerdown="startSplit"
-        />
+        <div class="splitter" title="拖动调整区域大小" @pointerdown="startSplit" />
 
         <BodyViewer
           label="请求体"
@@ -751,19 +679,12 @@ function headerCount(headers: HeaderItem[]): string {
       <!-- 响应 -->
       <div v-show="activeTab === 'response'" class="tab-page">
         <template v-if="detail.response">
-          <div
-            class="pane-top"
-            :style="{ width: `calc(${leftRatio * 100}% - 3px)` }"
-          >
+          <div class="pane-top" :style="{ width: `calc(${leftRatio * 100}% - 3px)` }">
             <section class="card">
               <div class="card-title">
                 响应头
-                <span class="count-badge">{{
-                  headerCount(detail.response.headers)
-                }}</span>
-                <span class="card-title-extra mono">{{
-                  detail.response.version
-                }}</span>
+                <span class="count-badge">{{ headerCount(detail.response.headers) }}</span>
+                <span class="card-title-extra mono">{{ detail.response.version }}</span>
               </div>
               <table v-if="detail.response.headers.length > 0" class="kv-table">
                 <tbody>
@@ -777,11 +698,7 @@ function headerCount(headers: HeaderItem[]): string {
             </section>
           </div>
 
-          <div
-            class="splitter"
-            title="拖动调整区域大小"
-            @pointerdown="startSplit"
-          />
+          <div class="splitter" title="拖动调整区域大小" @pointerdown="startSplit" />
 
           <BodyViewer
             label="响应体"
@@ -797,10 +714,7 @@ function headerCount(headers: HeaderItem[]): string {
       <!-- 拦截器执行记录 -->
       <div v-show="activeTab === 'modifications'" class="tab-page">
         <div class="pane-top full">
-          <section
-            v-if="detail.request_interceptors.length > 0"
-            class="execution-section"
-          >
+          <section v-if="detail.request_interceptors.length > 0" class="execution-section">
             <div class="execution-section-title">请求拦截器</div>
             <article
               v-for="execution in detail.request_interceptors"
@@ -808,28 +722,17 @@ function headerCount(headers: HeaderItem[]): string {
               class="card execution-card"
             >
               <div class="execution-head">
-                <span class="execution-order"
-                  >#{{ execution.position + 1 }}</span
-                >
-                <span class="execution-name mono" :title="scriptTitle(execution)">{{ scriptLabel(execution) }}</span>
-                <span
-                  v-if="execution.origin === 'temporary'"
-                  class="execution-origin"
-                  >临时</span
-                >
-                <span
-                  v-else-if="!execution.completed"
-                  class="execution-origin waiting"
+                <span class="execution-order">#{{ execution.position + 1 }}</span>
+                <span class="execution-name mono" :title="scriptTitle(execution)">{{
+                  scriptLabel(execution)
+                }}</span>
+                <span v-if="execution.origin === 'temporary'" class="execution-origin">临时</span>
+                <span v-else-if="!execution.completed" class="execution-origin waiting"
                   >暂停中</span
                 >
-                <span class="execution-hash mono">{{
-                  execution.script_hash.slice(0, 12)
-                }}</span>
+                <span class="execution-hash mono">{{ execution.script_hash.slice(0, 12) }}</span>
                 <span class="execution-actions">
-                  <button
-                    class="execution-open"
-                    @click="openExecution(execution)"
-                  >
+                  <button class="execution-open" @click="openExecution(execution)">
                     查看历史脚本
                   </button>
                   <button
@@ -844,21 +747,12 @@ function headerCount(headers: HeaderItem[]): string {
               <div v-if="execution.error" class="execution-error mono">
                 {{ execution.error }}
               </div>
-              <div
-                v-if="execution.modifications.length === 0"
-                class="execution-no-change"
-              >
+              <div v-if="execution.modifications.length === 0" class="execution-no-change">
                 已执行，未产生修改
               </div>
               <ul v-else class="mod-list">
-                <li
-                  v-for="(row, i) in modificationRows(execution)"
-                  :key="i"
-                  class="mod-item"
-                >
-                  <span class="mod-badge">{{
-                    modificationLabel(row.mod)
-                  }}</span>
+                <li v-for="(row, i) in modificationRows(execution)" :key="i" class="mod-item">
+                  <span class="mod-badge">{{ modificationLabel(row.mod) }}</span>
                   <span
                     class="mod-detail mono"
                     :class="{ clickable: row.truncated }"
@@ -870,10 +764,7 @@ function headerCount(headers: HeaderItem[]): string {
               </ul>
             </article>
           </section>
-          <section
-            v-if="detail.response_interceptors.length > 0"
-            class="execution-section"
-          >
+          <section v-if="detail.response_interceptors.length > 0" class="execution-section">
             <div class="execution-section-title">响应拦截器</div>
             <article
               v-for="execution in detail.response_interceptors"
@@ -881,28 +772,17 @@ function headerCount(headers: HeaderItem[]): string {
               class="card execution-card"
             >
               <div class="execution-head">
-                <span class="execution-order"
-                  >#{{ execution.position + 1 }}</span
-                >
-                <span class="execution-name mono" :title="scriptTitle(execution)">{{ scriptLabel(execution) }}</span>
-                <span
-                  v-if="execution.origin === 'temporary'"
-                  class="execution-origin"
-                  >临时</span
-                >
-                <span
-                  v-else-if="!execution.completed"
-                  class="execution-origin waiting"
+                <span class="execution-order">#{{ execution.position + 1 }}</span>
+                <span class="execution-name mono" :title="scriptTitle(execution)">{{
+                  scriptLabel(execution)
+                }}</span>
+                <span v-if="execution.origin === 'temporary'" class="execution-origin">临时</span>
+                <span v-else-if="!execution.completed" class="execution-origin waiting"
                   >暂停中</span
                 >
-                <span class="execution-hash mono">{{
-                  execution.script_hash.slice(0, 12)
-                }}</span>
+                <span class="execution-hash mono">{{ execution.script_hash.slice(0, 12) }}</span>
                 <span class="execution-actions">
-                  <button
-                    class="execution-open"
-                    @click="openExecution(execution)"
-                  >
+                  <button class="execution-open" @click="openExecution(execution)">
                     查看历史脚本
                   </button>
                   <button
@@ -917,21 +797,12 @@ function headerCount(headers: HeaderItem[]): string {
               <div v-if="execution.error" class="execution-error mono">
                 {{ execution.error }}
               </div>
-              <div
-                v-if="execution.modifications.length === 0"
-                class="execution-no-change"
-              >
+              <div v-if="execution.modifications.length === 0" class="execution-no-change">
                 已执行，未产生修改
               </div>
               <ul v-else class="mod-list">
-                <li
-                  v-for="(row, i) in modificationRows(execution)"
-                  :key="i"
-                  class="mod-item"
-                >
-                  <span class="mod-badge">{{
-                    modificationLabel(row.mod)
-                  }}</span>
+                <li v-for="(row, i) in modificationRows(execution)" :key="i" class="mod-item">
+                  <span class="mod-badge">{{ modificationLabel(row.mod) }}</span>
                   <span
                     class="mod-detail mono"
                     :class="{ clickable: row.truncated }"

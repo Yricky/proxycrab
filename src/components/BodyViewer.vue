@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import {
-  Io5Checkmark, Io5Copy, Io5DownloadOutline, Io5Warning,
-} from "vue-icons-plus/io5";
+import { Io5Checkmark, Io5Copy, Io5DownloadOutline, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import {
   BodyFetchError,
@@ -46,9 +44,7 @@ let loadVersion = 0;
 let copiedTimer: number | undefined;
 
 function header(name: string): string {
-  return (
-    props.headers.find((item) => item.name.toLowerCase() === name)?.value ?? ""
-  );
+  return props.headers.find((item) => item.name.toLowerCase() === name)?.value ?? "";
 }
 
 function declaredMediaType(): string {
@@ -59,33 +55,22 @@ function declaredMediaType(): string {
 }
 
 function sniffMediaType(bytes: Uint8Array): string | null {
-  const ascii = (start: number, end: number) =>
-    String.fromCharCode(...bytes.subarray(start, end));
+  const ascii = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));
   if (
     bytes.length >= 8 &&
-    bytes
-      .slice(0, 8)
-      .every((v, i) => v === [137, 80, 78, 71, 13, 10, 26, 10][i])
+    bytes.slice(0, 8).every((v, i) => v === [137, 80, 78, 71, 13, 10, 26, 10][i])
   )
     return "image/png";
   if (bytes[0] === 0xff && bytes[1] === 0xd8) return "image/jpeg";
   if (ascii(0, 6) === "GIF87a" || ascii(0, 6) === "GIF89a") return "image/gif";
   if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
-  if (
-    ascii(0, 3) === "ID3" ||
-    (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0)
-  )
+  if (ascii(0, 3) === "ID3" || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0))
     return "audio/mpeg";
   if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WAVE") return "audio/wav";
   if (ascii(0, 4) === "OggS") return "audio/ogg";
   if (ascii(0, 4) === "fLaC") return "audio/flac";
   if (bytes.length >= 12 && ascii(4, 8) === "ftyp") return "video/mp4";
-  if (
-    bytes[0] === 0x1a &&
-    bytes[1] === 0x45 &&
-    bytes[2] === 0xdf &&
-    bytes[3] === 0xa3
-  )
+  if (bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3)
     return "video/webm";
   return null;
 }
@@ -93,9 +78,7 @@ function sniffMediaType(bytes: Uint8Array): string | null {
 const mediaType = computed(() => {
   const declared = declaredMediaType();
   if (/^(image|audio|video)\//.test(declared)) return declared;
-  return loaded.value
-    ? (sniffMediaType(loaded.value.bytes) ?? declared)
-    : declared;
+  return loaded.value ? (sniffMediaType(loaded.value.bytes) ?? declared) : declared;
 });
 
 const previewKind = computed(() => {
@@ -103,34 +86,21 @@ const previewKind = computed(() => {
   if (media.startsWith("image/")) return "image";
   if (media.startsWith("audio/")) return "audio";
   if (media.startsWith("video/")) return "video";
-  if (media === "application/grpc" || media === "application/grpc+proto")
-    return "grpc";
-  if (media.includes("protobuf") || media === "application/x-protobuf")
-    return "protobuf";
+  if (media === "application/grpc" || media === "application/grpc+proto") return "grpc";
+  if (media.includes("protobuf") || media === "application/x-protobuf") return "protobuf";
   if (
     media.startsWith("text/") ||
-    [
-      "json",
-      "xml",
-      "javascript",
-      "ecmascript",
-      "x-www-form-urlencoded",
-      "graphql",
-      "yaml",
-    ].some((kind) => media.includes(kind))
+    ["json", "xml", "javascript", "ecmascript", "x-www-form-urlencoded", "graphql", "yaml"].some(
+      (kind) => media.includes(kind),
+    )
   )
     return "text";
   return "unsupported";
 });
 
-const storedSize = computed(() =>
-  props.body.type === "empty" ? 0 : props.body.size,
-);
+const storedSize = computed(() => (props.body.type === "empty" ? 0 : props.body.size));
 const sizeKnown = computed(
-  () =>
-    !props.unknownSize ||
-    reportedStoredSize.value !== null ||
-    loaded.value !== null,
+  () => !props.unknownSize || reportedStoredSize.value !== null || loaded.value !== null,
 );
 const effectiveStoredSize = computed(
   () =>
@@ -143,12 +113,9 @@ const embeddedIdentity = computed(() => {
   return "";
 });
 const headerIdentity = computed(
-  () =>
-    `${header("content-type")}\n${header("content-encoding")}\n${header("grpc-encoding")}`,
+  () => `${header("content-type")}\n${header("content-encoding")}\n${header("grpc-encoding")}`,
 );
-const canRequestFull = computed(
-  () => effectiveStoredSize.value <= UI_BODY_MAX_SIZE,
-);
+const canRequestFull = computed(() => effectiveStoredSize.value <= UI_BODY_MAX_SIZE);
 const overDefaultLimit = computed(
   () => !loaded.value && effectiveStoredSize.value > DEFAULT_BODY_MAX_SIZE,
 );
@@ -159,13 +126,9 @@ const decodedText = computed(() => {
 });
 
 const editorValue = computed(() => {
-  if (previewKind.value === "protobuf" || previewKind.value === "grpc")
-    return structured.value;
+  if (previewKind.value === "protobuf" || previewKind.value === "grpc") return structured.value;
   const text = decodedText.value;
-  if (
-    pretty.value &&
-    (mediaType.value.includes("json") || /^[\s]*[\[{]/.test(text))
-  ) {
+  if (pretty.value && (mediaType.value.includes("json") || /^[\s]*[\[{]/.test(text))) {
     try {
       return JSON.stringify(JSON.parse(text), null, 2);
     } catch {
@@ -177,16 +140,11 @@ const editorValue = computed(() => {
 
 const editorLanguage = computed(() => {
   const media = mediaType.value;
-  if (
-    previewKind.value === "protobuf" ||
-    previewKind.value === "grpc" ||
-    media.includes("json")
-  )
+  if (previewKind.value === "protobuf" || previewKind.value === "grpc" || media.includes("json"))
     return "json";
   if (media.includes("html")) return "html";
   if (media.includes("xml") || media === "image/svg+xml") return "xml";
-  if (media.includes("javascript") || media.includes("ecmascript"))
-    return "javascript";
+  if (media.includes("javascript") || media.includes("ecmascript")) return "javascript";
   if (media.includes("css")) return "css";
   return "plaintext";
 });
@@ -201,17 +159,12 @@ async function preparePreview(value: LoadedBody): Promise<void> {
   structured.value = "";
   if (["image", "audio", "video"].includes(previewKind.value)) {
     const buffer = value.bytes.slice().buffer as ArrayBuffer;
-    objectUrl.value = URL.createObjectURL(
-      new Blob([buffer], { type: mediaType.value }),
-    );
+    objectUrl.value = URL.createObjectURL(new Blob([buffer], { type: mediaType.value }));
   } else if (previewKind.value === "protobuf") {
     structured.value = inspectProtobuf(value.bytes);
   } else if (previewKind.value === "grpc") {
     try {
-      structured.value = await inspectGrpc(
-        value.bytes,
-        header("grpc-encoding").toLowerCase(),
-      );
+      structured.value = await inspectGrpc(value.bytes, header("grpc-encoding").toLowerCase());
     } catch (cause) {
       structured.value = `gRPC 解析失败：${String(cause)}`;
     }
@@ -268,11 +221,14 @@ async function download(): Promise<void> {
   downloading.value = true;
   try {
     await backend.downloadBody(
-      props.target, props.side, bodyFilename(props.target, props.side, props.headers),
+      props.target,
+      props.side,
+      bodyFilename(props.target, props.side, props.headers),
     );
   } catch (cause) {
     appStore.toast(
-      `Body 下载失败：${cause instanceof Error ? cause.message : String(cause)}`, "error",
+      `Body 下载失败：${cause instanceof Error ? cause.message : String(cause)}`,
+      "error",
     );
   } finally {
     downloading.value = false;
@@ -335,30 +291,10 @@ onBeforeUnmount(() => {
           <Io5DownloadOutline :size="13" />
         </button>
         <template v-if="loaded && previewKind === 'text'">
-          <button
-            class="tool-btn"
-            :class="{ on: pretty }"
-            @click="pretty = true"
-          >
-            格式化
-          </button>
-          <button
-            class="tool-btn"
-            :class="{ on: !pretty }"
-            @click="pretty = false"
-          >
-            原文
-          </button>
-          <button
-            class="btn icon"
-            title="复制 Body"
-            @click="copy('body', editorValue)"
-          >
-            <Io5Checkmark
-              v-if="copied === 'body'"
-              :size="13"
-              class="text-success"
-            />
+          <button class="tool-btn" :class="{ on: pretty }" @click="pretty = true">格式化</button>
+          <button class="tool-btn" :class="{ on: !pretty }" @click="pretty = false">原文</button>
+          <button class="btn icon" title="复制 Body" @click="copy('body', editorValue)">
+            <Io5Checkmark v-if="copied === 'body'" :size="13" class="text-success" />
             <Io5Copy v-else :size="13" />
           </button>
         </template>
@@ -370,11 +306,7 @@ onBeforeUnmount(() => {
     <div v-else-if="overDefaultLimit" class="body-state body-limit">
       <Io5Warning :size="18" />
       <span>Body 超过自动加载限制</span>
-      <button
-        v-if="canRequestFull"
-        class="btn primary"
-        @click="confirmFullLoad"
-      >
+      <button v-if="canRequestFull" class="btn primary" @click="confirmFullLoad">
         加载完整 Body（{{ formatBytes(effectiveStoredSize) }}）
       </button>
       <span v-else>Body 实际体积超过 1 GiB，无法在此加载</span>
@@ -395,18 +327,11 @@ onBeforeUnmount(() => {
     </div>
     <div
       v-else-if="
-        loaded &&
-        (previewKind === 'text' ||
-          previewKind === 'protobuf' ||
-          previewKind === 'grpc')
+        loaded && (previewKind === 'text' || previewKind === 'protobuf' || previewKind === 'grpc')
       "
       class="body-editor"
     >
-      <MonacoEditor
-        :model-value="editorValue"
-        :language="editorLanguage"
-        readonly
-      />
+      <MonacoEditor :model-value="editorValue" :language="editorLanguage" readonly />
     </div>
     <div v-else class="body-state">该二进制类型暂不支持预览</div>
   </section>

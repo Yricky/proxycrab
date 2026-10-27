@@ -10,7 +10,10 @@ afterEach(() => {
 test("share subscriptions refresh changed script labels without exposing source or changing references", async () => {
   vi.useFakeTimers();
   vi.stubGlobal("window", {
-    setInterval, clearInterval, setTimeout, clearTimeout,
+    setInterval,
+    clearInterval,
+    setTimeout,
+    clearTimeout,
     dispatchEvent: vi.fn(),
   });
   let displayName: string | null = "鉴权token";
@@ -27,10 +30,12 @@ test("share subscriptions refresh changed script labels without exposing source 
         init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
       });
     }
-    const data = path === "/share-api/session-view" ? bootstrap.view
-      : path === "/share-api/column-scripts"
-        ? [{ name: "auth-token", display_name: displayName, content: "" }]
-        : [];
+    const data =
+      path === "/share-api/session-view"
+        ? bootstrap.view
+        : path === "/share-api/column-scripts"
+          ? [{ name: "auth-token", display_name: displayName, content: "" }]
+          : [];
     return new Response(JSON.stringify({ ok: true, data }));
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -84,22 +89,37 @@ test("share policy revisions invalidate views once and detect failed/recovered b
   vi.stubGlobal("window", { setInterval, clearInterval, setTimeout, clearTimeout, dispatchEvent });
   const bootstrap: ShareBootstrap = {
     session: { id: 1, name: "shared", created_at: 0, description: null },
-    view: { session_id: 1, columns: [], filter: { option: null, input: "" }, redaction_revision: "v1" },
-    proxy_status: { status: "stopped" }, api_port: 18089,
+    view: {
+      session_id: 1,
+      columns: [],
+      filter: { option: null, input: "" },
+      redaction_revision: "v1",
+    },
+    proxy_status: { status: "stopped" },
+    api_port: 18089,
   };
   let revision: string | null = "v1";
   vi.stubGlobal("fetch", async (input: URL, init: RequestInit) => {
     const path = new URL(input).pathname;
-    if (path === "/share-api/proxy/changes") return new Promise<Response>((_resolve, reject) => {
-      init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-    });
+    if (path === "/share-api/proxy/changes")
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
     if (path === "/share-api/session-view") {
-      if (revision === "failed") return new Response(JSON.stringify({ ok: false, error: { code: "redaction_failed", message: "failed" } }), { status: 500 });
-      return new Response(JSON.stringify({ ok: true, data: { ...bootstrap.view, redaction_revision: revision } }));
+      if (revision === "failed")
+        return new Response(
+          JSON.stringify({ ok: false, error: { code: "redaction_failed", message: "failed" } }),
+          { status: 500 },
+        );
+      return new Response(
+        JSON.stringify({ ok: true, data: { ...bootstrap.view, redaction_revision: revision } }),
+      );
     }
     return new Response(JSON.stringify({ ok: true, data: [] }));
   });
-  const stop = await createShareBackend("http://localhost", "test", bootstrap).subscribeChanges(() => {});
+  const stop = await createShareBackend("http://localhost", "test", bootstrap).subscribeChanges(
+    () => {},
+  );
   try {
     await vi.advanceTimersByTimeAsync(1500);
     expect(dispatchEvent).not.toHaveBeenCalled();
@@ -115,5 +135,7 @@ test("share policy revisions invalidate views once and detect failed/recovered b
     revision = null;
     await vi.advanceTimersByTimeAsync(1500);
     expect(dispatchEvent).toHaveBeenCalledTimes(3);
-  } finally { stop(); }
+  } finally {
+    stop();
+  }
 });

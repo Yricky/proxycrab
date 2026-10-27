@@ -95,20 +95,11 @@ function nodeClick(kind: InterceptorKind, item: SessionInterceptorItem, index: n
   void interceptorsStore.toggle(kind, index);
 }
 
-function openPicker(
-  kind: InterceptorKind,
-  index: number,
-  x: number,
-  y: number,
-): void {
+function openPicker(kind: InterceptorKind, index: number, x: number, y: number): void {
   picker.value = { visible: true, kind, index, x, y };
 }
 
-function openPickerAtElement(
-  kind: InterceptorKind,
-  index: number,
-  event: MouseEvent,
-): void {
+function openPickerAtElement(kind: InterceptorKind, index: number, event: MouseEvent): void {
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
   openPicker(kind, index, rect.left, rect.bottom + 5);
 }
@@ -208,7 +199,11 @@ function onHttpApiChange(event: Event): void {
   }
 }
 
-watch(() => logs.sessionId, () => refresh(), { immediate: true });
+watch(
+  () => logs.sessionId,
+  () => refresh(),
+  { immediate: true },
+);
 
 onMounted(() => {
   window.addEventListener("focus", refresh);
@@ -225,9 +220,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="pipeline-shell">
-    <div v-if="logs.sessionId === null" class="pipeline-empty">
-      请选择或创建会话
-    </div>
+    <div v-if="logs.sessionId === null" class="pipeline-empty">请选择或创建会话</div>
     <div v-else class="pipeline-scroll">
       <div class="pipeline-track" :class="{ saving: interceptorsStore.saving }">
         <AppTooltip title="原设备" detail="请求来源">
@@ -281,7 +274,7 @@ onBeforeUnmount(() => {
                 @dragend="dragEnd"
               >
                 <span v-if="breakpointCount('request', item.name) > 0" class="breakpoint-count">
-                  {{ breakpointBadge('request', item.name) }}
+                  {{ breakpointBadge("request", item.name) }}
                 </span>
                 <span v-else-if="!item.valid">!</span>
                 <span v-else class="node-initial">{{ nodeInitial(scriptLabel(item)) }}</span>
@@ -355,7 +348,7 @@ onBeforeUnmount(() => {
                 @dragend="dragEnd"
               >
                 <span v-if="breakpointCount('response', item.name) > 0" class="breakpoint-count">
-                  {{ breakpointBadge('response', item.name) }}
+                  {{ breakpointBadge("response", item.name) }}
                 </span>
                 <span v-else-if="!item.valid">!</span>
                 <span v-else class="node-initial">{{ nodeInitial(scriptLabel(item)) }}</span>
@@ -386,11 +379,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <AppTooltip
-      v-if="canSweep"
-      title="清扫会话"
-      detail="新建配置一致的活跃会话，原会话转入已归档"
-    >
+    <AppTooltip v-if="canSweep" title="清扫会话" detail="新建配置一致的活跃会话，原会话转入已归档">
       <button
         class="pipeline-sweep"
         type="button"

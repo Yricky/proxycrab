@@ -17,11 +17,7 @@ import { BsFillSendFill } from "vue-icons-plus/bs";
 
 function replaySnapshot(): void {
   if (!snapshot.value) return;
-  const draft = prefillFromSnapshot(
-    props.sessionId,
-    props.logId,
-    snapshot.value,
-  );
+  const draft = prefillFromSnapshot(props.sessionId, props.logId, snapshot.value);
   if (draft) openReplay(draft);
 }
 
@@ -37,9 +33,14 @@ const loading = ref(true);
 const loadVersion = ref(0);
 const loadError = ref<string | null>(null);
 
-function onRedactionChanged(): void { snapshot.value = null; void load(); }
+function onRedactionChanged(): void {
+  snapshot.value = null;
+  void load();
+}
 onMounted(() => window.addEventListener("proxycrab-redaction-changed", onRedactionChanged));
-onBeforeUnmount(() => window.removeEventListener("proxycrab-redaction-changed", onRedactionChanged));
+onBeforeUnmount(() =>
+  window.removeEventListener("proxycrab-redaction-changed", onRedactionChanged),
+);
 
 async function load(): Promise<void> {
   const version = ++loadVersion.value;
@@ -66,9 +67,7 @@ onMounted(load);
 const request = computed(() => snapshot.value?.request ?? null);
 const response = computed(() => snapshot.value?.response ?? null);
 const state = computed(() => request.value ?? response.value);
-const side = computed<"request" | "response">(() =>
-  request.value ? "request" : "response",
-);
+const side = computed<"request" | "response">(() => (request.value ? "request" : "response"));
 const headers = computed<HeaderItem[]>(() =>
   Object.entries(state.value?.headers ?? {}).flatMap(([name, values]) =>
     values.map((value) => ({ name, value })),
@@ -116,9 +115,7 @@ function statusClass(status: number): string {
   return "s-other";
 }
 
-const urlSegments = computed(() =>
-  request.value ? buildUrlSegments(request.value.uri) : [],
-);
+const urlSegments = computed(() => (request.value ? buildUrlSegments(request.value.uri) : []));
 </script>
 
 <template>
@@ -134,11 +131,7 @@ const urlSegments = computed(() =>
           <span v-if="request" class="method-chip" :class="methodClass">
             {{ request.method }}
           </span>
-          <span
-            v-else-if="response"
-            class="status-chip mono"
-            :class="statusClass(response.status)"
-          >
+          <span v-else-if="response" class="status-chip mono" :class="statusClass(response.status)">
             {{ response.status }}
           </span>
           <span class="meta-item mono">{{ state.version }}</span>
@@ -155,21 +148,14 @@ const urlSegments = computed(() =>
             <BsFillSendFill :size="14" />
           </button>
         </div>
-        <SegmentedUrl
-          v-if="request"
-          class="url"
-          :segments="urlSegments"
-          :title="request.uri"
-        />
+        <SegmentedUrl v-if="request" class="url" :segments="urlSegments" :title="request.uri" />
       </header>
 
       <div class="content">
         <section class="card headers-card">
           <div class="card-title">
             Headers
-            <span v-if="headers.length" class="count-badge">{{
-              headers.length
-            }}</span>
+            <span v-if="headers.length" class="count-badge">{{ headers.length }}</span>
           </div>
           <div class="headers-scroll">
             <table v-if="headers.length" class="kv-table">
@@ -184,9 +170,7 @@ const urlSegments = computed(() =>
           </div>
         </section>
 
-        <div v-if="bodyPending" class="card body-card state-hint">
-          Body 尚未捕获完成
-        </div>
+        <div v-if="bodyPending" class="card body-card state-hint">Body 尚未捕获完成</div>
         <BodyViewer
           v-else
           class="body-panel"

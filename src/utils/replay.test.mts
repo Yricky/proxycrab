@@ -59,9 +59,7 @@ describe("prefillFromLog", () => {
 
 describe("prefillFromSnapshot", () => {
   it("returns null without a request snapshot", () => {
-    expect(
-      prefillFromSnapshot(1, 2, { request: null, response: null } as never),
-    ).toBeNull();
+    expect(prefillFromSnapshot(1, 2, { request: null, response: null } as never)).toBeNull();
   });
   it("maps string bodies to text mode", () => {
     const draft = prefillFromSnapshot(1, 2, {

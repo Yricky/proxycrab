@@ -1,12 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import {
-  Io5Add,
-  Io5CheckmarkCircle,
-  Io5Refresh,
-  Io5Save,
-  Io5Trash,
-} from "vue-icons-plus/io5";
+import { Io5Add, Io5CheckmarkCircle, Io5Refresh, Io5Save, Io5Trash } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import type { AgentsPreset, AgentsPresetState } from "../api/types";
 import MonacoEditor from "../components/MonacoEditor.vue";
@@ -255,11 +249,7 @@ onBeforeUnmount(() => {
           @keydown.enter="selectPreset(preset)"
         >
           <span class="ap-row-state">
-            <Io5CheckmarkCircle
-              v-if="state.active_id === preset.id"
-              :size="14"
-              title="当前激活"
-            />
+            <Io5CheckmarkCircle v-if="state.active_id === preset.id" :size="14" title="当前激活" />
           </span>
           <span class="ap-row-name" :title="preset.name">{{ preset.name }}</span>
           <button
@@ -273,9 +263,8 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="ap-sidebar-footer" @click="reimportDefaults">
-                  <Io5Refresh :size="13" />
-          重新导入默认预设
-
+        <Io5Refresh :size="13" />
+        重新导入默认预设
       </div>
     </aside>
 
@@ -286,21 +275,11 @@ onBeforeUnmount(() => {
       </div>
       <template v-if="selectedPreset">
         <div class="ap-toolbar">
-          <input
-            v-model="draftName"
-            class="input ap-name"
-            aria-label="预设名称"
-            maxlength="128"
-          />
+          <input v-model="draftName" class="input ap-name" aria-label="预设名称" maxlength="128" />
           <span v-if="selectedIsActive" class="ap-active-label">当前激活</span>
           <span v-if="dirty" class="ap-dirty">未保存</span>
           <span class="ap-spacer" />
-          <button
-            v-if="!selectedIsActive"
-            class="btn"
-            :disabled="saving"
-            @click="activateSelected"
-          >
+          <button v-if="!selectedIsActive" class="btn" :disabled="saving" @click="activateSelected">
             激活
           </button>
           <button class="btn primary" :disabled="saving || !dirty" @click="save()">

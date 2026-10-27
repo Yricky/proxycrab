@@ -51,11 +51,9 @@ function parseMessage(cursor: Cursor, depth = 0, endGroup?: number): ProtoField[
       value = readVarint(cursor).toString();
     } else if (wire === 1) {
       if (cursor.offset + 8 > cursor.bytes.length) throw new Error("截断的 fixed64");
-      value = new DataView(
-        cursor.bytes.buffer,
-        cursor.bytes.byteOffset + cursor.offset,
-        8,
-      ).getBigUint64(0, true).toString();
+      value = new DataView(cursor.bytes.buffer, cursor.bytes.byteOffset + cursor.offset, 8)
+        .getBigUint64(0, true)
+        .toString();
       cursor.offset += 8;
     } else if (wire === 2) {
       const length = Number(readVarint(cursor));
@@ -66,18 +64,18 @@ function parseMessage(cursor: Cursor, depth = 0, endGroup?: number): ProtoField[
       cursor.offset += length;
       const text = printableUtf8(bytes);
       if (text !== null) {
-        value = { len:length, txt: text };
+        value = { len: length, txt: text };
       } else if (depth < 64 && bytes.length > 0) {
         try {
           const nestedCursor: Cursor = { bytes, offset: 0 };
           const message = parseMessage(nestedCursor, depth + 1);
           if (nestedCursor.offset !== bytes.length || message.length === 0) throw new Error();
-          value = { len:length, msg: message };
+          value = { len: length, msg: message };
         } catch {
-          value = { len:length, bytes: hex(bytes) };
+          value = { len: length, bytes: hex(bytes) };
         }
       } else {
-        value = { len:length, bytes: hex(bytes) };
+        value = { len: length, bytes: hex(bytes) };
       }
     } else if (wire === 3) {
       value = { group: parseMessage(cursor, depth + 1, field) };
@@ -140,10 +138,7 @@ function formatJson(value: unknown, depth = 0): string[] {
       ? entries.find(([key]) => key !== "len")?.[0]
       : undefined;
   if (dataKey !== undefined) {
-    return inlineEntry(
-      `{ "len": ${record.len}, ${JSON.stringify(dataKey)}: `,
-      record[dataKey],
-    );
+    return inlineEntry(`{ "len": ${record.len}, ${JSON.stringify(dataKey)}: `, record[dataKey]);
   }
 
   if (entries.length === 0) return [`${indent}{}`];
@@ -151,10 +146,7 @@ function formatJson(value: unknown, depth = 0): string[] {
   entries.forEach(([key, item], index) => {
     const itemLines = formatJson(item, depth + 1);
     const firstItemLine = itemLines.shift()?.trimStart() ?? "null";
-    const entryLines = [
-      `${indent} ${JSON.stringify(key)}: ${firstItemLine}`,
-      ...itemLines,
-    ];
+    const entryLines = [`${indent} ${JSON.stringify(key)}: ${firstItemLine}`, ...itemLines];
     if (index < entries.length - 1) entryLines[entryLines.length - 1] += ",";
     lines.push(...entryLines);
   });

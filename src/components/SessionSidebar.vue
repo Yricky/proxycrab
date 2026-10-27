@@ -147,11 +147,7 @@ async function submitEdit(): Promise<void> {
   if (editingId.value === null) return;
   const name = editName.value.trim();
   if (!name) return;
-  const updated = await sessionsStore.update(
-    editingId.value,
-    name,
-    editDesc.value.trim() || null,
-  );
+  const updated = await sessionsStore.update(editingId.value, name, editDesc.value.trim() || null);
   if (updated) {
     closeEdit();
     appStore.toast("会话信息已更新", "success");
@@ -193,10 +189,7 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
       action: () => void toggleActive(session),
     },
     {
-      label:
-        sessionsStore.activeSessionId === session.id
-          ? "归档（请先取消活跃）"
-          : "归档",
+      label: sessionsStore.activeSessionId === session.id ? "归档（请先取消活跃）" : "归档",
       icon: Io5Archive,
       dividerBefore: true,
       disabled: sessionsStore.activeSessionId === session.id,
@@ -253,12 +246,7 @@ watch(sidebarWidth, updatePopupPos);
             </span>
             <IoArrowForwardCircle v-else :size="15" />
           </button>
-          <button
-            class="btn icon"
-            title="新建会话"
-            :disabled="creating"
-            @click="createSession"
-          >
+          <button class="btn icon" title="新建会话" :disabled="creating" @click="createSession">
             <Io5Add :size="16" />
           </button>
         </div>
@@ -270,7 +258,11 @@ watch(sidebarWidth, updatePopupPos);
         @click="openRoutingManager"
       >
         <Io5RadioButtonOn :size="13" />
-        <span v-if="routingStore.selectedName" class="sb-routing-name" :title="routingStore.selectedName">
+        <span
+          v-if="routingStore.selectedName"
+          class="sb-routing-name"
+          :title="routingStore.selectedName"
+        >
           {{ scriptLabelFor(routingStore.scripts, routingStore.selectedName) }}
         </span>
         <span v-else>未设置分流规则</span>
@@ -325,9 +317,7 @@ watch(sidebarWidth, updatePopupPos);
           @keyup.esc="closeEdit"
         />
         <div class="sb-edit-actions">
-          <button class="btn primary" :disabled="!editName.trim()" @click="submitEdit">
-            保存
-          </button>
+          <button class="btn primary" :disabled="!editName.trim()" @click="submitEdit">保存</button>
         </div>
       </div>
     </Teleport>

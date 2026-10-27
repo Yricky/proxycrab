@@ -83,9 +83,7 @@ onBeforeUnmount(() => {
         <div class="approval-main">
           <div class="approval-title">
             <span class="method mono">{{ item.method }}</span>
-            <span class="target mono" :title="requestTarget(item)">{{
-              requestTarget(item)
-            }}</span>
+            <span class="target mono" :title="requestTarget(item)">{{ requestTarget(item) }}</span>
             <span class="remaining">{{ remainingLabel(item) }}</span>
           </div>
           <div class="approval-meta">
@@ -133,27 +131,118 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.approval-root { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.approval-list { flex: 1; min-height: 0; overflow-y: auto; }
-.approval-item { display: flex; align-items: flex-end; gap: 16px; padding: 13px 14px; border-bottom: 1px solid var(--border); }
-.approval-item:last-child { border-bottom: 0; }
-.approval-main { flex: 1; min-width: 0; }
-.approval-title { display: flex; align-items: center; gap: 9px; }
-.method { flex: none; color: var(--warning); font-weight: 700; }
-.target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; user-select: text; }
-.remaining { flex: none; color: var(--warning); font-size: 11px; font-variant-numeric: tabular-nums; }
-.approval-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 5px; color: var(--text-secondary); font-size: 11px; }
-.approval-meta span { user-select: text; }
-.body-preview { max-height: 112px; margin: 9px 0 0; overflow: auto; padding: 8px 10px; border-left: 2px solid var(--border-strong); background: var(--bg-app); color: var(--text-secondary); font: 11px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
-.approval-actions { flex: none; display: flex; align-items: center; gap: 7px; }
-.duration-select { width: 92px; font-size: 11px; }
-.deny-btn { color: var(--danger); }
-.approval-empty { flex: 1; display: grid; place-content: center; justify-items: center; gap: 5px; color: var(--text-faint); }
-.approval-empty svg { margin-bottom: 4px; color: var(--success); }
-.approval-empty strong { color: var(--text-secondary); font-size: 13px; }
-.approval-empty span { font-size: 11px; }
+.approval-root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.approval-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.approval-item {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.approval-item:last-child {
+  border-bottom: 0;
+}
+.approval-main {
+  flex: 1;
+  min-width: 0;
+}
+.approval-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.method {
+  flex: none;
+  color: var(--warning);
+  font-weight: 700;
+}
+.target {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  user-select: text;
+}
+.remaining {
+  flex: none;
+  color: var(--warning);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.approval-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.approval-meta span {
+  user-select: text;
+}
+.body-preview {
+  max-height: 112px;
+  margin: 9px 0 0;
+  overflow: auto;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border-strong);
+  background: var(--bg-app);
+  color: var(--text-secondary);
+  font: 11px/1.55 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.approval-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.duration-select {
+  width: 92px;
+  font-size: 11px;
+}
+.deny-btn {
+  color: var(--danger);
+}
+.approval-empty {
+  flex: 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 5px;
+  color: var(--text-faint);
+}
+.approval-empty svg {
+  margin-bottom: 4px;
+  color: var(--success);
+}
+.approval-empty strong {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.approval-empty span {
+  font-size: 11px;
+}
 @media (max-width: 650px) {
-  .approval-item { align-items: stretch; flex-direction: column; }
-  .approval-actions { justify-content: flex-end; }
+  .approval-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .approval-actions {
+    justify-content: flex-end;
+  }
 }
 </style>

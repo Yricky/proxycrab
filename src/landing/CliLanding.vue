@@ -52,11 +52,46 @@ async function connect(): Promise<void> {
 </template>
 
 <style scoped>
-.cli-landing { height: 100%; display: grid; place-items: center; padding: 24px; background: var(--bg-app); }
-.login-card { width: min(420px, 100%); display: flex; flex-direction: column; gap: 14px; padding: 28px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-panel); box-shadow: var(--shadow-window); }
-.brand { color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-h1 { margin: 0; font-size: 22px; }
-p { margin: -5px 0 2px; color: var(--text-secondary); font-size: 13px; }
-.error { color: var(--danger); font-size: 12px; }
-.btn { align-self: flex-end; min-width: 88px; }
+.cli-landing {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg-app);
+}
+.login-card {
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-window);
+}
+.brand {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+h1 {
+  margin: 0;
+  font-size: 22px;
+}
+p {
+  margin: -5px 0 2px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.error {
+  color: var(--danger);
+  font-size: 12px;
+}
+.btn {
+  align-self: flex-end;
+  min-width: 88px;
+}
 </style>

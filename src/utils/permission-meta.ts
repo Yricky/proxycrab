@@ -97,10 +97,35 @@ export interface FunctionGroupDef {
 export const FUNCTION_GROUPS: FunctionGroupDef[] = [
   { key: "general", label: "基础配置", prefixes: ["/api/agents.md", "/api/config", "/api/assets"] },
   { key: "proxy", label: "代理服务", prefixes: ["/api/proxy/", "/api/clash-subscription"] },
-  { key: "sessions", label: "Session", prefixes: ["/api/sessions", "/api/session-shares", "/api/session-har-shares", "/api/archived-sessions", "/api/active-session"] },
+  {
+    key: "sessions",
+    label: "Session",
+    prefixes: [
+      "/api/sessions",
+      "/api/session-shares",
+      "/api/session-har-shares",
+      "/api/archived-sessions",
+      "/api/active-session",
+    ],
+  },
   { key: "logs", label: "抓包日志", prefixes: ["/api/logs/"] },
-  { key: "views", label: "Session 视图", prefixes: ["/api/session-view", "/api/session-interceptors"] },
-  { key: "scripts", label: "脚本与拦截器", prefixes: ["/api/redaction-scripts", "/api/column-scripts", "/api/filter-scripts", "/api/routing-scripts", "/api/routing-script-selection", "/api/interceptors"] },
+  {
+    key: "views",
+    label: "Session 视图",
+    prefixes: ["/api/session-view", "/api/session-interceptors"],
+  },
+  {
+    key: "scripts",
+    label: "脚本与拦截器",
+    prefixes: [
+      "/api/redaction-scripts",
+      "/api/column-scripts",
+      "/api/filter-scripts",
+      "/api/routing-scripts",
+      "/api/routing-script-selection",
+      "/api/interceptors",
+    ],
+  },
   { key: "breakpoints", label: "断点", prefixes: ["/api/breakpoints"] },
   { key: "bypass", label: "Bypass 流量", prefixes: ["/api/bypass"] },
   { key: "ca", label: "CA 证书", prefixes: ["/api/ca"] },
@@ -142,7 +167,8 @@ export function impactGroupOf(action: ApiActionView): ImpactGroupKey {
 /** 展示分组维度。 */
 export type PermissionGroupDimension = "function" | "impact";
 
-export const DIMENSION_OPTIONS: ReadonlyArray<{ value: PermissionGroupDimension; label: string }> = [
-  { value: "function", label: "功能" },
-  { value: "impact", label: "影响" },
-];
+export const DIMENSION_OPTIONS: ReadonlyArray<{ value: PermissionGroupDimension; label: string }> =
+  [
+    { value: "function", label: "功能" },
+    { value: "impact", label: "影响" },
+  ];

@@ -72,9 +72,7 @@ function actionLabel(action: ApiActionView): string {
 
 function groupMode(actions: ApiActionView[]): PermissionMode | typeof MIXED {
   const first = props.modelValue[actions[0]?.id ?? ""];
-  return first && actions.every((action) => props.modelValue[action.id] === first)
-    ? first
-    : MIXED;
+  return first && actions.every((action) => props.modelValue[action.id] === first) ? first : MIXED;
 }
 
 function actionMode(action: ApiActionView): PermissionMode {
@@ -103,11 +101,7 @@ function updateGroup(actions: ApiActionView[], mode: PermissionMode): void {
           <strong>{{ group.label }}</strong>
           <span>{{ group.actions.length }} 项</span>
         </div>
-        <div
-          class="mode-group"
-          role="group"
-          :aria-label="`${group.label}整组权限`"
-        >
+        <div class="mode-group" role="group" :aria-label="`${group.label}整组权限`">
           <button
             v-for="mode in modes"
             :key="mode.value"
@@ -123,21 +117,13 @@ function updateGroup(actions: ApiActionView[], mode: PermissionMode): void {
           </button>
         </div>
       </header>
-      <div
-        v-for="action in group.actions"
-        :key="action.id"
-        class="permission-row"
-      >
+      <div v-for="action in group.actions" :key="action.id" class="permission-row">
         <span class="method mono">{{ action.method }}</span>
         <div class="action-copy">
           <span>{{ actionLabel(action) }}</span>
           <code>{{ action.route_template }}</code>
         </div>
-        <div
-          class="mode-group"
-          role="group"
-          :aria-label="`${actionLabel(action)}权限`"
-        >
+        <div class="mode-group" role="group" :aria-label="`${actionLabel(action)}权限`">
           <button
             v-for="mode in modes"
             :key="mode.value"
@@ -158,28 +144,122 @@ function updateGroup(actions: ApiActionView[], mode: PermissionMode): void {
 </template>
 
 <style scoped>
-.permission-editor { display: flex; flex-direction: column; gap: 14px; }
-.permission-group { border-top: 1px solid var(--border); }
-.group-header { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; }
-.group-header > div { display: flex; align-items: baseline; gap: 7px; }
-.group-header strong { font-size: 12px; }
-.group-header span { color: var(--text-faint); font-size: 10px; }
-.permission-row { min-height: 42px; display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 5px 0 5px 8px; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
-.permission-row:hover { background: var(--bg-hover); }
-.method { font-size: 10px; font-weight: 700; color: var(--text-secondary); }
-.action-copy { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
-.action-copy > span { flex: none; font-size: 12px; }
-.action-copy code { min-width: 0; overflow: hidden; color: var(--text-faint); font: 10px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; user-select: text; }
-.mode-group { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-panel); justify-self: end; }
-.mode-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 18px; border: 0; border-radius: 999px; background: transparent; color: var(--text-faint); cursor: pointer; }
-.mode-btn:hover:not(:disabled):not(.active) { color: var(--text); background: var(--bg-hover); }
-.mode-btn.active.m-allow { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
-.mode-btn.active.m-approval { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
-.mode-btn.active.m-deny { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
-.mode-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.permission-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.permission-group {
+  border-top: 1px solid var(--border);
+}
+.group-header {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+}
+.group-header > div {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+.group-header strong {
+  font-size: 12px;
+}
+.group-header span {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+.permission-row {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0 5px 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+.permission-row:hover {
+  background: var(--bg-hover);
+}
+.method {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.action-copy {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.action-copy > span {
+  flex: none;
+  font-size: 12px;
+}
+.action-copy code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font: 10px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+.mode-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  justify-self: end;
+}
+.mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.mode-btn:hover:not(:disabled):not(.active) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.mode-btn.active.m-allow {
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  color: var(--success);
+}
+.mode-btn.active.m-approval {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
+}
+.mode-btn.active.m-deny {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+.mode-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 @media (max-width: 680px) {
-  .permission-row { grid-template-columns: 52px minmax(0, 1fr) auto; }
-  .action-copy { display: block; }
-  .action-copy code { display: block; margin-top: 2px; }
+  .permission-row {
+    grid-template-columns: 52px minmax(0, 1fr) auto;
+  }
+  .action-copy {
+    display: block;
+  }
+  .action-copy code {
+    display: block;
+    margin-top: 2px;
+  }
 }
 </style>

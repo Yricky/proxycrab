@@ -84,10 +84,7 @@ export function openBreakpointList(
   });
 }
 
-export function openBreakpointDetail(
-  breakpointId: number,
-  captureId: number,
-): void {
+export function openBreakpointDetail(breakpointId: number, captureId: number): void {
   windowsStore.open(`breakpoint-${breakpointId}`, {
     title: `#${captureId} — 断点详情`,
     component: LogDetailWindow,
@@ -135,23 +132,16 @@ export function openInterceptorSnapshot(
   logId: number,
   execution: InterceptorExecution,
 ): void {
-  windowsStore.open(
-    `interceptor-snapshot-${sessionId}-${logId}-${execution.execution_id}`,
-    {
-      title: `${scriptTitle(execution)} — 进入拦截器前的快照`,
-      component: InterceptorSnapshotWindow,
-      props: { sessionId, logId, execution },
-      width: 820,
-      height: 600,
-    },
-  );
+  windowsStore.open(`interceptor-snapshot-${sessionId}-${logId}-${execution.execution_id}`, {
+    title: `${scriptTitle(execution)} — 进入拦截器前的快照`,
+    component: InterceptorSnapshotWindow,
+    props: { sessionId, logId, execution },
+    width: 820,
+    height: 600,
+  });
 }
 
-export function openModificationValue(
-  id: string,
-  label: string,
-  value: string,
-): void {
+export function openModificationValue(id: string, label: string, value: string): void {
   openReadonlyViewer(`mod-value-${id}`, `${label} — 完整内容`, value);
 }
 
@@ -175,10 +165,7 @@ export function openResponseInterceptorManager(): void {
   });
 }
 
-export function openColumnManager(
-  initialName?: string,
-  sessionId: number | null = null,
-): void {
+export function openColumnManager(initialName?: string, sessionId: number | null = null): void {
   windowsStore.open("column-manager", {
     title: "自定义列管理器",
     component: ColumnManagerWindow,
@@ -187,9 +174,11 @@ export function openColumnManager(
     height: 600,
   });
   if (initialName) {
-    window.dispatchEvent(new CustomEvent("proxycrab-focus-script", {
-      detail: { scope: "column", name: initialName },
-    }));
+    window.dispatchEvent(
+      new CustomEvent("proxycrab-focus-script", {
+        detail: { scope: "column", name: initialName },
+      }),
+    );
   }
 }
 
@@ -230,10 +219,7 @@ export function openArchivedSessions(): void {
   });
 }
 
-export function openSessionExportShare(
-  sessionId: number,
-  sessionName: string,
-): void {
+export function openSessionExportShare(sessionId: number, sessionName: string): void {
   windowsStore.open(`session-export-share-${sessionId}`, {
     title: `导出和分享 — ${sessionName}`,
     component: SessionExportShareWindow,
@@ -241,9 +227,7 @@ export function openSessionExportShare(
     width: 700,
     height: 420,
   });
-  window.dispatchEvent(
-    new CustomEvent("proxycrab-refresh-session-share", { detail: sessionId }),
-  );
+  window.dispatchEvent(new CustomEvent("proxycrab-refresh-session-share", { detail: sessionId }));
 }
 
 export function openBase64(): void {
@@ -337,5 +321,10 @@ export function openAgentsPresets(): void {
 }
 
 export function openRedactionManager(): void {
-  windowsStore.open("redaction-manager", { title: "脱敏脚本管理器", component: RedactionManagerWindow, width: 1000, height: 600 });
+  windowsStore.open("redaction-manager", {
+    title: "脱敏脚本管理器",
+    component: RedactionManagerWindow,
+    width: 1000,
+    height: 600,
+  });
 }
