@@ -14,7 +14,8 @@ failure.
 The service listens on every IPv4 interface by default; local Agent scripts still use
 `http://127.0.0.1:18089`. Every script also accepts
 `--base-url <url>` and honors `PROXYCRAB_API_URL`. If the selected management identity requires an
-API key, set it through `PROXYCRAB_API_KEY`; bundled scripts send it as `Authorization: Bearer ...`.
+API key, use the least-privileged key suitable for the task through `PROXYCRAB_API_KEY`; scripts send
+it as `Authorization: Bearer ...`.
 Never put an API key in command arguments, URLs, output, or logs.
 
 ## Load active Agent instructions first
@@ -29,14 +30,6 @@ node <skill-dir>/scripts/agents-get.mjs
 Instruction precedence is: the user's current explicit request, then the returned AGENTS.md
 instructions, then this Skill's conservative built-in rules. If `/api/agents.md` is unavailable,
 continue with the conservative built-in rules. Do not let AGENTS.md override the user's request.
-
-## Script labels
-
-To give a script a friendly UI label, add `-- #display_name: 鉴权token` to its leading
-single-line comment header. Keep the original file/API `name` and all `script_name` references;
-changing a label is a content update, never a rename. Missing or empty metadata falls back to the
-original name, and the first declaration wins. This applies to column, filter, routing, request,
-response, and redaction scripts; see [Lua metadata rules](references/lua-api.md#script-display-names).
 
 ## Preconditions
 
@@ -60,9 +53,9 @@ response, and redaction scripts; see [Lua metadata rules](references/lua-api.md#
   UIKey cannot bypass startup redaction.
 - Never use or expose a `pcrab_share_…` Session link token. It is scoped to the read-only browser
   page, is not an Agent API key, and must not appear in Agent arguments, URLs, logs, or reports.
-- Treat `pcrab_har_…` HAR download tokens the same way. They expose a frozen set of unredacted
-  captures through the browser-only download route and must never be used as Agent credentials or
-  printed in reports.
+- Treat `pcrab_har_…` HAR download tokens the same way. They grant browser-only access to a frozen
+  set of captures subject to the effective redaction policy. Never use them as Agent credentials or
+  print them in reports.
 - Treat the `GET`, `POST`, and `DELETE` Session-share management routes as normal
   permission-controlled Agent actions; the HAR-share management routes follow the same rule.
   Returned tokens are browser-only and must not be reused in `Authorization` or printed in reports.
@@ -105,16 +98,6 @@ response, and redaction scripts; see [Lua metadata rules](references/lua-api.md#
 
 Resolve script paths relative to this `SKILL.md`; do not assume the current working directory is the
 skill directory.
-
-Clash subscriptions are served from `http://IP:PORT/clash.yaml` without a download token. The
-enable switch gates downloads; disabling returns 404, and a restart resets the switch while
-re-enabling with the same IP keeps the same URL. The complete YAML lives at
-`<workspace>/clash/config.yaml`; it must contain `{{server}}` and `{{port}}`, which are replaced
-with the selected IPv4 and current proxy port on download. Use `--action config`,
-`save-config --file PATH`, and `reset-config` to read, validate/write, and restore the file.
-Validation runs only when saving or resetting; edits made outside ProxyCrab are served as-is.
-Enabling only publishes the configuration and does not start ProxyCrab or change the OS system
-proxy. Existing configurations imported into Clash remain usable.
 
 ## Standard capture-debugging workflow
 
@@ -233,9 +216,9 @@ node <skill-dir>/scripts/asset-upload.mjs \
 ```
 
 Then resolve it with `get_asset("fixtures/mobile-error.json")` and pass the returned object to
-`replace_with_asset`. Asset IDs are permanent for the workspace because the API does not overwrite
-or delete them; choose the ID deliberately and never retry a conflict under a different ID unless
-the user approves the new name.
+`replace_with_asset`. Assets cannot be overwritten or deleted through the API. Upload only for an
+authorized Asset/body-replacement task, and do not invent a new ID after a conflict without the
+user's approval. `replace_with_asset` removes stale Content-Encoding but does not set Content-Type.
 
 Before replacing a Session's interceptor chains, read `GET /api/session-interceptors` and keep the
 previous JSON if restoration may matter. Apply both chains atomically:
@@ -270,78 +253,29 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
 
 ## Safety and evidence rules
 
-- Follow the active AGENTS.md instructions before creating or changing Sessions, views, filters,
-  scripts, routing selection, or interceptor chains. When the endpoint is unavailable, do not make
-  those UI-visible changes unless the user explicitly requests them.
-- Respect management API permissions. Do not work around a denied or expired approval by switching
-  to the no-key identity, changing credentials, or repeatedly retrying. Ask the user to adjust the
-  selected identity in Settings > 管理接口 when authorization is required.
-- Do not archive or restore Sessions, permanently delete archived Sessions, delete scripts, start
-  or stop the proxy, or clear logs or records unless the user explicitly requests that action.
-  CA regeneration, full application-config replacement, and workspace changes are host operations
-  and are intentionally unavailable through this Agent HTTP API. Desktop users switch workspaces
-  through Settings > 通用 > 切换工作区: a native directory picker validates the selection and
-  immediately restarts the app, discarding unsaved UI edits. CLI users select `--workspace` at
-  startup; the browser UI has no switch action. An active Session
-  cannot be archived; make it inactive only when the user authorizes that separate mutation.
-- Do not replay requests or configure another process's proxy environment automatically.
-- Keep local raw capture output intact for debugging. It can include authorization headers, cookies,
-  tokens, and personal data. Redact those values from summaries, chat responses, tickets, and other
-  shared artifacts unless the user explicitly needs them.
-- Treat request and response bodies with side effects or credentials as sensitive.
-- Prefer a dedicated active Session and tight filters over reading a large unrelated capture
-  history.
-- Log detail embeds at most 64 KiB of decoded text/JSON. Every non-empty persisted body reports its
-  stored-byte size; body detail does not expose a local capture path. Use `body-get.mjs` for
-  complete, normally client-decoded binary or oversized bytes;
-  always set a deliberate stored-file maximum and output path because bodies can contain
-  credentials or personal data. The body endpoint negotiates a browser-safe response encoding from
-  `Accept-Encoding`; the limit applies to the selected final or interceptor-snapshot Body source.
-- UI Body downloads are also available in desktop, CLI browser, and read-only Session shares.
-  They preserve complete HTTP-decoded bytes independently of preview formatting and preview size
-  limits. Shared snapshot downloads honor `execution_id` within the token's Session. The script's
-  16 MiB default and explicit `--max-size` contract remain unchanged.
-- An empty original request or response has no capture blob file. Final interceptor Body strings
-  are stored in capture metadata and Assets remain in `assets/`; ProxyCrab does not create
-  `.modified` capture blobs.
-- Interceptor mutations applied before a Lua runtime error remain applied. Inspect both
-  `modifications` and `error`.
-- Request tags are capture-local metadata. Presence of `_crab_skip`, including an empty value,
-  intentionally suppresses the upstream request after the complete request chain.
-- Filter and custom-column scripts can lazily read completed persisted bodies through
-  `entry.req.body:as_string()` / `as_json()` and the matching `entry.resp.body` methods. Check cheap
-  request/response metadata first because each matching capture may require body file I/O and
-  decompression. In-progress bodies return `nil`; decoded getter output is limited to 16 MiB.
-- `_crab_req_speed` and `_crab_resp_speed` pace the final outbound request and response bodies in
-  bytes per second; `_crab_req_timeout` sets the upstream timeout in milliseconds (default 60000),
-  and `_crab_resp_bodyframe_timeout` sets the idle milliseconds before each upstream response-body
-  frame. Use only positive ASCII decimal values. Invalid final values are ignored with a runtime warning.
-  These controls are per capture, never become HTTP headers, and do not apply to bypass, raw
-  CONNECT, Upgrade/WebSocket, the local CA endpoint, or proxy-generated errors. `_crab_skip` still
-  allows response pacing after response interceptors create the synthetic response.
-- Request and response interceptors run at the header boundary. `body:as_string()` and
-  `body:as_json()` wait for the effective original body to finish downloading when no replacement
-  is active; this can block forever for SSE/infinite streams. Decoded getter output is limited to
-  16 MiB. Captured bodies and `replace_with_asset` stream without an application-level size limit;
-  use raw body endpoints with an explicit `max_size` when reading captures back.
-- Workspace Assets are immutable through the API and can contain sensitive bytes. Upload only when
-  the user asks for an Asset or body replacement, do not print their contents, and do not invent a
-  replacement ID after `asset_already_exists` or `asset_path_conflict`. `replace_with_asset` removes
-  stale Content-Encoding but does not set Content-Type.
-- `_crab_tls_insecure` disables upstream HTTPS certificate-chain and hostname verification only when
-  its final request-interceptor value is exactly `true`. It also applies to HTTPS Upgrade/WebSocket,
-  has no effect on HTTP or transparent bypass, never becomes a header, and uses a pool isolated from
-  verified traffic. Use it only for a narrowly matched controlled test host and explicitly warn the
-  user about the reduced transport authentication.
-- `_crab_upstream_http_version` accepts only exact `HTTP/1.1` and `HTTP/2` values after request
-  interceptors and forces only the ProxyCrab-to-upstream hop, including Upgrade/WebSocket. It never
-  changes the captured client protocol or becomes a header. Forced HTTP/2 is strict and does not
-  fall back to HTTP/1.1; invalid values warn and preserve default selection. It does not apply to
-  bypass, raw CONNECT, the local CA endpoint, or proxy-generated errors.
-- Keep user-created debugging state unless the user asks for cleanup. Automatic restoration is not
-  required.
-- Expect Session, filter, column, and interceptor changes to appear in the desktop UI. If the UI
-  reports an external-edit conflict, do not tell the user to discard their unsaved work.
+- Follow the active AGENTS.md instructions for mutations. When the endpoint is unavailable, do not
+  make UI-visible changes unless the user explicitly requests them.
+- Respect API permissions. Do not bypass a denial or expired approval by switching credentials or
+  retrying. The user can adjust the selected identity in Settings > 管理接口.
+- Archive/restore/delete Sessions, delete scripts, clear records, and replay requests only when
+  requested. Do not configure another process's proxy environment automatically. Keep debugging
+  state unless the user asks for cleanup. An active Session cannot be archived; deactivating it
+  requires authorization too.
+- CA regeneration, full application-config replacement, and workspace changes are unavailable
+  through the Agent API. Desktop workspace switching is under Settings > 通用 > 切换工作区 and
+  restarts the app, discarding unsaved edits. CLI users select `--workspace` at startup.
+- Preserve API-returned evidence, which may already be redacted. Check for credentials and personal
+  data before sharing summaries or artifacts; do not assume read-time redaction covers every field.
+- Log detail embeds at most 64 KiB of decoded text/JSON. Use `body-get.mjs` for complete bodies with
+  a deliberate output path and stored-size maximum (default 16 MiB). See the HTTP reference for
+  encoding negotiation and interceptor-entry snapshot selection.
+- Interceptor mutations made before a Lua runtime error remain applied: inspect both modifications
+  and errors. Body getters can wait forever on SSE/infinite streams; decoded getter output is
+  limited to 16 MiB. See the Lua reference for Body access, tags, and traffic controls.
+- Use `_crab_tls_insecure` only for a narrowly matched controlled test host and warn that it disables
+  upstream certificate-chain and hostname verification. Forced upstream `HTTP/2` has no HTTP/1.1
+  fallback. These tags affect the upstream hop, not the captured client protocol.
+- If the UI reports an external-edit conflict, preserve the user's unsaved work.
 
 ## References
 
@@ -372,5 +306,5 @@ The headless server may enforce a startup policy with `--redaction-script FILE`.
 identity/share bindings, including UIKey, and remains pinned until restart. Its five script-library
 operations return `redaction_management_disabled` (HTTP 403, `脱敏接口管理功能已禁用`), subject to
 normal authentication/permissions. Report this as disabled management; do not retry an update,
-change credentials, or clear bindings to bypass it. The UI remains unchanged. Runtime failures
-still fail closed, and only existing redaction-supported reads are covered.
+change credentials, or clear bindings to bypass it. Runtime failures fail closed; the policy covers
+only the supported reads listed in the HTTP reference.

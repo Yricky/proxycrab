@@ -21,6 +21,7 @@ This reference documents the complete local HTTP surface used by ProxyCrab agent
 15. [System logs](#system-logs)
 16. [Errors and lifecycle notes](#errors-and-lifecycle-notes)
 17. [Clash subscription](#clash-subscription)
+18. [Redaction library and bindings](#redaction-library-and-bindings)
 
 ## Script display metadata
 
@@ -53,9 +54,6 @@ identity and route action. Temporary decisions are in-memory and disappear on re
 target supports only `allow` and `deny`, treats a persisted `approval` as deny, and never creates an
 approval request. API-key creation, deletion, and permission editing are management-UI-only
 operations under Settings > 管理接口; they are not public Agent HTTP resources.
-
-The CLI web backend derives its address from `window.location.hostname` (without the port).
-`GET /ui-api/local-ips` is unavailable; desktop Tauri still enumerates local IPv4 interfaces.
 
 The CLI prints its UI access token for the browser landing page. It generates a per-run
 `pcrab_ui_…` token by default; `--ui-key KEY` (with or without `run`) supplies a custom value.
@@ -104,26 +102,11 @@ Every failure is:
 Requests and responses use `application/json`. URL path segments and query values must be
 percent-encoded normally.
 
-### Desktop UI side effects
+### UI synchronization
 
-Successful HTTP mutations notify the running management frontend through a target-private channel.
-The HTTP envelope does not change and there is no public Agent event endpoint.
-
-- Session and active-Session changes refresh the sidebar without forcing the user to view another
-  Session.
-- Routing-library and selection changes refresh the routing manager.
-- Bypass deletion and clearing refresh the bypass window.
-- A changed log filter or Session view reloads the table only when that Session is currently viewed.
-- Column/filter/interceptor library changes refresh relevant choices, managers, table rendering, and
-  the current interceptor pipeline.
-- CA regeneration and system-log clearing refresh their open windows.
-- Workspace/config changes refresh a clean settings window.
-- Open script/settings windows preserve unsaved local input and show an external-change warning
-  instead of overwriting it.
-- Adjacent changes are coalesced and normal synchronization is silent.
-
-This means Agent operations become visible in the open desktop or CLI browser UI shortly after the HTTP success
-response. Do not assume the user wants their currently viewed Session changed.
+Successful management mutations synchronize into the desktop or CLI browser UI. They preserve the
+viewed Session unless it is archived, in which case the first remaining Session is selected.
+Open editors preserve unsaved input and warn about external changes; do not discard the user's work.
 
 ## Agent instructions
 
@@ -137,15 +120,7 @@ The user's current explicit request takes precedence over the returned document.
 unavailable, use the Skill's conservative built-in behavior. This read is stateless and does not
 notify or refresh the desktop UI.
 
-The desktop app manages multiple workspace-scoped presets under:
-
-```text
-agents/config.json
-agents/presets/<preset-id>.md
-```
-
-Newly initialized workspaces contain `充分使用能力` and `静默排查`, with `充分使用能力` active.
-Preset CRUD and selection are management-UI operations, not public Agent HTTP endpoints.
+Preset management is available in the owner UI, not through the Agent HTTP API.
 
 ## Shared data types
 
@@ -350,9 +325,7 @@ Returns a `SessionsPayload`:
 
 `sessions` contains non-archived `SessionMetadata` entries. `active_session_id` is `null` when no
 Session is active, including an empty workspace (`{ "sessions": [], "active_session_id": null }`).
-This object replaces the former array response and the former `GET /api/active-session` endpoint;
-that GET endpoint is removed. `scripts/session-list.mjs` emits the same object with `columns`
-added to each Session.
+`scripts/session-list.mjs` emits the same object with `columns` added to each Session.
 
 ### `POST /api/sessions`
 
@@ -715,8 +688,7 @@ When `has_snapshot` is false or the execution does not exist the endpoint return
 ### `GET /api/logs/{id}/body?session_id=3&side=request&max_size=16777216`
 
 Returns the final Body constructed after interceptors as an unwrapped raw byte stream. The final
-source is the original network Blob, a complete replacement string, or an Asset. `blob/` contains
-only original network bodies; ProxyCrab does not create `.modified` files.
+source is the original network body, a complete replacement string, or an Asset.
 
 Add `execution_id=17` to read the selected interceptor-entry snapshot body. The endpoint can
 resolve `original`, `string`, and `asset` sources, including in the snapshot viewer. `side` is required and must be
@@ -758,14 +730,11 @@ uses the same snapshot selection, encoding negotiation, and size rules. The shar
 Session; a supplied `session_id` cannot select another Session. A missing snapshot returns a
 snapshot error rather than falling back to the final Body. Share tokens remain share-only credentials.
 
-The UI's Body download button saves complete HTTP-decoded bytes, preserving text whitespace and
-binary/protocol data regardless of preview formatting. It works without loading a preview and is
-not restricted by the preview's 16 MiB/1 GiB limits. Desktop saves stream through a native save
-dialog; browser saves consume a browser-managed Blob before handing it to the browser downloader
-(browser resource limits still apply). Names prefer captured Content-Disposition filenames and
-otherwise include capture/breakpoint ID, snapshot execution ID when applicable, side, and MIME
-extension. No public API route, default size limit, authentication, or response format changed.
-`body-get.mjs` still requires an output path and retains its explicit/default stored-size limit.
+The UI's Body download button saves complete HTTP-decoded bytes independently of preview loading,
+formatting, and size limits. Browser resource limits still apply to large downloads. Snapshot
+selection does not fall back to the final Body when the snapshot is missing. `body-get.mjs` requires
+an output path and uses its explicit stored-size maximum or the 16 MiB default. Applicable read-time
+redaction policies still apply.
 
 ### Replaying a request: `POST /api/replay?session=3`
 
@@ -1120,9 +1089,8 @@ Returns:
 Public raw-file download on the management HTTP port. No proxy setup, running proxy, Bearer key,
 subscription token, or active Session is required. It returns only the current public certificate
 as PEM (`application/x-x509-ca-cert`, attachment `proxycrab-ca.crt`, `Cache-Control: no-store`).
-Regenerating the CA updates the file at the same URL. The old proxy virtual-host handler has been
-removed; the old URL is now an ordinary upstream request. Certificate and Clash URLs share the
-selected non-loopback IPv4 in the management UI.
+Regenerating the CA updates the file at the same URL. Use a non-loopback IPv4 reachable from
+the device downloading the certificate.
 
 ```bash
 node <skill-dir>/scripts/certificate-download.mjs --out /tmp/proxycrab-ca.crt
@@ -1139,8 +1107,7 @@ HTTP clients can download this public file without authentication.
 non-loopback IPv4; `DELETE` disables it (both default to `approval`, which CLI treats as deny for
 Agent identities until allowed). Disabled state is `{"enabled":false}`; enabled state is
 `{"enabled":true,"server":"192.168.1.20"}`. No download token is generated, returned, or validated.
-State is in memory and resets on restart. Successful management updates publish
-`clash_subscription` for UI synchronization.
+State is in memory and resets on restart.
 
 `GET /api/clash-config` returns `{"yaml":"…","default_yaml":"…"}` (default permission:
 `allow`). `PUT /api/clash-config` takes `{"yaml":"…"}` and validates before writing; `DELETE`
@@ -1152,12 +1119,11 @@ is a mapping, `proxies` is a non-empty list of mappings with non-empty `name` an
 a non-empty list of non-empty strings, the final rule is `MATCH,<target>`, both placeholders are
 present, and the file is at most 1 MiB. The raw file is a template, so validation substitutes
 `192.0.2.1` and `8089` for the placeholders before parsing. Invalid input returns `400 bad_request`
-and does not write the file. Successful `PUT`/`DELETE` publish `clash_config`.
+and does not write the file.
 
 `GET /clash.yaml` is a separate public download route, outside management Bearer auth and the
 management permission catalog. It is available only while the subscription is enabled; otherwise it
-returns `404 not_found`. The URL has no token, and query parameters are ignored, so legacy
-`?token=…` links keep working. The downloaded YAML is the saved file with `{{server}}` replaced by
+returns `404 not_found`. The URL requires no token. The downloaded YAML replaces `{{server}}` with
 the selected IPv4 and `{{port}}` replaced by the current configured proxy port; all other text,
 comments, and formatting are preserved. The file is not validated at download time, so external
 edits are served as-is. Responses use `Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
@@ -1313,11 +1279,9 @@ expand the redaction data contract below or change capture/forwarding.
 
 In this mode, all five library operations above reject authorized calls with HTTP 403,
 `redaction_management_disabled`, and message `脱敏接口管理功能已禁用`. Normal authentication and
-permission checks still apply. The frontend is unchanged and displays the backend error. Binding
-or clearing an identity/share cannot disable or replace the startup policy; selecting a named
+permission checks still apply. Binding or clearing an identity/share cannot disable or replace the startup policy; selecting a named
 library script also fails its library validation while management is disabled. Do not retry with
-another identity or treat this error as an upsert conflict. Without the flag, existing behavior is
-unchanged.
+another identity or treat this error as an upsert conflict.
 
 `POST /api/session-shares` and `POST /api/session-har-shares` accept optional `redaction_script`
 on initial creation. Re-enabling an enabled share remains idempotent; use the binding endpoint to
@@ -1345,10 +1309,6 @@ See the Lua reference's **Read-time redaction scripts** section for the three-st
 
 ### Browser secure-context limits
 
-The CLI web UI can open independent request windows on remote HTTP origins; their IDs are
-page-local counters. JWT decoding works on HTTP, but JWT signature verification uses
-`crypto.subtle` and requires a secure context (HTTPS or trusted localhost). Copy buttons have a
-legacy `execCommand` fallback. Monaco also has UUID/copy fallbacks; its context-menu paste remains
-browser-dependent, and its optional WebGPU renderer is disabled by default. Body/file downloads
-use Blob/object URLs rather than secure-context file pickers. These browser restrictions do not
-change management API permissions or the server-side replay endpoint.
+JWT decoding works on HTTP, but signature verification requires a secure context (HTTPS or trusted
+localhost). A browser JWT verification failure does not establish a server-side replay failure or
+change management API permissions.

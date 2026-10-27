@@ -146,7 +146,7 @@
     {
       "id": 25,
       "prompt": "Use the ProxyCrab management HTTP API to report the current workspace and immediately switch to /tmp/proxycrab-next.",
-      "expected_output": "The agent explains that /api/workspace and a workspace-switch HTTP endpoint do not exist and makes no HTTP attempt. It directs desktop users to Settings > 通用 > 切换工作区, whose no-argument trusted Tauri operation opens a directory picker and immediately restarts the app with the selected workspace's configuration, discarding unsaved edits. Canceling or selecting the current directory does nothing. Empty directories ignore dot-prefixed entries; nonempty directories require valid workspace_schema.json and app_config.json with a supported schema version, otherwise the UI shows a toast and keeps the current workspace. CLI users select the workspace explicitly with --workspace at startup; their browser UI hides the switch action.",
+      "expected_output": "The agent explains that workspace inspection/switching is unavailable through the Agent HTTP API and makes no HTTP attempt. It directs desktop users to Settings > 通用 > 切换工作区, warning that switching restarts the app and discards unsaved edits. CLI users select --workspace at startup.",
       "files": []
     },
     {
@@ -163,8 +163,8 @@
     },
     {
       "id": 28,
-      "prompt": "Using only a ProxyCrab browser share for Session 3, filter capture IDs by URI and explain whether this changes the Session's saved filter or can expose another Session.",
-      "expected_output": "The agent calls POST /share-api/logs/ids with the share token and an explicit filter, consumes matched_ids and in_progress_ids, explains that the request is read-only, that no share filter-save route exists, and that the server forcibly scopes the query to the token's Session regardless of any supplied session_id.",
+      "prompt": "Explain whether filtering by URI in a read-only ProxyCrab browser share for Session 3 changes the Session's saved filter or can expose another Session. Do not use the share token.",
+      "expected_output": "The agent explains that browser-share filtering is read-only, has no filter-save route, and is scoped to the token's Session regardless of a supplied session_id. It does not copy, print, or use the browser token in Agent commands.",
       "files": []
     },
     {
@@ -232,7 +232,7 @@
     {
       "id": 39,
       "prompt": "Give the existing ProxyCrab custom-column script auth-token the UI label 鉴权token. Preserve its logic, file name, and all Session references; verify the saved label and explain how removing it and duplicate labels behave.",
-      "expected_output": "The agent reads auth-token, adds or updates the first leading -- #display_name: 鉴权token annotation, preserves the rest of the Lua source, updates content using the existing script name, and reads it back to verify name remains auth-token and display_name is 鉴权token. It does not rename files or rewrite script_name references. It explains missing or empty metadata falls back to auth-token, the first header declaration wins, duplicate labels are allowed while original names distinguish scripts, and share pages retain labels without exposing source. In script editors, sidebars show original names and the editor toolbar shows display_name with original-name fallback. The custom-column header menu starts with 编辑脚本 and opens or focuses that exact script.",
+      "expected_output": "The agent reads auth-token, adds or updates the first leading -- #display_name: 鉴权token annotation, preserves the rest of the Lua source, updates content using the existing script name, and reads it back to verify name remains auth-token and display_name is 鉴权token. It does not rename files or rewrite script_name references. It explains missing or empty metadata falls back to auth-token, the first header declaration wins, duplicate labels are allowed while original names distinguish scripts, and share pages retain labels without exposing source.",
       "files": []
     },
     {
@@ -244,7 +244,7 @@
     {
       "id": 41,
       "prompt": "Download the current public CA certificate from the local ProxyCrab management service to /tmp/proxycrab-ca.crt while the proxy is stopped. Do not start the proxy or configure system proxy. Explain how a phone can download the same certificate.",
-      "expected_output": "The agent reads active Agent instructions and uses certificate-download.mjs or GET /ca.crt on the management port, saves only the public certificate, and reports the path/size. It explains using the non-loopback IPv4 URL or QR in certificate management without prior proxy setup, never recommends the removed proxy.crab virtual-host route, and keeps the proxy stopped.",
+      "expected_output": "The agent reads active Agent instructions and uses certificate-download.mjs or GET /ca.crt on the management port, saves only the public certificate, and reports the path/size. It explains using the non-loopback IPv4 URL or QR in certificate management without prior proxy setup, and keeps the proxy stopped.",
       "files": []
     },
     {
@@ -256,7 +256,7 @@
     {
       "id": 43,
       "prompt": "Explain how to download a complete Body larger than 1 GiB from ProxyCrab UI, and how to save the exact interceptor-entry snapshot from a read-only Session share. Does formatting JSON change the downloaded bytes, and does this change body-get.mjs limits?",
-      "expected_output": "The agent points to the Body toolbar download button without requiring preview loading, explains that downloads preserve complete HTTP-decoded bytes (not formatted JSON or parsed protobuf/gRPC), and distinguishes native desktop streaming saves from browser-managed Blob downloads subject to browser resources. It states that share Body reads honor execution_id within the token's Session and missing snapshots do not fall back to final bodies. Names prefer Content-Disposition then capture/execution/side and MIME suffix. Existing API authentication, parameters, raw responses, and the script's 16 MiB default or explicit max-size remain unchanged.",
+      "expected_output": "The agent points to the Body download button without requiring preview loading and explains that downloads preserve complete HTTP-decoded bytes independently of preview formatting and limits, subject to the effective redaction policy and browser resources. Share snapshots stay scoped to the shared Session and missing snapshots never fall back to final bodies. The agent does not use the share token. body-get.mjs requires an output path and defaults to a 16 MiB stored-size maximum unless explicitly overridden.",
       "files": []
     },
     {
@@ -267,14 +267,14 @@
     },
     {
       "id": 45,
-      "prompt": "A bound ProxyCrab body read returns redaction_failed. Diagnose the failure without changing credentials or policies.",
-      "expected_output": "Reports the bound read failure without automatically switching credentials, removing the policy, or using raw Assets/history to bypass it; asks the owner to diagnose the intended script.",
+      "prompt": "A bound ProxyCrab body read returns redaction_failed. Diagnose without changing credentials or policies, and explain whether exported capture JSON and HAR downloads are always unredacted.",
+      "expected_output": "Reports the read failure without switching credentials, removing the policy, or using raw Assets/history to bypass it. Explains that capture JSON and HAR can be transformed by the effective redaction policy; preserves API-returned evidence and checks remaining sensitive fields before sharing. Asks the owner to diagnose the intended script.",
       "files": []
     },
     {
       "id": 46,
       "prompt": "A headless ProxyCrab server started with --redaction-script /srv/mask.lua. Updating a redaction script returns redaction_management_disabled / 脱敏接口管理功能已禁用. Explain what happened and whether UIKey or clearing a share binding can bypass the policy.",
-      "expected_output": "Explain that startup redaction is pinned until restart, overrides all identity/share bindings including UIKey, and disables all five library operations. Do not retry PUT after a failed POST, switch credentials, clear bindings, or modify permissions to bypass it. Scope remains the existing redaction-supported reads; captures and forwarding are unchanged.",
+      "expected_output": "Explain that startup redaction is pinned until restart, overrides all identity/share bindings including unbound identities and UIKey, and disables all five library operations. Do not retry PUT after a failed POST, switch credentials, clear bindings, or modify permissions to bypass it. Scope remains the existing redaction-supported reads; captures and forwarding are unchanged.",
       "files": []
     },
     {
@@ -284,15 +284,9 @@
       "files": []
     },
     {
-      "id": 48,
-      "prompt": "The ProxyCrab CLI browser is opened at http://192.0.2.10:18089/. How does its web backend obtain the address? Should it call /ui-api/local-ips to discover Docker interfaces?",
-      "expected_output": "Explain that the web backend returns [window.location.hostname], here [\"192.0.2.10\"], without the port and without an HTTP request. /ui-api/local-ips has been removed. Tauri desktop continues local IPv4 enumeration.",
-      "files": []
-    },
-    {
       "id": 49,
       "prompt": "On a remote HTTP ProxyCrab CLI page, the request window opens but JWT verification reports importKey unavailable. Explain which behavior is a browser secure-context restriction and whether it means /api/replay is broken.",
-      "expected_output": "Distinguish page-local request-window IDs from crypto.subtle-backed JWT verification. JWT decoding still works; verification needs HTTPS or trusted localhost. Copy has a legacy fallback; editor context-menu paste can be browser-dependent. Do not claim a server replay failure or bypass authentication/redaction.",
+      "expected_output": "Explain that JWT decoding works on HTTP, while signature verification needs HTTPS or trusted localhost. A browser JWT verification failure does not establish that /api/replay is broken. Do not bypass authentication or redaction.",
       "files": []
     }
   ]

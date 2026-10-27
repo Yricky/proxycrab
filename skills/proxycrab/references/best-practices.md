@@ -1,17 +1,6 @@
 # ProxyCrab debugging best practices
 
-## Authenticate without leaking the key
-
-Use the least-privileged workspace API key suitable for the task and expose it only as
-`PROXYCRAB_API_KEY`. Bundled scripts attach the Bearer header and wait up to 40 seconds so a desktop
-approval can complete. Never pass a key as a CLI argument or query parameter, and never paste it
-into reports. A denial is a policy decision, not a signal to switch identities or retry in a loop.
-
-## Load the workspace policy first
-
-Immediately after reading the Skill, read `GET /api/agents.md`. The user's current explicit request
-takes precedence over that document. If the endpoint is unavailable, use the Skill's conservative
-built-in rules.
+For authentication, mutation boundaries, and sensitive-data handling, follow [SKILL.md](../SKILL.md).
 
 ## Scope first
 
@@ -27,12 +16,7 @@ Start with the narrowest stable discriminator available:
 4. a correlation header exposed by a custom column;
 5. a Lua filter for compound conditions.
 
-The API stores one filter per Session, but `POST /api/logs/ids` is always read-only. Save a filter
-only when explicitly requested through `PUT /api/sessions/{id}/filter`. Bundled query/wait scripts
-therefore cannot mutate the Session view while inspecting traffic.
-
-Capture/bypass queries and management Lua evaluations share an eight-task concurrency limit.
-Additional calls queue asynchronously, so prefer bounded batches over unbounded parallel fan-out.
+Prefer bounded query batches over unbounded parallel fan-out.
 
 ## Separate observation from mutation
 
@@ -50,7 +34,8 @@ script executed and shows exactly which modifications were recorded.
 
 ## Diagnose by lifecycle
 
-- `in_progress`: the capture can still gain a response or error.
+- `in_progress`: persisted unfinished state; confirm current activity through
+  `ProxyStatus.running.active_netlog` before expecting further updates.
 - `success`: transport completed, but application-level status can still be an error.
 - `failed`: use `error.stage`, `error.kind`, and `error.message`.
 - `tunneled`: traffic was passed through without decrypted HTTP details.
@@ -69,33 +54,9 @@ requests as additional captures. Do not mistake the CONNECT row for the applicat
 Bypassed CONNECT traffic has no decrypted request detail; inspect the bypass table for source,
 authority, reason, outcome, byte counts, and errors.
 
-For a controlled test host with a self-signed certificate, a narrowly matched request interceptor may
-set `_crab_tls_insecure` to the exact value `true`. This disables upstream certificate-chain and
-hostname verification, so record the tag as evidence, warn about the loss of server authentication,
-and never apply it broadly or to production traffic. Untagged requests remain on an isolated verified
-connection pool.
-
-When an intercepted browser request uses HTTP/2 but a rewritten local development upstream supports
-only cleartext HTTP/1.1, set `_crab_upstream_http_version` to exact `HTTP/1.1` in the same narrowly
-matched request interceptor. This preserves browser-to-ProxyCrab HTTP/2 while forcing only the local
-upstream hop. Confirm the tag in capture history and the original `entry.req.version`; do not treat
-the tag as an HTTP header. Use exact `HTTP/2` only when the upstream is known to support strict H2 or
-h2c because it deliberately disables HTTP/1.1 fallback.
-
-## Handle bodies accurately
-
-`text` and `json` bodies embed decoded content only through 64 KiB. Every non-empty persisted body
-reports its stored-byte size. Body detail never exposes a local capture path. `binary` and `large`
-detail variants remain metadata-only; use `body-get.mjs` with an explicit stored-size maximum and
-output file before claiming to have inspected their bytes. The endpoint negotiates from the client's
-`Accept-Encoding`: it preserves original bytes when every captured encoding is accepted, otherwise
-it streams a gzip, deflate, or identity fallback. The explicit maximum always checks the original
-stored file, not the decoded or recompressed byte count. `size` always describes stored bytes used
-to reproduce the captured request.
-
-When an interceptor replaces a body from an Asset, the historical modification records the Asset
-id. The interceptor source and modification history are durable capture evidence; Asset metadata
-and immutable workspace content identify the replacement.
+For TLS or upstream protocol issues, consult the [request-interceptor controls](lua-api.md#request-interceptors).
+For complete or snapshot bodies, use the [Body endpoint contract](http-api.md#get-apilogsidbodysession_id3siderequestmax_size16777216).
+Asset replacements are identified by their Asset ID in historical modifications.
 
 ## Report with traceable evidence
 
@@ -112,13 +73,10 @@ A useful diagnostic report contains:
 Distinguish direct observations from inference. Avoid dumping the entire capture when a few fields
 support the conclusion.
 
-## Protect sensitive data
+## Preserve evidence
 
-Raw local script output intentionally remains unredacted. Before sharing findings, redact or omit:
-
-- `authorization`, `proxy-authorization`, cookies, and set-cookie values;
-- API keys, signed URLs, session identifiers, and bearer tokens;
-- personal or regulated data in bodies;
-- internal hostnames or IPs when the audience should not receive them.
+Keep API-returned output intact; it may already be redacted by the effective read policy. Before
+sharing findings, check for credentials, personal data, and internal details unsuitable for the
+recipient. Redaction does not cover every field; see the [policy scope](http-api.md#redaction-library-and-bindings).
 
 Do not modify the local source evidence merely to create a redacted summary.

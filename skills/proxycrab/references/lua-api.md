@@ -29,13 +29,9 @@ or a Lua long comment (`--[[...]]` / `--[=[...]=]`). Whitespace around the colon
 trimmed; the first `#display_name` declaration wins, including an empty declaration. Missing or
 empty values fall back to the script's original name. Unknown annotations are ignored.
 
-This changes UI labels only. File names, API paths, `name`, `script_name`, selections, and Session
-references remain unchanged. Duplicate display names are allowed; tooltips and delete confirmations
-retain the original name. Script editor sidebars show original names; the editor toolbar shows
-the display name (falling back to the original). Labels refresh after saving. Historical interceptor executions use the
-metadata from their captured script source, not the current script file. The share UI receives the
-parsed display name while script content remains hidden. Metadata is derived from the Lua source,
-not stored in a separate settings file.
+Display names do not change file names, API paths, `name`, `script_name`, or Session references.
+Duplicate labels are allowed. Historical interceptor executions use metadata from their captured
+source. Share responses retain the display name without exposing script source.
 
 ## Base64 and JSON globals
 
@@ -336,7 +332,7 @@ replacement is already being returned. Tags remain persisted metadata and never 
 enables it. Any other present value is ignored with a Rust warning. It does nothing for HTTP, but it
 does apply to HTTPS Upgrade/WebSocket. Insecure and verified HTTPS traffic use separate connection
 pools, so later untagged requests cannot reuse an insecure TLS connection. Restrict this tag to a
-controlled test host because it removes upstream server authentication.
+controlled test host and warn the user that it removes upstream server authentication.
 
 `_crab_upstream_http_version` is resolved after request interceptors and accepts only the exact final
 strings `HTTP/1.1` and `HTTP/2`. It controls only the ProxyCrab-to-upstream hop, including
@@ -509,7 +505,9 @@ reconcile transfer framing, but scripts should not rely on stale semantic header
 ## Read-time redaction scripts
 
 Redaction is a read policy bound to a local management identity, ordinary API key, Session share,
-or HAR share. An unbound identity receives the original data. A bound missing/broken script causes
+or HAR share. Without a startup `--redaction-script` policy, an unbound identity receives original
+data. A startup policy overrides all identity/share bindings, including UIKey; see
+[redaction policy precedence](http-api.md#redaction-library-and-bindings). A missing/broken effective script causes
 `redaction_failed`; there is no fallback to original content. Forwarding, live interceptor execution,
 and persisted captures never run redaction. Interceptor modification history and executed source are
 outside this policy; historical snapshots and their bodies are redacted independently.
