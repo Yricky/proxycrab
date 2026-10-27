@@ -85,13 +85,21 @@ access without exposing anonymous management access remotely.
 
 ### CLI browser authentication and target capabilities
 
-When the CLI starts its management server, it also prints a 256-bit, per-run `pcrab_ui_…` token.
+The web backend resolves its address locally as `[window.location.hostname]`, without the page
+port. `GET /ui-api/local-ips` is not provided; container network interfaces are not exposed to the
+browser. The desktop Tauri `list_local_ips` command still enumerates local IPv4 interfaces.
+
+When the CLI starts its management server, it prints the actual UI access token. By default this is
+a generated 256-bit, per-run `pcrab_ui_…` token. `--ui-key KEY` supplies an explicit value, with or
+without `run`. It accepts nonempty visible ASCII without whitespace/control characters and does
+not require a prefix. No environment variable or persisted configuration is added. Custom UIKeys
+have the same authentication behavior and remain subject to a startup `--redaction-script`.
 The browser landing page verifies the token through `GET /ui-api/bootstrap`, installs an HTTP
 Backend in `window.proxyCrabBackend`, and then mounts the shared application. The cleartext token is
 not written to the workspace; the CLI stores only a SHA-256 digest in memory.
 
-The token protects target-private `/ui-api/*` routes for bootstrap, long-poll UI changes, local IP
-and regex helpers, Agent preset management, and API-key/permission management. It is also accepted
+The token protects target-private `/ui-api/*` routes for bootstrap, long-poll UI changes,
+regex helpers, Agent preset management, and API-key/permission management. It is also accepted
 as a trusted credential for the shared `/api/*` resources so the UI remains usable even when the
 ordinary local identity denies an action. These routes and this token are UI internals, not public
 agent API credentials.
@@ -958,13 +966,29 @@ permission. Actions without display metadata appear in 其他; grouping never ch
 | `PUT /api/session-shares/{id}/redaction` | Set `{ "redaction_script": "mask" }`, or null to unbind an enabled share (approval) |
 | `PUT /api/session-har-shares/{id}/redaction` | Same for enabled HAR shares (approval) |
 
+The headless CLI accepts `--redaction-script /path/to/mask.lua` (with or without `run`).
+It reads and compiles the file before starting the HTTP API or proxy; a missing/unreadable file or
+invalid Lua aborts startup. The source is pinned in memory for the process lifetime, is not added to
+the workspace library, and changes require a restart. This policy overrides identity and share
+bindings, including missing bindings and the UI access token (`UIKey`). It applies to the existing
+redaction-supported reads marked in the permissions UI and to Session/HAR share reads; it does not
+expand the redaction data contract below or change capture/forwarding.
+
+In this mode, all five library operations above reject authorized calls with HTTP 403,
+`redaction_management_disabled`, and message `脱敏接口管理功能已禁用`. Normal authentication and
+permission checks still apply. The frontend is unchanged and displays the backend error. Binding
+or clearing an identity/share cannot disable or replace the startup policy; selecting a named
+library script also fails its library validation while management is disabled. Do not retry with
+another identity or treat this error as an upsert conflict. Without the flag, existing behavior is
+unchanged.
+
 `POST /api/session-shares` and `POST /api/session-har-shares` accept optional `redaction_script`
 on initial creation. Re-enabling an enabled share remains idempotent; use the binding endpoint to
 change its policy. Share-state responses include nullable `redaction_script`.
 Owner-only CLI `PUT /ui-api/permissions/identities/{id}/redaction` accepts the same binding object;
 the desktop command is `set_http_identity_redaction`. Identity permission reads include the binding,
-and permission-table updates preserve it. The CLI UI access token and ordinary Tauri IPC reads are
-unbound; desktop Body previews currently use local management HTTP and therefore use the local
+and permission-table updates preserve it. Without a startup redaction script, the CLI UI access
+token and ordinary Tauri IPC reads are unbound; desktop Body previews currently use local management HTTP and therefore use the local
 identity's binding. Native download commands use their existing trusted IPC path.
 
 Redaction applies to log details, body reads, snapshot details/bodies, URL/custom-column view cells,
@@ -981,3 +1005,13 @@ open detail/body views when it changes. HAR downloads execute the pinned version
 and abort on a failing entry without emitting that entry's original contents.
 
 See the Lua reference's **Read-time redaction scripts** section for the three-state context contract.
+
+### Browser secure-context limits
+
+The CLI web UI can open independent request windows on remote HTTP origins; their IDs are
+page-local counters. JWT decoding works on HTTP, but JWT signature verification uses
+`crypto.subtle` and requires a secure context (HTTPS or trusted localhost). Copy buttons have a
+legacy `execCommand` fallback. Monaco also has UUID/copy fallbacks; its context-menu paste remains
+browser-dependent, and its optional WebGPU renderer is disabled by default. Body/file downloads
+use Blob/object URLs rather than secure-context file pickers. These browser restrictions do not
+change management API permissions or the server-side replay endpoint.

@@ -133,6 +133,18 @@ Like the page share, disabling, process exit, or Session archival makes the HAR 
 
 ## CLI browser UI
 
+Browser secure-context compatibility: request windows use page-local incremental IDs and work on
+remote HTTP origins. JWT decoding is local and works on HTTP, but signature verification requires
+`crypto.subtle` (HTTPS or a trusted localhost context). Copy buttons fall back to `execCommand`
+when the asynchronous Clipboard API is unavailable; editor context-menu paste may still depend on
+browser support, while keyboard paste uses the normal browser editing path. Downloads use
+Blob/object URLs and ordinary workers power Monaco; neither requires HTTPS by itself. Monaco
+also falls back from `randomUUID` to `getRandomValues`; its WebGPU renderer is disabled by default.
+
+The web backend uses the current page hostname (without its port) as its address, rather than
+requesting container interface addresses. There is no `/ui-api/local-ips` endpoint. Desktop Tauri
+continues to enumerate local IPv4 interfaces.
+
 Build the CLI frontend before compiling the binary so Cargo can embed the generated assets:
 
 ```bash
@@ -146,8 +158,31 @@ Run the CLI with a workspace:
 target/debug/proxycrab-cli run --workspace /path/to/workspace
 ```
 
-At startup the CLI prints its browser URL and a 256-bit, per-run `pcrab_ui_…` Access Token. Open
-the URL and enter that token on the landing page. The cleartext token is not persisted; the process
+To enforce read-time redaction for every supported identity, including UIKey and Session/HAR
+shares, supply a Lua file:
+
+```bash
+target/debug/proxycrab-cli run --workspace /path/to/workspace --redaction-script /path/to/mask.lua
+```
+
+The file is read and compiled once before services start; read/compile errors abort startup.
+Changes require a restart. This in-memory policy overrides existing bindings and disables the five
+redaction-library management endpoints with HTTP 403 `redaction_management_disabled`
+(`脱敏接口管理功能已禁用`). The frontend remains unchanged and shows the API error.
+Only the existing redaction-supported data is transformed; capture and forwarding are unchanged.
+See [the redaction API contract](docs/backend-api.md#redaction-library-and-bindings) for scope.
+
+By default, startup generates a 256-bit, per-run `pcrab_ui_…` Access Token. To choose the UIKey,
+pass `--ui-key 'your-custom-key'`, with or without `run`:
+
+```bash
+proxycrab-cli run --workspace /path/to/workspace --ui-key 'your-custom-key'
+```
+
+The key must be nonempty visible ASCII with no whitespace or control characters; no prefix is
+required. There is no environment-variable or persisted-config option. Startup prints the browser
+URL and actual `Access token`, whether supplied or generated. Enter it on the landing page.
+Custom UIKeys remain subject to `--redaction-script` when supplied. The cleartext token is not persisted; the process
 keeps only its SHA-256 digest. It authorizes the browser UI's internal `/ui-api/*` operations and
 trusted calls to the shared `/api/*` management resources for that process lifetime.
 

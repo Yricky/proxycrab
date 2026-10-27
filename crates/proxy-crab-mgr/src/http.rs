@@ -1777,6 +1777,7 @@ impl ErrorCode {
     /// 错误码对应的 HTTP 状态码。穷尽匹配：新增错误码必须在编译期决定状态码。
     pub fn http_status(self) -> StatusCode {
         match self {
+            Self::RedactionManagementDisabled => StatusCode::FORBIDDEN,
             Self::BadRequest
             | Self::InvalidAssetId
             | Self::InvalidAssetFormat
@@ -1976,6 +1977,75 @@ mod tests {
         )
         .unwrap();
         assert!(text.contains("redaction_failed") && !text.contains("secret"));
+
+        // A pinned policy overrides both missing identity bindings and unbound owner reads.
+        let forced = manager.with_forced_redaction(proxy_crab_mitm::model::Script {
+            name: "startup.lua".into(),
+            content: "assert(context.api == '/api/logs/{id}'); req.uri = 'https://example.com/forced'".into(),
+        }).unwrap();
+        for permissions in [
+            Arc::new(BoundReads) as Arc<dyn PermissionManager>,
+            Arc::new(AllowAll),
+        ] {
+            let app = router(forced.clone(), permissions);
+            for auth in [None, Some("Bearer test-key")] {
+                let mut request =
+                    Request::builder().uri(format!("/api/logs/{id}?session_id={}", session.id));
+                if let Some(auth) = auth {
+                    request = request.header("authorization", auth);
+                }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), axum::http::StatusCode::OK);
+                let payload: Value = serde_json::from_slice(
+                    &to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    payload["data"]["request"]["uri"],
+                    "https://example.com/forced"
+                );
+            }
+            for (method, path, body) in [
+                ("GET", "/api/redaction-scripts", ""),
+                (
+                    "POST",
+                    "/api/redaction-scripts",
+                    r#"{"name":"new","content":""}"#,
+                ),
+                ("GET", "/api/redaction-scripts/token-mask", ""),
+                (
+                    "PUT",
+                    "/api/redaction-scripts/token-mask",
+                    r#"{"content":""}"#,
+                ),
+                ("DELETE", "/api/redaction-scripts/token-mask", ""),
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(path)
+                            .header("content-type", "application/json")
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+                let payload: Value = serde_json::from_slice(
+                    &to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+                )
+                .unwrap();
+                assert_eq!(payload["error"]["code"], "redaction_management_disabled");
+                assert_eq!(payload["error"]["message"], "脱敏接口管理功能已禁用");
+            }
+        }
+        assert!(manager.redaction_script("token-mask".into()).await.is_ok());
     }
 
     struct AllowAll;

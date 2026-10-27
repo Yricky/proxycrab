@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     RedactionFailed,
+    RedactionManagementDisabled,
     BadRequest,
     NotFound,
     LogNotFound,
@@ -49,6 +50,7 @@ impl ErrorCode {
     /// The stable snake_case wire representation.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::RedactionManagementDisabled => "redaction_management_disabled",
             Self::RedactionFailed => "redaction_failed",
             Self::BadRequest => "bad_request",
             Self::NotFound => "not_found",

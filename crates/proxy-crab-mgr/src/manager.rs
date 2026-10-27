@@ -243,6 +243,7 @@ pub trait ProxyCrabManager: Send + Sync {
 
 #[derive(Clone)]
 pub struct MitmManager {
+    forced_redaction: Option<Script>,
     read_policy: Option<ReadPolicy>,
     runtime: Arc<ProxyCrab>,
     agents: Arc<AgentsStore>,
@@ -280,12 +281,32 @@ impl MitmManager {
         }
         let clash_subscription = Arc::new(ClashSubscription::new(runtime.workspace().root()));
         Arc::new(Self {
+            forced_redaction: None,
             read_policy: None,
             runtime,
             agents,
             clash_subscription,
             blocking_tasks: Arc::new(Semaphore::new(MAX_BLOCKING_MANAGEMENT_TASKS)),
         })
+    }
+
+    /// Pin a validated, process-local policy that overrides identity and share bindings.
+    pub fn with_forced_redaction(&self, script: Script) -> ManagerResult<Arc<Self>> {
+        proxy_crab_mitm::lua::redaction::RedactionEvaluator::new(&script.content, &script.name)
+            .map_err(|error| ManagerError::bad_request(error.to_string()))?;
+        let mut manager = self.clone();
+        manager.forced_redaction = Some(script);
+        Ok(Arc::new(manager))
+    }
+
+    fn ensure_redaction_management_enabled(&self) -> ManagerResult<()> {
+        if self.forced_redaction.is_some() {
+            return Err(ManagerError::new(
+                ErrorCode::RedactionManagementDisabled,
+                "脱敏接口管理功能已禁用",
+            ));
+        }
+        Ok(())
     }
 
     pub fn runtime(&self) -> &Arc<ProxyCrab> {
@@ -499,30 +520,36 @@ impl MitmManager {
 impl ProxyCrabManager for MitmManager {
     fn reader(&self, script: Option<&str>, api: &str) -> ManagerResult<Arc<dyn ProxyCrabManager>> {
         let mut reader = self.clone();
-        reader.read_policy = script
-            .map(|name| {
-                self.runtime
-                    .script(ScriptKind::Redaction, name)
-                    .map(|script| ReadPolicy {
-                        script,
-                        api: api.into(),
-                    })
-                    .map_err(|_| redaction::failed())
-            })
-            .transpose()?;
+        let script = match &self.forced_redaction {
+            Some(forced) => Some(forced.clone()),
+            None => script
+                .map(|name| {
+                    self.runtime
+                        .script(ScriptKind::Redaction, name)
+                        .map_err(|_| redaction::failed())
+                })
+                .transpose()?,
+        };
+        reader.read_policy = script.map(|script| ReadPolicy {
+            script,
+            api: api.into(),
+        });
         Ok(Arc::new(reader))
     }
     async fn redaction_scripts(&self) -> ManagerResult<Vec<Script>> {
+        self.ensure_redaction_management_enabled()?;
         self.runtime
             .scripts(ScriptKind::Redaction)
             .map_err(map_error)
     }
     async fn redaction_script(&self, name: String) -> ManagerResult<Script> {
+        self.ensure_redaction_management_enabled()?;
         self.runtime
             .script(ScriptKind::Redaction, &name)
             .map_err(map_error)
     }
     async fn create_redaction_script(&self, request: ScriptRequest) -> ManagerResult<()> {
+        self.ensure_redaction_management_enabled()?;
         self.runtime
             .create_script(
                 ScriptKind::Redaction,
@@ -538,11 +565,13 @@ impl ProxyCrabManager for MitmManager {
         name: String,
         request: UpdateScriptRequest,
     ) -> ManagerResult<()> {
+        self.ensure_redaction_management_enabled()?;
         self.runtime
             .update_script(ScriptKind::Redaction, &name, request.content)
             .map_err(map_error)
     }
     async fn delete_redaction_script(&self, name: String) -> ManagerResult<()> {
+        self.ensure_redaction_management_enabled()?;
         self.runtime
             .delete_script(ScriptKind::Redaction, &name)
             .map_err(map_error)

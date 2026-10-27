@@ -54,9 +54,15 @@ target supports only `allow` and `deny`, treats a persisted `approval` as deny, 
 approval request. API-key creation, deletion, and permission editing are management-UI-only
 operations under Settings > 管理接口; they are not public Agent HTTP resources.
 
-The CLI also prints a per-run `pcrab_ui_…` token for its browser landing page. It authorizes private
-UI routes and trusted UI calls, is not an Agent API key, and must never be copied into
-`PROXYCRAB_API_KEY`.
+The CLI web backend derives its address from `window.location.hostname` (without the port).
+`GET /ui-api/local-ips` is unavailable; desktop Tauri still enumerates local IPv4 interfaces.
+
+The CLI prints its UI access token for the browser landing page. It generates a per-run
+`pcrab_ui_…` token by default; `--ui-key KEY` (with or without `run`) supplies a custom value.
+Custom values require nonempty visible ASCII without whitespace/control characters, but no prefix.
+There is no environment-variable or persisted-config option. Both forms authorize private UI
+routes and trusted UI calls, are not Agent API keys, and must never be copied into
+`PROXYCRAB_API_KEY`. A custom UIKey cannot bypass a startup `--redaction-script` policy.
 
 Session sharing uses separate `pcrab_share_…` tokens and `/share-api/*` browser routes. Those tokens
 are scoped to one read-only Session, live only for the current process while sharing remains
@@ -1297,13 +1303,29 @@ each local identity/API key, Session share and HAR share. Normal capture and for
 | `PUT /api/session-shares/{id}/redaction` | Set `{ "redaction_script": "mask" }`, or null to unbind an enabled share (approval) |
 | `PUT /api/session-har-shares/{id}/redaction` | Same for enabled HAR shares (approval) |
 
+The headless CLI accepts `--redaction-script /path/to/mask.lua` (with or without `run`).
+It reads and compiles the file before starting the HTTP API or proxy; a missing/unreadable file or
+invalid Lua aborts startup. The source is pinned in memory for the process lifetime, is not added to
+the workspace library, and changes require a restart. This policy overrides identity and share
+bindings, including missing bindings and the UI access token (`UIKey`). It applies to the existing
+redaction-supported reads marked in the permissions UI and to Session/HAR share reads; it does not
+expand the redaction data contract below or change capture/forwarding.
+
+In this mode, all five library operations above reject authorized calls with HTTP 403,
+`redaction_management_disabled`, and message `脱敏接口管理功能已禁用`. Normal authentication and
+permission checks still apply. The frontend is unchanged and displays the backend error. Binding
+or clearing an identity/share cannot disable or replace the startup policy; selecting a named
+library script also fails its library validation while management is disabled. Do not retry with
+another identity or treat this error as an upsert conflict. Without the flag, existing behavior is
+unchanged.
+
 `POST /api/session-shares` and `POST /api/session-har-shares` accept optional `redaction_script`
 on initial creation. Re-enabling an enabled share remains idempotent; use the binding endpoint to
 change its policy. Share-state responses include nullable `redaction_script`.
 Owner-only CLI `PUT /ui-api/permissions/identities/{id}/redaction` accepts the same binding object;
 the desktop command is `set_http_identity_redaction`. Identity permission reads include the binding,
-and permission-table updates preserve it. The CLI UI access token and ordinary Tauri IPC reads are
-unbound; desktop Body previews currently use local management HTTP and therefore use the local
+and permission-table updates preserve it. Without a startup redaction script, the CLI UI access
+token and ordinary Tauri IPC reads are unbound; desktop Body previews currently use local management HTTP and therefore use the local
 identity's binding. Native download commands use their existing trusted IPC path.
 
 Redaction applies to log details, body reads, snapshot details/bodies, URL/custom-column view cells,
@@ -1320,3 +1342,13 @@ open detail/body views when it changes. HAR downloads execute the pinned version
 and abort on a failing entry without emitting that entry's original contents.
 
 See the Lua reference's **Read-time redaction scripts** section for the three-state context contract.
+
+### Browser secure-context limits
+
+The CLI web UI can open independent request windows on remote HTTP origins; their IDs are
+page-local counters. JWT decoding works on HTTP, but JWT signature verification uses
+`crypto.subtle` and requires a secure context (HTTPS or trusted localhost). Copy buttons have a
+legacy `execCommand` fallback. Monaco also has UUID/copy fallbacks; its context-menu paste remains
+browser-dependent, and its optional WebGPU renderer is disabled by default. Body/file downloads
+use Blob/object URLs rather than secure-context file pickers. These browser restrictions do not
+change management API permissions or the server-side replay endpoint.

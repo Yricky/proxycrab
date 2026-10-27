@@ -15,7 +15,6 @@ base64.workspace = true
 clap.workspace = true
 getrandom.workspace = true
 include_dir = "0.7"
-if-addrs.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -47,10 +47,12 @@ export function openBrowser(url: string): void {
   });
 }
 
+let replayWindowId = 0;
+
 export function openReplay(prefill?: ReplayDraft): void {
   // 后端没有 replay 接口时，任何入口都不应打开发送请求窗口。
   if (!getBackend().replay) return;
-  windowsStore.open(`replay-${crypto.randomUUID()}`, {
+  windowsStore.open(`replay-${++replayWindowId}`, {
     title: "发送请求",
     component: ReplayWindow,
     props: { prefill },

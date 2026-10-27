@@ -175,7 +175,7 @@ export function createHttpBackend(
     getProxyStatus: () => call("/api/proxy/status"),
     startProxy: () => call("/api/proxy/start", json("POST")),
     stopProxy: () => call("/api/proxy/stop", json("POST")),
-    listLocalIps: () => call("/ui-api/local-ips"),
+    listLocalIps: async () => [window.location.hostname],
 
     listSessions: () => call("/api/sessions"),
     listArchivedSessions: () => call("/api/archived-sessions"),

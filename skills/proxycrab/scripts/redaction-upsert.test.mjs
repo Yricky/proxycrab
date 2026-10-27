@@ -47,3 +47,18 @@ test("replaces an existing script after a create conflict", async () => {
   }`);
   assert.deepEqual(result, { action: "updated", name: "mask" });
 });
+
+test("disabled management is reported without attempting an update", async () => {
+  await assert.rejects(runUpsert(`(method, pathname) => {
+    if (method !== "POST" || pathname !== "/api/redaction-scripts") throw new Error("unexpected retry");
+    return new Response(JSON.stringify({ ok: false, error: {
+      code: "redaction_management_disabled", message: "脱敏接口管理功能已禁用"
+    } }), { status: 403 });
+  }`), (error) => {
+    assert.equal(error.code, 1);
+    assert.match(error.stderr, /redaction_management_disabled/);
+    assert.match(error.stderr, /脱敏接口管理功能已禁用/);
+    assert.doesNotMatch(error.stderr, /unexpected retry/);
+    return true;
+  });
+});

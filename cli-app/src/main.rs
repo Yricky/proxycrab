@@ -65,6 +65,14 @@ struct RunArgs {
     #[arg(long, env = "PROXYCRAB_API_PORT")]
     api_port: Option<u16>,
 
+    /// Use this UI access key instead of generating a random token for this run.
+    #[arg(long, value_name = "KEY", value_parser = parse_ui_key)]
+    ui_key: Option<String>,
+
+    /// Load a Lua redaction file once; override all bindings and disable script management.
+    #[arg(long, value_name = "FILE")]
+    redaction_script: Option<PathBuf>,
+
     /// Do not start the management HTTP API.
     #[arg(long)]
     no_api: bool,
@@ -133,13 +141,20 @@ async fn run(args: RunArgs) -> Result<()> {
         });
     }
 
-    let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
+    let manager = MitmManager::new(runtime);
+    let manager: Arc<dyn ProxyCrabManager> = match args.redaction_script {
+        Some(path) => load_redaction_script(&manager, &path)?,
+        None => manager,
+    };
 
     let mut ui_token = None;
     let http = if args.no_api {
         None
     } else {
-        let token = generate_ui_token().context("generate CLI UI access token")?;
+        let token = match args.ui_key {
+            Some(key) => key,
+            None => generate_ui_token().context("generate CLI UI access token")?,
+        };
         let access = Arc::new(UiAccess::new(&token));
         let permissions = CliPermissionService::open(&workspace, Some(access.clone()))
             .context("open management API permission store")?;
@@ -213,6 +228,24 @@ async fn run(args: RunArgs) -> Result<()> {
     Ok(())
 }
 
+fn load_redaction_script(manager: &MitmManager, path: &Path) -> Result<Arc<MitmManager>> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("read redaction script {}", path.display()))?;
+    manager
+        .with_forced_redaction(proxy_crab_mitm::model::Script {
+            name: path.to_string_lossy().into_owned(),
+            content,
+        })
+        .with_context(|| format!("load redaction script {}", path.display()))
+}
+
+fn parse_ui_key(value: &str) -> Result<String, String> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err("UI key must contain only visible ASCII characters, without whitespace".into());
+    }
+    Ok(value.to_owned())
+}
+
 fn generate_ui_token() -> Result<String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes)
@@ -282,6 +315,184 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_flags_work_with_default_and_explicit_run() {
+        for argv in [
+            vec![
+                "proxycrab-cli",
+                "--workspace",
+                "workspace",
+                "--redaction-script",
+                "mask.lua",
+                "--ui-key",
+                "custom-ui-key",
+            ],
+            vec![
+                "proxycrab-cli",
+                "run",
+                "--workspace",
+                "workspace",
+                "--redaction-script",
+                "mask.lua",
+                "--ui-key",
+                "custom-ui-key",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(argv).unwrap();
+            let args = match cli.command {
+                Some(Command::Run(args)) => args,
+                None => cli.run,
+                _ => panic!("expected run"),
+            };
+            assert_eq!(args.redaction_script, Some(PathBuf::from("mask.lua")));
+            assert_eq!(args.ui_key.as_deref(), Some("custom-ui-key"));
+        }
+        assert!(
+            Cli::try_parse_from(["proxycrab-cli"])
+                .unwrap()
+                .run
+                .redaction_script
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn ui_key_rejects_invalid_authorization_values() {
+        for value in [
+            "", " ", "a b", "a\tb", "a\nb", "a\rb", "a\0b", "a\u{7f}b", "密钥", "a\u{a0}b",
+        ] {
+            assert!(Cli::try_parse_from(["proxycrab-cli", "--ui-key", value]).is_err());
+        }
+        let cli = Cli::try_parse_from(["proxycrab-cli"]).unwrap();
+        assert!(cli.run.ui_key.is_none());
+        let token = generate_ui_token().unwrap();
+        assert!(token.starts_with("pcrab_ui_"));
+        assert_eq!(parse_ui_key(&token).unwrap(), token);
+        assert_eq!(parse_ui_key("custom_./+~=key").unwrap(), "custom_./+~=key");
+    }
+
+    #[test]
+    fn startup_redaction_requires_valid_file_and_pins_its_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = ProxyCrab::open(
+            &dir.path().join("workspace"),
+            Arc::new(LogBuffer::default()),
+        )
+        .unwrap();
+        let manager = MitmManager::new(runtime);
+        let path = dir.path().join("mask.lua");
+        assert!(load_redaction_script(&manager, &path).is_err());
+        std::fs::write(&path, "this is not valid Lua!").unwrap();
+        assert!(load_redaction_script(&manager, &path).is_err());
+        std::fs::write(&path, "req.uri = 'https://example.com/masked'").unwrap();
+        let forced = load_redaction_script(&manager, &path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(forced.reader(None, "/api/logs/{id}").is_ok());
+        assert!(forced.reader(Some("missing"), "/api/logs/{id}").is_ok());
+    }
+
+    #[tokio::test]
+    async fn ui_key_cannot_bypass_startup_redaction_or_manage_scripts() {
+        use proxy_crab_mitm::{
+            model::{NewSession, RequestData},
+            storage::CaptureStore,
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = ProxyCrab::open(dir.path(), Arc::new(LogBuffer::default())).unwrap();
+        // The server handle reports the configured port, so choose a concrete free port.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        runtime
+            .workspace()
+            .override_config_in_memory(|config| config.api_port = port);
+        let session = runtime.create_session(NewSession::default()).unwrap();
+        let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
+        let id = store
+            .begin(
+                "client",
+                &RequestData {
+                    method: "GET".into(),
+                    uri: "https://example.com/secret".into(),
+                    version: "HTTP/1.1".into(),
+                    headers: Default::default(),
+                    tags: Default::default(),
+                },
+                "request",
+            )
+            .unwrap();
+        let path = dir.path().join("startup.lua");
+        std::fs::write(
+            &path,
+            "assert(context.api == '/api/logs/{id}'); req.uri = 'https://example.com/masked'",
+        )
+        .unwrap();
+        let manager = load_redaction_script(&MitmManager::new(runtime), &path).unwrap();
+        std::fs::write(&path, "error('changed after startup')").unwrap();
+        let key = Cli::try_parse_from(["proxycrab-cli", "--ui-key", "custom-ui-key"])
+            .unwrap()
+            .run
+            .ui_key
+            .unwrap();
+        let access = Arc::new(UiAccess::new(&key));
+        assert!(access.allows_authorization(Some("Bearer custom-ui-key")));
+        assert!(!access.allows_authorization(Some("Bearer wrong-ui-key")));
+        let permissions = CliPermissionService::open(dir.path(), Some(access)).unwrap();
+        let server = proxy_crab_mgr::http::start_http_server(manager, permissions)
+            .await
+            .unwrap();
+        let read_path = format!("/api/logs/{id}?session_id={}", session.id);
+        for (method, path, body, expected) in [
+            ("GET", read_path.as_str(), "", "200"),
+            ("GET", "/api/redaction-scripts", "", "403"),
+            (
+                "POST",
+                "/api/redaction-scripts",
+                r#"{"name":"new","content":""}"#,
+                "403",
+            ),
+            ("GET", "/api/redaction-scripts/new", "", "403"),
+            (
+                "PUT",
+                "/api/redaction-scripts/new",
+                r#"{"content":""}"#,
+                "403",
+            ),
+            ("DELETE", "/api/redaction-scripts/new", "", "403"),
+        ] {
+            let mut connection = tokio::net::TcpStream::connect(("127.0.0.1", server.port))
+                .await
+                .unwrap();
+            let request = format!(
+                "{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {key}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            connection.write_all(request.as_bytes()).await.unwrap();
+            let mut response = String::new();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                connection.read_to_string(&mut response),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(
+                response.starts_with(&format!("HTTP/1.1 {expected}")),
+                "{response}"
+            );
+            if expected == "200" {
+                assert!(response.contains("https://example.com/masked"));
+                assert!(!response.contains("secret"));
+            } else {
+                assert!(response.contains("redaction_management_disabled"));
+                assert!(response.contains("脱敏接口管理功能已禁用"));
+            }
+        }
+        server.shutdown().await;
+    }
 
     #[test]
     fn embedded_skill_contains_entrypoints_but_no_evals() {

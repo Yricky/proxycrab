@@ -133,7 +133,6 @@ pub fn router(
     let protected = Router::new()
         .route("/ui-api/bootstrap", get(bootstrap))
         .route("/ui-api/changes", get(changes_after))
-        .route("/ui-api/local-ips", get(local_ips))
         .route("/ui-api/validate-filter-regex", post(validate_filter_regex))
         .route(
             "/ui-api/agents-presets",
@@ -222,22 +221,6 @@ async fn changes_after(
         cursor: state.changes.cursor.load(Ordering::SeqCst),
         changes: values,
     })
-}
-
-async fn local_ips() -> Response {
-    let mut ips = if_addrs::get_if_addrs()
-        .map(|interfaces| {
-            interfaces
-                .into_iter()
-                .map(|interface| interface.addr.ip())
-                .filter(|ip| ip.is_ipv4())
-                .map(|ip| ip.to_string())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    ips.sort();
-    ips.dedup();
-    success(ips)
 }
 
 async fn validate_filter_regex(Json(request): Json<RegexRequest>) -> Response {
@@ -333,7 +316,10 @@ async fn session() -> Response {
 
 async fn asset(Path(path): Path<String>) -> Response {
     let response = static_asset(&path);
-    if response.status() == StatusCode::NOT_FOUND && !path.contains('.') {
+    if response.status() == StatusCode::NOT_FOUND
+        && !path.contains('.')
+        && !path.starts_with("ui-api/")
+    {
         static_asset("index.html")
     } else {
         response

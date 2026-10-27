@@ -270,6 +270,30 @@
       "prompt": "A bound ProxyCrab body read returns redaction_failed. Diagnose the failure without changing credentials or policies.",
       "expected_output": "Reports the bound read failure without automatically switching credentials, removing the policy, or using raw Assets/history to bypass it; asks the owner to diagnose the intended script.",
       "files": []
+    },
+    {
+      "id": 46,
+      "prompt": "A headless ProxyCrab server started with --redaction-script /srv/mask.lua. Updating a redaction script returns redaction_management_disabled / 脱敏接口管理功能已禁用. Explain what happened and whether UIKey or clearing a share binding can bypass the policy.",
+      "expected_output": "Explain that startup redaction is pinned until restart, overrides all identity/share bindings including UIKey, and disables all five library operations. Do not retry PUT after a failed POST, switch credentials, clear bindings, or modify permissions to bypass it. Scope remains the existing redaction-supported reads; captures and forwarding are unchanged.",
+      "files": []
+    },
+    {
+      "id": 47,
+      "prompt": "Explain how to start headless ProxyCrab with a custom browser UIKey and a mandatory redaction script. Does a key without pcrab_ui_ become an Agent API key?",
+      "expected_output": "Show --ui-key KEY and --redaction-script FILE with --workspace DIR, using placeholders only. Explain nonempty visible ASCII without whitespace/control characters, no required prefix, random token fallback when omitted, actual token printed at startup, and no new environment variable or persistence. Custom UIKeys remain browser credentials and cannot bypass redaction; do not place them in PROXYCRAB_API_KEY or Agent commands.",
+      "files": []
+    },
+    {
+      "id": 48,
+      "prompt": "The ProxyCrab CLI browser is opened at http://192.0.2.10:18089/. How does its web backend obtain the address? Should it call /ui-api/local-ips to discover Docker interfaces?",
+      "expected_output": "Explain that the web backend returns [window.location.hostname], here [\"192.0.2.10\"], without the port and without an HTTP request. /ui-api/local-ips has been removed. Tauri desktop continues local IPv4 enumeration.",
+      "files": []
+    },
+    {
+      "id": 49,
+      "prompt": "On a remote HTTP ProxyCrab CLI page, the request window opens but JWT verification reports importKey unavailable. Explain which behavior is a browser secure-context restriction and whether it means /api/replay is broken.",
+      "expected_output": "Distinguish page-local request-window IDs from crypto.subtle-backed JWT verification. JWT decoding still works; verification needs HTTPS or trusted localhost. Copy has a legacy fallback; editor context-menu paste can be browser-dependent. Do not claim a server replay failure or bypass authentication/redaction.",
+      "files": []
     }
   ]
 }

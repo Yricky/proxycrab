@@ -54,8 +54,10 @@ response, and redaction scripts; see [Lua metadata rules](references/lua-api.md#
   retry and approve it; do not loop automatically. The CLI target has no approval decisions and
   treats `approval` as deny. `permission_denied` means the selected identity cannot perform the
   action, and `invalid_api_key` means the environment key is missing, malformed, unknown, or deleted.
-- Never use the per-run `pcrab_ui_…` browser token as an Agent API key. It is a trusted UI credential
-  printed for a human; do not copy it into `PROXYCRAB_API_KEY` or any Agent command.
+- Never use the browser UIKey as an Agent API key. It defaults to a per-run `pcrab_ui_…` token,
+  but `--ui-key KEY` can supply a custom value without that prefix. Both are trusted UI credentials
+  printed for a human; do not copy them into `PROXYCRAB_API_KEY` or any Agent command. A custom
+  UIKey cannot bypass startup redaction.
 - Never use or expose a `pcrab_share_…` Session link token. It is scoped to the read-only browser
   page, is not an Agent API key, and must not appear in Agent arguments, URLs, logs, or reports.
 - Treat `pcrab_har_…` HAR download tokens the same way. They expose a frozen set of unredacted
@@ -353,7 +355,7 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
 ## Read-time redaction
 
 Management reads may be transformed by the selected identity's bound Lua redaction script. An
-unbound identity returns original data; a failed/missing bound script refuses the read. Do not retry
+unbound identity normally returns original data; a failed/missing bound script refuses the read. Do not retry
 with another credential or remove a binding to bypass that failure. Ordinary captures are unchanged.
 The owner can manage bindings in settings and Session sharing; HAR policies run during download.
 
@@ -365,3 +367,10 @@ or deleting one needs owner approval, and reading one script's source is denied 
 upsert script creates first and treats a conflict as an update instead of reading the script. Never
 change permissions automatically. See the HTTP and Lua references for
 `context.api`, the three-state data model, lazy Body access, and the intentionally excluded history.
+
+The headless server may enforce a startup policy with `--redaction-script FILE`. This overrides all
+identity/share bindings, including UIKey, and remains pinned until restart. Its five script-library
+operations return `redaction_management_disabled` (HTTP 403, `脱敏接口管理功能已禁用`), subject to
+normal authentication/permissions. Report this as disabled management; do not retry an update,
+change credentials, or clear bindings to bypass it. The UI remains unchanged. Runtime failures
+still fail closed, and only existing redaction-supported reads are covered.

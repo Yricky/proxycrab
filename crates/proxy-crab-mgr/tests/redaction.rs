@@ -431,3 +431,92 @@ async fn redaction_har_stops_after_error_and_never_emits_original_entry() {
     );
     assert!(output.try_next().await.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn forced_redaction_overrides_missing_and_unbound_page_and_har_policies() {
+    let f = Fixture::new(MASK).await;
+    for binding in [None, Some("mask".to_string())] {
+        let original: Arc<dyn ProxyCrabManager> = f.manager.clone();
+        let pages = SessionShareService::new();
+        let page = pages
+            .enable_with_script(&original, f.sid, binding.clone())
+            .await
+            .unwrap();
+        let hars = HarShareService::new();
+        let har = hars
+            .enable(
+                &original,
+                EnableHarShareRequest {
+                    session_id: f.sid,
+                    scope: HarShareScope::All,
+                    log_ids: vec![f.id],
+                    redaction_script: binding,
+                },
+            )
+            .await
+            .unwrap();
+        let forced: Arc<dyn ProxyCrabManager> = f
+            .manager
+            .with_forced_redaction(Script {
+                name: "startup.lua".into(),
+                content: MASK.into(),
+            })
+            .unwrap();
+        // Even a binding whose library script no longer exists cannot defeat startup policy.
+        if page.redaction_script.is_some() {
+            f.manager
+                .delete_redaction_script("mask".into())
+                .await
+                .unwrap();
+        }
+        for (app, uri) in [
+            (
+                proxy_crab_mgr::session_share::router(forced.clone(), pages),
+                format!("/share-api/logs/{}?token={}", f.id, page.token.unwrap()),
+            ),
+            (
+                proxy_crab_mgr::har_share::router(forced, hars),
+                format!("/session.har?token={}", har.token.unwrap()),
+            ),
+        ] {
+            let response = app
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let text = String::from_utf8(
+                to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap();
+            assert!(text.contains("masked response"));
+            assert!(!text.contains("secret"));
+        }
+    }
+    let forced = f
+        .manager
+        .with_forced_redaction(Script {
+            name: "broken.lua".into(),
+            content: "error('secret')".into(),
+        })
+        .unwrap();
+    let error = forced
+        .reader(None, "/api/logs/{id}")
+        .unwrap()
+        .log(Some(f.sid), f.id)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::RedactionFailed);
+    assert!(!error.message.contains("secret"));
+    assert!(
+        f.manager
+            .log(Some(f.sid), f.id)
+            .await
+            .unwrap()
+            .request
+            .uri
+            .contains("secret")
+    );
+}

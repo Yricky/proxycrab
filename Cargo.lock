@@ -3544,7 +3544,6 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "getrandom 0.4.3",
- "if-addrs",
  "include_dir",
  "proxy-crab-mgr",
  "proxy-crab-mitm",
