@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, type Component } from "vue";
 import { Io5Ban, Io5Checkmark, Io5HandLeft } from "vue-icons-plus/io5";
+import { LiaStarOfLifeSolid } from "vue-icons-plus/lia";
 import type { ApiActionView, PermissionMode } from "../api/types";
 import {
-  ACTION_LABELS,
+  ACTION_META,
   FUNCTION_GROUPS,
   IMPACT_GROUPS,
   OTHER_GROUP,
@@ -50,24 +51,28 @@ interface ActionGroup {
 
 const groups = computed<ActionGroup[]>(() => {
   const dimension = props.dimension ?? "function";
-  const defs: ActionGroup[] =
-    dimension === "impact"
-      ? IMPACT_GROUPS.map((group) => ({ key: group.key, label: group.label, actions: [] }))
-      : [
-          ...FUNCTION_GROUPS.map((group) => ({ key: group.key, label: group.label, actions: [] })),
-          { ...OTHER_GROUP, actions: [] },
-        ];
+  const defs: ActionGroup[] = [
+    ...(dimension === "impact" ? IMPACT_GROUPS : FUNCTION_GROUPS).map((group) => ({
+      key: group.key,
+      label: group.label,
+      actions: [],
+    })),
+    { ...OTHER_GROUP, actions: [] },
+  ];
   const byKey = new Map(defs.map((group) => [group.key, group]));
   for (const action of props.catalog) {
-    const key =
-      dimension === "impact" ? impactGroupOf(action) : functionGroupOf(action.route_template).key;
+    const key = !ACTION_META[action.id]
+      ? OTHER_GROUP.key
+      : dimension === "impact"
+        ? impactGroupOf(action.id)
+        : functionGroupOf(action.route_template).key;
     byKey.get(key)?.actions.push(action);
   }
   return defs.filter((group) => group.actions.length > 0);
 });
 
 function actionLabel(action: ApiActionView): string {
-  return ACTION_LABELS[action.id] ?? action.route_template;
+  return ACTION_META[action.id]?.label ?? action.route_template;
 }
 
 function groupMode(actions: ApiActionView[]): PermissionMode | typeof MIXED {
@@ -123,20 +128,30 @@ function updateGroup(actions: ApiActionView[], mode: PermissionMode): void {
           <span>{{ actionLabel(action) }}</span>
           <code>{{ action.route_template }}</code>
         </div>
-        <div class="mode-group" role="group" :aria-label="`${actionLabel(action)}权限`">
-          <button
-            v-for="mode in modes"
-            :key="mode.value"
-            type="button"
-            class="mode-btn"
-            :class="[`m-${mode.value}`, { active: actionMode(action) === mode.value }]"
-            :title="`${mode.label}：${mode.description}`"
-            :aria-pressed="actionMode(action) === mode.value"
-            :disabled="disabled"
-            @click="updateAction(action.id, mode.value)"
+        <div class="permission-controls">
+          <span
+            v-if="ACTION_META[action.id]?.redaction"
+            class="redaction-indicator"
+            title="支持脱敏：绑定脚本后生效"
+            aria-label="支持脱敏：绑定脚本后生效"
           >
-            <component :is="mode.icon" :size="12" />
-          </button>
+            <LiaStarOfLifeSolid :size="15" />
+          </span>
+          <div class="mode-group" role="group" :aria-label="`${actionLabel(action)}权限`">
+            <button
+              v-for="mode in modes"
+              :key="mode.value"
+              type="button"
+              class="mode-btn"
+              :class="[`m-${mode.value}`, { active: actionMode(action) === mode.value }]"
+              :title="`${mode.label}：${mode.description}`"
+              :aria-pressed="actionMode(action) === mode.value"
+              :disabled="disabled"
+              @click="updateAction(action.id, mode.value)"
+            >
+              <component :is="mode.icon" :size="12" />
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -207,6 +222,16 @@ function updateGroup(actions: ApiActionView[], mode: PermissionMode): void {
   text-overflow: ellipsis;
   white-space: nowrap;
   user-select: text;
+}
+.permission-controls {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 8px;
+}
+.redaction-indicator {
+  display: inline-flex;
+  color: var(--text-secondary);
 }
 .mode-group {
   display: inline-flex;

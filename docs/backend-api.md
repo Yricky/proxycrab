@@ -941,6 +941,12 @@ Entries are not persisted and are consumed through incremental polling.
 
 The desktop and CLI owner UI expose a global redaction script library and one script selector for
 each local identity/API key, Session share and HAR share. Normal capture and forwarding are unaffected.
+In Settings > 管理接口, a redaction icon to the left of an endpoint’s permission controls marks
+support for identity-bound redaction. It is always shown for supported endpoints, even when no
+script is bound; it does not indicate that redaction is currently active.
+The UI’s impact groups are explicitly configured display metadata, independent of HTTP method
+and default permission. `GET /api/ca` appears in 仅读取 while retaining its default `deny`
+permission. Actions without display metadata appear in 其他; grouping never changes authorization.
 
 | Endpoint | Contract |
 | --- | --- |

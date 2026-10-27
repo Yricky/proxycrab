@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { Io5ChevronDown, Io5OpenOutline, Io5Play, Io5Warning } from "vue-icons-plus/io5";
+import { Io5ChevronDown, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import type { AssetMetadata } from "../api/types";
 import { proxyStore } from "../stores/proxy";
@@ -22,6 +22,7 @@ import {
   type ReplayDraft,
 } from "../utils/replay";
 import { openLogDetail } from "./launcher";
+import { BsFillSendFill } from "vue-icons-plus/bs";
 
 const props = defineProps<{ prefill?: ReplayDraft }>();
 const backend = useBackend();
@@ -76,8 +77,16 @@ const method = computed(() =>
 
 // ---------- 会话 ----------
 // 会话列表统一走 sessionsStore，样式复用 SessionListItem（与侧边栏一致）。
+const selectedSessionId = ref<number | null>(sessionsStore.activeSessionId);
+const selectedSession = computed(
+  () => sessionsStore.sessions.find((session) => session.id === selectedSessionId.value) ?? null,
+);
 const pickerOpen = ref(false);
-const sendWrap = ref<HTMLElement | null>(null);
+const sessionSeg = ref<HTMLElement | null>(null);
+const warnOpen = ref(false);
+const warnWrap = ref<HTMLElement | null>(null);
+const bodyWarnOpen = ref(false);
+const bodyWarnWrap = ref<HTMLElement | null>(null);
 
 function closePicker(): void {
   pickerOpen.value = false;
@@ -87,12 +96,29 @@ function togglePicker(): void {
   pickerOpen.value = !pickerOpen.value;
 }
 
-function onDocumentPointerDown(event: PointerEvent): void {
-  if (!sendWrap.value?.contains(event.target as Node)) closePicker();
+function chooseSession(sessionId: number): void {
+  selectedSessionId.value = sessionId;
+  closePicker();
 }
 
-watch(pickerOpen, (open) => {
-  if (open) document.addEventListener("pointerdown", onDocumentPointerDown);
+// 会话列表可能在窗口打开后才就绪，未选中时补上当前活跃会话。
+watch(
+  () => sessionsStore.sessions.length,
+  () => {
+    if (selectedSession.value === null && sessionsStore.activeSessionId !== null)
+      selectedSessionId.value = sessionsStore.activeSessionId;
+  },
+);
+
+function onDocumentPointerDown(event: PointerEvent): void {
+  const target = event.target as Node;
+  if (!sessionSeg.value?.contains(target)) closePicker();
+  if (!warnWrap.value?.contains(target)) warnOpen.value = false;
+  if (!bodyWarnWrap.value?.contains(target)) bodyWarnOpen.value = false;
+}
+
+watch([pickerOpen, warnOpen, bodyWarnOpen], ([picker, warn, bodyWarn]) => {
+  if (picker || warn || bodyWarn) document.addEventListener("pointerdown", onDocumentPointerDown);
   else document.removeEventListener("pointerdown", onDocumentPointerDown);
 });
 onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPointerDown));
@@ -136,6 +162,62 @@ const lengthIssue = computed(() => contentLengthIssue(tuples.value, knownBodySiz
 const missingContentType = computed(
   () => hasBody.value && headerValue(tuples.value, "content-type") === null,
 );
+type HeaderWarning = { key: string; hint: string; action: string; fix: () => void };
+// GET / HEAD 按协议不应携带请求体：提示在请求体标题栏。
+const bodylessMethod = computed(() =>
+  (method.value === "GET" || method.value === "HEAD") && hasBody.value ? method.value : null,
+);
+const bodyWarnings = computed<HeaderWarning[]>(() =>
+  bodylessMethod.value
+    ? [
+        {
+          key: bodylessMethod.value,
+          hint: `${bodylessMethod.value} 请求不应携带请求体`,
+          action: "清空 body",
+          fix: () => {
+            bodyMode.value = "none";
+          },
+        },
+      ]
+    : [],
+);
+watch(bodyWarnings, (warnings) => {
+  if (warnings.length === 0) bodyWarnOpen.value = false;
+});
+// 按 header key 维度聚合：一个 key 最多一条提示。
+const headerWarnings = computed<HeaderWarning[]>(() => {
+  const warnings: HeaderWarning[] = [];
+  if (lengthIssue.value === "missing")
+    warnings.push({
+      key: "Content-Length",
+      hint: "存在 body 但未声明长度",
+      action: "自动补上",
+      fix: fixContentLength,
+    });
+  else if (lengthIssue.value === "mismatch")
+    warnings.push({
+      key: "Content-Length",
+      hint: "声明值与实际 body 大小不符",
+      action: `修正为 ${knownBodySize.value}`,
+      fix: fixContentLength,
+    });
+  if (missingContentType.value)
+    warnings.push({
+      key: "Content-Type",
+      hint: "存在 body 但未声明类型",
+      action: "按内容补齐",
+      fix: fixContentType,
+    });
+  return warnings;
+});
+watch(headerWarnings, (warnings) => {
+  if (warnings.length === 0) warnOpen.value = false;
+});
+function applyWarning(warning: HeaderWarning): void {
+  warning.fix();
+  warnOpen.value = false;
+  bodyWarnOpen.value = false;
+}
 
 function upsertHeader(name: string, value: string): void {
   const committed = rows.value.filter((row) => row.name !== "" || row.value !== "");
@@ -160,9 +242,36 @@ function fixContentType(): void {
 
 // ---------- 执行 ----------
 const executing = ref(false);
-const resultLogId = ref<number | null>(null);
-const resultSessionId = ref<number | null>(null);
-const executeError = ref<string | null>(null);
+const MAX_SEND_RECORDS = 20;
+type SendRecord = {
+  key: number;
+  logId: number | null;
+  sessionId: number;
+  sessionName: string;
+  method: string;
+  url: string;
+  at: string;
+  error: string | null;
+};
+// 发送记录只存在于本窗口生命周期内，新记录排在最右，超出条数从左侧丢弃。
+const sendRecords = ref<SendRecord[]>([]);
+let recordKey = 0;
+
+function pushRecord(record: Omit<SendRecord, "key">): void {
+  recordKey += 1;
+  sendRecords.value = [...sendRecords.value, { ...record, key: recordKey }].slice(
+    -MAX_SEND_RECORDS,
+  );
+}
+
+function recordTitle(record: SendRecord): string {
+  const base = `${record.method} ${record.url}\n${record.sessionName} · ${record.at}`;
+  return record.error ? `${base}\n${record.error}` : base;
+}
+
+function openRecord(record: SendRecord): void {
+  if (record.logId !== null) openLogDetail(record.sessionId, record.logId);
+}
 
 function buildBody(): ReplayBodySpec | undefined {
   if (bodyMode.value === "text" && bodyText.value.length > 0)
@@ -180,47 +289,51 @@ function buildBody(): ReplayBodySpec | undefined {
 }
 
 const canCompose = computed(() => method.value !== "" && /^https?:\/\//.test(url.value));
-const noSession = computed(() => sessionsStore.sessions.length === 0);
 const sendDisabled = computed(
-  () => executing.value || !canCompose.value || !proxyStore.running || noSession.value,
+  () =>
+    executing.value || !canCompose.value || !proxyStore.running || selectedSession.value === null,
 );
 const sendTitle = computed(() =>
-  !proxyStore.running
-    ? "代理未启动，无法发送"
-    : !canCompose.value
-      ? "请填写合法的请求方法与 URL"
-      : noSession.value
-        ? "没有可用的会话"
-        : "选择会话并发送",
+  executing.value
+    ? "发送中…"
+    : !proxyStore.running
+      ? "代理未启动，无法发送"
+      : !canCompose.value
+        ? "请填写合法的请求方法与 URL"
+        : sessionsStore.sessions.length === 0
+          ? "没有可用的会话"
+          : !selectedSession.value
+            ? "请选择会话"
+            : `发送到 ${selectedSession.value.name}`,
 );
 
-async function execute(targetSessionId: number): Promise<void> {
+async function execute(): Promise<void> {
   const replay = backend.replay;
-  if (executing.value || !replay) return;
+  if (executing.value || !replay || !selectedSession.value) return;
   closePicker();
   executing.value = true;
-  resultLogId.value = null;
-  resultSessionId.value = null;
-  executeError.value = null;
+  const record: Omit<SendRecord, "key"> = {
+    logId: null,
+    sessionId: selectedSession.value.id,
+    sessionName: selectedSession.value.name,
+    method: method.value,
+    url: url.value,
+    at: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+    error: null,
+  };
   try {
-    const result = await replay(targetSessionId, {
+    const result = await replay(record.sessionId, {
       method: method.value,
       url: url.value,
       headers: tuples.value,
       body: buildBody(),
     });
-    resultLogId.value = result.log_id;
-    resultSessionId.value = targetSessionId;
+    record.logId = result.log_id;
   } catch (error) {
-    executeError.value = error instanceof Error ? error.message : String(error);
+    record.error = error instanceof Error ? error.message : String(error);
   } finally {
     executing.value = false;
-  }
-}
-
-function openResult(): void {
-  if (resultLogId.value !== null && resultSessionId.value !== null) {
-    openLogDetail(resultSessionId.value, resultLogId.value);
+    pushRecord(record);
   }
 }
 
@@ -244,95 +357,125 @@ const bodyExtra = computed(() => {
   <div class="replay-root">
     <header class="summary">
       <UrlInput v-model="url" class="url" />
-      <div
-        v-if="lengthIssue || missingContentType || resultLogId !== null || executeError"
-        class="notice-line"
-      >
-        <span v-if="lengthIssue" class="notice-item">
-          <Io5Warning :size="12" class="warning-icon" />
-          {{
-            lengthIssue === "missing"
-              ? "缺少 Content-Length"
-              : "Content-Length 与实际 body 大小不符"
-          }}
-          <button class="btn notice-btn" @click="fixContentLength">
-            {{ lengthIssue === "missing" ? "自动补上" : `修正为 ${knownBodySize}` }}
-          </button>
-        </span>
-        <span v-if="missingContentType" class="notice-item">
-          <Io5Warning :size="12" class="warning-icon" />
-          缺少 Content-Type
-          <button class="btn notice-btn" @click="fixContentType">按内容补齐</button>
-        </span>
-        <span class="summary-spacer" />
-        <span v-if="resultLogId !== null" class="notice-item result-ok">
-          已发送，日志 #{{ resultLogId }}
-          <button class="btn notice-btn" @click="openResult">
-            <Io5OpenOutline :size="12" /> 查看详情
-          </button>
-        </span>
-        <span v-else-if="executeError" class="notice-item text-danger">{{ executeError }}</span>
-      </div>
     </header>
 
-    <nav class="tab-bar">
-      <CustomSelect
-        class="method-select"
-        :model-value="methodChoice"
-        :options="methodOptions"
-        :display-value="methodDisplay"
-        aria-label="请求方法"
-        @update:model-value="methodChoice = $event"
-      >
-        <template #footer="{ close }">
-          <input
-            v-model="customMethod"
-            class="input method-custom-input mono"
-            placeholder="自定义 Method"
-            aria-label="自定义请求方法"
-            spellcheck="false"
-            @focus="methodChoice = CUSTOM_METHOD"
-            @input="methodChoice = CUSTOM_METHOD"
-            @keydown.enter.prevent="close(true)"
-          />
+    <div class="send-row">
+      <div class="record-strip">
+        <template v-for="record in sendRecords" :key="record.key">
+          <button
+            v-if="record.logId !== null"
+            type="button"
+            class="record-chip"
+            :title="recordTitle(record)"
+            @click="openRecord(record)"
+          >
+            #{{ record.logId }}
+          </button>
+          <span v-else class="record-chip failed" :title="recordTitle(record)">失败</span>
         </template>
-      </CustomSelect>
-      <button class="tab-btn active">请求</button>
-      <span class="summary-spacer" />
-      <div ref="sendWrap" class="send-wrap" @keydown.esc="closePicker">
+      </div>
+      <div class="send-group" @keydown.esc="closePicker">
+        <CustomSelect
+          class="method-select"
+          :model-value="methodChoice"
+          :options="methodOptions"
+          :display-value="methodDisplay"
+          aria-label="请求方法"
+          @update:model-value="methodChoice = $event"
+        >
+          <template #footer="{ close }">
+            <input
+              v-model="customMethod"
+              class="input method-custom-input mono"
+              placeholder="自定义 Method"
+              aria-label="自定义请求方法"
+              spellcheck="false"
+              @focus="methodChoice = CUSTOM_METHOD"
+              @input="methodChoice = CUSTOM_METHOD"
+              @keydown.enter.prevent="close(true)"
+            />
+          </template>
+        </CustomSelect>
+        <div ref="sessionSeg" class="session-seg">
+          <button
+            type="button"
+            class="session-trigger"
+            :class="{ open: pickerOpen }"
+            :disabled="sessionsStore.sessions.length === 0"
+            :title="selectedSession ? `发送到 ${selectedSession.name}` : '选择会话'"
+            :aria-expanded="pickerOpen"
+            aria-label="选择会话"
+            @click="togglePicker"
+          >
+            <span class="session-label" :class="{ placeholder: !selectedSession }">{{
+              selectedSession?.name ?? "选择会话"
+            }}</span>
+            <Io5ChevronDown :size="13" />
+          </button>
+          <div v-if="pickerOpen" class="session-picker" role="menu" aria-label="选择会话">
+            <SessionListItem
+              v-for="session in sessionsStore.sessions"
+              :key="session.id"
+              :session="session"
+              :viewing="selectedSessionId === session.id"
+              :active="sessionsStore.activeSessionId === session.id"
+              :active-connections="proxyStore.activeNetlogCount(session.id)"
+              class="picker-row"
+              role="menuitem"
+              tabindex="0"
+              @click="chooseSession(session.id)"
+              @keydown.enter.prevent="chooseSession(session.id)"
+              @keydown.space.prevent="chooseSession(session.id)"
+            />
+          </div>
+        </div>
         <button
-          class="btn primary send-btn"
+          type="button"
+          class="send-btn"
+          :class="{ sending: executing }"
           :disabled="sendDisabled"
           :title="sendTitle"
-          :aria-expanded="pickerOpen"
-          @click="togglePicker"
+          aria-label="发送请求"
+          :aria-busy="executing"
+          @click="execute"
         >
-          <Io5Play :size="13" />
-          {{ executing ? "发送中…" : "发送" }}
-          <Io5ChevronDown :size="11" />
+          <BsFillSendFill :size="13" />
         </button>
-        <div v-if="pickerOpen" class="session-picker" role="menu" aria-label="选择会话">
-          <SessionListItem
-            v-for="session in sessionsStore.sessions"
-            :key="session.id"
-            :session="session"
-            :active="sessionsStore.activeSessionId === session.id"
-            :active-connections="proxyStore.activeNetlogCount(session.id)"
-            class="picker-row"
-            role="menuitem"
-            tabindex="0"
-            @click="execute(session.id)"
-            @keydown.enter.prevent="execute(session.id)"
-            @keydown.space.prevent="execute(session.id)"
-          />
-        </div>
       </div>
-    </nav>
+    </div>
 
     <div class="tab-page">
       <section class="card headers-card">
         <div class="card-title">
           请求头
+          <div
+            v-if="headerWarnings.length > 0"
+            ref="warnWrap"
+            class="warn-wrap"
+            @keydown.esc="warnOpen = false"
+          >
+            <button
+              class="warn-trigger"
+              :class="{ active: warnOpen }"
+              :title="`请求头有 ${headerWarnings.length} 项待补齐`"
+              aria-label="请求头警告"
+              :aria-expanded="warnOpen"
+              @click="warnOpen = !warnOpen"
+            >
+              <Io5Warning :size="12" />
+            </button>
+            <div v-if="warnOpen" class="warn-menu" role="menu">
+              <div v-for="warning in headerWarnings" :key="warning.key" class="warn-item">
+                <div class="warn-item-head">
+                  <span class="warn-key mono">{{ warning.key }}</span>
+                  <button class="btn notice-btn" @click="applyWarning(warning)">
+                    {{ warning.action }}
+                  </button>
+                </div>
+                <div class="warn-hint">{{ warning.hint }}</div>
+              </div>
+            </div>
+          </div>
           <span class="count-badge">{{ tuples.length }}</span>
         </div>
         <div class="headers-scroll">
@@ -343,7 +486,35 @@ const bodyExtra = computed(() => {
       <section class="card body-card">
         <div class="card-title">
           请求体
-          <span v-if="bodyExtra" class="card-title-extra mono">{{ bodyExtra }}</span>
+          <div
+            v-if="bodyWarnings.length > 0"
+            ref="bodyWarnWrap"
+            class="warn-wrap"
+            @keydown.esc="bodyWarnOpen = false"
+          >
+            <button
+              class="warn-trigger"
+              :class="{ active: bodyWarnOpen }"
+              :title="`请求体有 ${bodyWarnings.length} 项待处理`"
+              aria-label="请求体警告"
+              :aria-expanded="bodyWarnOpen"
+              @click="bodyWarnOpen = !bodyWarnOpen"
+            >
+              <Io5Warning :size="12" />
+            </button>
+            <div v-if="bodyWarnOpen" class="warn-menu" role="menu">
+              <div v-for="warning in bodyWarnings" :key="warning.key" class="warn-item">
+                <div class="warn-item-head">
+                  <span class="warn-key mono">{{ warning.key }}</span>
+                  <button class="btn notice-btn" @click="applyWarning(warning)">
+                    {{ warning.action }}
+                  </button>
+                </div>
+                <div class="warn-hint">{{ warning.hint }}</div>
+              </div>
+            </div>
+          </div>
+          <span class="card-title-extra mono">{{ bodyExtra ?? "" }}</span>
           <span class="summary-spacer" />
           <span class="mode-tabs">
             <button
@@ -427,78 +598,83 @@ const bodyExtra = computed(() => {
   flex: 1;
 }
 
-.notice-line {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 4px;
-  font-size: 11px;
-  min-height: 20px;
-}
-
-.notice-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--text-secondary);
-}
-
 .notice-btn {
   padding: 0 6px;
   font-size: 11px;
   line-height: 18px;
 }
 
-.warning-icon {
-  color: var(--warning);
-}
-
-/* 与详情页 tab 栏对齐 */
-.tab-bar {
+/* 发送行：左侧为发送记录（右对齐），右侧为方法 / 会话 / 发送三合一控件 */
+.send-row {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--border);
-  border-top: 1px solid var(--border);
+  gap: 8px;
+  padding: 6px 8px;
 }
 
-.tab-btn {
-  position: relative;
-  display: inline-flex;
+.record-strip {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 6px 14px 8px;
-  border: none;
-  background: transparent;
+  justify-content: flex-end;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.record-chip {
+  flex: none;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-panel);
   color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.record-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.record-chip.failed {
+  border-color: var(--danger);
+  color: var(--danger);
   cursor: default;
 }
 
-.tab-btn.active {
-  color: var(--accent);
-  font-weight: 600;
+.send-group {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
 }
 
-.tab-btn.active::after {
-  content: "";
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: -1px;
-  height: 2px;
-  border-radius: 1px;
-  background: var(--accent);
+.send-group > .method-select {
+  width: 82px;
 }
 
-.method-select {
-  width: 92px;
+.send-group > .method-select :deep(.select-trigger) {
+  height: 100%;
+  min-height: 0;
+  padding: 2px 6px 2px 9px;
+  border: none;
+  border-radius: 5px 0 0 5px;
+  background: transparent;
+  font-size: 11px;
 }
 
-.method-select :deep(.select-trigger) {
-  min-height: 26px;
-  padding: 2px 7px 2px 9px;
+.send-group > .method-select :deep(.select-trigger:hover:not(:disabled)) {
+  background: var(--bg-hover);
 }
 
 .method-custom-input {
@@ -510,25 +686,94 @@ const bodyExtra = computed(() => {
   font-size: 11px;
 }
 
-.send-wrap {
-  position: relative;
+.send-group :deep(button:focus-visible) {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.session-seg {
   display: flex;
+  min-width: 120px;
+  border-left: 1px solid var(--border);
+}
+
+.session-trigger {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  max-width: 200px;
+  padding: 2px 6px 2px 9px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-trigger:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.session-trigger:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.session-trigger > svg {
   flex: none;
-  margin-left: auto;
+  color: var(--text-secondary);
+  transition: transform 0.12s;
+}
+
+.session-trigger.open > svg {
+  transform: rotate(180deg);
+}
+
+.session-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-label.placeholder {
+  color: var(--text-faint);
 }
 
 .send-btn {
-  min-height: 26px;
-  padding: 2px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  padding: 0;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0 5px 5px 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.send-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.send-btn.sending,
+.send-btn:disabled {
+  color: var(--text-faint);
+  cursor: default;
 }
 
 .session-picker {
   position: absolute;
   z-index: 100006;
   top: calc(100% + 4px);
-  right: 0;
-  min-width: 220px;
-  max-width: 360px;
+  left: -1px;
+  right: -1px;
   max-height: 280px;
   overflow-y: auto;
   padding: 4px;
@@ -549,8 +794,8 @@ const bodyExtra = computed(() => {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px 12px 12px;
+  gap: 8px;
+  padding: 0px 8px 8px;
   overflow: hidden;
 }
 
@@ -566,11 +811,93 @@ const bodyExtra = computed(() => {
 .headers-card {
   flex: none;
   max-height: 45%;
+  /* 标题栏的警告菜单需要溢出卡片显示；圆角由标题栏自身负责 */
+  overflow: visible;
+}
+
+.headers-card > .card-title {
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+.headers-card > .headers-scroll {
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
+.warn-wrap {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+
+.warn-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--warning);
+  cursor: pointer;
+}
+
+.warn-trigger:hover,
+.warn-trigger.active {
+  background: var(--bg-hover);
+}
+
+.warn-menu {
+  position: absolute;
+  z-index: 100004;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 280px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popup);
+  font-weight: 400;
+}
+
+.warn-item {
+  padding: 5px 7px;
+  border-radius: var(--radius-sm);
+}
+
+.warn-item:hover {
+  background: var(--bg-hover);
+}
+
+.warn-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.warn-key {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.warn-hint {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 
 .body-card {
   flex: 1;
   min-height: 0;
+  /* 标题栏的警告菜单需要溢出卡片显示；圆角由标题栏与内容区自身负责 */
+  overflow: visible;
+}
+
+.body-card > .card-title {
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
 
 .card-title {
@@ -588,6 +915,7 @@ const bodyExtra = computed(() => {
 
 .card-title-extra {
   font-weight: 400;
+  font-size: 11px;
   color: var(--text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -639,6 +967,8 @@ const bodyExtra = computed(() => {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  overflow: hidden;
 }
 
 .body-editor {

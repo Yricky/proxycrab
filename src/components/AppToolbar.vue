@@ -52,6 +52,7 @@ import {
 } from "vue-icons-plus/io5";
 import { BsFillSendFill } from "vue-icons-plus/bs";
 import { GrConnect } from "vue-icons-plus/gr";
+import { LiaStarOfLifeSolid } from "vue-icons-plus/lia";
 
 type ToolbarMenu = "ai" | "scripts" | "tools" | "system";
 
@@ -273,7 +274,7 @@ onBeforeUnmount(() => {
             class="tb-menu-item"
             @click="runMenuAction(openRedactionManager)"
           >
-            <Io5ShieldCheckmark :size="15" /><span>脱敏脚本</span>
+            <LiaStarOfLifeSolid :size="15" /><span>脱敏脚本</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openRoutingManager)">
             <Io5RadioButtonOn :size="14" />

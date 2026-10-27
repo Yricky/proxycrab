@@ -1,90 +1,112 @@
-import type { ApiActionView } from "../api/types";
-
 /**
- * 权限目录展示元数据（前端侧）。
- *
- * 后端 ApiActionView 只下发 id/method/route_template/default_mode，
- * 文案与分组由前端自行推导，避免展示概念与传输模型耦合。
+ * 权限目录展示元数据（前端侧）。文案、影响分组和脱敏能力显式配置，
+ * 不依赖后端默认权限或 HTTP 方法；未配置的接口归入「其他」。
  */
+export type ImpactGroupKey = "read" | "write" | "danger";
 
-/** 动作 id（`METHOD /route/template`）→ 中文文案。 */
-export const ACTION_LABELS: Record<string, string> = {
-  "GET /api/redaction-scripts": "列出脱敏脚本",
-  "POST /api/redaction-scripts": "创建脱敏脚本",
-  "GET /api/redaction-scripts/{name}": "读取脱敏脚本",
-  "PUT /api/redaction-scripts/{name}": "更新脱敏脚本",
-  "DELETE /api/redaction-scripts/{name}": "删除脱敏脚本",
-  "PUT /api/session-shares/{id}/redaction": "绑定分享脱敏脚本",
-  "PUT /api/session-har-shares/{id}/redaction": "绑定 HAR 脱敏脚本",
-  "GET /api/agents.md": "读取 Agent 指令",
-  "GET /api/assets/{*asset_id}": "读取资源",
-  "POST /api/assets/{*asset_id}": "上传资源",
-  "GET /api/config": "读取全局配置",
-  "GET /api/proxy/status": "读取代理状态",
-  "POST /api/proxy/start": "启动代理",
-  "POST /api/proxy/stop": "停止代理",
-  "GET /api/sessions": "列出 Session 及活动状态",
-  "POST /api/sessions": "创建 Session",
-  "GET /api/archived-sessions": "列出归档 Session",
-  "POST /api/sessions/{id}/archive": "归档 Session",
-  "POST /api/archived-sessions/{id}/restore": "恢复归档 Session",
-  "DELETE /api/archived-sessions/{id}": "永久删除归档 Session",
-  "PUT /api/active-session": "切换活动 Session",
-  "PUT /api/sessions/{id}": "更新 Session",
-  "PUT /api/sessions/{id}/filter": "保存 Session 过滤条件",
-  "POST /api/session-shares": "启用 Session 分享",
-  "GET /api/session-shares/{id}": "查看 Session 分享状态",
-  "DELETE /api/session-shares/{id}": "禁用 Session 分享",
-  "POST /api/session-har-shares": "启用 HAR 分享",
-  "GET /api/session-har-shares/{id}": "查看 HAR 分享状态",
-  "DELETE /api/session-har-shares/{id}": "禁用 HAR 分享",
-  "POST /api/logs/ids": "查询日志 ID",
-  "POST /api/logs/views": "批量渲染日志",
-  "GET /api/logs/{id}/body": "读取日志正文",
-  "GET /api/logs/{id}": "读取日志详情",
-  "GET /api/session-view": "读取 Session 视图",
-  "PUT /api/session-view": "替换 Session 视图",
-  "GET /api/session-interceptors": "读取拦截器链",
-  "PUT /api/session-interceptors": "替换拦截器链",
-  "GET /api/column-scripts": "列出自定义列脚本",
-  "POST /api/column-scripts": "创建自定义列脚本",
-  "GET /api/column-scripts/{name}": "读取自定义列脚本",
-  "PUT /api/column-scripts/{name}": "更新自定义列脚本",
-  "DELETE /api/column-scripts/{name}": "删除自定义列脚本",
-  "GET /api/filter-scripts": "列出过滤脚本",
-  "POST /api/filter-scripts": "创建过滤脚本",
-  "POST /api/filter-scripts/{name}/debug": "调试过滤脚本",
-  "GET /api/filter-scripts/{name}": "读取过滤脚本",
-  "PUT /api/filter-scripts/{name}": "更新过滤脚本",
-  "DELETE /api/filter-scripts/{name}": "删除过滤脚本",
-  "GET /api/routing-scripts": "列出分流脚本",
-  "POST /api/routing-scripts": "创建分流脚本",
-  "GET /api/routing-scripts/{name}": "读取分流脚本",
-  "PUT /api/routing-scripts/{name}": "更新分流脚本",
-  "DELETE /api/routing-scripts/{name}": "删除分流脚本",
-  "GET /api/routing-script-selection": "读取活动分流脚本",
-  "PUT /api/routing-script-selection": "选择活动分流脚本",
-  "GET /api/interceptors": "列出拦截器",
-  "POST /api/interceptors": "创建拦截器",
-  "GET /api/interceptors/{kind}/{name}": "读取拦截器",
-  "PUT /api/interceptors/{kind}/{name}": "更新拦截器",
-  "DELETE /api/interceptors/{kind}/{name}": "删除拦截器",
-  "GET /api/breakpoints": "列出活动断点",
-  "GET /api/breakpoints/{id}/body": "读取断点正文",
-  "GET /api/breakpoints/{id}": "读取断点详情",
-  "POST /api/breakpoints/{id}/extend": "延长断点等待",
-  "POST /api/breakpoints/{id}/release": "释放断点",
-  "POST /api/breakpoints/{id}/execute": "执行临时脚本",
-  "GET /api/bypass": "读取 Bypass 流量",
-  "DELETE /api/bypass": "清空 Bypass 流量",
-  "POST /api/bypass/delete": "批量删除 Bypass 流量",
-  "DELETE /api/bypass/{id}": "删除 Bypass 流量",
-  "GET /api/ca": "读取 CA 证书",
-  "GET /api/clash-subscription": "读取 Clash 订阅状态",
-  "PUT /api/clash-subscription": "开启或更新 Clash 订阅",
-  "DELETE /api/clash-subscription": "关闭 Clash 订阅",
-  "GET /api/system-logs": "读取系统日志",
-  "DELETE /api/system-logs": "清空系统日志",
+interface PermissionActionMeta {
+  label: string;
+  impact: ImpactGroupKey;
+  /** 是否支持身份绑定的脱敏策略；省略表示不支持。 */
+  redaction?: boolean;
+}
+
+/** 动作 id（`METHOD /route/template`）→ 展示元数据。 */
+export const ACTION_META: Readonly<Record<string, PermissionActionMeta>> = {
+  "GET /api/redaction-scripts": { label: "列出脱敏脚本", impact: "read" },
+  "POST /api/redaction-scripts": { label: "创建脱敏脚本", impact: "write" },
+  "GET /api/redaction-scripts/{name}": { label: "读取脱敏脚本", impact: "danger" },
+  "PUT /api/redaction-scripts/{name}": { label: "更新脱敏脚本", impact: "write" },
+  "DELETE /api/redaction-scripts/{name}": { label: "删除脱敏脚本", impact: "write" },
+  "PUT /api/session-shares/{id}/redaction": { label: "绑定分享脱敏脚本", impact: "write" },
+  "PUT /api/session-har-shares/{id}/redaction": { label: "绑定 HAR 脱敏脚本", impact: "write" },
+  "GET /api/agents.md": { label: "读取 Agent 指令", impact: "read" },
+  "GET /api/assets/{*asset_id}": { label: "读取资源", impact: "read" },
+  "POST /api/assets/{*asset_id}": { label: "上传资源", impact: "write" },
+  "GET /api/config": { label: "读取全局配置", impact: "read" },
+  "GET /api/proxy/status": { label: "读取代理状态", impact: "read" },
+  "POST /api/proxy/start": { label: "启动代理", impact: "write" },
+  "POST /api/proxy/stop": { label: "停止代理", impact: "write" },
+  "GET /api/sessions": { label: "列出 Session 及活动状态", impact: "read" },
+  "POST /api/sessions": { label: "创建 Session", impact: "write" },
+  "GET /api/archived-sessions": { label: "列出归档 Session", impact: "read" },
+  "POST /api/sessions/{id}/archive": { label: "归档 Session", impact: "danger" },
+  "POST /api/archived-sessions/{id}/restore": { label: "恢复归档 Session", impact: "write" },
+  "DELETE /api/archived-sessions/{id}": { label: "永久删除归档 Session", impact: "danger" },
+  "PUT /api/active-session": { label: "切换活动 Session", impact: "write" },
+  "PUT /api/sessions/{id}": { label: "更新 Session", impact: "write" },
+  "PUT /api/sessions/{id}/filter": { label: "保存 Session 过滤条件", impact: "write" },
+  "POST /api/session-shares": { label: "启用 Session 分享", impact: "write" },
+  "GET /api/session-shares/{id}": { label: "查看 Session 分享状态", impact: "read" },
+  "DELETE /api/session-shares/{id}": { label: "禁用 Session 分享", impact: "write" },
+  "POST /api/session-har-shares": { label: "启用 HAR 分享", impact: "write" },
+  "GET /api/session-har-shares/{id}": { label: "查看 HAR 分享状态", impact: "read" },
+  "DELETE /api/session-har-shares/{id}": { label: "禁用 HAR 分享", impact: "write" },
+  "POST /api/logs/ids": { label: "查询日志 ID", impact: "write", redaction: true },
+  "POST /api/logs/views": { label: "批量渲染日志", impact: "write", redaction: true },
+  "GET /api/logs/{id}/body": { label: "读取日志正文", impact: "read", redaction: true },
+  "GET /api/logs/{id}": { label: "读取日志详情", impact: "read", redaction: true },
+  "GET /api/session-view": { label: "读取 Session 视图", impact: "read", redaction: true },
+  "PUT /api/session-view": { label: "替换 Session 视图", impact: "write" },
+  "GET /api/session-interceptors": { label: "读取拦截器链", impact: "read" },
+  "PUT /api/session-interceptors": { label: "替换拦截器链", impact: "write" },
+  "GET /api/column-scripts": { label: "列出自定义列脚本", impact: "read" },
+  "POST /api/column-scripts": { label: "创建自定义列脚本", impact: "write" },
+  "GET /api/column-scripts/{name}": { label: "读取自定义列脚本", impact: "read" },
+  "PUT /api/column-scripts/{name}": { label: "更新自定义列脚本", impact: "write" },
+  "DELETE /api/column-scripts/{name}": { label: "删除自定义列脚本", impact: "danger" },
+  "GET /api/filter-scripts": { label: "列出过滤脚本", impact: "read" },
+  "POST /api/filter-scripts": { label: "创建过滤脚本", impact: "write" },
+  "POST /api/filter-scripts/{name}/debug": {
+    label: "调试过滤脚本",
+    impact: "write",
+    redaction: true,
+  },
+  "GET /api/filter-scripts/{name}": { label: "读取过滤脚本", impact: "read" },
+  "PUT /api/filter-scripts/{name}": { label: "更新过滤脚本", impact: "write" },
+  "DELETE /api/filter-scripts/{name}": { label: "删除过滤脚本", impact: "danger" },
+  "GET /api/routing-scripts": { label: "列出分流脚本", impact: "read" },
+  "POST /api/routing-scripts": { label: "创建分流脚本", impact: "write" },
+  "GET /api/routing-scripts/{name}": { label: "读取分流脚本", impact: "read" },
+  "PUT /api/routing-scripts/{name}": { label: "更新分流脚本", impact: "write" },
+  "DELETE /api/routing-scripts/{name}": { label: "删除分流脚本", impact: "danger" },
+  "GET /api/routing-script-selection": { label: "读取活动分流脚本", impact: "read" },
+  "PUT /api/routing-script-selection": { label: "选择活动分流脚本", impact: "write" },
+  "GET /api/interceptors": { label: "列出拦截器", impact: "read" },
+  "POST /api/interceptors": { label: "创建拦截器", impact: "write" },
+  "GET /api/interceptors/{kind}/{name}": { label: "读取拦截器", impact: "read" },
+  "PUT /api/interceptors/{kind}/{name}": { label: "更新拦截器", impact: "write" },
+  "DELETE /api/interceptors/{kind}/{name}": { label: "删除拦截器", impact: "danger" },
+  "GET /api/breakpoints": { label: "列出活动断点", impact: "read", redaction: true },
+  "GET /api/breakpoints/{id}/body": { label: "读取断点正文", impact: "read", redaction: true },
+  "GET /api/breakpoints/{id}": { label: "读取断点详情", impact: "read", redaction: true },
+  "POST /api/breakpoints/{id}/extend": { label: "延长断点等待", impact: "write", redaction: true },
+  "POST /api/breakpoints/{id}/release": { label: "释放断点", impact: "write" },
+  "POST /api/breakpoints/{id}/execute": { label: "执行临时脚本", impact: "write", redaction: true },
+  "GET /api/bypass": { label: "读取 Bypass 流量", impact: "read", redaction: true },
+  "DELETE /api/bypass": { label: "清空 Bypass 流量", impact: "danger" },
+  "POST /api/bypass/delete": { label: "批量删除 Bypass 流量", impact: "danger" },
+  "DELETE /api/bypass/{id}": { label: "删除 Bypass 流量", impact: "danger" },
+  "GET /api/ca": { label: "读取 CA 证书", impact: "read" },
+  "GET /api/clash-subscription": { label: "读取 Clash 订阅状态", impact: "read" },
+  "PUT /api/clash-subscription": { label: "开启或更新 Clash 订阅", impact: "write" },
+  "DELETE /api/clash-subscription": { label: "关闭 Clash 订阅", impact: "write" },
+  "GET /api/system-logs": { label: "读取系统日志", impact: "read" },
+  "DELETE /api/system-logs": { label: "清空系统日志", impact: "danger" },
+  "GET /api/assets": { label: "列出资源", impact: "read" },
+  "POST /api/replay": { label: "重放请求", impact: "write" },
+  "GET /api/logs/{id}/interceptors/{execution_id}/content": {
+    label: "读取拦截器执行脚本",
+    impact: "read",
+  },
+  "GET /api/logs/{id}/interceptors/{execution_id}/snapshot": {
+    label: "读取拦截器快照",
+    impact: "read",
+    redaction: true,
+  },
+  "GET /api/clash-config": { label: "读取 Clash 配置", impact: "read" },
+  "PUT /api/clash-config": { label: "更新 Clash 配置", impact: "write" },
+  "DELETE /api/clash-config": { label: "重置 Clash 配置", impact: "write" },
 };
 
 /** 「功能」维度分组定义（顺序即展示顺序；prefixes 按 route_template 前缀匹配）。 */
@@ -143,25 +165,15 @@ export function functionGroupOf(routeTemplate: string): { key: string; label: st
   return OTHER_GROUP;
 }
 
-/** 「影响」维度分组。 */
-export type ImpactGroupKey = "read" | "write" | "danger";
-
+/** 「影响」维度分组（顺序即展示顺序）。 */
 export const IMPACT_GROUPS: ReadonlyArray<{ key: ImpactGroupKey; label: string }> = [
   { key: "read", label: "仅读取" },
   { key: "write", label: "有写操作" },
   { key: "danger", label: "危险操作" },
 ];
 
-/**
- * 影响分类（基于动作默认值静态判定，不随用户配置漂移）：
- * - 默认 Deny 的动作即「危险操作」；
- * - 其余 GET 为「仅读取」；
- * - 其余非 GET（POST/PUT/DELETE）为「有写操作」。
- */
-export function impactGroupOf(action: ApiActionView): ImpactGroupKey {
-  if (action.default_mode === "deny") return "danger";
-  if (action.method === "GET") return "read";
-  return "write";
+export function impactGroupOf(actionId: string): ImpactGroupKey | "other" {
+  return ACTION_META[actionId]?.impact ?? OTHER_GROUP.key;
 }
 
 /** 展示分组维度。 */

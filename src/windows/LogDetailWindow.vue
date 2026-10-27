@@ -856,7 +856,7 @@ function headerCount(headers: HeaderItem[]): string {
 
 .summary {
   flex: none;
-  padding: 6px 12px 6px;
+  padding: 6px 10px 6px;
   background: var(--bg-panel);
 }
 
@@ -1047,7 +1047,7 @@ function headerCount(headers: HeaderItem[]): string {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 8px 12px;
+  padding: 8px 10px;
 }
 
 .breakpoint-state {
@@ -1158,7 +1158,7 @@ function headerCount(headers: HeaderItem[]): string {
   min-height: 0;
   display: flex;
   flex-direction: row;
-  padding: 10px 12px 12px;
+  padding: 10px;
   overflow: hidden;
 }
 
