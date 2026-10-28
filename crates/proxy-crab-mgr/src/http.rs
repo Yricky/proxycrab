@@ -45,7 +45,7 @@ use crate::{
         InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError, ManagerResult,
         ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ReplayRequestPayload,
         RoutingSelection, ScriptRequest, SessionQuery, SystemLogsQuery, UpdateScriptRequest,
-        UpdateSessionRequest, default_body_max_size,
+        UpdateSessionRequest, WebSocketQuery, default_body_max_size,
     },
     har_share::{EnableHarShareRequest, HarShareService},
     manager::ProxyCrabManager,
@@ -252,7 +252,7 @@ fn spawn_proxy_status_change_bridge(
 }
 
 #[cfg(test)]
-fn router(manager: ManagerState, permissions: Arc<dyn PermissionManager>) -> Router {
+pub(crate) fn router(manager: ManagerState, permissions: Arc<dyn PermissionManager>) -> Router {
     let (changes, _) = broadcast::channel(128);
     router_with_changes(manager, permissions, changes)
 }
@@ -337,6 +337,11 @@ fn router_with_changes_and_extra(
         .route("/api/logs/ids", post(log_ids))
         .route("/api/logs/views", post(log_views))
         .route("/api/logs/{id}/body", get(log_body))
+        .route("/api/logs/{id}/websocket/messages", get(websocket_messages))
+        .route(
+            "/api/logs/{id}/websocket/messages/{message_id}/body",
+            get(websocket_message_body),
+        )
         .route(
             "/api/logs/{id}/interceptors/{execution_id}/content",
             get(log_interceptor_content),
@@ -1064,6 +1069,47 @@ async fn log(
     success(manager.log(query.session_id, id).await?)
 }
 
+async fn websocket_messages(
+    ReadManager(manager): ReadManager,
+    ApiPath(id): ApiPath<u64>,
+    ApiQuery(query): ApiQuery<WebSocketQuery>,
+) -> ApiResult {
+    success(
+        manager
+            .websocket_messages(
+                query.session_id,
+                id,
+                query.body_side()?,
+                query.after_id,
+                query.limit.unwrap_or(500),
+            )
+            .await?,
+    )
+}
+async fn websocket_message_body(
+    ReadManager(manager): ReadManager,
+    ApiPath((id, message_id)): ApiPath<(u64, u32)>,
+    ApiQuery(query): ApiQuery<WebSocketQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let source = manager
+        .websocket_message_body(
+            query.session_id,
+            id,
+            query.body_side()?,
+            message_id,
+            query.max_size.unwrap_or_else(default_body_max_size),
+        )
+        .await?;
+    let mut response = body_response(source, &headers, query.max_size)
+        .await
+        .map_err(ApiError)?;
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
 async fn log_body(
     ReadManager(manager): ReadManager,
     ApiPath(id): ApiPath<u64>,
@@ -1777,7 +1823,8 @@ impl ErrorCode {
     /// 错误码对应的 HTTP 状态码。穷尽匹配：新增错误码必须在编译期决定状态码。
     pub fn http_status(self) -> StatusCode {
         match self {
-            Self::RedactionManagementDisabled => StatusCode::FORBIDDEN,
+            Self::RedactionManagementDisabled | Self::MessageContentHidden => StatusCode::FORBIDDEN,
+            Self::MessageContentUnavailable => StatusCode::UNPROCESSABLE_ENTITY,
             Self::BadRequest
             | Self::InvalidAssetId
             | Self::InvalidAssetFormat

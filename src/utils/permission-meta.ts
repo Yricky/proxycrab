@@ -44,6 +44,15 @@ export const ACTION_META: Readonly<Record<string, PermissionActionMeta>> = {
   "DELETE /api/session-har-shares/{id}": { label: "禁用 HAR 分享", impact: "write" },
   "POST /api/logs/ids": { label: "查询日志 ID", impact: "write", redaction: true },
   "POST /api/logs/views": { label: "批量渲染日志", impact: "write", redaction: true },
+  "GET /api/logs/{id}/websocket/messages": {
+    label: "读取 WebSocket 消息列表",
+    impact: "read",
+  },
+  "GET /api/logs/{id}/websocket/messages/{message_id}/body": {
+    label: "读取 WebSocket 消息正文",
+    impact: "read",
+    redaction: true,
+  },
   "GET /api/logs/{id}/body": { label: "读取日志正文", impact: "read", redaction: true },
   "GET /api/logs/{id}": { label: "读取日志详情", impact: "read", redaction: true },
   "GET /api/session-view": { label: "读取 Session 视图", impact: "read", redaction: true },

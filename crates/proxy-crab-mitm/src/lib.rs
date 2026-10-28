@@ -13,6 +13,7 @@ pub mod model;
 pub mod proxy;
 pub mod runtime;
 pub mod storage;
+pub mod websocket;
 pub mod workspace;
 
 pub use proxy::replay::{ReplayBody, ReplayError, ReplayRequest};

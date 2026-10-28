@@ -1020,3 +1020,61 @@ legacy `execCommand` fallback. Monaco also has UUID/copy fallbacks; its context-
 browser-dependent, and its optional WebGPU renderer is disabled by default. Body/file downloads
 use Blob/object URLs rather than secure-context file pickers. These browser restrictions do not
 change management API permissions or the server-side replay endpoint.
+
+## WebSocket message capture
+
+HTTP/1.1 WebSocket 13 upgrades create a separate linked `ws://`/`wss://` capture with
+`request.version = "WebSocket/13"`. The handshake remains an HTTP log. `GET /api/logs/{id}`
+includes optional `websocket` metadata on both records: `handshake_log_id`,
+`websocket_log_id`, `subprotocol`, `extensions`, `opened_at`, `closed_at`, `close_code`,
+`close_reason`. Use runtime active-netlog membership for live state, not missing close time.
+Close reason is omitted under a read policy because it is peer-controlled text.
+
+- `GET /api/logs/{id}/websocket/messages?session_id=S&side=request|response&after_id=0&limit=500`
+  returns `{messages, next_after_id, has_more}` inside the standard API envelope.
+  Limit is 1–2000. IDs start at 1 independently per direction. `next_after_id` is the last
+  returned ID or the input cursor, including when `has_more=false`; poll with that cursor.
+  Entries contain `id`, `type` (`text`/`binary`), `started_at`, `completed_at` (Unix ms),
+  `size` (original decoded byte count), `content_available`, `omitted_reason`.
+- `GET /api/logs/{id}/websocket/messages/{message_id}/body?session_id=S&side=request|response&max_size=16777216`
+  returns policy-filtered bytes (`text/plain; charset=utf-8` or `application/octet-stream`),
+  with `Cache-Control: no-store`. Limits apply before and after redaction. Empty messages are valid.
+  Omitted capture content produces `message_content_unavailable` (422), policy-hidden content
+  `message_content_hidden` (403), failed/legacy policies `redaction_failed` (500).
+- Equivalent `/share-api/...` paths use the share-scoped Session and policy; supplied Session IDs
+  cannot escape the share. Desktop methods call the same manager implementation.
+
+The request body file stores C2S and response body file S2C. These are internal containers,
+not HTTP response bodies: generic body reads are rejected, detail payloads are empty, and
+WebSocket connection rows are excluded from HAR. Handshake HAR entries remain eligible.
+No historical message backfill or connection-wide export is provided.
+
+Messages are unmasked, reassembled and permessage-deflate decoded before storage. Complete messages
+up to 16 MiB are buffered then appended. Larger messages retain metadata with
+`omitted_reason=size_limit_exceeded`; traffic and later message capture continue. Ping/Pong
+are not records; Close updates connection metadata. Capture/decode/storage failures stop affected
+capture processing without intentionally interrupting forwarding. HTTP/2/3 extended CONNECT is out of scope.
+
+Internal format v1: eight-byte magic `PCWS\x01\0\0\0`, followed by little-endian u32 message ID,
+u32 record length, u32 metadata length, UTF-8 JSON metadata, and payload bytes.
+`record_length = 4 + metadata_length + payload_length`; total record bytes are `8 + record_length`.
+Readers only publish complete records; incomplete tails do not become empty messages. No length backfill.
+
+The dedicated WebSocket UI uses a compact 84px Canvas waterfall (85px including border) with two directional lanes,
+viewport-sized high-DPI rendering, Command/Ctrl + wheel pointer-anchored horizontal zoom,
+scroll, and message selection. The time row uses adaptive, evenly spaced 1/2/5 time ticks with short vertical marks on its bottom divider;
+compact icon toolbars replace text buttons, without a zoom slider, scale ruler, or reserved scrollbar space. Handshake/connection
+IDs remain available in the API; the detail pages do not show cross-navigation buttons.
+
+Connection metadata and icon actions share one toolbar. Per-direction message counts appear
+as a second, smaller line in the left C→S/S→C legends; direction labels align with Canvas bars.
+
+WebSocket messages refresh automatically while the connection is active; there are no manual
+follow/refresh buttons. At full extent (no horizontal overflow), incoming data keeps the timeline
+fitted. Zoomed views keep their scale and scroll position; each lane shows a right-edge pill for
+unseen new messages. Clicking it reveals that direction’s newest message and clears its unread
+count without changing zoom. Returning to full extent resumes continuous fitting.
+
+Zoom is absolute: 1× means 100 CSS pixels per second, capped at 64× (6.4 px/ms,
+100px = 15.625ms), independent of the captured time range. Full-extent fitting also respects
+this cap; a short capture may leave unused space to the right.

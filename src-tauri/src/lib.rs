@@ -375,6 +375,34 @@ async fn get_log(
 }
 
 #[tauri::command]
+async fn get_websocket_messages(
+    state: State<'_, BackendState>,
+    session_id: u64,
+    id: u64,
+    side: String,
+    after_id: u32,
+    limit: Option<usize>,
+) -> Result<proxy_crab_mitm::websocket::WebSocketPage, ManagerError> {
+    let query = proxy_crab_mgr::dto::WebSocketQuery {
+        session_id: Some(session_id),
+        side,
+        after_id,
+        limit,
+        max_size: None,
+    };
+    state
+        .manager()
+        .websocket_messages(
+            Some(session_id),
+            id,
+            query.body_side()?,
+            after_id,
+            limit.unwrap_or(500),
+        )
+        .await
+}
+
+#[tauri::command]
 async fn get_interceptor_content(
     state: State<'_, BackendState>,
     session_id: Option<u64>,
@@ -1165,6 +1193,8 @@ pub fn run() {
             get_log_views,
             validate_filter_regex,
             get_log,
+            get_websocket_messages,
+            body_download::fetch_websocket_message_body,
             replay,
             list_assets,
             get_interceptor_content,

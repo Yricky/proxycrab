@@ -90,6 +90,7 @@ impl CaptureBodyWriter {
 pub struct CaptureStore {
     session_id: u64,
     connection: Arc<Mutex<Connection>>,
+    websocket_index: Arc<Mutex<crate::websocket::RecordIndex>>,
     session_directory: PathBuf,
     workspace_root: PathBuf,
 }
@@ -109,11 +110,89 @@ impl CaptureStore {
         let store = Self {
             session_id,
             connection: Arc::new(Mutex::new(connection)),
+            websocket_index: Arc::new(Mutex::new(Default::default())),
             session_directory,
             workspace_root: workspace_root.to_path_buf(),
         };
         store.initialize()?;
         Ok(store)
+    }
+
+    pub(crate) fn websocket_body_path(&self, id: u64, side: BodySide) -> PathBuf {
+        self.body_path(id, side)
+    }
+
+    pub(crate) fn link_websocket(
+        &self,
+        id: u64,
+        handshake: u64,
+        extensions: &str,
+        subprotocol: Option<&str>,
+    ) -> Result<()> {
+        self.connection()?.execute("INSERT INTO websocket_captures (capture_id,handshake_id,extensions,subprotocol,opened_at) VALUES (?1,?2,?3,?4,?5)", params![id as i64,handshake as i64,extensions,subprotocol,now_millis() as i64])?;
+        Ok(())
+    }
+    pub(crate) fn close_websocket(&self, id: u64) -> Result<()> {
+        self.connection()?.execute(
+            "UPDATE websocket_captures SET closed_at=?2 WHERE capture_id=?1",
+            params![id as i64, now_millis() as i64],
+        )?;
+        self.connection()?.execute("UPDATE captures SET outcome=CASE WHEN error_kind IS NULL THEN 'success' ELSE 'failed' END, stage='completed', updated_at=MAX(updated_at+1,?2) WHERE id=?1",params![id as i64,now_millis() as i64])?;
+        Ok(())
+    }
+    pub(crate) fn websocket_close_frame(
+        &self,
+        id: u64,
+        code: Option<u16>,
+        reason: &str,
+    ) -> Result<()> {
+        self.connection()?.execute("UPDATE websocket_captures SET close_code=COALESCE(close_code,?2),close_reason=COALESCE(close_reason,?3) WHERE capture_id=?1",params![id as i64,code,reason])?;
+        Ok(())
+    }
+    pub fn websocket_info(&self, id: u64) -> Result<Option<crate::websocket::WebSocketInfo>> {
+        self.connection()?.query_row("SELECT capture_id,handshake_id,extensions,subprotocol,opened_at,closed_at,close_code,close_reason FROM websocket_captures WHERE capture_id=?1 OR handshake_id=?1",params![id as i64],|r|Ok(crate::websocket::WebSocketInfo {
+            websocket_log_id:r.get::<_,i64>(0)? as u64,handshake_log_id:r.get::<_,i64>(1)? as u64,extensions:r.get(2)?,subprotocol:r.get(3)?,opened_at:r.get::<_,i64>(4)? as u64,closed_at:r.get::<_,Option<i64>>(5)?.map(|v|v as u64),close_code:r.get(6)?,close_reason:r.get(7)?
+        })).optional().map_err(Into::into)
+    }
+    pub fn websocket_messages(
+        &self,
+        id: u64,
+        side: BodySide,
+        after_id: u32,
+        limit: usize,
+    ) -> Result<Option<crate::websocket::WebSocketPage>> {
+        if !self
+            .websocket_info(id)?
+            .is_some_and(|i| i.websocket_log_id == id)
+        {
+            return Ok(None);
+        }
+        Ok(Some(
+            self.websocket_index
+                .lock()
+                .map_err(|_| anyhow!("WebSocket index lock poisoned"))?
+                .read(&self.body_path(id, side), after_id, limit, None)?
+                .0,
+        ))
+    }
+    pub fn websocket_message_body(
+        &self,
+        id: u64,
+        side: BodySide,
+        message_id: u32,
+    ) -> Result<Option<Vec<u8>>> {
+        if !self
+            .websocket_info(id)?
+            .is_some_and(|i| i.websocket_log_id == id)
+        {
+            return Ok(None);
+        }
+        Ok(self
+            .websocket_index
+            .lock()
+            .map_err(|_| anyhow!("WebSocket index lock poisoned"))?
+            .read(&self.body_path(id, side), 0, 1, Some(message_id))?
+            .1)
     }
 
     pub(crate) fn session_id(&self) -> u64 {
@@ -417,6 +496,13 @@ impl CaptureStore {
     }
 
     pub fn body_source(&self, id: u64, side: BodySide) -> Result<Option<BodySource>> {
+        if self
+            .get_many(&[id])?
+            .first()
+            .is_some_and(|c| c.request.version == "WebSocket/13")
+        {
+            return Ok(None);
+        }
         let row = self
             .connection()?
             .query_row(
@@ -727,7 +813,9 @@ impl CaptureStore {
     }
 
     pub fn mark_in_progress_range_as_shutdown(&self, min_id: u64, max_id: u64) -> Result<usize> {
-        Ok(self.connection()?.execute(
+        let connection = self.connection()?;
+        connection.execute("UPDATE websocket_captures SET closed_at=COALESCE(closed_at,?1) WHERE capture_id>=?2 AND capture_id<=?3",params![now_millis() as i64,min_id as i64,max_id as i64])?;
+        Ok(connection.execute(
             "UPDATE captures SET outcome='failed', stage='connect',
                 error_stage='connect', error_kind='proxy_shutdown',
                 error_message='proxy stopped before the request completed',
@@ -761,6 +849,12 @@ impl CaptureStore {
                 req_tags TEXT NOT NULL DEFAULT '{}',
                 req_modifications TEXT NOT NULL DEFAULT '{\"final_body\":{\"type\":\"original\"}}',
                 resp_modifications TEXT NOT NULL DEFAULT '{\"final_body\":{\"type\":\"original\"}}'
+            );
+            CREATE TABLE IF NOT EXISTS websocket_captures (
+                capture_id INTEGER PRIMARY KEY REFERENCES captures(id) ON DELETE CASCADE,
+                handshake_id INTEGER NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
+                extensions TEXT NOT NULL, subprotocol TEXT, opened_at INTEGER NOT NULL,
+                closed_at INTEGER, close_code INTEGER, close_reason TEXT
             );
             CREATE INDEX IF NOT EXISTS captures_created_at ON captures(created_at);
             CREATE TABLE IF NOT EXISTS interceptor_script_contents (

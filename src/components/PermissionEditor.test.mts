@@ -10,6 +10,7 @@ const redactedActions = [
   "POST /api/logs/views",
   "GET /api/logs/{id}",
   "GET /api/logs/{id}/body",
+  "GET /api/logs/{id}/websocket/messages/{message_id}/body",
   "GET /api/logs/{id}/interceptors/{execution_id}/snapshot",
   "GET /api/breakpoints",
   "GET /api/breakpoints/{id}",

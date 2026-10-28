@@ -73,6 +73,7 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
 | --- | --- |
 | Read active Agent instructions | `scripts/agents-get.mjs` |
 | Find existing traffic | `scripts/session-list.mjs`, then `scripts/log-query.mjs` |
+| Inspect WebSocket messages | `scripts/websocket-messages.mjs`, then `body-get.mjs --message-id ID`; see WebSocket sections in HTTP/Lua references |
 | Inspect one capture | `scripts/log-get.mjs` |
 | Replay a request through a Session (source `ProxyCrabRequest`) | `scripts/replay-send.mjs` |
 | Read an interceptor execution's source or entry snapshot | `scripts/interceptor-get.mjs` |
@@ -308,3 +309,14 @@ operations return `redaction_management_disabled` (HTTP 403, `脱敏接口管理
 normal authentication/permissions. Report this as disabled management; do not retry an update,
 change credentials, or clear bindings to bypass it. Runtime failures fail closed; the policy covers
 only the supported reads listed in the HTTP reference.
+
+## WebSocket captures
+
+Successful HTTP/1.1 WebSocket 13 upgrades have a separate linked ws/wss capture. Read its
+`websocket` field and `request.version` (`WebSocket/13`); use runtime active-netlog membership
+for current connection activity. Message IDs are per direction (`request` = C2S, `response` = S2C).
+List metadata with `websocket-messages.mjs`, using `next_after_id` for pagination/polling, then read
+one payload with `body-get.mjs --message-id`. Never attempt raw container download or treat it as
+an HTTP body. Capture content is decoded/reassembled and limited to 16 MiB per message; omitted
+messages retain metadata. HAR excludes WS connection rows but may include handshake rows.
+Bound redaction scripts must opt into WebSocket messages; never bypass a failed/legacy policy.

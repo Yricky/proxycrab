@@ -290,6 +290,14 @@ pub fn router(manager: Arc<dyn ProxyCrabManager>, shares: Arc<SessionShareServic
         .route("/share-api/logs/{id}", get(log))
         .route("/share-api/logs/{id}/body", get(log_body))
         .route(
+            "/share-api/logs/{id}/websocket/messages",
+            get(websocket_messages),
+        )
+        .route(
+            "/share-api/logs/{id}/websocket/messages/{message_id}/body",
+            get(websocket_message_body),
+        )
+        .route(
             "/share-api/logs/{id}/interceptors/{execution_id}/content",
             get(log_interceptor_content),
         )
@@ -474,6 +482,60 @@ async fn log(
         .manager
         .reader(scope.redaction_script.as_deref(), "/share-api/logs/{id}")?;
     success(manager.log(Some(scope.session_id), id).await?)
+}
+
+async fn websocket_messages(
+    State(state): State<Arc<ShareState>>,
+    Extension(scope): Extension<ShareScope>,
+    Path(id): Path<u64>,
+    Query(query): Query<crate::dto::WebSocketQuery>,
+) -> Result<Json<serde_json::Value>, ShareApiError> {
+    let manager = state.manager.reader(
+        scope.redaction_script.as_deref(),
+        "/share-api/logs/{id}/websocket/messages",
+    )?;
+    success(
+        manager
+            .websocket_messages(
+                Some(scope.session_id),
+                id,
+                query.body_side()?,
+                query.after_id,
+                query.limit.unwrap_or(500),
+            )
+            .await?,
+    )
+}
+async fn websocket_message_body(
+    State(state): State<Arc<ShareState>>,
+    Extension(scope): Extension<ShareScope>,
+    Path((id, message_id)): Path<(u64, u32)>,
+    Query(query): Query<crate::dto::WebSocketQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ShareApiError> {
+    let manager = state.manager.reader(
+        scope.redaction_script.as_deref(),
+        "/share-api/logs/{id}/websocket/messages/{message_id}/body",
+    )?;
+    let source = manager
+        .websocket_message_body(
+            Some(scope.session_id),
+            id,
+            query.body_side()?,
+            message_id,
+            query
+                .max_size
+                .unwrap_or_else(crate::dto::default_body_max_size),
+        )
+        .await?;
+    let mut response = body_response(source, &headers, query.max_size)
+        .await
+        .map_err(ShareApiError)?;
+    response.headers_mut().insert(
+        "cache-control",
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
 }
 
 async fn log_body(

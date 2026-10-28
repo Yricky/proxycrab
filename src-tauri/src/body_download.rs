@@ -55,6 +55,36 @@ pub(crate) async fn fetch_body(
     load_body(&source, max_size).await
 }
 
+#[tauri::command]
+pub(crate) async fn fetch_websocket_message_body(
+    state: State<'_, BackendState>,
+    session_id: u64,
+    id: u64,
+    side: String,
+    message_id: u32,
+    max_size: Option<u64>,
+) -> Result<LoadedBody, ManagerError> {
+    let query = proxy_crab_mgr::dto::WebSocketQuery {
+        session_id: Some(session_id),
+        side,
+        after_id: 0,
+        limit: None,
+        max_size,
+    };
+    let max_size = max_size.unwrap_or(16 * 1024 * 1024);
+    let source = state
+        .manager()
+        .websocket_message_body(
+            Some(session_id),
+            id,
+            query.body_side()?,
+            message_id,
+            max_size,
+        )
+        .await?;
+    load_body(&source, max_size).await
+}
+
 async fn load_body(source: &BodySource, max_size: u64) -> Result<LoadedBody, ManagerError> {
     if source.stored_size > max_size {
         return Err(ManagerError::body_too_large(source.stored_size, max_size));

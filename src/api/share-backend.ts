@@ -1,6 +1,6 @@
 import type { Backend } from "./backend";
 import { BackendError } from "./backend-error";
-import { downloadBodyFromBase, fetchBodyFromBase } from "./body";
+import { downloadBodyFromBase, fetchBodyFromBase, fetchWebSocketBodyFromBase } from "./body";
 import { saveFileInWebview } from "./save-file";
 import type {
   AppConfig,
@@ -196,6 +196,21 @@ export function createShareBackend(
     getLogIds: (value) => call("/share-api/logs/ids", json(value)),
     getLogViews: (value) => call("/share-api/logs/views", json(value)),
     validateFilterRegex: (pattern) => call("/share-api/validate-filter-regex", json({ pattern })),
+    getWebSocketMessages: (_sessionId, id, side, afterId, limit = 500) =>
+      call(
+        `/share-api/logs/${id}/websocket/messages?side=${side}&after_id=${afterId}&limit=${limit}`,
+      ),
+    fetchWebSocketMessageBody: (_sessionId, id, side, messageId) =>
+      fetchWebSocketBodyFromBase(
+        baseUrl,
+        bootstrap.session.id,
+        id,
+        side,
+        messageId,
+        undefined,
+        "/share-api",
+        token,
+      ),
     getLog: (_sessionId, id) => call<LogDetail>(`/share-api/logs/${id}`),
     getInterceptorContent: async (_sessionId, id, executionId) => {
       const url = new URL(`/share-api/logs/${id}/interceptors/${executionId}/content`, baseUrl);

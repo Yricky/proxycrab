@@ -102,6 +102,22 @@ pub trait ProxyCrabManager: Send + Sync {
     async fn log_views(&self, request: LogViewsRequest) -> ManagerResult<LogViewsPayload>;
     async fn export_logs(&self, request: ExportLogsRequest) -> ManagerResult<LogExport>;
     async fn log(&self, session_id: Option<u64>, id: u64) -> ManagerResult<LogDetail>;
+    async fn websocket_messages(
+        &self,
+        session_id: Option<u64>,
+        id: u64,
+        side: BodySide,
+        after_id: u32,
+        limit: usize,
+    ) -> ManagerResult<proxy_crab_mitm::websocket::WebSocketPage>;
+    async fn websocket_message_body(
+        &self,
+        session_id: Option<u64>,
+        id: u64,
+        side: BodySide,
+        message_id: u32,
+        max_size: u64,
+    ) -> ManagerResult<BodySource>;
     async fn replay(
         &self,
         session_id: u64,
@@ -1096,6 +1112,7 @@ impl ProxyCrabManager for MitmManager {
                 };
                 summaries.retain(|item| {
                     item.outcome == CaptureOutcome::Success
+                        && !item.request.version.starts_with("WebSocket/")
                         && item.response.is_some()
                         && !(item.request.method.eq_ignore_ascii_case("CONNECT")
                             && item.stage == "tls_mitm")
@@ -1228,10 +1245,149 @@ impl ProxyCrabManager for MitmManager {
                 .map_err(map_error)?
                 .ok_or_else(|| ManagerError::not_found(format!("log {id} not found")))?;
             let detail = match redactor {
-                Some(r) => r.detail(&runtime, detail)?,
+                Some(ref r) => r.detail(&runtime, detail)?,
                 None => detail,
             };
-            Ok(log_detail_from_capture(detail))
+            let mut result = log_detail_from_capture(detail);
+            result.websocket = runtime.websocket_info(session_id, id).map_err(map_error)?;
+            if policy.is_some() {
+                if let Some(info) = &mut result.websocket {
+                    info.close_reason = None;
+                    // Negotiated headers must follow the same policy as the handshake.
+                    let handshake = runtime
+                        .capture(session_id, info.handshake_log_id)
+                        .map_err(map_error)?
+                        .ok_or_else(|| ManagerError::not_found("handshake not found"))?;
+                    let safe = redactor
+                        .as_ref()
+                        .expect("policy redactor")
+                        .detail(&runtime, handshake)?
+                        .summary;
+                    info.subprotocol = safe
+                        .response
+                        .as_ref()
+                        .and_then(|r| r.headers.get("sec-websocket-protocol"))
+                        .and_then(|v| v.first())
+                        .cloned();
+                    info.extensions = safe
+                        .response
+                        .as_ref()
+                        .and_then(|r| r.headers.get("sec-websocket-extensions"))
+                        .map(|v| v.join(","))
+                        .unwrap_or_default();
+                }
+            }
+            Ok(result)
+        })
+        .await
+    }
+
+    async fn websocket_messages(
+        &self,
+        session_id: Option<u64>,
+        id: u64,
+        side: BodySide,
+        after_id: u32,
+        limit: usize,
+    ) -> ManagerResult<proxy_crab_mitm::websocket::WebSocketPage> {
+        if !(1..=2000).contains(&limit) {
+            return Err(ManagerError::bad_request(
+                "limit must be between 1 and 2000",
+            ));
+        }
+        let sid = self.session_id(session_id)?;
+        let runtime = self.runtime.clone();
+        self.run_blocking("websocket message index", move || {
+            runtime
+                .websocket_messages(sid, id, side, after_id, limit)
+                .map_err(map_error)?
+                .ok_or_else(|| ManagerError::not_found("WebSocket connection not found"))
+        })
+        .await
+    }
+
+    async fn websocket_message_body(
+        &self,
+        session_id: Option<u64>,
+        id: u64,
+        side: BodySide,
+        message_id: u32,
+        max_size: u64,
+    ) -> ManagerResult<BodySource> {
+        if message_id == 0 || max_size == 0 {
+            return Err(ManagerError::bad_request(
+                "message_id and max_size must be positive",
+            ));
+        }
+        let sid = self.session_id(session_id)?;
+        let runtime = self.runtime.clone();
+        let policy = self.read_policy.clone();
+        self.run_blocking("websocket message body", move || {
+            let page = runtime
+                .websocket_messages(sid, id, side, message_id - 1, 1)
+                .map_err(map_error)?
+                .ok_or_else(|| ManagerError::not_found("WebSocket connection not found"))?;
+            let meta = page
+                .messages
+                .into_iter()
+                .find(|m| m.id == message_id)
+                .ok_or_else(|| ManagerError::not_found("message not found"))?;
+            if !meta.content_available {
+                return Err(ManagerError::new(
+                    ErrorCode::MessageContentUnavailable,
+                    "message content was omitted during capture",
+                ));
+            }
+            if meta.size > max_size {
+                return Err(ManagerError::body_too_large(meta.size, max_size));
+            }
+            let mut bytes = runtime
+                .websocket_message_body(sid, id, side, message_id)
+                .map_err(map_error)?
+                .ok_or_else(|| ManagerError::not_found("message not found"))?;
+            if let Some(policy) = policy {
+                let summary = runtime
+                    .captures(sid, &[id])
+                    .map_err(map_error)?
+                    .pop()
+                    .ok_or_else(|| ManagerError::not_found("log not found"))?;
+                let evaluator = proxy_crab_mitm::lua::redaction::RedactionEvaluator::new(
+                    &policy.script.content,
+                    &policy.script.name,
+                )
+                .map_err(|_| redaction::failed())?;
+                let mut context = serde_json::to_value(&meta).map_err(|_| redaction::failed())?;
+                context["session_id"] = sid.into();
+                context["log_id"] = id.into();
+                bytes = evaluator
+                    .websocket_message(&policy.api, &summary.request.uri, side, &context, bytes)
+                    .map_err(|_| redaction::failed())?
+                    .ok_or_else(|| {
+                        ManagerError::new(
+                            ErrorCode::MessageContentHidden,
+                            "message content is hidden by policy",
+                        )
+                    })?;
+            }
+            if bytes.len() as u64 > max_size {
+                return Err(ManagerError::body_too_large(bytes.len() as u64, max_size));
+            }
+            Ok(BodySource {
+                stored_size: bytes.len() as u64,
+                data: proxy_crab_mitm::storage::BodySourceData::Bytes(bytes),
+                path: None,
+                content_type: Some(
+                    if serde_json::to_value(&meta).map_err(|_| redaction::failed())?["type"]
+                        == "text"
+                    {
+                        "text/plain; charset=utf-8"
+                    } else {
+                        "application/octet-stream"
+                    }
+                    .into(),
+                ),
+                content_encodings: Vec::new(),
+            })
         })
         .await
     }
@@ -1246,6 +1402,16 @@ impl ProxyCrabManager for MitmManager {
         let runtime = self.runtime.clone();
         let policy = self.read_policy.clone();
         self.run_blocking("log body source", move || {
+            if runtime
+                .captures(session_id, &[id])
+                .map_err(map_error)?
+                .first()
+                .is_some_and(|s| s.request.version.starts_with("WebSocket/"))
+            {
+                return Err(ManagerError::bad_request(
+                    "WebSocket containers are internal; read individual messages",
+                ));
+            }
             let redactor = ReadRedactor::prepare(&policy)?;
             if !runtime.has_capture(session_id, id).map_err(map_error)? {
                 return Err(ManagerError::new(
@@ -1965,6 +2131,7 @@ fn log_detail_from_capture(detail: CaptureDetail) -> LogDetail {
     let id = detail.summary.id;
     let session_id = detail.summary.session_id;
     LogDetail {
+        websocket: None,
         id,
         session_id,
         created_at: detail.summary.created_at,
@@ -2109,6 +2276,237 @@ mod tests {
             })
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn websocket_reads_apply_policy_and_never_expose_containers() {
+        let dir = tempdir().unwrap();
+        let runtime = ProxyCrab::open(dir.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
+        let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
+        let handshake = store
+            .begin("test", &request("handshake"), "request")
+            .unwrap();
+        let mut req = request("socket");
+        req.version = "WebSocket/13".into();
+        req.uri = "wss://example.com/ws?secret=1".into();
+        let id = store.begin("test", &req, "websocket").unwrap();
+        let db = rusqlite::Connection::open(
+            runtime
+                .workspace()
+                .root()
+                .join("sessions")
+                .join(session.id.to_string())
+                .join("captures.db"),
+        )
+        .unwrap();
+        db.execute("INSERT INTO websocket_captures(capture_id,handshake_id,extensions,opened_at,close_reason) VALUES (?1,?2,'',1,'sensitive close')", rusqlite::params![id as i64,handshake as i64]).unwrap();
+        let mut bytes = b"PCWS\x01\0\0\0".to_vec();
+        for (message_id, payload, available) in [
+            (1u32, b"secret".as_slice(), true),
+            (2, b"".as_slice(), false),
+        ] {
+            let metadata = serde_json::json!({"id":message_id,"type":"text","started_at":1,"completed_at":2,"size":if available {6} else {16777217},"content_available":available,"omitted_reason":if available {None} else {Some("size_limit_exceeded")}});
+            let meta = serde_json::to_vec(&metadata).unwrap();
+            bytes.extend(message_id.to_le_bytes());
+            bytes.extend(((4 + meta.len() + payload.len()) as u32).to_le_bytes());
+            bytes.extend((meta.len() as u32).to_le_bytes());
+            bytes.extend(meta);
+            bytes.extend(payload);
+        }
+        store.save_body(id, BodySide::Request, &bytes).unwrap();
+        let manager = MitmManager::new(runtime.clone());
+        let page = manager
+            .websocket_messages(Some(session.id), id, BodySide::Request, 0, 1)
+            .await
+            .unwrap();
+        assert_eq!(page.messages.len(), 1);
+        assert!(page.has_more);
+        assert_eq!(page.next_after_id, 1);
+        let page = manager
+            .websocket_messages(Some(session.id), id, BodySide::Request, 2, 1)
+            .await
+            .unwrap();
+        assert!(page.messages.is_empty());
+        assert_eq!(page.next_after_id, 2);
+        assert!(
+            manager
+                .websocket_messages(Some(session.id), id, BodySide::Request, 0, 2001)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            manager
+                .log_body_source(Some(session.id), id, BodySide::Request)
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::BadRequest
+        );
+        assert!(matches!(
+            manager
+                .log(Some(session.id), id)
+                .await
+                .unwrap()
+                .request
+                .body,
+            proxy_crab_mitm::model::BodyPayload::Empty
+        ));
+        assert_eq!(
+            manager
+                .websocket_message_body(Some(session.id), id, BodySide::Request, 1, 2)
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::BodyTooLarge
+        );
+        assert_eq!(
+            manager
+                .websocket_message_body(Some(session.id), id, BodySide::Request, 2, 16777216)
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::MessageContentUnavailable
+        );
+        for (name, script, expected) in [
+            ("old", "", Some(ErrorCode::RedactionFailed)),
+            (
+                "fail",
+                "-- @proxycrab websocket-messages\nerror('private')",
+                Some(ErrorCode::RedactionFailed),
+            ),
+            (
+                "hide",
+                "-- @proxycrab websocket-messages\nif context.kind == 'websocket_message' then req.body:hide() end",
+                Some(ErrorCode::MessageContentHidden),
+            ),
+            (
+                "mask",
+                "-- @proxycrab websocket-messages\nif context.kind == 'websocket_message' then assert(resp == nil); req.body:replace_with_string('safe') elseif req then req.uri = 'wss://example.com/safe' end",
+                None,
+            ),
+        ] {
+            manager
+                .create_redaction_script(ScriptRequest {
+                    name: name.into(),
+                    content: script.into(),
+                })
+                .await
+                .unwrap();
+            let reader = manager
+                .reader(
+                    Some(name),
+                    "/api/logs/{id}/websocket/messages/{message_id}/body",
+                )
+                .unwrap();
+            let result = reader
+                .websocket_message_body(Some(session.id), id, BodySide::Request, 1, 16_777_216)
+                .await;
+            if let Some(code) = expected {
+                assert_eq!(result.unwrap_err().code, code);
+            } else {
+                let source = result.unwrap();
+                assert!(
+                    matches!(source.data, proxy_crab_mitm::storage::BodySourceData::Bytes(ref b) if b == b"safe")
+                );
+                let detail = reader.log(Some(session.id), id).await.unwrap();
+                assert_eq!(detail.request.uri, "wss://example.com/safe");
+                assert!(detail.websocket.unwrap().close_reason.is_none());
+            }
+        }
+        let source = manager
+            .websocket_message_body(Some(session.id), id, BodySide::Request, 1, 16_777_216)
+            .await
+            .unwrap();
+        assert!(
+            matches!(source.data, proxy_crab_mitm::storage::BodySourceData::Bytes(ref b) if b == b"secret")
+        );
+
+        use axum::{
+            body::{Body, to_bytes},
+            http::Request,
+        };
+        use tower::ServiceExt;
+        struct BoundPolicy;
+        #[async_trait::async_trait]
+        impl crate::permission::PermissionManager for BoundPolicy {
+            async fn check_permission(
+                &self,
+                _: crate::permission::PermissionAction,
+            ) -> Option<crate::permission::PermissionDenied> {
+                None
+            }
+            async fn redaction_script(
+                &self,
+                _: &crate::permission::ManagementCredential,
+            ) -> Result<Option<String>, crate::permission::PermissionDenied> {
+                Ok(Some("mask".into()))
+            }
+        }
+        let app = crate::http::router(manager.clone(), Arc::new(BoundPolicy));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/logs/{id}/websocket/messages/1/body?session_id={}&side=request",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(
+            to_bytes(response.into_body(), 100).await.unwrap().as_ref(),
+            b"safe"
+        );
+        for (path, status) in [
+            (
+                format!("/api/logs/{id}/body?session_id={}&side=request", session.id),
+                400,
+            ),
+            (
+                format!(
+                    "/api/logs/{id}/websocket/messages?session_id={}&side=invalid",
+                    session.id
+                ),
+                400,
+            ),
+            (
+                format!(
+                    "/api/logs/{id}/websocket/messages?session_id={}&side=request&limit=2001",
+                    session.id
+                ),
+                400,
+            ),
+        ] {
+            assert_eq!(
+                app.clone()
+                    .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap()
+                    .status(),
+                status
+            );
+        }
+        let shared_manager: Arc<dyn ProxyCrabManager> = manager;
+        let shares = crate::session_share::SessionShareService::new();
+        let token = shares
+            .enable_with_script(&shared_manager, session.id, Some("mask".into()))
+            .await
+            .unwrap()
+            .token
+            .unwrap();
+        let shared_app = crate::session_share::router(shared_manager, shares);
+        let response = shared_app.oneshot(Request::builder().uri(format!("/share-api/logs/{id}/websocket/messages/1/body?session_id=999&side=request&token={token}")).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            to_bytes(response.into_body(), 100).await.unwrap().as_ref(),
+            b"safe"
+        );
     }
 
     #[test]

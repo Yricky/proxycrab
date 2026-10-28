@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     RedactionFailed,
+    MessageContentUnavailable,
+    MessageContentHidden,
     RedactionManagementDisabled,
     BadRequest,
     NotFound,
@@ -52,6 +54,8 @@ impl ErrorCode {
         match self {
             Self::RedactionManagementDisabled => "redaction_management_disabled",
             Self::RedactionFailed => "redaction_failed",
+            Self::MessageContentUnavailable => "message_content_unavailable",
+            Self::MessageContentHidden => "message_content_hidden",
             Self::BadRequest => "bad_request",
             Self::NotFound => "not_found",
             Self::LogNotFound => "log_not_found",
@@ -212,6 +216,27 @@ pub struct BodyQuery {
     pub execution_id: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSocketQuery {
+    pub session_id: Option<u64>,
+    pub side: String,
+    #[serde(default)]
+    pub after_id: u32,
+    pub limit: Option<usize>,
+    pub max_size: Option<u64>,
+}
+impl WebSocketQuery {
+    pub fn body_side(&self) -> ManagerResult<proxy_crab_mitm::storage::BodySide> {
+        match self.side.as_str() {
+            "request" => Ok(proxy_crab_mitm::storage::BodySide::Request),
+            "response" => Ok(proxy_crab_mitm::storage::BodySide::Response),
+            _ => Err(ManagerError::bad_request(
+                "side must be request or response",
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AssetQuery {
     pub format: Option<String>,
@@ -346,6 +371,8 @@ pub struct ResponseDetail {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogDetail {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket: Option<proxy_crab_mitm::websocket::WebSocketInfo>,
     pub id: u64,
     pub session_id: u64,
     pub created_at: u64,

@@ -3032,3 +3032,161 @@ async fn replay_requires_running_proxy_and_live_session() {
         Err(ReplayError::SessionNotFound)
     ));
 }
+
+#[tokio::test]
+async fn websocket_capture_is_linked_live_and_keeps_http_handshake_complete() {
+    let (_data, runtime, proxy_port) = runtime().await;
+    let session = create_active_session(&runtime, None).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (close_tx, close_rx) = tokio::sync::oneshot::channel();
+    let upstream = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            socket.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+        socket.write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n").await.unwrap();
+        let mut masked = [0; 8];
+        socket.read_exact(&mut masked).await.unwrap();
+        assert_eq!(&masked, &[129, 130, 1, 2, 3, 4, b'h' ^ 1, b'i' ^ 2]);
+        socket.write_all(&[129, 2, b'o', b'k']).await.unwrap();
+        close_rx.await.unwrap();
+        socket.write_all(&[136, 2, 3, 232]).await.unwrap();
+        let mut rest = Vec::new();
+        socket.read_to_end(&mut rest).await.unwrap();
+    });
+    let mut client = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    client.write_all(format!("GET http://127.0.0.1:{port}/chat HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    while !response.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        client.read_exact(&mut byte).await.unwrap();
+        response.push(byte[0]);
+    }
+    client
+        .write_all(&[129, 130, 1, 2, 3, 4, b'h' ^ 1, b'i' ^ 2])
+        .await
+        .unwrap();
+    let mut reply = [0; 4];
+    client.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply, [129, 2, b'o', b'k']);
+    let captures = runtime.list_captures(session.id, 10, None).unwrap();
+    assert_eq!(captures.len(), 2);
+    let ws = captures
+        .iter()
+        .find(|c| c.request.version == "WebSocket/13")
+        .unwrap();
+    let http = captures.iter().find(|c| c.id != ws.id).unwrap();
+    assert_eq!(http.outcome, CaptureOutcome::Success);
+    assert_eq!(ws.outcome, CaptureOutcome::InProgress);
+    assert!(ws.request.uri.starts_with("ws://"));
+    let info = runtime
+        .websocket_info(session.id, http.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(info.websocket_log_id, ws.id);
+    assert_eq!(info.handshake_log_id, http.id);
+    assert!(info.closed_at.is_none());
+    assert!(
+        runtime
+            .capture_body_source(session.id, ws.id, BodySide::Request)
+            .unwrap()
+            .is_none()
+    );
+    if let ProxyStatus::Running { active_netlog, .. } = runtime.proxy_status() {
+        assert!(active_netlog.get(&session.id).unwrap().contains(&ws.id));
+    } else {
+        panic!("proxy stopped");
+    }
+    close_tx.send(()).unwrap();
+    let mut close = [0; 4];
+    client.read_exact(&mut close).await.unwrap();
+    client.shutdown().await.unwrap();
+    upstream.await.unwrap();
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if runtime
+                .websocket_info(session.id, ws.id)
+                .unwrap()
+                .unwrap()
+                .closed_at
+                .is_some()
+            {
+                break;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        runtime
+            .websocket_message_body(session.id, ws.id, BodySide::Request, 1)
+            .unwrap()
+            .unwrap(),
+        b"hi"
+    );
+    assert_eq!(
+        runtime
+            .websocket_message_body(session.id, ws.id, BodySide::Response, 1)
+            .unwrap()
+            .unwrap(),
+        b"ok"
+    );
+    let info = runtime.websocket_info(session.id, ws.id).unwrap().unwrap();
+    assert_eq!(info.close_code, Some(1000));
+    assert_eq!(
+        runtime
+            .capture(session.id, ws.id)
+            .unwrap()
+            .unwrap()
+            .summary
+            .outcome,
+        CaptureOutcome::Success
+    );
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
+async fn stopping_proxy_finalizes_live_websocket_as_cancelled() {
+    let (_data, runtime, proxy_port) = runtime().await;
+    let session = create_active_session(&runtime, None).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let upstream = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            socket.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+        socket.write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n").await.unwrap();
+        let mut rest = Vec::new();
+        let _ = socket.read_to_end(&mut rest).await;
+    });
+    let mut client = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    client.write_all(format!("GET http://127.0.0.1:{port}/chat HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\r\n").as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    while !response.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        client.read_exact(&mut byte).await.unwrap();
+        response.push(byte[0]);
+    }
+    let ws = runtime
+        .list_captures(session.id, 10, None)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.request.version == "WebSocket/13")
+        .unwrap();
+    runtime.stop_proxy().await.unwrap();
+    let info = runtime.websocket_info(session.id, ws.id).unwrap().unwrap();
+    assert!(info.closed_at.is_some());
+    let detail = runtime.capture(session.id, ws.id).unwrap().unwrap();
+    assert_eq!(detail.summary.outcome, CaptureOutcome::Failed);
+    assert_eq!(detail.summary.error.unwrap().kind, "proxy_shutdown");
+    upstream.await.unwrap();
+}

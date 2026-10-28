@@ -367,6 +367,37 @@ impl ProxyCrab {
         self.pin_capture_store(session_id)?.store.contains(id)
     }
 
+    pub fn websocket_info(
+        &self,
+        session_id: u64,
+        id: u64,
+    ) -> Result<Option<crate::websocket::WebSocketInfo>> {
+        self.pin_capture_store(session_id)?.store.websocket_info(id)
+    }
+    pub fn websocket_messages(
+        &self,
+        session_id: u64,
+        id: u64,
+        side: BodySide,
+        after_id: u32,
+        limit: usize,
+    ) -> Result<Option<crate::websocket::WebSocketPage>> {
+        self.pin_capture_store(session_id)?
+            .store
+            .websocket_messages(id, side, after_id, limit)
+    }
+    pub fn websocket_message_body(
+        &self,
+        session_id: u64,
+        id: u64,
+        side: BodySide,
+        message_id: u32,
+    ) -> Result<Option<Vec<u8>>> {
+        self.pin_capture_store(session_id)?
+            .store
+            .websocket_message_body(id, side, message_id)
+    }
+
     pub fn capture_body_source(
         &self,
         session_id: u64,

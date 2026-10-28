@@ -288,6 +288,18 @@
       "prompt": "On a remote HTTP ProxyCrab CLI page, the request window opens but JWT verification reports importKey unavailable. Explain which behavior is a browser secure-context restriction and whether it means /api/replay is broken.",
       "expected_output": "Explain that JWT decoding works on HTTP, while signature verification needs HTTPS or trusted localhost. A browser JWT verification failure does not establish that /api/replay is broken. Do not bypass authentication or redaction.",
       "files": []
+    },
+    {
+      "id": 50,
+      "prompt": "Inspect a WebSocket connection in the active ProxyCrab Session, list both directions and save one received message. Do not download its internal container.",
+      "expected_output": "Uses WebSocket/13 and linked websocket metadata, websocket-messages.mjs separately per direction with after-id/next_after_id, then body-get.mjs --message-id --side response. Distinguishes omitted, hidden, empty and active connection state.",
+      "files": []
+    },
+    {
+      "id": 51,
+      "prompt": "A bound HTTP redaction script fails when reading WebSocket messages. Explain and prepare a compatible JSON token-redaction script without changing permissions.",
+      "expected_output": "Uses exact opt-in comment -- @proxycrab websocket-messages and context.kind; req-only C2S/resp-only S2C body, preserves HTTP branch, explains fail-closed legacy policy and metadata visibility. No credential switching or raw body workaround.",
+      "files": []
     }
   ]
 }

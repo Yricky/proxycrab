@@ -128,3 +128,41 @@ async function requestBody(
   }
   return response;
 }
+
+/** Reads one policy-filtered WebSocket message, never the internal container. */
+export async function fetchWebSocketBodyFromBase(
+  base: string,
+  sessionId: number,
+  id: number,
+  side: BodySide,
+  messageId: number,
+  authorization?: string,
+  apiPrefix = "/api",
+  queryToken?: string,
+): Promise<LoadedBody> {
+  const url = new URL(`${apiPrefix}/logs/${id}/websocket/messages/${messageId}/body`, base);
+  url.searchParams.set("session_id", String(sessionId));
+  url.searchParams.set("side", side);
+  url.searchParams.set("max_size", String(DEFAULT_BODY_MAX_SIZE));
+  if (queryToken !== undefined) url.searchParams.set("token", queryToken);
+  const response = await fetch(url, {
+    headers: authorization ? { Authorization: authorization } : undefined,
+    referrerPolicy: "no-referrer",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const result = (await response.json().catch(() => null)) as { error?: ManagerError } | null;
+    throw new BodyFetchError(
+      result?.error ?? {
+        code: `http_${response.status}`,
+        message: `消息读取失败 (${response.status})`,
+      },
+    );
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  return {
+    bytes,
+    decodedSize: bytes.length,
+    contentType: response.headers.get("content-type") ?? "application/octet-stream",
+  };
+}

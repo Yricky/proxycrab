@@ -150,6 +150,20 @@ export interface Backend {
   enableHarShare(request: EnableHarShareRequest): Promise<HarShareState>;
   disableHarShare(sessionId: number): Promise<HarShareState>;
 
+  getWebSocketMessages?(
+    sessionId: number,
+    id: number,
+    side: BodySide,
+    afterId: number,
+    limit?: number,
+  ): Promise<import("./types").WebSocketPage>;
+  fetchWebSocketMessageBody?(
+    sessionId: number,
+    id: number,
+    side: BodySide,
+    messageId: number,
+  ): Promise<LoadedBody>;
+
   // capture logs
   getLogIds(request: LogIdsRequest): Promise<LogIdsPayload>;
   getLogViews(request: LogViewsRequest): Promise<LogViewsPayload>;

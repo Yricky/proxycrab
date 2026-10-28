@@ -15,6 +15,7 @@ import { proxyStore } from "../stores/proxy";
 import { isInactiveInProgress } from "../utils/capture-outcome";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import BodyViewer from "../components/BodyViewer.vue";
+import WebSocketDetail from "../components/WebSocketDetail.vue";
 import { Io5Checkmark, Io5ChevronDown, Io5Copy, Io5Warning } from "vue-icons-plus/io5";
 import {
   openInterceptorSnapshot,
@@ -40,6 +41,8 @@ const props = defineProps<{
 const backend = useBackend();
 
 const detail = ref<LogDetail | null>(null);
+const isWebSocket = computed(() => detail.value?.request.version === "WebSocket/13");
+const hasWebSocketApi = Boolean(backend.getWebSocketMessages && backend.fetchWebSocketMessageBody);
 const loading = ref(true);
 const loadError = ref<string | null>(null);
 const breakpoint = ref<BreakpointSummary | null>(null);
@@ -552,10 +555,20 @@ function headerCount(headers: HeaderItem[]): string {
           <span class="meta-item"> <span class="meta-label">阶段</span>{{ detail.stage }} </span>
           <span v-if="loading" class="refreshing text-faint">刷新中…</span>
           <span class="summary-spacer" />
-          <button v-if="backend.replay" class="btn icon" title="重放此请求" @click="replayCurrent">
+          <button
+            v-if="backend.replay && !isWebSocket"
+            class="btn icon"
+            title="重放此请求"
+            @click="replayCurrent"
+          >
             <BsFillSendFill :size="14" />
           </button>
-          <button class="btn icon copy-menu-button" title="复制" @click="openCopyMenu">
+          <button
+            v-if="!isWebSocket"
+            class="btn icon copy-menu-button"
+            title="复制"
+            @click="openCopyMenu"
+          >
             <Io5Checkmark
               v-if="copiedKey === 'url' || copiedKey === 'curl'"
               :size="14"
@@ -575,7 +588,14 @@ function headerCount(headers: HeaderItem[]): string {
           </div>
         </div>
       </header>
-      <section v-if="breakpoint" class="breakpoint-panel">
+      <WebSocketDetail
+        v-if="isWebSocket && hasWebSocketApi"
+        :key="`${detail.session_id}-${detail.id}`"
+        :detail="detail"
+        :active="active"
+      />
+      <div v-else-if="isWebSocket" class="state-hint">当前接口不支持读取 WebSocket 消息</div>
+      <section v-if="!isWebSocket && breakpoint" class="breakpoint-panel">
         <div class="breakpoint-actions">
           <span class="breakpoint-state">
             断点等待中 · {{ breakpoint.display_name ?? breakpoint.interceptor_name }} · 剩余
@@ -615,7 +635,7 @@ function headerCount(headers: HeaderItem[]): string {
       </section>
 
       <!-- Tab 栏 -->
-      <nav class="tab-bar">
+      <nav v-if="!isWebSocket" class="tab-bar">
         <button
           v-for="tab in tabs"
           :key="tab.key"
@@ -630,7 +650,7 @@ function headerCount(headers: HeaderItem[]): string {
       </nav>
 
       <!-- 请求 -->
-      <div v-show="activeTab === 'request'" class="tab-page">
+      <div v-if="!isWebSocket" v-show="activeTab === 'request'" class="tab-page">
         <div class="pane-top" :style="{ width: `calc(${leftRatio * 100}% - 3px)` }">
           <section v-if="queryParams.length > 0" class="card">
             <div class="card-title">
@@ -677,7 +697,7 @@ function headerCount(headers: HeaderItem[]): string {
       </div>
 
       <!-- 响应 -->
-      <div v-show="activeTab === 'response'" class="tab-page">
+      <div v-if="!isWebSocket" v-show="activeTab === 'response'" class="tab-page">
         <template v-if="detail.response">
           <div class="pane-top" :style="{ width: `calc(${leftRatio * 100}% - 3px)` }">
             <section class="card">
@@ -712,7 +732,7 @@ function headerCount(headers: HeaderItem[]): string {
       </div>
 
       <!-- 拦截器执行记录 -->
-      <div v-show="activeTab === 'modifications'" class="tab-page">
+      <div v-if="!isWebSocket" v-show="activeTab === 'modifications'" class="tab-page">
         <div class="pane-top full">
           <section v-if="detail.request_interceptors.length > 0" class="execution-section">
             <div class="execution-section-title">请求拦截器</div>

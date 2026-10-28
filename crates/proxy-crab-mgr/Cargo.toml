@@ -29,6 +29,7 @@ url.workspace = true
 time = { workspace = true, features = ["formatting"] }
 
 [dev-dependencies]
+rusqlite.workspace = true
 brotli.workspace = true
 flate2.workspace = true
 tempfile = "3"

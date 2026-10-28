@@ -22,6 +22,7 @@ run(async () => {
   assertAllowedArgs(args, [
     "session-id",
     "log-id",
+    "message-id",
     "execution-id",
     "breakpoint-id",
     "side",
@@ -34,6 +35,7 @@ Usage:
   node body-get.mjs --log-id ID [--session-id ID] [--execution-id ID] --side request|response --output FILE [--max-size BYTES]
   node body-get.mjs --breakpoint-id ID --side request|response --output FILE [--max-size BYTES]
 
+Add --message-id ID to read one policy-filtered WebSocket message. Internal containers cannot be downloaded.
 Read the complete decoded body into FILE. The default maximum is 16777216 stored bytes. Exactly one
 of --log-id and --breakpoint-id is required. ProxyCrab negotiates the response encoding from the
 client's Accept-Encoding header, while max-size limits the selected final or snapshot Body source.
@@ -43,6 +45,7 @@ UI preview limits do not restrict downloads; this script still uses its own defa
   }
 
   const logId = optionalInteger(args, "log-id", { min: 1 });
+  const messageId = optionalInteger(args, "message-id", { min: 1, max: 4294967295 });
   const breakpointId = optionalInteger(args, "breakpoint-id", { min: 1 });
   if ((logId === undefined) === (breakpointId === undefined)) {
     throw new UsageError(
@@ -59,6 +62,9 @@ UI preview limits do not restrict downloads; this script still uses its own defa
       "--session-id and --execution-id are only valid with --log-id",
     );
   }
+  if (messageId !== undefined && (logId === undefined || executionId !== undefined)) {
+    throw new UsageError("--message-id requires --log-id and cannot select a snapshot");
+  }
   const side = requiredString(args, "side");
   if (side !== "request" && side !== "response") {
     throw new UsageError("--side must be request or response");
@@ -67,7 +73,7 @@ UI preview limits do not restrict downloads; this script still uses its own defa
   const output = path.resolve(requiredString(args, "output"));
   const pathname =
     logId !== undefined
-      ? `/api/logs/${logId}/body`
+      ? messageId !== undefined ? `/api/logs/${logId}/websocket/messages/${messageId}/body` : `/api/logs/${logId}/body`
       : `/api/breakpoints/${breakpointId}/body`;
   const url = new URL(`${normalizeBaseUrl(args)}${pathname}`);
   url.searchParams.set("side", side);

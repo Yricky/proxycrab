@@ -559,3 +559,38 @@ States and output are scoped to a record/snapshot in that request. HAR pins the 
 the download and redacts entries before deriving query strings, cookies, redirect URLs and body
 fields. A failing HAR entry terminates the stream; earlier successfully redacted entries may already
 have been sent. No cross-request or cross-snapshot result cache is used.
+
+## WebSocket read-time redaction
+
+A bound script must explicitly opt in using an exact standalone comment:
+
+```lua
+-- @proxycrab websocket-messages
+if context.kind == "websocket_message" then
+    local current = req or resp
+    -- req exists only for C2S; resp exists only for S2C.
+    if context.type == "text" then
+        local value = current.body:as_json()
+        value.access_token = nil
+        current.body:replace_with_json(value)
+    else
+        current.body:hide()
+    end
+end
+```
+
+The message invocation provides read-only `context`: kind, api, session_id, log_id, id, type,
+started_at, completed_at, size, content_available, omitted_reason. `req`/`resp` offers read-only
+connection `uri` (the usual URI view), `version` (`WebSocket/13`), and current-message `body`.
+No top-level `message` object, HTTP headers/method/status, or raw container is exposed.
+Message body methods: `as_string()` (UTF-8), `as_bytes()` (Lua binary string), `as_json()`,
+`replace_with_string(value)`, `replace_with_bytes(value)`, `replace_with_json(value)`, `hide()`.
+Reads observe original message bytes; replacements stage output and do not modify capture/forwarding.
+`hide()` differs from replacing with an empty string. Size limits and script failures are fail-closed.
+
+The opt-in applies only to message invocations; scripts must still handle ordinary HTTP reads.
+Legacy bound scripts cannot read WS content until opted in. Metadata indexes expose no payload and
+remain available: original timing, direction, type and byte size are intentionally not anonymized.
+Identity/share bindings and process-forced policies use the existing precedence. No binding means
+original content according to ordinary read permission. URI/handshake redaction remains the existing
+HTTP flow. Under policies, close reasons are suppressed rather than exposed outside message redaction.

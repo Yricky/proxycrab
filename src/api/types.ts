@@ -400,7 +400,33 @@ export interface ResponseDetail {
   body: BodyPayload;
 }
 
+export interface WebSocketInfo {
+  handshake_log_id: number;
+  websocket_log_id: number;
+  extensions: string;
+  subprotocol: string | null;
+  opened_at: number;
+  closed_at: number | null;
+  close_code: number | null;
+  close_reason: string | null;
+}
+export interface WebSocketMessage {
+  id: number;
+  type: "text" | "binary";
+  started_at: number;
+  completed_at: number;
+  size: number;
+  content_available: boolean;
+  omitted_reason: string | null;
+}
+export interface WebSocketPage {
+  messages: WebSocketMessage[];
+  next_after_id: number;
+  has_more: boolean;
+}
 export interface LogDetail {
+  websocket?: WebSocketInfo;
+
   id: number;
   session_id: number;
   created_at: number;

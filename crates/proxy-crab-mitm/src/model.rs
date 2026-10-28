@@ -293,6 +293,7 @@ pub struct CaptureError {
 pub struct RequestData {
     pub method: String,
     pub uri: String,
+    /// Protocol and version, e.g. HTTP/1.1, HTTP/2, or WebSocket/13.
     pub version: String,
     pub headers: HeaderValues,
     #[serde(default)]

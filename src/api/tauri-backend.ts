@@ -168,6 +168,16 @@ export function createTauriBackend(): Backend {
     getLogIds: (request: LogIdsRequest) => call("get_log_ids", { request }),
     getLogViews: (request: LogViewsRequest) => call("get_log_views", { request }),
     validateFilterRegex: (pattern: string) => call("validate_filter_regex", { pattern }),
+    getWebSocketMessages: (sessionId, id, side, afterId, limit = 500) =>
+      call("get_websocket_messages", { sessionId, id, side, afterId, limit }),
+    fetchWebSocketMessageBody: async (sessionId, id, side, messageId) => {
+      const result = await call<{ bytes: number[]; contentType: string }>(
+        "fetch_websocket_message_body",
+        { sessionId, id, side, messageId },
+      );
+      const bytes = new Uint8Array(result.bytes);
+      return { bytes, decodedSize: bytes.length, contentType: result.contentType };
+    },
     getLog: (sessionId: number | null, id: number) => call<LogDetail>("get_log", { sessionId, id }),
     replay: (sessionId: number, request: ReplayRequestPayload) =>
       call<ReplayResult>("replay", { sessionId, request }),

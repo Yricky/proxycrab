@@ -1,5 +1,6 @@
 //! Read-only originals and transactional, staged output. Never used by forwarding.
 use super::*;
+use mlua::MetaMethod;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PartState {
@@ -19,14 +20,167 @@ impl PartState {
 
 /// One compiled evaluator per API request (or HAR download), with fresh globals per invocation.
 #[derive(Clone)]
-pub struct RedactionEvaluator(Arc<Mutex<ReusableScript>>);
+pub struct RedactionEvaluator(Arc<Mutex<ReusableScript>>, bool);
 impl RedactionEvaluator {
     pub fn new(source: &str, name: &str) -> Result<Self> {
-        Ok(Self(Arc::new(Mutex::new(ReusableScript::new(
-            source,
-            ScriptKind::Redaction,
-            name,
-        )?))))
+        Ok(Self(
+            Arc::new(Mutex::new(ReusableScript::new(
+                source,
+                ScriptKind::Redaction,
+                name,
+            )?)),
+            source
+                .lines()
+                .any(|line| line.trim() == "-- @proxycrab websocket-messages"),
+        ))
+    }
+}
+
+/// Message policies explicitly opt in with `-- @proxycrab websocket-messages`.
+/// Unlike HTTP staged reads, each invocation has exactly one fully loaded body.
+impl RedactionEvaluator {
+    pub fn websocket_message(
+        &self,
+        api: &str,
+        uri: &str,
+        side: BodySide,
+        metadata: &serde_json::Value,
+        bytes: Vec<u8>,
+    ) -> Result<Option<Vec<u8>>> {
+        if !self.1 {
+            bail!("policy does not support websocket messages");
+        }
+        if bytes.len() as u64 > LUA_BODY_LIMIT {
+            bail!("message exceeds body limit");
+        }
+        let output = Arc::new(Mutex::new(Some(bytes.clone())));
+        let body = WebSocketRedactionBody {
+            original: Arc::new(bytes),
+            output: output.clone(),
+        };
+        let script = self.0.lock().expect("redaction evaluator lock");
+        script.lua.gc_restart();
+        script
+            .lua
+            .app_data_ref::<InstructionCounter>()
+            .expect("instruction counter")
+            .reset();
+        let _ = script.warnings.take();
+        let env = script
+            .environment_factory
+            .call::<Table>(script.lua.globals())?;
+        let json: Table = script.lua.globals().get("json")?;
+        let context: Table = json
+            .get::<Function>("decode")?
+            .call(serde_json::to_string(metadata)?)?;
+        context.set("api", api)?;
+        context.set("kind", "websocket_message")?;
+        // Read-only proxy: scripts cannot replace context fields or the message's body.
+        let context = WebSocketRedactionContext(context);
+        env.set("context", context)?;
+        env.set("req", Value::Nil)?;
+        env.set("resp", Value::Nil)?;
+        env.set(
+            match side {
+                BodySide::Request => "req",
+                BodySide::Response => "resp",
+            },
+            WebSocketRedactionMessage {
+                uri: uri.to_owned(),
+                body,
+            },
+        )?;
+        if !script.function.set_environment(env)? {
+            bail!("redaction script has no environment");
+        }
+        let result = script.function.call::<()>(());
+        let _ = script.warnings.take();
+        result?;
+        let result = output.lock().expect("message output lock").clone();
+        if result
+            .as_ref()
+            .is_some_and(|b| b.len() as u64 > LUA_BODY_LIMIT)
+        {
+            bail!("replacement exceeds body limit");
+        }
+        Ok(result)
+    }
+}
+#[derive(Clone)]
+struct WebSocketRedactionContext(Table);
+impl UserData for WebSocketRedactionContext {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_meta_method(MetaMethod::Index, |_, this, key: String| {
+            this.0.get::<Value>(key)
+        });
+        methods.add_meta_method(
+            MetaMethod::NewIndex,
+            |_, _, _: (Value, Value)| -> mlua::Result<()> {
+                Err(LuaError::runtime("WebSocket context is read-only"))
+            },
+        );
+    }
+}
+#[derive(Clone)]
+struct WebSocketRedactionMessage {
+    uri: String,
+    body: WebSocketRedactionBody,
+}
+impl UserData for WebSocketRedactionMessage {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get("uri", |_, this| Ok(UriView::from(&this.uri)));
+        fields.add_field_method_get("version", |_, _| Ok("WebSocket/13"));
+        for name in ["headers", "method", "status"] {
+            fields.add_field_method_get(name, |_, _| Ok(Value::Nil));
+        }
+        fields.add_field_method_get("body", |_, this| Ok(this.body.clone()));
+    }
+}
+#[derive(Clone)]
+struct WebSocketRedactionBody {
+    original: Arc<Vec<u8>>,
+    output: Arc<Mutex<Option<Vec<u8>>>>,
+}
+impl UserData for WebSocketRedactionBody {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("as_string", |lua, this, ()| {
+            std::str::from_utf8(&this.original).map_err(LuaError::external)?;
+            lua.create_string(this.original.as_slice())
+        });
+        methods.add_method("as_bytes", |lua, this, ()| {
+            lua.create_string(this.original.as_slice())
+        });
+        methods.add_method("as_json", |lua, this, ()| {
+            let _: serde_json::Value =
+                serde_json::from_slice(&this.original).map_err(LuaError::external)?;
+            let json: Table = lua.globals().get("json")?;
+            json.get::<Function>("decode")?
+                .call::<Value>(lua.create_string(this.original.as_slice())?)
+        });
+        for name in ["replace_with_string", "replace_with_bytes"] {
+            methods.add_method(name, |_, this, value: mlua::LuaString| {
+                if value.as_bytes().len() as u64 > LUA_BODY_LIMIT {
+                    return Err(LuaError::runtime("body exceeds limit"));
+                }
+                *this.output.lock().expect("message output lock") = Some(value.as_bytes().to_vec());
+                Ok(())
+            });
+        }
+        methods.add_method("replace_with_json", |lua, this, value: Value| {
+            let json: Table = lua.globals().get("json")?;
+            let encoded = json
+                .get::<Function>("encode")?
+                .call::<mlua::LuaString>(value)?;
+            if encoded.as_bytes().len() as u64 > LUA_BODY_LIMIT {
+                return Err(LuaError::runtime("body exceeds limit"));
+            }
+            *this.output.lock().expect("message output lock") = Some(encoded.as_bytes().to_vec());
+            Ok(())
+        });
+        methods.add_method("hide", |_, this, ()| {
+            *this.output.lock().expect("message output lock") = None;
+            Ok(())
+        });
     }
 }
 
@@ -584,6 +738,117 @@ mod tests {
             updated_at: 1,
         }
     }
+    #[test]
+    fn websocket_policy_is_opt_in_directional_and_fail_closed() {
+        let metadata =
+            serde_json::json!({"id": 1, "type": "text", "started_at": 1, "completed_at": 2});
+        let old = RedactionEvaluator::new("", "legacy").unwrap();
+        assert!(
+            old.websocket_message(
+                "/test",
+                "wss://example.com",
+                BodySide::Request,
+                &metadata,
+                b"secret".to_vec()
+            )
+            .is_err()
+        );
+        let evaluator = RedactionEvaluator::new(
+            r#"-- @proxycrab websocket-messages
+            assert(context.kind == 'websocket_message')
+            assert(context.id == 1)
+            assert(req ~= nil and resp == nil)
+            assert(req.version == 'WebSocket/13')
+            assert(req.headers == nil and req.method == nil)
+            assert(req.body:as_string() == 'secret')
+            req.body:replace_with_string('safe')
+        "#,
+            "ws",
+        )
+        .unwrap();
+        assert_eq!(
+            evaluator
+                .websocket_message(
+                    "/test",
+                    "wss://example.com",
+                    BodySide::Request,
+                    &metadata,
+                    b"secret".to_vec()
+                )
+                .unwrap()
+                .unwrap(),
+            b"safe"
+        );
+        assert!(
+            evaluator
+                .websocket_message(
+                    "/test",
+                    "wss://example.com",
+                    BodySide::Response,
+                    &metadata,
+                    b"secret".to_vec()
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn websocket_policy_hiding_empty_binary_and_readonly_metadata() {
+        let metadata = serde_json::json!({"id": 3});
+        for (body, expected) in [
+            ("resp.body:hide()", None),
+            ("resp.body:replace_with_string('')", Some(Vec::new())),
+            (
+                "resp.body:replace_with_bytes(resp.body:as_bytes())",
+                Some(vec![0, 255]),
+            ),
+        ] {
+            let evaluator = RedactionEvaluator::new(
+                &format!(
+                    "-- @proxycrab websocket-messages\nassert(req == nil and resp ~= nil); {body}"
+                ),
+                "ws",
+            )
+            .unwrap();
+            assert_eq!(
+                evaluator
+                    .websocket_message(
+                        "/test",
+                        "wss://example.com",
+                        BodySide::Response,
+                        &metadata,
+                        vec![0, 255]
+                    )
+                    .unwrap(),
+                expected
+            );
+        }
+        for mutation in [
+            "rawset(context, 'id', 4)",
+            "context.id = 4",
+            "resp.version = 'HTTP/1.1'",
+            "resp.uri = 'wss://other'",
+            "error('fail')",
+        ] {
+            let evaluator = RedactionEvaluator::new(
+                &format!("-- @proxycrab websocket-messages\n{mutation}"),
+                "ws",
+            )
+            .unwrap();
+            assert!(
+                evaluator
+                    .websocket_message(
+                        "/test",
+                        "wss://example.com",
+                        BodySide::Response,
+                        &metadata,
+                        vec![]
+                    )
+                    .is_err()
+            );
+        }
+    }
+
     #[test]
     fn redaction_reuses_original_body_between_stages_and_does_not_emit_later_appends() {
         let dir = tempfile::tempdir().unwrap();

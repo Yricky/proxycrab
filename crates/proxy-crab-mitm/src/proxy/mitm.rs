@@ -592,23 +592,82 @@ pub(crate) async fn handle_session_http_request(
         headers: headers_to_values(upstream_response.headers()),
     };
     if upstream_response.status() == StatusCode::SWITCHING_PROTOCOLS {
+        let _ = store.complete(capture_id, &response_data, &BodySourceType::Original);
         if let Some(downstream_upgrade) = downstream_upgrade {
+            let header = |headers: &crate::model::HeaderValues, name: &str| {
+                headers.get(name).map(|v| v.join(",")).unwrap_or_default()
+            };
+            let websocket = request_data.version == "HTTP/1.1"
+                && header(&request_data.headers, "sec-websocket-version").trim() == "13"
+                && header(&request_data.headers, "upgrade").eq_ignore_ascii_case("websocket")
+                && header(&response_data.headers, "upgrade").eq_ignore_ascii_case("websocket");
+            let extensions = header(&response_data.headers, "sec-websocket-extensions");
+            let subprotocol = header(&response_data.headers, "sec-websocket-protocol");
+            let socket_capture = if websocket {
+                let mut socket_request = request_data.clone();
+                socket_request.version = "WebSocket/13".into();
+                socket_request.uri = if let Some(rest) = socket_request.uri.strip_prefix("https://")
+                {
+                    format!("wss://{rest}")
+                } else if let Some(rest) = socket_request.uri.strip_prefix("http://") {
+                    format!("ws://{rest}")
+                } else {
+                    socket_request.uri
+                };
+                match tracker.begin_capture(&store, || {
+                    let id = store.begin(&source.label(), &socket_request, "websocket")?;
+                    if let Err(error) = store.link_websocket(
+                        id,
+                        capture_id,
+                        &extensions,
+                        (!subprotocol.is_empty()).then_some(subprotocol.as_str()),
+                    ) {
+                        let _ = store.discard(id);
+                        return Err(error);
+                    }
+                    Ok(id)
+                }) {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        tracing::warn!("WebSocket capture unavailable: {error}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let upstream_upgrade = hyper::upgrade::on(&mut upstream_response);
             let upgrade_cancellation = cancellation.clone();
             tracker.spawn(async move {
-                if let (Ok(downstream), Ok(upstream)) =
-                    (downstream_upgrade.await, upstream_upgrade.await)
-                {
-                    let mut downstream = TokioIo::new(downstream);
-                    let mut upstream = TokioIo::new(upstream);
-                    tokio::select! {
-                        _ = tokio::io::copy_bidirectional(&mut downstream, &mut upstream) => {}
-                        _ = upgrade_cancellation.cancelled() => {}
+                let pin=Arc::new(pin);
+                let socket_id=socket_capture.as_ref().map(|(id,_)|*id);
+                let upgraded=tokio::select! {
+                    result=async {tokio::try_join!(downstream_upgrade,upstream_upgrade)}=>result.map_err(|e|e.to_string()),
+                    _=upgrade_cancellation.cancelled()=>Err("WebSocket proxy connection cancelled".into()),
+                };
+                match upgraded {
+                    Ok((downstream,upstream)) => {
+                        let mut downstream=TokioIo::new(downstream);
+                        let mut upstream=TokioIo::new(upstream);
+                        if let Some(id)=socket_id {
+                            let result=crate::websocket::forward(&mut downstream,&mut upstream,store.clone(),id,&extensions,upgrade_cancellation.clone(),Some(pin.clone())).await;
+                            if let Err(error)=result {
+                                let kind=if upgrade_cancellation.is_cancelled(){"proxy_shutdown"}else{"websocket_transport_failed"};
+                                let _=store.note_error(id,&CaptureError {stage:ErrorStage::ResponseBody,kind:kind.into(),message:error.to_string()});
+                            }
+                        } else {
+                            tokio::select! {_=tokio::io::copy_bidirectional(&mut downstream,&mut upstream)=>{},_=upgrade_cancellation.cancelled()=>{}}
+                        }
                     }
+                    Err(error)=>{if let Some(id)=socket_id {
+                        let kind=if upgrade_cancellation.is_cancelled(){"proxy_shutdown"}else{"websocket_upgrade_failed"};
+                        let _=store.note_error(id,&CaptureError {stage:ErrorStage::Upstream,kind:kind.into(),message:error});
+                    }}
                 }
+                if let Some(id)=socket_id {let _=store.close_websocket(id);}
+                drop(socket_capture);
             });
         }
-        let _ = store.complete(capture_id, &response_data, &BodySourceType::Original);
         return response_from_data(&response_data, Vec::new(), false);
     }
 

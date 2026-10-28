@@ -1,6 +1,6 @@
 import type { Backend } from "./backend";
 import { BackendError } from "./backend-error";
-import { downloadBodyFromBase, fetchBodyFromBase } from "./body";
+import { downloadBodyFromBase, fetchBodyFromBase, fetchWebSocketBodyFromBase } from "./body";
 import { saveFileInWebview } from "./save-file";
 import type {
   ActiveSession,
@@ -208,6 +208,17 @@ export function createHttpBackend(
       call("/api/logs/views", json("POST", requestValue)),
     validateFilterRegex: (pattern: string) =>
       call("/ui-api/validate-filter-regex", json("POST", { pattern })),
+    getWebSocketMessages: (sessionId, id, side, afterId, limit = 500) =>
+      call(
+        query(`/api/logs/${id}/websocket/messages`, {
+          session_id: sessionId,
+          side,
+          after_id: afterId,
+          limit,
+        }),
+      ),
+    fetchWebSocketMessageBody: (sessionId, id, side, messageId) =>
+      fetchWebSocketBodyFromBase(baseUrl, sessionId, id, side, messageId, authorization(token)),
     getLog: (sessionId: number | null, id: number) =>
       call<LogDetail>(query(`/api/logs/${id}`, { session_id: sessionId })),
     replay: (sessionId: number, request: ReplayRequestPayload) =>
