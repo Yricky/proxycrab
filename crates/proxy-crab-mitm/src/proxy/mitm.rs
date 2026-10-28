@@ -304,6 +304,7 @@ pub(crate) async fn handle_session_http_request(
     };
     let raw_request = DeferredBody::new(incoming, raw_request_writer, &tracker);
     let raw_request_reader = raw_request.reader();
+    let mut ws_callbacks = Vec::new();
     let mut request_replacement = None;
     let mut request_replacement_source = None;
     for (position, script) in interceptor_snapshot.request.iter().enumerate() {
@@ -371,7 +372,7 @@ pub(crate) async fn handle_session_http_request(
         };
         let mut run_error = None;
         let execution = tokio::task::spawn_blocking(move || {
-            execute_request_with_state(
+            crate::lua::execute_request_with_ws(
                 &source,
                 &request_snapshot,
                 execution_state,
@@ -383,7 +384,16 @@ pub(crate) async fn handle_session_http_request(
         })
         .await;
         match execution {
-            Ok(Ok((effects, error))) => {
+            Ok(Ok((effects, error, callback))) => {
+                if let Some(callback) = callback {
+                    ws_callbacks.push(crate::websocket::interception::RegisteredCallback {
+                        source: crate::websocket::WsInterceptor {
+                            execution_id,
+                            name: script.name.clone(),
+                        },
+                        callback,
+                    });
+                }
                 request_data.method = effects
                     .method
                     .expect("request interceptor effects always include a method");
@@ -625,6 +635,16 @@ pub(crate) async fn handle_session_http_request(
                         let _ = store.discard(id);
                         return Err(error);
                     }
+                    if let Err(error) = store.set_websocket_interceptors(
+                        id,
+                        &ws_callbacks
+                            .iter()
+                            .map(|c| c.source.clone())
+                            .collect::<Vec<_>>(),
+                    ) {
+                        let _ = store.discard(id);
+                        return Err(error);
+                    }
                     Ok(id)
                 }) {
                     Ok(value) => Some(value),
@@ -636,6 +656,19 @@ pub(crate) async fn handle_session_http_request(
             } else {
                 None
             };
+            if websocket && socket_capture.is_none() && !ws_callbacks.is_empty() {
+                fail_capture(
+                    &store,
+                    capture_id,
+                    ErrorStage::Interceptor,
+                    "websocket_capture_failed",
+                    "WebSocket interception storage unavailable",
+                );
+                return text_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "WebSocket interception storage unavailable",
+                );
+            }
             let upstream_upgrade = hyper::upgrade::on(&mut upstream_response);
             let upgrade_cancellation = cancellation.clone();
             tracker.spawn(async move {
@@ -650,7 +683,11 @@ pub(crate) async fn handle_session_http_request(
                         let mut downstream=TokioIo::new(downstream);
                         let mut upstream=TokioIo::new(upstream);
                         if let Some(id)=socket_id {
-                            let result=crate::websocket::forward(&mut downstream,&mut upstream,store.clone(),id,&extensions,upgrade_cancellation.clone(),Some(pin.clone())).await;
+                            let result = if ws_callbacks.is_empty() {
+                                crate::websocket::forward(&mut downstream,&mut upstream,store.clone(),id,&extensions,upgrade_cancellation.clone(),Some(pin.clone())).await.map_err(anyhow::Error::from)
+                            } else {
+                                crate::websocket::interception::forward(&mut downstream,&mut upstream,store.clone(),id,&extensions,upgrade_cancellation.clone(),ws_callbacks).await
+                            };
                             if let Err(error)=result {
                                 let kind=if upgrade_cancellation.is_cancelled(){"proxy_shutdown"}else{"websocket_transport_failed"};
                                 let _=store.note_error(id,&CaptureError {stage:ErrorStage::ResponseBody,kind:kind.into(),message:error.to_string()});

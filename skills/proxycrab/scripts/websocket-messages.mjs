@@ -8,6 +8,10 @@ run(async () => {
     printHelp(`Usage: node websocket-messages.mjs --log-id ID --side request|response [--session-id ID] [--after-id ID] [--limit N]
 Read WebSocket message metadata only. request=C2S, response=S2C. IDs are per direction.
 Use next_after_id for subsequent pages and polling; has_more only describes the current snapshot.
+Interception metadata includes sequence, status, root/parent {side,id}, producer/dropped_by and errors.
+Use root for the network source and parent for the direct trigger; producer identifies the source
+execution_id, callback invocation_id and send_index. Read source snapshots from the handshake log
+with interceptor-get.mjs --log-id HANDSHAKE_ID --execution-id EXECUTION_ID.
 Read content with body-get.mjs --log-id ID --message-id ID --side request|response --output FILE.`);
     return;
   }

@@ -560,6 +560,66 @@ the download and redacts entries before deriving query strings, cookies, redirec
 fields. A failing HAR entry terminates the stream; earlier successfully redacted entries may already
 have been sent. No cross-request or cross-snapshot result cache is used.
 
+## WebSocket interception callbacks
+
+A connection request interceptor can register **one** callback with `req:on_ws_message(function(ws) ... end)`.
+Registration is unavailable in temporary breakpoint scripts; attempts raise a Lua error.
+The runtime retains the Lua closure and its captured variables for the upgraded connection. Only
+successful HTTP/1.1 WebSocket upgrades activate callbacks. Editing a library script affects new
+connections, not the closures or source snapshots of existing ones.
+
+```lua
+local received = 0
+req:on_ws_message(function(ws)
+    received = received + 1
+    local message = ws.message
+    if message.direction == "request" and message.type == "text" and message.body == "ping" then
+        ws:drop()
+        ws:send("response", "pong", "text")
+    end
+end)
+```
+
+| API | Behavior |
+| --- | --- |
+| `ws.message` | Read-only current complete message. `body` is a Lua byte string; `direction`/`side` is `request` (to server) or `response` (to client); `type` is `text` or `binary`. Metadata includes IDs and provenance described in the HTTP reference. |
+| `ws:drop()` | Stops this message before later callbacks/delivery; still records it with `status=dropped`. Does not return from the Lua function or cancel its sends. |
+| `ws:send(direction, body, type?)` | Stages a new message for either direction. `type` defaults to `text`; text must be valid UTF-8, binary accepts arbitrary bytes. Payload limit is 16 MiB. |
+| `ws:history(after_sequence?, limit?)` | Read-only page of finalized messages from both directions, including generated, dropped and failed messages. Defaults: after sequence 0, limit 64; limit is clamped to 1–256. Access `#page` and `page[i]`; advance using the last item's `sequence`. History excludes the current message and queued messages. |
+
+Current messages, history entries, and nested provenance metadata are read-only. To replace a
+message, call `drop()` and `send()` to the same direction. During callbacks `req` and its previously
+captured headers/body aliases are read-only; request mutations, new registration and request
+breakpoints are unavailable. Captured local variables remain mutable. `ws:drop`, `ws:send` and
+`ws:history` are scoped to the active invocation; retaining an old `ws` does not permit later writes.
+
+Callbacks run serially per connection in request-interceptor registration order. Each original
+network message completes its entire derived chain before the next original message starts.
+Original messages proceed through the chain before their sends. Successful sends append to one
+FIFO queue in call order. A generated message starts at the callback **after its sender**, even if
+its direction differs; it never invokes the sender or earlier callbacks. For example, A processing
+M emits X1/X2, then B processing M emits Y: the order is M, X1, X2, Y. If X1 emits Z, Z goes behind Y.
+Ping, Pong and Close are handled by the protocol layer and do not invoke Lua callbacks.
+
+A callback's sends/drop commit together only when it succeeds. Errors or instruction-budget
+exhaustion cancel those effects, record an invocation error and pass the unchanged message to the
+next callback. The callback is invoked again for subsequent messages. Lua variable changes are not
+rolled back. The pending FIFO limit is **16384 messages**, counting the invocation's staged sends,
+excluding history and the message currently processing. Overflow fails the invocation even if
+its Lua error is caught, cancelling all of that invocation's staged sends/drop; previously committed
+queue entries continue processing.
+
+Calling `on_ws_message` twice in one request script raises a Lua error. If caught with `pcall`, the
+first registration remains; otherwise request-script failure cancels its registration. Any other
+uncaught request-script error likewise cancels registration.
+
+Every final record preserves its root network-message reference and direct parent reference.
+Generated records also identify source script `execution_id`, callback `invocation_id`, and
+`send_index`. Dropped records identify the dropping invocation. Failed/unsent records retain a
+reason and body. Read the connection's source snapshots using its handshake log and registered
+execution IDs, rather than the current script library. Compression (`permessage-deflate`) is
+supported; callbacks see decoded, reassembled payloads.
+
 ## WebSocket read-time redaction
 
 A bound script must explicitly opt in using an exact standalone comment:

@@ -25,7 +25,8 @@ use crate::{
 
 pub(crate) const BODY_DETAIL_LIMIT: u64 = 64 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BodySide {
     Request,
     Response,
@@ -149,10 +150,30 @@ impl CaptureStore {
         self.connection()?.execute("UPDATE websocket_captures SET close_code=COALESCE(close_code,?2),close_reason=COALESCE(close_reason,?3) WHERE capture_id=?1",params![id as i64,code,reason])?;
         Ok(())
     }
+    pub(crate) fn set_websocket_interceptors(
+        &self,
+        id: u64,
+        interceptors: &[crate::websocket::WsInterceptor],
+    ) -> Result<()> {
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        for (position, interceptor) in interceptors.iter().enumerate() {
+            tx.execute("INSERT INTO websocket_interceptors(capture_id,position,execution_id) VALUES (?1,?2,?3)", params![id as i64,position as i64,interceptor.execution_id as i64])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     pub fn websocket_info(&self, id: u64) -> Result<Option<crate::websocket::WebSocketInfo>> {
-        self.connection()?.query_row("SELECT capture_id,handshake_id,extensions,subprotocol,opened_at,closed_at,close_code,close_reason FROM websocket_captures WHERE capture_id=?1 OR handshake_id=?1",params![id as i64],|r|Ok(crate::websocket::WebSocketInfo {
-            websocket_log_id:r.get::<_,i64>(0)? as u64,handshake_log_id:r.get::<_,i64>(1)? as u64,extensions:r.get(2)?,subprotocol:r.get(3)?,opened_at:r.get::<_,i64>(4)? as u64,closed_at:r.get::<_,Option<i64>>(5)?.map(|v|v as u64),close_code:r.get(6)?,close_reason:r.get(7)?
-        })).optional().map_err(Into::into)
+        let connection = self.connection()?;
+        let mut info = connection.query_row("SELECT capture_id,handshake_id,extensions,subprotocol,opened_at,closed_at,close_code,close_reason FROM websocket_captures WHERE capture_id=?1 OR handshake_id=?1",params![id as i64],|r|Ok(crate::websocket::WebSocketInfo {
+            websocket_log_id:r.get::<_,i64>(0)? as u64,handshake_log_id:r.get::<_,i64>(1)? as u64,extensions:r.get(2)?,subprotocol:r.get(3)?,opened_at:r.get::<_,i64>(4)? as u64,closed_at:r.get::<_,Option<i64>>(5)?.map(|v|v as u64),close_code:r.get(6)?,close_reason:r.get(7)?,interceptors:vec![]
+        })).optional()?;
+        if let Some(info) = &mut info {
+            info.interceptors = connection.prepare("SELECT r.id,r.name FROM websocket_interceptors w JOIN capture_interceptor_runs r ON r.id=w.execution_id WHERE w.capture_id=?1 ORDER BY w.position")?
+                .query_map(params![info.websocket_log_id as i64], |r| Ok(crate::websocket::WsInterceptor {execution_id:r.get::<_,i64>(0)? as u64,name:r.get(1)?}))?
+                .collect::<std::result::Result<_,_>>()?;
+        }
+        Ok(info)
     }
     pub fn websocket_messages(
         &self,
@@ -855,6 +876,12 @@ impl CaptureStore {
                 handshake_id INTEGER NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
                 extensions TEXT NOT NULL, subprotocol TEXT, opened_at INTEGER NOT NULL,
                 closed_at INTEGER, close_code INTEGER, close_reason TEXT
+            );
+            CREATE TABLE IF NOT EXISTS websocket_interceptors (
+                capture_id INTEGER NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,
+                execution_id INTEGER NOT NULL REFERENCES capture_interceptor_runs(id) ON DELETE CASCADE,
+                PRIMARY KEY(capture_id,position)
             );
             CREATE INDEX IF NOT EXISTS captures_created_at ON captures(created_at);
             CREATE TABLE IF NOT EXISTS interceptor_script_contents (

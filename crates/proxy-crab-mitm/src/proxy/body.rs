@@ -6,9 +6,8 @@ use std::{
     path::PathBuf,
     pin::Pin,
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc as std_mpsc,
     },
     task::{Context, Poll},
     time::Duration,
@@ -60,7 +59,6 @@ struct ChannelBody {
 enum DeferredCommand {
     Read {
         frame_timeout: Option<Duration>,
-        result: std_mpsc::Sender<Result<DeferredBodyRead, String>>,
     },
     Finish {
         forward: bool,
@@ -75,23 +73,55 @@ pub(crate) enum DeferredBodyRead {
     File(PathBuf),
 }
 
+#[derive(Default)]
+struct DeferredReadCompletion {
+    result: Mutex<Option<Result<DeferredBodyRead, String>>>,
+    ready: Condvar,
+}
+
+impl DeferredReadCompletion {
+    fn publish(&self, result: Result<DeferredBodyRead, String>) {
+        let mut current = self.result.lock().unwrap();
+        // Preserve the captured input result even if later replay fails downstream.
+        if current.is_none() {
+            *current = Some(result);
+            self.ready.notify_all();
+        }
+    }
+
+    fn wait(&self) -> Result<DeferredBodyRead, String> {
+        let mut result = self.result.lock().unwrap();
+        while result.is_none() {
+            result = self.ready.wait(result).unwrap();
+        }
+        result.as_ref().unwrap().clone()
+    }
+}
+
+struct DeferredCompletionGuard(Arc<DeferredReadCompletion>);
+impl Drop for DeferredCompletionGuard {
+    fn drop(&mut self) {
+        self.0
+            .publish(Err("body reader stopped before completing".into()));
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct DeferredBodyReader {
     sender: mpsc::UnboundedSender<DeferredCommand>,
+    completion: Arc<DeferredReadCompletion>,
 }
 
 impl DeferredBodyReader {
+    // Called from Lua's blocking execution worker, never from an async runtime worker.
     pub(crate) fn read(&self, frame_timeout: Option<Duration>) -> Result<DeferredBodyRead, String> {
-        let (sender, receiver) = std_mpsc::channel();
-        self.sender
-            .send(DeferredCommand::Read {
-                frame_timeout,
-                result: sender,
-            })
-            .map_err(|_| "body reader is no longer available".to_owned())?;
-        receiver
-            .recv()
-            .map_err(|_| "body reader stopped before completing".to_owned())?
+        if let Some(result) = self.completion.result.lock().unwrap().as_ref() {
+            return result.clone();
+        }
+        // Finish may already be queued or executing. Both paths publish to the same
+        // completion, so a Read behind Finish does not depend on command consumption.
+        let _ = self.sender.send(DeferredCommand::Read { frame_timeout });
+        self.completion.wait()
     }
 }
 
@@ -116,6 +146,7 @@ impl DeferredBody {
         let (command_sender, command_receiver) = mpsc::unbounded_channel();
         let (frame_sender, frame_receiver) = mpsc::channel(4);
         let (done_sender, done_receiver) = oneshot::channel();
+        let completion = Arc::new(DeferredReadCompletion::default());
         tracker.spawn(run_deferred_body(
             body,
             writer,
@@ -123,10 +154,12 @@ impl DeferredBody {
             command_receiver,
             frame_sender,
             done_sender,
+            DeferredCompletionGuard(completion.clone()),
         ));
         Self {
             reader: DeferredBodyReader {
                 sender: command_sender.clone(),
+                completion,
             },
             sender: command_sender,
             receiver: Mutex::new(Some(frame_receiver)),
@@ -178,6 +211,7 @@ async fn run_deferred_body<B>(
     mut commands: mpsc::UnboundedReceiver<DeferredCommand>,
     frames: mpsc::Sender<Result<Frame<Bytes>, BoxError>>,
     done: oneshot::Sender<PumpResult>,
+    completion: DeferredCompletionGuard,
 ) where
     B: Body<Data = Bytes> + Unpin + Send + 'static,
     B::Error: Into<BoxError> + Send + Sync + 'static,
@@ -185,18 +219,12 @@ async fn run_deferred_body<B>(
     let mut writer = Some(writer);
     let mut completed: Option<(PumpResult, bool)> = None;
     let mut trailers = Vec::new();
-    let mut read_waiters = Vec::new();
     let (forward, speed, frame_timeout) = loop {
         match commands.recv().await {
-            Some(DeferredCommand::Read {
-                frame_timeout,
-                result: waiter,
-            }) => {
-                if let Some((result, stored)) = &completed {
-                    let _ = waiter.send(read_result(result, *stored, &path));
+            Some(DeferredCommand::Read { frame_timeout }) => {
+                if completed.is_some() {
                     continue;
                 }
-                read_waiters.push(waiter);
                 let result = drain_body(
                     &mut body,
                     writer.as_mut(),
@@ -212,9 +240,7 @@ async fn run_deferred_body<B>(
                     result,
                 )
                 .await;
-                for waiter in read_waiters.drain(..) {
-                    let _ = waiter.send(read_result(&result, stored, &path));
-                }
+                completion.0.publish(read_result(&result, stored, &path));
                 completed = Some((result, stored));
             }
             Some(DeferredCommand::Finish {
@@ -295,12 +321,13 @@ async fn run_deferred_body<B>(
             None,
         )
         .await;
-        finish_writer(
+        let (result, stored) = finish_writer(
             writer.take().expect("deferred body writer is available"),
             result,
         )
-        .await
-        .0
+        .await;
+        completion.0.publish(read_result(&result, stored, &path));
+        result
     };
     let _ = done.send(result);
 }
@@ -827,6 +854,119 @@ mod tests {
     fn test_task_group() -> TaskGroup {
         let (changes, _) = tokio::sync::watch::channel(0);
         TaskGroup::new(ActivityTracker::new(changes))
+    }
+
+    async fn deferred_fixture<B>(body: B) -> (tempfile::TempDir, TaskGroup, DeferredBody)
+    where
+        B: Body<Data = Bytes> + Unpin + Send + 'static,
+        B::Error: Into<BoxError> + Send + Sync + 'static,
+    {
+        let root = tempdir().unwrap();
+        let store = CaptureStore::open(1, root.path()).unwrap();
+        let request = RequestData {
+            method: "POST".into(),
+            uri: "http://example.com/upload".into(),
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+            tags: RequestTags::new(),
+        };
+        let id = store.begin("test", &request, "request").unwrap();
+        let writer = store
+            .create_body_writer(id, BodySide::Request)
+            .await
+            .unwrap();
+        let tracker = test_task_group();
+        let deferred = DeferredBody::new(body, writer, &tracker);
+        (root, tracker, deferred)
+    }
+
+    #[tokio::test]
+    async fn deferred_read_after_finish_retains_empty_file_and_error_results() {
+        for case in 0..3 {
+            let frames: Vec<Result<Frame<Bytes>, io::Error>> = match case {
+                0 => vec![],
+                1 => vec![Ok(Frame::data(Bytes::from_static(b"captured")))],
+                _ => vec![Err(io::Error::other("input failed"))],
+            };
+            let (_root, tracker, deferred) =
+                deferred_fixture(StreamBody::new(stream::iter(frames))).await;
+            let reader = deferred.reader();
+            let (output, done) = deferred.finish(false, None, None);
+            assert!(output.is_none());
+            let pump = done.await.unwrap();
+            assert_eq!(pump.outcome == PumpOutcome::Complete, case != 2);
+            for _ in 0..2 {
+                let clone = reader.clone();
+                let result = tokio::task::spawn_blocking(move || clone.read(None))
+                    .await
+                    .unwrap();
+                match case {
+                    0 => assert_eq!(result.unwrap(), DeferredBodyRead::Empty),
+                    1 => {
+                        let DeferredBodyRead::File(path) = result.unwrap() else {
+                            panic!("missing file")
+                        };
+                        assert_eq!(tokio::fs::read(path).await.unwrap(), b"captured");
+                    }
+                    _ => assert_eq!(result.unwrap_err(), "input failed"),
+                }
+            }
+            tracker.shutdown(Duration::from_secs(1)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn deferred_reader_racing_finish_waits_for_capture_completion() {
+        let (sender, mut receiver) = mpsc::channel::<Result<Frame<Bytes>, io::Error>>(1);
+        let body = StreamBody::new(stream::poll_fn(move |cx| receiver.poll_recv(cx)));
+        let (_root, tracker, deferred) = deferred_fixture(body).await;
+        let reader = deferred.reader();
+        let (output, done) = deferred.finish(true, None, None);
+        // Finish is already ahead of Read in the command queue, while body input
+        // remains pending. Read must wait for completion rather than a Read reply.
+        let (started, wait_started) = oneshot::channel();
+        let read = tokio::task::spawn_blocking(move || {
+            let _ = started.send(());
+            reader.read(None)
+        });
+        wait_started.await.unwrap();
+        assert!(!read.is_finished());
+        sender
+            .send(Ok(Frame::data(Bytes::from_static(b"streamed"))))
+            .await
+            .unwrap();
+        drop(sender);
+        assert_eq!(
+            output.unwrap().collect().await.unwrap().to_bytes(),
+            b"streamed"[..]
+        );
+        assert_eq!(done.await.unwrap().outcome, PumpOutcome::Complete);
+        let result = timeout(Duration::from_secs(1), read)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let DeferredBodyRead::File(path) = result else {
+            panic!("missing captured body")
+        };
+        assert_eq!(tokio::fs::read(path).await.unwrap(), b"streamed");
+        tracker.shutdown(Duration::from_secs(1)).await;
+    }
+
+    #[tokio::test]
+    async fn deferred_reader_is_released_when_capture_task_is_aborted() {
+        let body = StreamBody::new(stream::pending::<Result<Frame<Bytes>, io::Error>>());
+        let (_root, tracker, deferred) = deferred_fixture(body).await;
+        let reader = deferred.reader();
+        let (_output, _done) = deferred.finish(false, None, None);
+        let read = tokio::task::spawn_blocking(move || reader.read(None));
+        tracker.shutdown(Duration::from_millis(10)).await;
+        let error = timeout(Duration::from_secs(1), read)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error, "body reader stopped before completing");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -400,7 +400,19 @@ export interface ResponseDetail {
   body: BodyPayload;
 }
 
+export interface WebSocketInterceptor {
+  execution_id: number;
+  name: string;
+}
+export interface WebSocketInvocation extends WebSocketInterceptor {
+  invocation_id: number;
+}
+export interface WebSocketMessageRef {
+  side: "request" | "response";
+  id: number;
+}
 export interface WebSocketInfo {
+  interceptors?: WebSocketInterceptor[];
   handshake_log_id: number;
   websocket_log_id: number;
   extensions: string;
@@ -412,6 +424,14 @@ export interface WebSocketInfo {
 }
 export interface WebSocketMessage {
   id: number;
+  sequence?: number;
+  root?: WebSocketMessageRef;
+  parent?: WebSocketMessageRef;
+  producer?: WebSocketInvocation & { send_index: number };
+  dropped_by?: WebSocketInvocation;
+  status?: "sent" | "dropped" | "unsent" | "failed";
+  error?: string;
+  errors?: (WebSocketInvocation & { error: string })[];
   type: "text" | "binary";
   started_at: number;
   completed_at: number;

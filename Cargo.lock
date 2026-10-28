@@ -3481,6 +3481,7 @@ dependencies = [
  "flate2",
  "fs2",
  "futures",
+ "getrandom 0.4.3",
  "http-body-util",
  "hyper",
  "hyper-rustls",

@@ -1,4 +1,4 @@
-import type { WebSocketMessage, WebSocketPage } from "../api/types";
+import type { WebSocketMessage, WebSocketPage, WebSocketMessageRef } from "../api/types";
 
 export function messageBar(message: WebSocketMessage, origin: number, scale: number) {
   return {
@@ -144,4 +144,39 @@ export function unseenMessageIds(
       remaining.delete(message.id);
   }
   return remaining;
+}
+
+/** Origin stays visible in the border even when disposition overrides the fill. */
+export function messageColors(message: WebSocketMessage) {
+  const border = message.producer ? "--accent" : "--success";
+  const fill =
+    message.status === "dropped"
+      ? "--text-faint"
+      : message.status === "failed" || message.status === "unsent"
+        ? "--danger"
+        : border;
+  return { border, fill };
+}
+
+export function messageStatusLabel(message: WebSocketMessage) {
+  switch (message.status) {
+    case "sent":
+      return "已发送";
+    case "dropped":
+      return "已丢弃";
+    case "unsent":
+      return "未发送";
+    case "failed":
+      return "发送失败";
+    default:
+      return "已采集";
+  }
+}
+
+export function findRelatedMessage(
+  messages: Record<"request" | "response", WebSocketMessage[]>,
+  reference: WebSocketMessageRef,
+) {
+  const message = messages[reference.side].find((item) => item.id === reference.id);
+  return message ? { side: reference.side, message } : null;
 }

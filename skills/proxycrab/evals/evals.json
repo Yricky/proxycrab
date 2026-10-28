@@ -300,6 +300,26 @@
       "prompt": "A bound HTTP redaction script fails when reading WebSocket messages. Explain and prepare a compatible JSON token-redaction script without changing permissions.",
       "expected_output": "Uses exact opt-in comment -- @proxycrab websocket-messages and context.kind; req-only C2S/resp-only S2C body, preserves HTTP branch, explains fail-closed legacy policy and metadata visibility. No credential switching or raw body workaround.",
       "files": []
+    },
+    {
+      "id": 52,
+      "prompt": "Create a ProxyCrab request interceptor using the supplied WebSocket fixture. Preserve the existing interceptor chains and verify a new client ping is dropped while its generated pong reaches only later callbacks. Trace the generated response to its source code snapshot.",
+      "expected_output": "Registers once with req:on_ws_message, uses immutable ws.message and ws:drop/ws:send response. Verifies dropped original persisted, generated response producer and parent/root references with direction, invocation_id and send_index. Reads exact source from the handshake log execution ID, not current library. Explains FIFO and no self-recursion; supports compressed messages.",
+      "files": [
+        "evals/fixtures/test-websocket-interceptor.lua"
+      ]
+    },
+    {
+      "id": 53,
+      "prompt": "Explain what happens when a WebSocket callback drops the current message, sends two messages and then errors, and when its sends exceed the pending queue limit. Does the callback run for the next message?",
+      "expected_output": "Both scenarios cancel the current invocation sends and drop, record its error, and pass the original to later callbacks. Pending FIFO has 16384-entry hard limit including staged sends but excluding history/current. Previously committed entries remain. Callback runs again; closure variable changes do not roll back. Duplicate registration throws; caught preserves first, uncaught cancels registration.",
+      "files": []
+    },
+    {
+      "id": 54,
+      "prompt": "In the WebSocket Canvas a blue-bordered message has a red fill. Explain its meaning, find its direct trigger and root message, and identify the exact callback that sent it.",
+      "expected_output": "Blue border means interceptor-generated; red fill means unsent/delivery failure, not drop (gray). Uses side plus ID for root/parent jumps, producer execution_id/invocation_id/send_index for sender, failure reason and connection source snapshot. Original borders are green and selection preserves origin border.",
+      "files": []
     }
   ]
 }

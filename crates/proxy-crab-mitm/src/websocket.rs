@@ -16,6 +16,11 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+pub(crate) mod interception;
+#[cfg(test)]
+mod interception_tests;
+pub(crate) mod transport;
+
 const MAGIC: &[u8; 8] = b"PCWS\x01\0\0\0";
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +33,38 @@ pub struct WebSocketInfo {
     pub closed_at: Option<u64>,
     pub close_code: Option<u16>,
     pub close_reason: Option<String>,
+    #[serde(default)]
+    pub interceptors: Vec<WsInterceptor>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WsInterceptor {
+    pub execution_id: u64,
+    pub name: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MessageRef {
+    pub side: BodySide,
+    pub id: u32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WsInvocation {
+    pub execution_id: u64,
+    pub name: String,
+    pub invocation_id: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WsProducer {
+    pub execution_id: u64,
+    pub name: String,
+    pub invocation_id: u64,
+    pub send_index: usize,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WsCallbackError {
+    pub execution_id: u64,
+    pub name: String,
+    pub invocation_id: u64,
+    pub error: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebSocketMessage {
@@ -39,6 +76,22 @@ pub struct WebSocketMessage {
     pub size: u64,
     pub content_available: bool,
     pub omitted_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<MessageRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<MessageRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub producer: Option<WsProducer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dropped_by: Option<WsInvocation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<WsCallbackError>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebSocketPage {
@@ -121,8 +174,8 @@ fn read_records_indexed(
         let meta_len = u32::from_le_bytes(header[8..12].try_into()?) as u64;
         if record_len < 4
             || meta_len > record_len - 4
-            || meta_len > 65536
-            || record_len > MAX_MESSAGE as u64 + 65540
+            || meta_len > MAX_MESSAGE as u64
+            || record_len > 2 * MAX_MESSAGE as u64 + 4
         {
             bail!("invalid WebSocket record length");
         }
@@ -268,6 +321,14 @@ impl Decoder {
             size: message.size,
             content_available: available,
             omitted_reason: (!available).then(|| "size_limit_exceeded".into()),
+            sequence: None,
+            root: None,
+            parent: None,
+            producer: None,
+            dropped_by: None,
+            status: None,
+            error: None,
+            errors: vec![],
         };
         let json = serde_json::to_vec(&meta)?;
         let payload = if available {

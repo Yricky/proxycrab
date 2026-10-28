@@ -12,6 +12,7 @@ bytes.workspace = true
 flate2.workspace = true
 fs2.workspace = true
 futures.workspace = true
+getrandom.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-rustls.workspace = true

@@ -3190,3 +3190,128 @@ async fn stopping_proxy_finalizes_live_websocket_as_cancelled() {
     assert_eq!(detail.summary.error.unwrap().kind, "proxy_shutdown");
     upstream.await.unwrap();
 }
+
+#[tokio::test]
+async fn websocket_callbacks_survive_upgrade_and_script_edits_with_frozen_sources() {
+    let (_data, runtime, proxy_port) = runtime().await;
+    let session = create_active_session(&runtime, None).await;
+    let source = r#"local n = 0
+        local original_body = req.body
+        req:on_ws_message(function(ws)
+            n = n + 1
+            assert(original_body:as_string() == '')
+            assert(not pcall(function() req.uri = '/changed' end))
+            assert(#ws:history() == (n-1)*2)
+            ws:drop()
+            ws:send('response', tostring(n))
+        end)"#;
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "ws-counter".into(),
+                content: source.into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "ws-counter".into(),
+                    enabled: true,
+                }],
+                response: vec![],
+            },
+        )
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let upstream = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = vec![];
+        while !request.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            socket.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+        socket.write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n").await.unwrap();
+        let mut received = vec![];
+        socket.read_to_end(&mut received).await.unwrap();
+        assert!(received.is_empty(), "dropped originals reached upstream");
+    });
+    let mut client = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    client.write_all(format!("GET http://127.0.0.1:{port}/chat HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: text/plain\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\r\n").as_bytes()).await.unwrap();
+    let mut response = vec![];
+    while !response.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        timeout(Duration::from_secs(2), client.read_exact(&mut byte))
+            .await
+            .unwrap()
+            .unwrap();
+        response.push(byte[0]);
+    }
+    assert!(String::from_utf8_lossy(&response).contains("101"));
+    for expected in [b'1', b'2'] {
+        if expected == b'2' {
+            runtime
+                .update_script(
+                    ScriptKind::RequestInterceptor,
+                    "ws-counter",
+                    "error('new version must not run on old connection')".into(),
+                )
+                .unwrap();
+        }
+        client
+            .write_all(&[129, 129, 1, 2, 3, 4, b'M' ^ 1])
+            .await
+            .unwrap();
+        let mut reply = [0; 3];
+        timeout(Duration::from_secs(2), client.read_exact(&mut reply))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reply, [129, 1, expected]);
+    }
+    runtime.stop_proxy().await.unwrap();
+    upstream.await.unwrap();
+    let ws = runtime
+        .list_captures(session.id, 10, None)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.request.version == "WebSocket/13")
+        .unwrap();
+    let info = runtime.websocket_info(session.id, ws.id).unwrap().unwrap();
+    assert_eq!(info.interceptors.len(), 1);
+    let snapshot = runtime
+        .interceptor_script_content(
+            session.id,
+            info.handshake_log_id,
+            info.interceptors[0].execution_id,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.content, source);
+    let originals = runtime
+        .websocket_messages(session.id, ws.id, BodySide::Request, 0, 10)
+        .unwrap()
+        .unwrap();
+    let generated = runtime
+        .websocket_messages(session.id, ws.id, BodySide::Response, 0, 10)
+        .unwrap()
+        .unwrap();
+    assert_eq!(originals.messages.len(), 2);
+    assert_eq!(generated.messages.len(), 2);
+    for m in originals.messages {
+        assert_eq!(m.status.as_deref(), Some("dropped"));
+        assert!(m.errors.is_empty());
+    }
+    for m in generated.messages {
+        assert_eq!(m.status.as_deref(), Some("sent"));
+        assert_eq!(
+            m.producer.unwrap().execution_id,
+            info.interceptors[0].execution_id
+        );
+    }
+}

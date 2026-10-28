@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
   drainWebSocketPages,
+  messageColors,
+  messageStatusLabel,
+  findRelatedMessage,
   hexBytes,
   messageBar,
   messageNeighbors,
@@ -212,5 +215,49 @@ describe("adaptive timeline ticks", () => {
     const after = timelineTicks(6.4, 30, 640);
     const common = after.find((t) => t.time === before[1]!.time)!;
     expect(common.x).toBeCloseTo(before[1]!.x - 30);
+  });
+});
+
+describe("message origin and disposition", () => {
+  const producer = { execution_id: 7, name: "reply", invocation_id: 3, send_index: 1 };
+  test("origin defines border and disposition overrides only fill", () => {
+    for (const origin of [undefined, producer]) {
+      const border = origin ? "--accent" : "--success";
+      expect(messageColors({ ...message, producer: origin })).toEqual({ border, fill: border });
+      expect(messageColors({ ...message, producer: origin, status: "sent" })).toEqual({
+        border,
+        fill: border,
+      });
+      expect(messageColors({ ...message, producer: origin, status: "dropped" })).toEqual({
+        border,
+        fill: "--text-faint",
+      });
+      for (const status of ["unsent", "failed"] as const) {
+        expect(messageColors({ ...message, producer: origin, status })).toEqual({
+          border,
+          fill: "--danger",
+        });
+      }
+    }
+  });
+  test("legacy capture does not claim confirmed delivery", () => {
+    expect(messageStatusLabel(message)).toBe("已采集");
+    expect(messageStatusLabel({ ...message, status: "sent" })).toBe("已发送");
+    expect(messageStatusLabel({ ...message, status: "dropped" })).toBe("已丢弃");
+    expect(messageStatusLabel({ ...message, status: "unsent" })).toBe("未发送");
+    expect(messageStatusLabel({ ...message, status: "failed" })).toBe("发送失败");
+  });
+  test("provenance navigation distinguishes equal IDs in opposite directions", () => {
+    const response = { ...message, type: "binary" as const };
+    const messages = { request: [message], response: [response] };
+    expect(findRelatedMessage(messages, { side: "response", id: 1 })).toEqual({
+      side: "response",
+      message: response,
+    });
+    expect(findRelatedMessage(messages, { side: "request", id: 1 })).toEqual({
+      side: "request",
+      message,
+    });
+    expect(findRelatedMessage(messages, { side: "response", id: 2 })).toBeNull();
   });
 });

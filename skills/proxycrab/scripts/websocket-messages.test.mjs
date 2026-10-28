@@ -23,3 +23,20 @@ for (const args of [["--log-id","7","--side","invalid"], ["--log-id","7","--side
     await assert.rejects(exec(process.execPath, [new URL('./websocket-messages.mjs', import.meta.url).pathname, ...args]));
   });
 }
+
+test("preserves generated-message lineage, drop state and callback errors", async () => {
+  const message = {
+    id: 4, sequence: 9, type: "text", status: "dropped",
+    root: { side: "request", id: 1 }, parent: { side: "response", id: 3 },
+    producer: { execution_id: 17, name: "reply", invocation_id: 20, send_index: 2 },
+    dropped_by: { execution_id: 18, name: "guard", invocation_id: 21 },
+    errors: [{ execution_id: 19, name: "inspect", invocation_id: 19, error: "budget exceeded" }],
+  };
+  const expected = { messages: [message], next_after_id: 4, has_more: false };
+  const { stdout } = await exec(process.execPath, ["--input-type=module", "-e", `
+    globalThis.fetch = async () => new Response(JSON.stringify({ok:true,data:${JSON.stringify(expected)}}));
+    process.argv = ['node', ${JSON.stringify(script)}, '--log-id','7','--side','response'];
+    await import(${JSON.stringify(script)});
+  `]);
+  assert.deepEqual(JSON.parse(stdout), expected);
+});

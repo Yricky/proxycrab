@@ -5,7 +5,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
 };
 
@@ -29,6 +29,7 @@ use crate::{
 
 mod codec;
 pub mod redaction;
+pub(crate) mod websocket;
 
 pub const INSTRUCTION_LIMIT: u32 = 100_000;
 pub const MEMORY_LIMIT: usize = 16 * 1024 * 1024;
@@ -360,10 +361,55 @@ pub(crate) fn execute_request_with_state(
     capture_log_id: Option<u64>,
     breakpoint: Option<BreakpointHook>,
 ) -> Result<(ScriptEffects, Option<String>)> {
+    let (effects, error, _) = execute_request_inner(
+        source,
+        request,
+        state,
+        journal,
+        script_name,
+        capture_log_id,
+        breakpoint,
+        false,
+    )?;
+    Ok((effects, error))
+}
+
+pub(crate) fn execute_request_with_ws(
+    source: &str,
+    request: &RequestData,
+    state: SharedInterceptorState,
+    journal: ModificationJournal,
+    script_name: &str,
+    capture_log_id: Option<u64>,
+    breakpoint: Option<BreakpointHook>,
+) -> Result<(ScriptEffects, Option<String>, Option<websocket::WsCallback>)> {
+    execute_request_inner(
+        source,
+        request,
+        state,
+        journal,
+        script_name,
+        capture_log_id,
+        breakpoint,
+        true,
+    )
+}
+
+fn execute_request_inner(
+    source: &str,
+    request: &RequestData,
+    state: SharedInterceptorState,
+    journal: ModificationJournal,
+    script_name: &str,
+    capture_log_id: Option<u64>,
+    breakpoint: Option<BreakpointHook>,
+    allow_ws: bool,
+) -> Result<(ScriptEffects, Option<String>, Option<websocket::WsCallback>)> {
     let (lua, warnings) = safe_lua()?;
     lua.globals().set(
         "req",
         RequestView {
+            allow_ws,
             request: request.clone(),
             state: state.clone(),
             journal: journal.clone(),
@@ -378,7 +424,17 @@ pub(crate) fn execute_request_with_state(
         script_name,
         capture_log_id,
     );
-    Ok((state.effects(&journal), error))
+    let function = lua.named_registry_value::<Option<Function>>(websocket::REGISTRATION)?;
+    lua.unset_named_registry_value(websocket::REGISTRATION)?;
+    let callback = if error.is_none() {
+        function.map(|function| websocket::WsCallback::new(lua, function))
+    } else {
+        None
+    };
+    if callback.is_some() {
+        state.read_only.store(true, Ordering::Relaxed);
+    }
+    Ok((state.effects(&journal), error, callback))
 }
 
 pub fn execute_response(source: &str, response: &ResponseData) -> Result<ScriptEffects> {
@@ -488,6 +544,7 @@ fn install_breakpoint(lua: &Lua, hook: Option<BreakpointHook>) -> Result<()> {
         return Ok(());
     };
     let breakpoint = lua.create_function(move |_, timeout_ms: u64| {
+        hook.context.state.ensure_writable()?;
         hook.registry
             .wait(hook.context.clone(), timeout_ms)
             .map_err(LuaError::external)
@@ -839,6 +896,7 @@ pub(crate) struct SharedInterceptorState {
     raw_body: Arc<Mutex<Option<DeferredBodyReader>>>,
     assets: Arc<Mutex<Option<AssetStore>>>,
     response_phase: bool,
+    read_only: Arc<AtomicBool>,
 }
 
 impl SharedInterceptorState {
@@ -853,7 +911,17 @@ impl SharedInterceptorState {
             raw_body: Arc::new(Mutex::new(None)),
             assets: Arc::new(Mutex::new(None)),
             response_phase: false,
+            read_only: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    fn ensure_writable(&self) -> mlua::Result<()> {
+        if self.read_only.load(Ordering::Relaxed) {
+            return Err(LuaError::runtime(
+                "request is read-only during WebSocket callbacks",
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn new_request(
@@ -1067,6 +1135,7 @@ impl ModificationJournal {
 
 #[derive(Clone)]
 struct RequestView {
+    allow_ws: bool,
     request: RequestData,
     state: SharedInterceptorState,
     journal: ModificationJournal,
@@ -1081,6 +1150,7 @@ impl UserData for RequestView {
                 .expect("request Lua state always has a method"))
         });
         fields.add_field_method_set("method", |_, this, method: String| {
+            this.state.ensure_writable()?;
             hyper::Method::from_bytes(method.as_bytes())
                 .map_err(|error| LuaError::runtime(error.to_string()))?;
             *this
@@ -1101,6 +1171,7 @@ impl UserData for RequestView {
             ))
         });
         fields.add_field_method_set("uri", |_, this, uri: String| {
+            this.state.ensure_writable()?;
             uri.parse::<hyper::Uri>()
                 .map_err(|error| LuaError::runtime(error.to_string()))?;
             *this.state.uri.lock().expect("Lua URI state lock poisoned") = Some(uri.clone());
@@ -1122,6 +1193,23 @@ impl UserData for RequestView {
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("on_ws_message", |lua, this, function: Function| {
+            this.state.ensure_writable()?;
+            if !this.allow_ws {
+                return Err(LuaError::runtime(
+                    "on_ws_message is only available during a connection request interceptor",
+                ));
+            }
+            if lua
+                .named_registry_value::<Option<Function>>(websocket::REGISTRATION)?
+                .is_some()
+            {
+                return Err(LuaError::runtime(
+                    "on_ws_message can only be registered once per interceptor",
+                ));
+            }
+            lua.set_named_registry_value(websocket::REGISTRATION, function)
+        });
         add_mutable_tag_methods(methods);
     }
 }
@@ -1227,6 +1315,7 @@ where
     });
     methods.add_method("set_tag", |_, this, (key, value): (String, String)| {
         let (state, journal) = this.tag_state();
+        state.ensure_writable()?;
         state
             .tags
             .lock()
@@ -1274,6 +1363,7 @@ impl UserData for MutableHeaders {
             Ok(result)
         });
         methods.add_method("append", |_, this, (name, value): (String, String)| {
+            this.state.ensure_writable()?;
             validate_header_input(&name, &value)?;
             let mut headers = this
                 .state
@@ -1287,6 +1377,7 @@ impl UserData for MutableHeaders {
             Ok(())
         });
         methods.add_method("set", |_, this, (name, value): (String, String)| {
+            this.state.ensure_writable()?;
             validate_header_input(&name, &value)?;
             let mut headers = this
                 .state
@@ -1299,6 +1390,7 @@ impl UserData for MutableHeaders {
             Ok(())
         });
         methods.add_method("remove", |_, this, name: String| {
+            this.state.ensure_writable()?;
             let mut headers = this
                 .state
                 .headers
@@ -1321,6 +1413,7 @@ struct MutableBody {
 impl UserData for MutableBody {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("replace_with_string", |_, this, content: String| {
+            this.state.ensure_writable()?;
             *this
                 .state
                 .body
@@ -1333,6 +1426,7 @@ impl UserData for MutableBody {
             Ok(())
         });
         methods.add_method("replace_with_asset", |_, this, asset: mlua::AnyUserData| {
+            this.state.ensure_writable()?;
             let asset = asset
                 .borrow::<LuaAsset>()
                 .map_err(|_| LuaError::runtime("replace_with_asset requires an asset object"))?

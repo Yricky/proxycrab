@@ -8,12 +8,21 @@ import {
   Io5CodeSlash,
 } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type { LogDetail, WebSocketMessage } from "../api/types";
+import type {
+  LogDetail,
+  WebSocketMessage,
+  WebSocketMessageRef,
+  WebSocketInterceptor,
+} from "../api/types";
 import type { BodySide, LoadedBody } from "../api/body";
 import { appStore, reportError } from "../stores/app";
+import { openReadonlyViewer } from "../windows/launcher";
 import { copyText } from "../utils/clipboard";
 import {
   drainWebSocketPages,
+  messageColors,
+  messageStatusLabel,
+  findRelatedMessage,
   hexBytes,
   messageBar,
   messageNeighbors,
@@ -174,13 +183,13 @@ function paint() {
     const bar = messageBar(message, origin.value, scale.value);
     const x = bar.left - scrollLeft.value;
     const y = messageLaneTop(side);
-    const accent = color(side === "request" ? "--accent" : "--success");
+    const colors = messageColors(message);
     const chosen = selected.value?.side === side && selected.value.message.id === message.id;
-    ctx.fillStyle = accent;
+    ctx.fillStyle = color(colors.fill);
     ctx.globalAlpha = 0.3;
     ctx.fillRect(x, y, bar.width, 18);
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = chosen ? color("--text") : accent;
+    ctx.strokeStyle = color(colors.border);
     ctx.lineWidth = chosen ? 2 : 1;
     ctx.strokeRect(x + 0.5, y + 0.5, Math.max(0, bar.width - 1), 17);
     ctx.save();
@@ -268,7 +277,7 @@ function hoverCanvas(event: MouseEvent) {
   }
   const hit = hitMessage(event);
   hoverTitle.value = hit
-    ? `${hit.side === "request" ? "C→S" : "S→C"} #${hit.message.id} ${hit.message.type} · ${hit.message.size} B · ${timeLabel(hit.message.started_at - origin.value)} → ${timeLabel(hit.message.completed_at - origin.value)}`
+    ? `${hit.side === "request" ? "C→S" : "S→C"} #${hit.message.id} ${hit.message.type} · ${hit.message.size} B · ${hit.message.producer ? "拦截器发送" : "原始消息"} · ${messageStatusLabel(hit.message)} · ${timeLabel(hit.message.started_at - origin.value)} → ${timeLabel(hit.message.completed_at - origin.value)}`
     : "";
 }
 async function wheelCanvas(event: WheelEvent) {
@@ -419,9 +428,9 @@ async function select(side: BodySide, message: WebSocketMessage) {
     if (token === selectionGeneration) bodyLoading.value = false;
   }
 }
-function navigateMessage(message: WebSocketMessage | undefined) {
-  if (!selected.value || !message) return;
-  void select(selected.value.side, message);
+function navigateMessage(message: WebSocketMessage | undefined, side = selected.value?.side) {
+  if (!side || !message) return;
+  void select(side, message);
   if (viewport.value) {
     const bar = messageBar(message, origin.value, scale.value);
     if (
@@ -431,6 +440,34 @@ function navigateMessage(message: WebSocketMessage | undefined) {
       viewport.value.scrollLeft = Math.max(0, bar.left - viewportWidth.value / 2);
       onScroll();
     }
+  }
+}
+function referenceLabel(reference: WebSocketMessageRef) {
+  return `${reference.side === "request" ? "C→S" : "S→C"} #${reference.id}`;
+}
+function navigateRelated(reference: WebSocketMessageRef) {
+  const related = findRelatedMessage(messages.value, reference);
+  if (!related) return;
+  navigateMessage(related.message, related.side);
+}
+async function openSource(interceptor: WebSocketInterceptor) {
+  if (!info.value || !backend.getInterceptorContent) return;
+  const { session_id } = props.detail;
+  const id = info.value.handshake_log_id;
+  try {
+    const { content } = await backend.getInterceptorContent(
+      session_id,
+      id,
+      interceptor.execution_id,
+    );
+    openReadonlyViewer(
+      `script-snapshot-${session_id}-${id}-${interceptor.execution_id}`,
+      `${interceptor.name} — WS 来源脚本`,
+      content,
+      "lua",
+    );
+  } catch (error) {
+    reportError(error, "加载 WS 来源脚本失败");
   }
 }
 async function copy() {
@@ -517,6 +554,21 @@ onBeforeUnmount(() => {
         >
       </div>
       <span v-if="refreshing">加载中…</span>
+    </div>
+    <div v-if="info?.interceptors?.length && backend.getInterceptorContent" class="ws-toolbar">
+      <span>连接脚本快照</span>
+      <button
+        v-for="interceptor in info.interceptors"
+        :key="interceptor.execution_id"
+        class="btn source-link"
+        @click="openSource(interceptor)"
+      >
+        {{ interceptor.name }} #{{ interceptor.execution_id }}
+      </button>
+    </div>
+    <div class="ws-toolbar ws-legend" aria-label="消息颜色图例">
+      <span class="original">原始消息</span><span class="generated">拦截器发送</span>
+      <span class="dropped">灰底：已丢弃</span><span class="failed">红底：未发送／失败</span>
     </div>
     <div v-if="listError" class="ws-error">{{ listError }}</div>
     <div class="waterfall">
@@ -618,6 +670,67 @@ onBeforeUnmount(() => {
           <Io5DownloadOutline :size="13" />
         </button>
       </div>
+      <div class="ws-toolbar ws-provenance">
+        <strong>{{ messageStatusLabel(selected.message) }}</strong>
+        <span>{{ selected.message.producer ? "拦截器发送" : "原始消息" }}</span>
+        <span v-if="selected.message.sequence != null"
+          >处理序号 {{ selected.message.sequence }}</span
+        >
+        <template v-for="relation in ['root', 'parent'] as const" :key="relation">
+          <template v-if="selected.message[relation]">
+            <span>{{ relation === "root" ? "源头" : "直接触发" }}</span>
+            <button
+              v-if="backend.getWebSocketMessages"
+              class="btn source-link"
+              :disabled="!findRelatedMessage(messages, selected.message[relation]!)"
+              @click="navigateRelated(selected.message[relation]!)"
+            >
+              {{ referenceLabel(selected.message[relation]!) }}
+            </button>
+          </template>
+        </template>
+        <template v-if="selected.message.producer">
+          <span>发送者</span>
+          <button
+            v-if="backend.getInterceptorContent"
+            class="btn source-link"
+            @click="openSource(selected.message.producer)"
+          >
+            {{ selected.message.producer.name }} #{{ selected.message.producer.execution_id }}
+          </button>
+          <span
+            >调用 #{{ selected.message.producer.invocation_id }} · 第
+            {{ selected.message.producer.send_index }} 次发送</span
+          >
+        </template>
+        <template v-if="selected.message.dropped_by">
+          <span>丢弃者</span>
+          <button
+            v-if="backend.getInterceptorContent"
+            class="btn source-link"
+            @click="openSource(selected.message.dropped_by)"
+          >
+            {{ selected.message.dropped_by.name }} #{{ selected.message.dropped_by.execution_id }}
+          </button>
+          <span>调用 #{{ selected.message.dropped_by.invocation_id }}</span>
+        </template>
+      </div>
+      <div v-if="selected.message.error" class="ws-error">{{ selected.message.error }}</div>
+      <div
+        v-for="failure in selected.message.errors"
+        :key="failure.invocation_id"
+        class="ws-toolbar ws-error"
+      >
+        <span>回调失败</span>
+        <button
+          v-if="backend.getInterceptorContent"
+          class="btn source-link"
+          @click="openSource(failure)"
+        >
+          {{ failure.name }} #{{ failure.execution_id }}
+        </button>
+        <span>调用 #{{ failure.invocation_id }}：{{ failure.error }}</span>
+      </div>
       <div v-if="bodyLoading" class="empty-hint">加载消息正文…</div>
       <div v-else-if="bodyError" class="ws-error">{{ bodyError }}</div>
       <div v-else-if="!selected.message.content_available" class="empty-hint">
@@ -656,6 +769,29 @@ onBeforeUnmount(() => {
   gap: 6px;
   padding: 3px 8px;
   border-bottom: 1px solid var(--border);
+}
+.source-link {
+  padding: 1px 5px;
+  font-size: inherit;
+  color: var(--accent);
+}
+.ws-legend {
+  gap: 12px;
+}
+.ws-legend .original {
+  color: var(--success);
+}
+.ws-legend .generated {
+  color: var(--accent);
+}
+.ws-legend .dropped {
+  color: var(--text-faint);
+}
+.ws-legend .failed {
+  color: var(--danger);
+}
+.ws-provenance {
+  overflow-wrap: anywhere;
 }
 .ws-connection-toolbar {
   flex-wrap: nowrap;

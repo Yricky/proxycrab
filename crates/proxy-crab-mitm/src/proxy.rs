@@ -38,8 +38,7 @@ use crate::{
     error::Error,
     lua::{
         BodyReplacement, BreakpointHook, ModificationJournal, ResponseScriptContext,
-        SharedInterceptorState, evaluate_routing, execute_request_with_state,
-        execute_response_with_state,
+        SharedInterceptorState, evaluate_routing, execute_response_with_state,
     },
     model::{
         BodySourceType, CaptureError, ErrorStage, HeaderValues, InterceptorExecutionOrigin,

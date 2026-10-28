@@ -1297,11 +1297,23 @@ impl ProxyCrabManager for MitmManager {
         }
         let sid = self.session_id(session_id)?;
         let runtime = self.runtime.clone();
+        let redact = self.read_policy.is_some();
         self.run_blocking("websocket message index", move || {
-            runtime
+            let mut page = runtime
                 .websocket_messages(sid, id, side, after_id, limit)
                 .map_err(map_error)?
-                .ok_or_else(|| ManagerError::not_found("WebSocket connection not found"))
+                .ok_or_else(|| ManagerError::not_found("WebSocket connection not found"))?;
+            if redact {
+                for message in &mut page.messages {
+                    if message.error.is_some() {
+                        message.error = Some("WebSocket delivery failed".into());
+                    }
+                    for error in &mut message.errors {
+                        error.error = "WebSocket callback failed".into();
+                    }
+                }
+            }
+            Ok(page)
         })
         .await
     }
@@ -2306,7 +2318,7 @@ mod tests {
             (1u32, b"secret".as_slice(), true),
             (2, b"".as_slice(), false),
         ] {
-            let metadata = serde_json::json!({"id":message_id,"type":"text","started_at":1,"completed_at":2,"size":if available {6} else {16777217},"content_available":available,"omitted_reason":if available {None} else {Some("size_limit_exceeded")}});
+            let metadata = serde_json::json!({"id":message_id,"type":"text","started_at":1,"completed_at":2,"size":if available {6} else {16777217},"content_available":available,"omitted_reason":if available {None} else {Some("size_limit_exceeded")},"error":"private delivery","errors":[{"execution_id":1,"name":"test","invocation_id":1,"error":"private callback payload"}]});
             let meta = serde_json::to_vec(&metadata).unwrap();
             bytes.extend(message_id.to_le_bytes());
             bytes.extend(((4 + meta.len() + payload.len()) as u32).to_le_bytes());
@@ -2399,6 +2411,18 @@ mod tests {
                     "/api/logs/{id}/websocket/messages/{message_id}/body",
                 )
                 .unwrap();
+            let safe_page = reader
+                .websocket_messages(Some(session.id), id, BodySide::Request, 0, 1)
+                .await
+                .unwrap();
+            assert_eq!(
+                safe_page.messages[0].error.as_deref(),
+                Some("WebSocket delivery failed")
+            );
+            assert_eq!(
+                safe_page.messages[0].errors[0].error,
+                "WebSocket callback failed"
+            );
             let result = reader
                 .websocket_message_body(Some(session.id), id, BodySide::Request, 1, 16_777_216)
                 .await;

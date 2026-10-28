@@ -1027,15 +1027,27 @@ HTTP/1.1 WebSocket 13 upgrades create a separate linked `ws://`/`wss://` capture
 `request.version = "WebSocket/13"`. The handshake remains an HTTP log. `GET /api/logs/{id}`
 includes optional `websocket` metadata on both records: `handshake_log_id`,
 `websocket_log_id`, `subprotocol`, `extensions`, `opened_at`, `closed_at`, `close_code`,
-`close_reason`. Use runtime active-netlog membership for live state, not missing close time.
-Close reason is omitted under a read policy because it is peer-controlled text.
+`close_reason`, and optional `interceptors: [{execution_id, name}]` in callback order.
+These source execution IDs refer to the handshake log’s existing interceptor content endpoint;
+source code is stored once per execution, not repeated per message. Use runtime active-netlog membership for live state, not missing close time.
+Close reason is omitted under a read policy because it is peer-controlled text. Delivery and callback
+error text is replaced with generic errors under read policies to avoid exposing payloads through errors.
 
 - `GET /api/logs/{id}/websocket/messages?session_id=S&side=request|response&after_id=0&limit=500`
   returns `{messages, next_after_id, has_more}` inside the standard API envelope.
-  Limit is 1–2000. IDs start at 1 independently per direction. `next_after_id` is the last
+  Limit is 1–2000. Passive-capture IDs start at 1 independently per direction. Intercepted connections use a global processing sequence as the ID, so each direction may have gaps. `next_after_id` is the last
   returned ID or the input cursor, including when `has_more=false`; poll with that cursor.
   Entries contain `id`, `type` (`text`/`binary`), `started_at`, `completed_at` (Unix ms),
-  `size` (original decoded byte count), `content_available`, `omitted_reason`.
+  `size` (decoded byte count), `content_available`, `omitted_reason`.
+  Intercepted messages additionally expose optional `sequence` (connection-wide finalized order),
+  `status` (`sent`, `dropped`, `unsent`, `failed`), `root` and `parent` references (`{side,id}`),
+  `producer` (`{execution_id,name,invocation_id,send_index}`), `dropped_by`
+  (`{execution_id,name,invocation_id}`), `error` (delivery failure), and `errors` (callback failures,
+  each `{execution_id,name,invocation_id,error}`). `root` is the originating network message;
+  `parent` is the directly triggering message, which can itself be generated. Message IDs remain
+  per direction; never resolve a reference using ID alone. Legacy passive records have no delivery
+  status and do not prove successful delivery. Dropped and failed messages retain readable payloads
+  subject to the normal content limits and read policies.
 - `GET /api/logs/{id}/websocket/messages/{message_id}/body?session_id=S&side=request|response&max_size=16777216`
   returns policy-filtered bytes (`text/plain; charset=utf-8` or `application/octet-stream`),
   with `Cache-Control: no-store`. Limits apply before and after redaction. Empty messages are valid.
@@ -1050,10 +1062,16 @@ WebSocket connection rows are excluded from HAR. Handshake HAR entries remain el
 No historical message backfill or connection-wide export is provided.
 
 Messages are unmasked, reassembled and permessage-deflate decoded before storage. Complete messages
-up to 16 MiB are buffered then appended. Larger messages retain metadata with
-`omitted_reason=size_limit_exceeded`; traffic and later message capture continue. Ping/Pong
-are not records; Close updates connection metadata. Capture/decode/storage failures stop affected
-capture processing without intentionally interrupting forwarding. HTTP/2/3 extended CONNECT is out of scope.
+up to 16 MiB are buffered then appended. In passive capture, larger messages retain metadata with
+`omitted_reason=size_limit_exceeded`; traffic and later message capture continue. Active interception
+rejects oversized or invalid messages and closes the connection, since incomplete payloads cannot
+be safely processed by callbacks. Ping/Pong
+are not records; Close updates connection metadata. Connections without WS callbacks retain passive forwarding. Connections with callbacks use
+message-level interception before forwarding; they support permessage-deflate input, including
+context takeover even when a message is dropped. Outgoing frames are uncompressed with RSV1 clear,
+which is valid under permessage-deflate negotiation and avoids corrupting peer compression state. Dropped messages never reach the destination;
+unsent/failed messages are recorded with reasons. Callback errors cancel only that invocation's
+pending sends/drop and pass the original message to the next callback. HTTP/2/3 extended CONNECT is out of scope.
 
 Internal format v1: eight-byte magic `PCWS\x01\0\0\0`, followed by little-endian u32 message ID,
 u32 record length, u32 metadata length, UTF-8 JSON metadata, and payload bytes.
@@ -1064,7 +1082,13 @@ The dedicated WebSocket UI uses a compact 84px Canvas waterfall (85px including 
 viewport-sized high-DPI rendering, Command/Ctrl + wheel pointer-anchored horizontal zoom,
 scroll, and message selection. The time row uses adaptive, evenly spaced 1/2/5 time ticks with short vertical marks on its bottom divider;
 compact icon toolbars replace text buttons, without a zoom slider, scale ruler, or reserved scrollbar space. Handshake/connection
-IDs remain available in the API; the detail pages do not show cross-navigation buttons.
+IDs remain available in the API. WS details show source and direct-trigger links (including across
+lanes), generating/dropping callback invocation IDs, send ordinal, delivery failures and callback
+errors. Connection source buttons and callback links open the historical handshake script snapshot
+through the existing content API; these controls require the corresponding backend capability.
+Canvas fill/border is green for original messages and blue for generated messages. Dropped messages
+have gray fill and unsent/failed messages red fill; borders always retain origin color, including
+when selected. Selection increases border thickness.
 
 Connection metadata and icon actions share one toolbar. Per-direction message counts appear
 as a second, smaller line in the left C→S/S→C legends; direction labels align with Canvas bars.
