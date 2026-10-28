@@ -54,7 +54,8 @@ test.each<PermissionGroupDimension>(["function", "impact"])(
       expect(row, action.id).toBeDefined();
       if (redactedActions.includes(action.id)) {
         expect(row, action.id).toContain('class="redaction-indicator"');
-        expect(row, action.id).toContain('title="支持脱敏：绑定脚本后生效"');
+        expect(row, action.id).toContain('aria-label="支持脱敏：绑定脱敏脚本后生效"');
+        expect(row, action.id).not.toContain('title="支持脱敏');
         expect(row!.indexOf('class="redaction-indicator"')).toBeLessThan(
           row!.indexOf('class="mode-group"'),
         );

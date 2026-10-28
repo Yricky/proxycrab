@@ -1219,6 +1219,7 @@ pub fn run() {
             reset_clash_config,
             regenerate_certificate,
             save_file,
+            body_download::fetch_body,
             body_download::download_body,
             get_system_logs,
             clear_system_logs,

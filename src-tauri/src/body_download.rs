@@ -1,11 +1,14 @@
 use std::path::Path;
 
-use proxy_crab_mgr::{dto::ManagerError, http::body_reader};
+use proxy_crab_mgr::{
+    dto::{ErrorCode, ManagerError},
+    http::body_reader,
+};
 use proxy_crab_mitm::storage::{BodySide, BodySource};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::BackendState;
 
@@ -30,15 +33,53 @@ pub(crate) enum BodyTarget {
     },
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LoadedBody {
+    bytes: Vec<u8>,
+    content_type: String,
+}
+
 #[tauri::command]
-pub(crate) async fn download_body(
-    window: tauri::WebviewWindow,
+pub(crate) async fn fetch_body(
     state: State<'_, BackendState>,
     target: BodyTarget,
     side: String,
-    filename: String,
-) -> Result<bool, ManagerError> {
-    let side = match side.as_str() {
+    max_size: Option<u64>,
+) -> Result<LoadedBody, ManagerError> {
+    let max_size = max_size.unwrap_or(16 * 1024 * 1024);
+    if max_size == 0 || max_size > 1024 * 1024 * 1024 {
+        return Err(ManagerError::bad_request("无效的 Body 大小限制"));
+    }
+    let source = body_source(&state, target, &side).await?;
+    load_body(&source, max_size).await
+}
+
+async fn load_body(source: &BodySource, max_size: u64) -> Result<LoadedBody, ManagerError> {
+    if source.stored_size > max_size {
+        return Err(ManagerError::body_too_large(source.stored_size, max_size));
+    }
+    let mut reader = body_reader(source, true).await?;
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|error| ManagerError::new(ErrorCode::BodyReadFailed, error.to_string()))?;
+    Ok(LoadedBody {
+        bytes,
+        content_type: source
+            .content_type
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".into()),
+    })
+}
+
+async fn body_source(
+    state: &BackendState,
+    target: BodyTarget,
+    side: &str,
+) -> Result<BodySource, ManagerError> {
+    let side = match side {
         "request" => BodySide::Request,
         "response" => BodySide::Response,
         _ => {
@@ -48,7 +89,7 @@ pub(crate) async fn download_body(
         }
     };
     let manager = state.manager();
-    let source = match target {
+    Ok(match target {
         BodyTarget::Log { id, session_id } => {
             manager.log_body_source(Some(session_id), id, side).await?
         }
@@ -62,7 +103,18 @@ pub(crate) async fn download_body(
                 .await?
         }
         BodyTarget::Breakpoint { id } => manager.breakpoint_body_source(id, side).await?,
-    };
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn download_body(
+    window: tauri::WebviewWindow,
+    state: State<'_, BackendState>,
+    target: BodyTarget,
+    side: String,
+    filename: String,
+) -> Result<bool, ManagerError> {
+    let source = body_source(&state, target, &side).await?;
     let selected = tauri::async_runtime::spawn_blocking(move || {
         window
             .dialog()
@@ -120,16 +172,20 @@ mod tests {
             content_type: None,
             content_encodings: vec![],
         };
+        let loaded = load_body(&source, 5).await.unwrap();
+        assert_eq!(loaded.bytes, [0, 255, 13, 10, 42]);
+        assert_eq!(loaded.content_type, "application/octet-stream");
         save_body(&source, &path).await.unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), [0, 255, 13, 10, 42]);
         source.content_encodings.push("gzip".into());
+        assert!(load_body(&source, 5).await.is_err());
         assert!(save_body(&source, &path).await.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), [0, 255, 13, 10, 42]);
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
     #[tokio::test]
-    async fn save_decodes_gzip_without_formatting_text() {
+    async fn preview_and_save_decode_gzip_and_preview_checks_stored_size() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("body.json");
         let source = BodySource {
@@ -142,6 +198,13 @@ mod tests {
             content_type: Some("application/json".into()),
             content_encodings: vec!["gzip".into()],
         };
+        let loaded = load_body(&source, 32).await.unwrap();
+        assert_eq!(loaded.bytes, b" { \"a\": 1 }\n");
+        assert_eq!(loaded.content_type, "application/json");
+        let error = load_body(&source, 31).await.err().unwrap();
+        assert_eq!(error.code, ErrorCode::BodyTooLarge);
+        assert_eq!(error.actual_size, Some(32));
+        assert_eq!(error.max_size, Some(31));
         save_body(&source, &path).await.unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b" { \"a\": 1 }\n");
     }

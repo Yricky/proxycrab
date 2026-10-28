@@ -3,6 +3,7 @@ import { computed, type Component } from "vue";
 import { Io5Ban, Io5Checkmark, Io5HandLeft } from "vue-icons-plus/io5";
 import { LiaStarOfLifeSolid } from "vue-icons-plus/lia";
 import type { ApiActionView, PermissionMode } from "../api/types";
+import AppTooltip from "./AppTooltip.vue";
 import {
   ACTION_META,
   FUNCTION_GROUPS,
@@ -129,14 +130,15 @@ function updateGroup(actions: ApiActionView[], mode: PermissionMode): void {
           <code>{{ action.route_template }}</code>
         </div>
         <div class="permission-controls">
-          <span
+          <AppTooltip
             v-if="ACTION_META[action.id]?.redaction"
-            class="redaction-indicator"
-            title="支持脱敏：绑定脚本后生效"
-            aria-label="支持脱敏：绑定脚本后生效"
+            title="支持脱敏"
+            detail="绑定脱敏脚本后生效"
           >
-            <LiaStarOfLifeSolid :size="15" />
-          </span>
+            <span class="redaction-indicator" aria-label="支持脱敏：绑定脱敏脚本后生效">
+              <LiaStarOfLifeSolid :size="15" />
+            </span>
+          </AppTooltip>
           <div class="mode-group" role="group" :aria-label="`${actionLabel(action)}权限`">
             <button
               v-for="mode in modes"

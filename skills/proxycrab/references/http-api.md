@@ -1289,8 +1289,8 @@ change its policy. Share-state responses include nullable `redaction_script`.
 Owner-only CLI `PUT /ui-api/permissions/identities/{id}/redaction` accepts the same binding object;
 the desktop command is `set_http_identity_redaction`. Identity permission reads include the binding,
 and permission-table updates preserve it. Without a startup redaction script, the CLI UI access
-token and ordinary Tauri IPC reads are unbound; desktop Body previews currently use local management HTTP and therefore use the local
-identity's binding. Native download commands use their existing trusted IPC path.
+token and ordinary Tauri IPC reads are unbound. Desktop Body previews (`fetch_body`) and native
+downloads (`download_body`) use trusted Tauri IPC and do not use the local HTTP identity binding.
 
 Redaction applies to log details, body reads, snapshot details/bodies, URL/custom-column view cells,
 URI/custom filters, filter debugging, breakpoint details/bodies/summary URLs, bypass URLs and HAR.

@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Backend } from "./backend";
 import { BackendError } from "./backend-error";
-import { fetchBodyFromHttp } from "./body";
+import { BodyFetchError, DEFAULT_BODY_MAX_SIZE, UI_BODY_MAX_SIZE } from "./body";
 import type {
   ActiveSession,
   ApiActionView,
@@ -90,8 +90,24 @@ export function createTauriBackend(): Backend {
       replaceConfig: (config: AppConfig) => call("replace_config", { config }),
       regenerateCertificate: () => call("regenerate_certificate"),
     },
-    fetchBody: async (target, side, maxSize) =>
-      fetchBodyFromHttp(await call("get_config"), target, side, maxSize),
+    fetchBody: async (target, side, maxSize = DEFAULT_BODY_MAX_SIZE) => {
+      if (!Number.isSafeInteger(maxSize) || maxSize <= 0 || maxSize > UI_BODY_MAX_SIZE) {
+        throw new BodyFetchError({ code: "bad_request", message: "无效的 Body 大小限制" });
+      }
+      try {
+        const result = await invoke<{ bytes: number[]; contentType: string }>("fetch_body", {
+          target,
+          side,
+          maxSize,
+        });
+        const bytes = new Uint8Array(result.bytes);
+        return { bytes, decodedSize: bytes.byteLength, contentType: result.contentType };
+      } catch (error) {
+        throw new BodyFetchError(
+          isManagerError(error) ? error : { code: "invoke_error", message: String(error) },
+        );
+      }
+    },
     subscribeChanges: async (handler) => {
       const unlisten = await listen("proxycrab://http-api-change", (event) =>
         handler(event.payload as import("./types").HttpApiChange),

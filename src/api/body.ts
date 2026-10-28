@@ -1,4 +1,4 @@
-import type { AppConfig, ManagerError } from "./types";
+import type { ManagerError } from "./types";
 import { saveBlobInWebview } from "./save-file";
 
 export const DEFAULT_BODY_MAX_SIZE = 16 * 1024 * 1024;
@@ -29,20 +29,6 @@ export class BodyFetchError extends Error {
     this.actualSize = error.actual_size;
     this.maxSize = error.max_size;
   }
-}
-
-function apiBase(config: AppConfig): string {
-  return `http://127.0.0.1:${config.api_port}`;
-}
-
-export async function fetchBodyFromHttp(
-  config: AppConfig,
-  target: BodyTarget,
-  side: BodySide,
-  maxSize = DEFAULT_BODY_MAX_SIZE,
-  authorization?: string,
-): Promise<LoadedBody> {
-  return fetchBodyFromBase(apiBase(config), target, side, maxSize, authorization);
 }
 
 export async function fetchBodyFromBase(

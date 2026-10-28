@@ -628,6 +628,11 @@ Names prefer the captured `Content-Disposition` filename (`filename*` UTF-8 befo
 sanitized to a local basename, then fall back to log/breakpoint ID, optional execution ID, side,
 and a MIME-derived extension (`.bin` for unknown types).
 
+Desktop previews use the trusted Tauri `fetch_body` command with `{target, side, maxSize}`,
+without fetching configuration or calling local HTTP. The command returns decoded bytes and content
+type, defaults to a 16 MiB stored-size limit, and accepts limits up to 1 GiB. Structured size errors
+retain `actual_size` and `max_size`. Browser previews continue to use HTTP.
+
 Desktop uses the trusted Tauri `download_body` command with `{target, side, filename}`. Targets
 are `{kind:"log", id, sessionId}`, `{kind:"interceptor", id, sessionId, executionId}`, or
 `{kind:"breakpoint", id}`. It opens the native save dialog (cancel returns `false`), streams HTTP
@@ -988,8 +993,8 @@ change its policy. Share-state responses include nullable `redaction_script`.
 Owner-only CLI `PUT /ui-api/permissions/identities/{id}/redaction` accepts the same binding object;
 the desktop command is `set_http_identity_redaction`. Identity permission reads include the binding,
 and permission-table updates preserve it. Without a startup redaction script, the CLI UI access
-token and ordinary Tauri IPC reads are unbound; desktop Body previews currently use local management HTTP and therefore use the local
-identity's binding. Native download commands use their existing trusted IPC path.
+token and ordinary Tauri IPC reads are unbound. Desktop Body previews (`fetch_body`) and native
+downloads (`download_body`) use trusted Tauri IPC and do not use the local HTTP identity binding.
 
 Redaction applies to log details, body reads, snapshot details/bodies, URL/custom-column view cells,
 URI/custom filters, filter debugging, breakpoint details/bodies/summary URLs, bypass URLs and HAR.
