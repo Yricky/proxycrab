@@ -1,16 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import {
-  Io5Add,
-  Io5ChevronDown,
-  Io5ChevronForward,
-  Io5DocumentOutline,
-  Io5FolderOutline,
-  Io5Play,
-  Io5RadioButtonOn,
-  Io5Save,
-  Io5Trash,
-} from "vue-icons-plus/io5";
+import { Io5Play, Io5RadioButtonOn, Io5Save, Io5Trash } from "vue-icons-plus/io5";
 import type { HttpApiChange, HttpApiResource } from "../api/types";
 import MonacoEditor from "./MonacoEditor.vue";
 import { appStore, reportError } from "../stores/app";
@@ -18,7 +8,9 @@ import { confirmDialog } from "../stores/dialog";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { windowsStore } from "../stores/windows";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
-import { scriptTreeRows, validateScriptPath } from "../utils/script-tree";
+import FileCreateForm from "./FileCreateForm.vue";
+import FileTree from "./FileTree.vue";
+import { validateScriptPath } from "../utils/script-tree";
 
 export interface ScriptLibraryEntry {
   name: string;
@@ -96,6 +88,15 @@ const selectedName = ref<string | null>(null);
 const activeName = ref<string | null>(null);
 const content = ref("");
 const newName = ref("");
+const filter = ref("");
+const creatingIn = ref<string | null>(null);
+const creating = ref(false);
+const createError = ref("");
+function beginCreate(directory: string): void {
+  creatingIn.value = directory;
+  newName.value = "";
+  createError.value = "";
+}
 const dirty = ref(false);
 const saving = ref(false);
 const debugLogId = ref("");
@@ -121,13 +122,18 @@ function notifyChanged(): void {
   if (config.changeEvent) window.dispatchEvent(new CustomEvent(config.changeEvent));
 }
 
-const collapsedDirectories = ref(new Set<string>());
-const treeRows = computed(() => scriptTreeRows(scripts.value, collapsedDirectories.value));
-
-function toggleDirectory(path: string): void {
-  if (collapsedDirectories.value.has(path)) collapsedDirectories.value.delete(path);
-  else collapsedDirectories.value.add(path);
-}
+const treeEntries = computed(() =>
+  scripts.value
+    .filter((script) =>
+      scriptTitle(script).toLocaleLowerCase().includes(filter.value.trim().toLocaleLowerCase()),
+    )
+    .map((script) => ({
+      path: script.name,
+      label: `${script.name.split("/").pop()}.lua`,
+      title: scriptTitle(script),
+      data: script,
+    })),
+);
 
 function deleteMessage(script: ScriptLibraryEntry): string {
   if (config.deleteMessage) return config.deleteMessage(script, dirty.value);
@@ -144,12 +150,6 @@ async function loadScript(script: ScriptLibraryEntry | null): Promise<void> {
   // 只有真的切换了脚本才清空调试结果：保存后由变更事件触发的重载是同一个脚本。
   if (name !== selectedName.value) clearDebugResult();
   selectedName.value = name;
-  if (name) {
-    const parts = name.split("/");
-    for (let i = 1; i < parts.length; i++) {
-      collapsedDirectories.value.delete(parts.slice(0, i).join("/"));
-    }
-  }
   if (!script) {
     content.value = "";
     dirty.value = false;
@@ -321,20 +321,27 @@ async function toggleActive(): Promise<void> {
 }
 
 async function createScript(): Promise<void> {
-  const name = newName.value.trim();
-  const problem = validateScriptPath(name);
+  if (creating.value || creatingIn.value === null) return;
+  const name = [creatingIn.value, newName.value.trim()].filter(Boolean).join("/");
+  const problem = !newName.value.trim() ? "文件名不能为空" : validateScriptPath(name);
   if (problem) {
-    reportError(problem);
+    createError.value = problem;
     return;
   }
-  if (!(await confirmDiscard())) return;
+  creating.value = true;
+  createError.value = "";
   try {
+    if (!(await confirmDiscard())) return;
     await config.api.create(name, config.defaultSource);
+    creatingIn.value = null;
+    filter.value = "";
     newName.value = "";
     await refreshScripts(name);
     notifyChanged();
   } catch (error) {
-    reportError(error, `创建${config.sidebarTitle}失败`);
+    createError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    creating.value = false;
   }
 }
 
@@ -401,56 +408,47 @@ onBeforeUnmount(() => {
       <div class="slm-sidebar-title">{{ config.sidebarTitle }}</div>
       <div class="slm-create">
         <input
-          v-model="newName"
+          v-model="filter"
           class="input"
-          :placeholder="`${config.createPlaceholder}，如 业务/脚本名`"
-          title="相对于当前脚本目录的路径，例如 业务/脚本名；自动添加 .lua 扩展名"
-          aria-label="新脚本相对路径"
-          @keyup.enter="createScript"
+          placeholder="过滤脚本名称或路径"
+          aria-label="过滤脚本"
+          :disabled="creatingIn !== null"
         />
-        <button class="btn icon primary" title="新建" @click="createScript">
-          <Io5Add :size="15" />
-        </button>
       </div>
-      <div class="slm-script-list">
-        <div v-if="!scripts.length" class="empty-hint slm-list-empty">
-          {{ config.emptyListHint }}
-        </div>
-        <div
-          v-for="row in treeRows"
-          :key="`${row.script ? 'file' : 'dir'}:${row.path}`"
-          class="slm-script-row"
-          :class="{ active: !!row.script && selectedName === row.path }"
-          :style="{ paddingLeft: `${8 + row.depth * 14}px` }"
-        >
-          <button
-            class="slm-tree-item"
-            :aria-expanded="row.script ? undefined : !collapsedDirectories.has(row.path)"
-            :title="row.script ? scriptTitle(row.script) : row.path"
-            @click="row.script ? selectScript(row.script) : toggleDirectory(row.path)"
+      <FileTree
+        class="slm-script-list"
+        :entries="treeEntries"
+        :selected="selectedName"
+        :empty-hint="filter ? '没有匹配的脚本' : config.emptyListHint"
+        :can-create="!!config.api.create"
+        :creating-in="creatingIn"
+        :create-disabled="creating"
+        @create="beginCreate"
+        @select="selectScript($event.data)"
+      >
+        <template #create>
+          <FileCreateForm
+            v-if="creatingIn !== null"
+            v-model="newName"
+            :key="creatingIn"
+            :directory="creatingIn"
+            :busy="creating"
+            :error="createError"
+            @submit="createScript"
+            @cancel="creatingIn = null"
+          />
+        </template>
+        <template #suffix="{ entry }">
+          <span v-if="config.selection && activeName === entry.path" class="slm-active"
+            >生效中</span
           >
-            <span class="slm-chevron">
-              <component
-                :is="collapsedDirectories.has(row.path) ? Io5ChevronForward : Io5ChevronDown"
-                v-if="!row.script"
-                :size="12"
-              />
-            </span>
-            <component :is="row.script ? Io5DocumentOutline : Io5FolderOutline" :size="14" />
-            <span class="slm-script-name">{{ row.label }}</span>
-            <span
-              v-if="row.script && config.selection && activeName === row.path"
-              class="slm-active"
-              >生效中</span
-            >
+        </template>
+        <template #actions="{ entry }">
+          <button class="btn icon danger" title="删除" @click.stop="removeScript(entry.data)">
+            <Io5Trash :size="14" />
           </button>
-          <span v-if="row.script" class="slm-row-actions">
-            <button class="btn icon danger" title="删除" @click.stop="removeScript(row.script)">
-              <Io5Trash :size="14" />
-            </button>
-          </span>
-        </div>
-      </div>
+        </template>
+      </FileTree>
     </aside>
 
     <section class="slm-editor-pane">
@@ -585,76 +583,11 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   padding: 0 0 var(--space-2);
 }
-.slm-list-empty {
-  padding: var(--space-3);
-  text-align: center;
-}
-
-.slm-script-row {
-  min-height: 26px;
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: 0 5px 0 8px;
-  cursor: pointer;
-}
-.slm-tree-item {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.slm-tree-item > svg,
-.slm-chevron {
-  flex: none;
-}
-.slm-chevron {
-  width: 12px;
-  display: flex;
-}
-.slm-script-row:focus-within {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
-}
-.slm-script-row:hover {
-  background: var(--bg-hover);
-}
-.slm-script-row.active {
-  background: var(--bg-selected);
-}
-.slm-script-name {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-}
 .slm-active {
   flex: none;
   color: var(--accent);
   font-size: 10px;
 }
-.slm-row-actions {
-  display: none;
-  flex: none;
-  align-items: center;
-  gap: 1px;
-}
-.slm-script-row:hover .slm-row-actions,
-.slm-script-row:focus-within .slm-row-actions,
-.slm-script-row.active .slm-row-actions {
-  display: flex;
-}
-
 .slm-editor-pane {
   min-width: 0;
   min-height: 0;

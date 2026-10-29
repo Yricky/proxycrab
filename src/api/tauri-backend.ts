@@ -197,6 +197,13 @@ export function createTauriBackend(): Backend {
     replay: (sessionId: number, request: ReplayRequestPayload) =>
       call<ReplayResult>("replay", { sessionId, request }),
     listAssets: () => call<AssetMetadata[]>("list_assets"),
+    uploadAsset: async (id, file) =>
+      call<AssetMetadata>("upload_asset", await file.arrayBuffer(), {
+        headers: {
+          "x-asset-id": id,
+          "x-asset-content-type": file.type || "application/octet-stream",
+        },
+      }),
     getInterceptorContent: (sessionId: number | null, id: number, executionId: number) =>
       call<InterceptorContent>("get_interceptor_content", { sessionId, id, executionId }),
     getInterceptorSnapshot: (sessionId: number | null, id: number, executionId: number) =>

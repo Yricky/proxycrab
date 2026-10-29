@@ -1,3 +1,4 @@
+import AssetManagerWindow from "./AssetManagerWindow.vue";
 import HarExportWindow from "./HarExportWindow.vue";
 import type { LogsStore } from "../stores/logs";
 import { scriptTitle } from "../utils/script-label";
@@ -343,5 +344,15 @@ export function openHarExport(logs: LogsStore): void {
     props: { logs },
     width: 720,
     height: 460,
+  });
+}
+
+export function openAssetManager(): void {
+  if (!getBackend().listAssets) return;
+  windowsStore.open("asset-manager", {
+    title: "工作区资源",
+    component: AssetManagerWindow,
+    width: 760,
+    height: 520,
   });
 }

@@ -79,7 +79,8 @@ async function request<T>(
 ): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Authorization", authorization(token));
-  if (init.body !== undefined) headers.set("Content-Type", "application/json");
+  if (init.body !== undefined && !headers.has("Content-Type"))
+    headers.set("Content-Type", "application/json");
   let response: Response;
   try {
     response = await fetch(new URL(path, baseUrl), { ...init, headers });
@@ -228,6 +229,12 @@ export function createHttpBackend(
     replay: (sessionId: number, request: ReplayRequestPayload) =>
       call<ReplayResult>(`/api/replay?session=${sessionId}`, json("POST", request)),
     listAssets: () => call<AssetMetadata[]>("/api/assets"),
+    uploadAsset: (id, file) =>
+      call<AssetMetadata>(`/api/assets/${id.split("/").map(encodeURIComponent).join("/")}`, {
+        method: "POST",
+        body: file,
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+      }),
     getInterceptorContent: async (sessionId, id, executionId) => {
       const url = new URL(
         query(`/api/logs/${id}/interceptors/${executionId}/content`, {

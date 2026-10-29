@@ -1,83 +1,63 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import {
-  Io5ChevronDown,
-  Io5ChevronForward,
-  Io5DocumentOutline,
-  Io5FolderOutline,
-} from "vue-icons-plus/io5";
 import type { AssetMetadata } from "../api/types";
+import { useBackend } from "../api";
+import { selectFile } from "../api/select-file";
+import { validateAssetPath } from "../utils/asset-path";
+import { reportError } from "../stores/app";
+import FileCreateForm from "./FileCreateForm.vue";
+import FileTree from "./FileTree.vue";
 
 const props = defineProps<{ assets: AssetMetadata[] }>();
 const selected = defineModel<string | null>("selected", { required: true });
-
-interface AssetNode {
-  name: string;
-  path: string;
-  depth: number;
-  children: AssetNode[];
-  asset: AssetMetadata | null;
-}
-
-function buildTree(assets: AssetMetadata[]): AssetNode[] {
-  const root: AssetNode = {
-    name: "",
-    path: "",
-    depth: -1,
-    children: [],
-    asset: null,
-  };
-  for (const asset of assets) {
-    const parts = asset.id.split("/");
-    let node = root;
-    parts.forEach((part, index) => {
-      const path = parts.slice(0, index + 1).join("/");
-      let child = node.children.find((item) => item.name === part);
-      if (!child) {
-        child = { name: part, path, depth: index, children: [], asset: null };
-        node.children.push(child);
-      }
-      if (index === parts.length - 1) child.asset = asset;
-      node = child;
-    });
+const emit = defineEmits<{ uploaded: [asset: AssetMetadata] }>();
+const backend = useBackend();
+const creatingIn = ref<string | null>(null);
+const file = ref<File | null>(null);
+const filename = ref("");
+const busy = ref(false);
+const error = ref("");
+async function beginUpload(directory: string): Promise<void> {
+  if (!backend.uploadAsset || busy.value) return;
+  busy.value = true;
+  try {
+    const picked = await selectFile();
+    if (!picked) return;
+    file.value = picked;
+    filename.value = picked.name;
+    error.value = "";
+    creatingIn.value = directory;
+  } catch (cause) {
+    reportError(cause, "选择文件失败");
+  } finally {
+    busy.value = false;
   }
-  const sort = (nodes: AssetNode[]) => {
-    nodes.sort((a, b) =>
-      a.asset === null && b.asset !== null
-        ? -1
-        : a.asset !== null && b.asset === null
-          ? 1
-          : a.name.localeCompare(b.name),
-    );
-    nodes.forEach((node) => sort(node.children));
-  };
-  sort(root.children);
-  return root.children;
 }
-
-const tree = computed(() => buildTree(props.assets));
-const collapsed = ref(new Set<string>());
-
-const visibleNodes = computed(() => {
-  const result: AssetNode[] = [];
-  const walk = (nodes: AssetNode[]) => {
-    for (const node of nodes) {
-      result.push(node);
-      if (node.asset === null && !collapsed.value.has(node.path)) {
-        walk(node.children);
-      }
-    }
-  };
-  walk(tree.value);
-  return result;
-});
-
-function toggle(path: string): void {
-  const next = new Set(collapsed.value);
-  if (next.has(path)) next.delete(path);
-  else next.add(path);
-  collapsed.value = next;
+async function upload(): Promise<void> {
+  if (!file.value || creatingIn.value === null || !backend.uploadAsset || busy.value) return;
+  const id = [creatingIn.value, filename.value].filter(Boolean).join("/");
+  error.value = !filename.value ? "文件名不能为空" : (validateAssetPath(id) ?? "");
+  if (error.value) return;
+  busy.value = true;
+  try {
+    const asset = await backend.uploadAsset(id, file.value);
+    emit("uploaded", asset);
+    selected.value = asset.id;
+    creatingIn.value = null;
+    file.value = null;
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    busy.value = false;
+  }
 }
+const entries = computed(() =>
+  props.assets.map((asset) => ({
+    path: asset.id,
+    title: `${asset.id} · ${asset.content_type} · ${formatSize(asset.size)}`,
+    data: asset,
+  })),
+);
 
 function formatSize(size: number): string {
   if (size < 1024) return `${size} B`;
@@ -87,70 +67,41 @@ function formatSize(size: number): string {
 </script>
 
 <template>
-  <div class="asset-tree">
-    <div v-if="visibleNodes.length === 0" class="empty-hint text-faint">工作区暂无资源</div>
-    <button
-      v-for="node in visibleNodes"
-      :key="node.path"
-      class="asset-row mono"
-      :class="{ active: node.asset !== null && selected === node.asset.id }"
-      :style="{ paddingLeft: `${8 + node.depth * 14}px` }"
-      :title="
-        node.asset ? `${node.asset.content_type} · ${formatSize(node.asset.size)}` : node.path
-      "
-      @click="node.asset === null ? toggle(node.path) : (selected = node.asset.id)"
-    >
-      <template v-if="node.asset === null">
-        <Io5ChevronDown v-if="!collapsed.has(node.path)" :size="12" />
-        <Io5ChevronForward v-else :size="12" />
-        <Io5FolderOutline :size="13" />
-      </template>
-      <Io5DocumentOutline v-else :size="13" />
-      <span class="asset-name">{{ node.name }}</span>
-      <span v-if="node.asset" class="asset-size text-faint">{{ formatSize(node.asset.size) }}</span>
-    </button>
-  </div>
+  <FileTree
+    class="mono"
+    :entries="entries"
+    :selected="selected"
+    empty-hint="工作区暂无资源"
+    :can-create="!!backend.uploadAsset"
+    :creating-in="creatingIn"
+    :create-disabled="busy"
+    @create="beginUpload"
+    @select="selected = $event.path"
+  >
+    <template #create>
+      <FileCreateForm
+        v-if="creatingIn !== null"
+        v-model="filename"
+        :key="creatingIn"
+        :directory="creatingIn"
+        :busy="busy"
+        :error="error"
+        confirm-text="上传"
+        @submit="upload"
+        @cancel="
+          creatingIn = null;
+          file = null;
+        "
+      />
+    </template>
+    <template #suffix="{ entry }">
+      <span class="asset-size text-faint">{{ formatSize(entry.data.size) }}</span>
+    </template>
+  </FileTree>
 </template>
 
 <style scoped>
-.asset-tree {
-  overflow: auto;
-  font-size: 12px;
-}
-
-.asset-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  width: 100%;
-  height: 22px;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-  text-align: left;
-}
-
-.asset-row:hover {
-  background: var(--bg-hover);
-}
-
-.asset-row.active {
-  background: var(--bg-selected);
-}
-
-.asset-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .asset-size {
-  margin-left: auto;
-  padding-right: 6px;
-}
-
-.empty-hint {
-  padding: 8px;
+  flex: none;
 }
 </style>

@@ -170,6 +170,7 @@ export interface Backend {
   getLog(sessionId: number | null, id: number): Promise<LogDetail>;
   replay?(sessionId: number, request: ReplayRequestPayload): Promise<ReplayResult>;
   listAssets(): Promise<AssetMetadata[]>;
+  uploadAsset?(id: string, file: Blob): Promise<AssetMetadata>;
   getInterceptorContent(
     sessionId: number | null,
     id: number,

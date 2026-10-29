@@ -84,3 +84,24 @@ test("Session sharing summaries use one batch read", async () => {
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(new URL(fetchMock.mock.calls[0][0]).pathname).toBe("/api/session-shares");
 });
+
+test("asset upload preserves binary data and explicit content type", async () => {
+  const metadata = { id: "images/icon.png", size: 3 };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(new Response(JSON.stringify({ ok: true, data: metadata }), { status: 201 }));
+  vi.stubGlobal("fetch", fetchMock);
+  const backend = createHttpBackend("http://localhost:18089", "test-key", {
+    target: "cli",
+    workspace: { current_path: "/workspace", configured_path: "/workspace" },
+    http_service: { running: true, host: "0.0.0.0", port: 18089, error: null },
+  });
+  const file = new Blob([new Uint8Array([0, 255, 1])], { type: "image/png" });
+  expect(await backend.uploadAsset!(metadata.id, file)).toEqual(metadata);
+  const [url, options] = fetchMock.mock.calls[0];
+  expect(String(url)).toBe("http://localhost:18089/api/assets/images/icon.png");
+  expect(options.method).toBe("POST");
+  expect(options.body).toBe(file);
+  expect(options.headers.get("Content-Type")).toBe("image/png");
+  expect(options.headers.get("Authorization")).toBe("Bearer test-key");
+});

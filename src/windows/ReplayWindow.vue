@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { reportError } from "../stores/app";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Io5ChevronDown, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
@@ -134,6 +135,14 @@ async function ensureAssets(): Promise<void> {
     assets.value = await backend.listAssets();
   } catch (error) {
     assetsError.value = error instanceof Error ? error.message : String(error);
+  }
+}
+async function onAssetUploaded(asset: AssetMetadata): Promise<void> {
+  assets.value = [...assets.value.filter((item) => item.id !== asset.id), asset];
+  try {
+    assets.value = await backend.listAssets();
+  } catch (error) {
+    reportError(error, "资源已上传，刷新列表失败");
   }
 }
 function selectBodyMode(mode: BodyMode): void {
@@ -568,6 +577,7 @@ const bodyExtra = computed(() => {
               v-else
               v-model:selected="assetId"
               :assets="assets"
+              @uploaded="onAssetUploaded"
               class="body-assets"
             />
           </template>

@@ -37,7 +37,7 @@ Script operations do not follow symlinks within the library. Encode the **whole*
 URL parameter: `/api/filter-scripts/business%2Ferrors` (and append `/debug` for debugging).
 JSON bodies and helper `--name` arguments use the unencoded value `business/errors`.
 
-The script managers show a compact, directory-first file tree. Directories are derived from
+The script managers and replay workspace-asset picker use the same compact, directory-first file-tree component. Asset entries retain their original extensions, size and content-type metadata; script labels append `.lua` without changing API identities. Directories are derived from
 script paths; empty-directory management, rename and drag-and-drop moves are not supported.
 
 ## Script display metadata
@@ -1502,3 +1502,14 @@ count without changing zoom. Returning to full extent resumes continuous fitting
 Zoom is absolute: 1× means 100 CSS pixels per second, capped at 64× (6.4 px/ms,
 100px = 15.625ms), independent of the captured time range. Full-extent fitting also respects
 this cap; a short capture may leave unused space to the right.
+
+## Resource manager UI capabilities
+
+The workspace resource manager requires `listAssets`; its upload actions and those in the replay
+asset picker require `uploadAsset`. HTTP upload uses the existing raw-body POST asset endpoint.
+The desktop backend exposes `upload_asset` over binary Tauri IPC using `x-asset-id` and
+`x-asset-content-type` headers; it uses the same asset store and conflict rules without HTTP.
+The shared single-file picker does not upload on selection: users confirm the destination name.
+Asset IDs allow lowercase ASCII letters, digits, `_`, `-`, `.`, and `/`; maximum length is 255
+bytes, each segment at most 100 bytes, and empty, `.`, `..`, `.metadata` segments are invalid.
+No overwrite, move, rename, delete or empty-directory API has been introduced.

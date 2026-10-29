@@ -354,6 +354,36 @@ async fn list_assets(
 }
 
 #[tauri::command]
+async fn upload_asset(
+    state: State<'_, BackendState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<proxy_crab_mgr::asset::AssetMetadata, ManagerError> {
+    use proxy_crab_mgr::{dto::ErrorCode, manager::map_asset_error};
+    let id = request
+        .headers()
+        .get("x-asset-id")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| ManagerError::new(ErrorCode::InvalidAssetId, "missing asset id"))?;
+    let content_type = request
+        .headers()
+        .get("x-asset-content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(ManagerError::new(
+            ErrorCode::AssetStoreFailed,
+            "expected binary upload body",
+        ));
+    };
+    let mut upload = state
+        .manager()
+        .begin_asset_upload(id.to_owned(), content_type.to_owned())
+        .await?;
+    upload.write(bytes).await.map_err(map_asset_error)?;
+    upload.finish().await.map_err(map_asset_error)
+}
+
+#[tauri::command]
 async fn get_log(
     state: State<'_, BackendState>,
     session_id: Option<u64>,
@@ -1149,6 +1179,7 @@ pub fn run() {
             body_download::fetch_websocket_message_body,
             replay,
             list_assets,
+            upload_asset,
             get_interceptor_content,
             get_interceptor_snapshot,
             list_breakpoints,

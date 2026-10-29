@@ -283,3 +283,23 @@ with a relative name such as `business/errors`; ProxyCrab creates the parent dir
 saves `business/errors.lua` inside that library's directory. Existing root-level scripts remain
 compatible. Bindings retain the full relative name. Empty folders, renaming and drag-and-drop
 moves are outside this UI's scope. See the [script path API contract](skills/proxycrab/references/http-api.md#script-relative-paths).
+
+Script libraries and the replay workspace-asset picker share `src/components/FileTree.vue`.
+Callers provide relative-path entries (`path`, optional `label`/`title`, and business `data`),
+a controlled selection, and optional suffix/action slots. The component derives directories,
+sorts directories first, handles folding, and reveals selected paths; it does not call APIs or
+change business state before the caller accepts selection. Script path validation remains separate.
+
+### Workspace resource manager and file creation
+
+Open **工作区资源** from the script menu when the current backend provides `listAssets`.
+The manager shows the shared file tree and selected-resource metadata. Upload actions appear only
+when `uploadAsset` is available; both HTTP and Tauri backends implement it. Tauri sends raw binary
+IPC directly to the existing asset store, without requiring the management HTTP service.
+
+Each directory has a `+` action; a dashed `+` row creates at the root. Script managers now use
+their top input for name/path filtering. Script creation uses the selected directory and the
+library's default template. Resource creation opens the shared single-file picker, then an editable
+name form before upload. Invalid names are reported without automatic renaming, and existing
+resources are never overwritten. The replay asset picker supports the same upload flow and selects
+the uploaded resource. Empty directory management, moving and renaming remain unsupported.

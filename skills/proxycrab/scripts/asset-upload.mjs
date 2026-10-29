@@ -33,8 +33,8 @@ application/octet-stream. Existing IDs are never overwritten.
   const id = requiredString(args, "id");
   const file = path.resolve(requiredString(args, "file"));
   const contentType = args["content-type"] ?? "application/octet-stream";
-  if (/[^a-z0-9_./]/.test(id)) {
-    throw new UsageError("--id may contain only lowercase letters, digits, _, ., and /");
+  if (/[^a-z0-9_./-]/.test(id)) {
+    throw new UsageError("--id may contain only lowercase letters, digits, _, -, ., and /");
   }
   if (/[^\x20-\x7e]/.test(contentType) || contentType.trim() !== contentType) {
     throw new UsageError("--content-type must be a non-empty printable HTTP header value");

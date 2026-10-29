@@ -2094,7 +2094,7 @@ fn map_error(error: anyhow::Error) -> ManagerError {
     }
 }
 
-fn map_asset_error(error: AssetError) -> ManagerError {
+pub fn map_asset_error(error: AssetError) -> ManagerError {
     match error {
         AssetError::InvalidId(message) => ManagerError::new(
             ErrorCode::InvalidAssetId,

@@ -368,6 +368,18 @@
       "prompt": "A ProxyCrab API Key bound to mask gets 403 share_redaction_forbidden when POST /api/session-shares includes redaction_script:null. How should it create or update a share? May an unconfigured Key or a Key explicitly bound to empty string send that field?",
       "expected_output": "Removes the share redaction field entirely, not merely null, and uses the same permission-controlled POST; the bound Key share dynamically follows its stable identity binding. Unconfigured/null-bound Keys also cannot supply the field. Only a Key explicitly configured with empty-string no-redaction may supply null/empty/named policy. Does not change credentials or remove the Key binding, does not call the removed PUT redaction route, and preserves persistence/token on updates. Explains identity deletion or lookup failure denies inherited reads and startup redaction cannot be disabled.",
       "files": []
+    },
+    {
+      "id": 63,
+      "prompt": "Explain how nested scripts and workspace assets are shown in the script managers and replay asset picker. A script is named business/errors and an asset is named images/icon.png. Which identifiers should API helpers use?",
+      "expected_output": "Both views use the shared compact directory-first file tree. Script errors.lua is only a display label; helpers and bindings retain business/errors. The asset retains images/icon.png, including its extension, and the picker displays size and type metadata. No move, rename, empty-directory API is invented.",
+      "files": []
+    },
+    {
+      "id": 64,
+      "prompt": "Upload a file named Demo-Image.png into the images directory from the workspace resource manager, then upload another file from the replay asset picker. Explain how root and directory creation differ, without overwriting existing resources.",
+      "expected_output": "Uses the directory plus or dashed root plus, selects one file, presents its unchanged name for confirmation, reports uppercase as invalid and allows explicit editing to demo-image.png. Conflicts remain errors. Upload requires backend capability, works via HTTP or Tauri binary IPC, and replay selects the new resource and refreshes its list. Script toolbar input filters; script creation uses directory/root plus and the default template.",
+      "files": []
     }
   ]
 }

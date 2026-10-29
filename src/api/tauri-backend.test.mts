@@ -151,3 +151,13 @@ test("share IPC distinguishes omitted, inherited and explicitly unredacted polic
   });
   expect(Reflect.get(backend, "setSessionShareRedaction")).toBeUndefined();
 });
+
+test("desktop asset upload sends binary IPC with its path and MIME type", async () => {
+  const file = new Blob([new Uint8Array([0, 255, 1])], { type: "image/png" });
+  const metadata = { id: "images/icon.png", size: 3 };
+  vi.mocked(invoke).mockResolvedValue(metadata);
+  expect(await createTauriBackend().uploadAsset!(metadata.id, file)).toEqual(metadata);
+  expect(invoke).toHaveBeenCalledExactlyOnceWith("upload_asset", await file.arrayBuffer(), {
+    headers: { "x-asset-id": metadata.id, "x-asset-content-type": "image/png" },
+  });
+});

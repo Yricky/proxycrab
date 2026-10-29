@@ -430,3 +430,16 @@ The browser buffers Blob parts; desktop writes temporary-file chunks and commits
 the export window cancels it. There is no HAR link sharing or backend HAR generation API. Agents
 should read supplied Session links through the existing share routes rather than invent export
 routes. Read failures never authorize changing credentials or bypassing redaction.
+
+Script sidebars and the existing workspace-asset picker share one file-tree presentation.
+This UI refactor does not change helper arguments, API paths or script/asset identifiers;
+continue using the complete relative identifier, not the displayed leaf label.
+
+### Resource upload UI
+
+The workspace resource manager and replay asset picker expose upload only when the backend provides
+that capability. Directory `+` targets that directory; the dashed top `+` targets the root. A single
+file is selected, then its destination name is confirmed. Names are not automatically rewritten;
+conflicts never overwrite existing assets. Script trees use the same creation locations and their
+top text field filters scripts. Tauri uploads use binary IPC; agent uploads still use
+`scripts/asset-upload.mjs` and the existing HTTP endpoint.

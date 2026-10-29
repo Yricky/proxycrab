@@ -8,6 +8,7 @@ import { useBackend } from "../api";
 import AppTooltip from "./AppTooltip.vue";
 import {
   openBase64,
+  openAssetManager,
   openAgentsPresets,
   openApprovals,
   openCertManager,
@@ -268,6 +269,13 @@ onBeforeUnmount(() => {
           >
             <Io5CodeSlash :size="14" />
             <span>过滤脚本</span>
+          </button>
+          <button
+            v-if="backend.listAssets"
+            class="tb-menu-item"
+            @click="runMenuAction(openAssetManager)"
+          >
+            <Io5DocumentText :size="14" /><span>工作区资源</span>
           </button>
           <button
             v-if="backend.listRedactionScripts"
