@@ -76,7 +76,6 @@ async function setPagePersistent(event: Event): Promise<void> {
   pageMutating.value = true;
   try {
     pageShare.value = await backend.enableSessionShare(props.sessionId, {
-      redactionScript: pageRedaction.value,
       persistent,
     });
     sessionsStore.updateShare(pageShare.value);
@@ -100,7 +99,7 @@ async function togglePageShare(): Promise<void> {
       appStore.toast("链接分享已关闭", "success");
     } else {
       pageShare.value = await backend.enableSessionShare(props.sessionId, {
-        redactionScript: pageRedaction.value,
+        redactionScript: pageRedaction.value ?? undefined,
         persistent: pagePersistent.value,
       });
       sessionsStore.updateShare(pageShare.value);
@@ -152,6 +151,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  loadSequence++;
   window.removeEventListener("proxycrab-refresh-session-share", onRefreshRequest);
   window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
@@ -194,6 +194,8 @@ onBeforeUnmount(() => {
       </label>
       <RedactionSelect
         v-if="typeof backend.enableSessionShare === 'function' && backend.listRedactionScripts"
+        inherit-label="跟随本机无 API Key"
+        :inherited-value-label="pageShare?.redaction_identity ? '跟随 API Key 脱敏配置' : undefined"
         :model-value="pageRedaction"
         :disabled="loading || pageMutating"
         @update:model-value="setRedaction($event)"

@@ -104,6 +104,14 @@ surface has no `/api/agents.md` endpoint and needs no management API key or loca
 Resolve script paths relative to this `SKILL.md`; do not assume the current working directory is the
 skill directory.
 
+Share defaults are enforced by the backend. New shares with an omitted redaction field inherit
+local dynamically. Keys bound to a script must omit the field and shares follow their Key binding;
+unconfigured Keys must also omit it. Only a Key explicitly bound to `""` may supply a share policy.
+Never remove bindings or change credentials to bypass `share_redaction_forbidden`. Explicit `""`
+means no share-level redaction; explicit null restores local inheritance. Omitted update fields
+preserve existing policy. Use POST /api/session-shares for every update; the separate redaction
+route is removed. Local/Key lookups fail closed. Startup redaction remains authoritative.
+
 ## Read a Session sharing link
 
 For a URL such as `http://host:18089/session?token=pcrab_share_…`, agents can call the
@@ -121,7 +129,11 @@ scripts use `/api/*` and do not support share authentication; use an HTTP client
    `POST /share-api/logs/views` with `{"logs":[{"id":42}]}` (at most 200 per call), or inspect
    candidates with `GET /share-api/logs/{id}`. For a full ID page, continue with the smallest
    matched ID as exclusive `max_id`; stop on a short page. Re-evaluate `in_progress_ids` on completion.
-3. Read raw bodies, WebSocket messages, or historical interceptor source/snapshots as needed using
+3. Read current chain metadata with `GET /share-api/session-interceptors` when needed. It returns
+   ordered request/response items (`name`, optional `display_name`, `enabled`, `valid`) for the shared
+   Session only, with no library source or writes. This is current configuration, not proof of what
+   executed for a historical capture. The shared UI displays this chain read-only and follows changes.
+   Read raw bodies, WebSocket messages, or historical interceptor source/snapshots as needed using
    the [complete share route table](references/http-api.md#session-share-read-api).
    These endpoints always use the shared Session; a supplied `session_id` cannot select another one.
 4. Report capture evidence and the Session/log IDs. Share reads apply the effective redaction
@@ -363,7 +375,7 @@ existing authorized detail/Body reads, with no separate HAR policy or download A
 
 Use `scripts/redaction-upsert.mjs --name NAME --file SCRIPT.lua` to create/update an authorized
 redaction script. Use `scripts/share-redaction-set.mjs --session ID --kind page --name NAME`
-(or `--clear true` only when explicitly requested) to change an enabled share's binding. The helper reads the current persistence mode and updates both settings through
+(or `--clear true` for explicit no redaction, `--inherit true` for local inheritance, only when requested) to change an enabled share's binding. The helper reads the current persistence mode and updates both settings through
 `POST /api/session-shares`. Binding changes do not print
 the share token. Listing and creating scripts are allowed by default, replacing
 or deleting one needs owner approval, and reading one script's source is denied by default; the

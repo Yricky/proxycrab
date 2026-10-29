@@ -127,10 +127,8 @@ Both trusted targets can inspect, enable, and disable one share per Session. Tau
 `get_session_share`, `enable_session_share`, and `disable_session_share`; HTTP clients use
 permission-controlled `GET /api/session-shares/{id}`, `POST /api/session-shares`, and
 `DELETE /api/session-shares/{id}`. Enable takes `session_id` and optional `session_share_config`
-containing `redaction_script` and `persistent`. An omitted config preserves an enabled share, or
-creates a temporary share with no binding. A supplied config replaces both settings without
-rotating the token. The frontend groups these as `enableSessionShare(sessionId,
-{redactionScript, persistent})`; no additional route or IPC command is needed.
+containing `redaction_script` and `persistent`. The frontend groups these as
+`enableSessionShare(sessionId, {redactionScript, persistent})` and omits undefined fields.
 
 Shares default to temporary. Persistent entries save their plaintext token and redaction binding in
 `<workspace>/session-shares.json` and automatically restore enabled on desktop/CLI restart. Status
@@ -139,6 +137,37 @@ removes the durable entry, and re-enabling generates a new token. Atomic private
 precedes in-memory updates; corrupt files surface startup failures. Permanent Session deletion
 cleans up its share record. See the [Skill HTTP reference](../skills/proxycrab/references/http-api.md#post-apisession-shares)
 for the complete request/response contract.
+
+Share redaction is resolved by the backend, not copied by the frontend. For a new owner-created
+share, omitting `session_share_config.redaction_script` inherits the current local no-API-key binding.
+Explicit `null` selects that same inheritance; `""` explicitly disables share-level redaction; a
+nonempty name selects a library script. On updates, an omitted redaction field preserves the current
+policy; use explicit null to switch back to local inheritance. A supplied config updates persistence
+without rotating the token; an omitted config preserves an existing owner share.
+
+API keys have stricter rules. A Key bound to a nonempty script must omit the share redaction field
+and the share follows that Key's binding dynamically, including on updates. An unconfigured Key
+(null/missing binding) also cannot supply the field; new shares inherit local. Only a Key whose own
+binding is explicitly `""` may supply the field, including null, empty, or a script name. Violations
+return HTTP 403 `share_redaction_forbidden` before modifying share state. Owner Tauri IPC, local
+management requests and the trusted CLI UI may select policies normally. Ordinary route permission
+checks still apply. Existing null Key bindings are not treated as explicit opt-out.
+
+Inherited policies resolve their identity on each share request, so changing local or Key bindings
+updates share reads without rotating links. A missing/deleted Key or failed identity lookup fails
+closed (`redaction_failed`); it never falls back to original data. Status reports the configured
+`redaction_script` and optional `redaction_identity` (a stable Key ID, never an API Key credential).
+The frontend shows inheritance separately from explicit no redaction and never reads local defaults.
+The startup `--redaction-script` policy still overrides all these settings.
+
+Updates use `POST /api/session-shares` exclusively. The old
+`PUT /api/session-shares/{id}/redaction` route and desktop `set_session_share_redaction` command
+have been removed; persisted permissions drop that obsolete action.
+
+Persistent share files use version 2 and retain policy references. Version 1 files remain readable:
+old null share bindings migrate to explicit `""` to preserve their original unredacted behavior;
+named script bindings and tokens are preserved. New inherited shares retain null policy references
+across restart and resolve the current binding when read.
 
 The browser bundle serves `/session?token=…`, plus an optional `id` query parameter that focuses the
 matching record (scrolls the list to that row and opens its inline detail panel). The shared frontend
@@ -152,12 +181,22 @@ exactly one non-empty `token` query parameter; `Authorization` is ignored. Respo
 `Cache-Control: no-store`, and the page uses `Referrer-Policy: no-referrer`. The server derives the
 Session scope on every request and overwrites any client Session ID. The surface
 contains bootstrap, scoped proxy status and proxy-change long polling, Session view, stateless log-ID queries, rendered log rows, detail,
-body, name-only column/filter lists, and regex validation. It has no write, export, interceptor,
-breakpoint, config, permission, routing, CA, bypass, or system-log route. The frontend expresses
+body, metadata-only column/filter lists, the current Session interceptor chain, and regex validation.
+`GET /share-api/session-interceptors` returns `SessionInterceptorsPayload` for the Token's Session,
+ignoring any client `session_id`: ordered request/response arrays contain only `name`, optional
+`display_name`, `enabled`, and `valid`. It never exposes library source; POST/PUT/DELETE are unavailable.
+There is no export, interceptor-write, breakpoint, config, permission, routing, CA, bypass, or system-log route. The frontend expresses
 these limits as missing optional `Backend` methods: the share Backend omits `replay`, Session-view
 writes, approvals, and local-IP lookup, so the UI hides the send-request entry, replay buttons, and
 editable column controls instead of offering actions the surface would reject. Column widths stay
 adjustable in each viewer's own page; the overrides live only in memory and are never written back.
+`AppReadonly` reuses `InterceptorPipeline`; missing write methods remove add/edit/recreate/remove,
+toggle and drag interactions and action hints. Missing breakpoint reads suppress breakpoint UI.
+Existing read/save methods retain frontend HAR export. Share polling checks interceptor configuration
+every 1.5 seconds with the existing metadata poll, emitting scoped `session_interceptors` changes
+when chain order, membership, labels, enabled state or validity changes. The component then refreshes
+through `getSessionInterceptors`; unchanged state produces no repeated change events and stopped
+subscriptions emit no further changes.
 Disabling invalidates the token; restart invalidates only temporary shares. An archived Session
 is unavailable, and restoring it preserves its enabled share. Agents may use the token on
 `/share-api/*`; it is not accepted as a management credential on `/api/*`.
@@ -949,7 +988,6 @@ authorization.
 | `GET /api/redaction-scripts/{name}` | Read script (deny) |
 | `PUT /api/redaction-scripts/{name}` | Replace `{ "content": "..." }` (approval) |
 | `DELETE /api/redaction-scripts/{name}` | Delete script; existing bindings remain and fail closed (approval) |
-| `PUT /api/session-shares/{id}/redaction` | Set `{ "redaction_script": "mask" }`, or null to unbind an enabled share (approval) |
 
 The headless CLI accepts `--redaction-script /path/to/mask.lua` (with or without `run`).
 It reads and compiles the file before starting the HTTP API or proxy; a missing/unreadable file or

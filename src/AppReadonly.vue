@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import InterceptorPipeline from "./components/InterceptorPipeline.vue";
 import FilterBar from "./components/FilterBar.vue";
 import LogTable from "./components/LogTable.vue";
 import FloatingWindow from "./components/FloatingWindow.vue";
@@ -73,6 +74,10 @@ onBeforeUnmount(() => {
             :session-id="logs.sessionId"
             :syncing="Boolean(backend.replaceSessionFilter)"
             :apply-filter="(filter) => logs.applyFilter(filter)"
+          />
+          <InterceptorPipeline
+            v-if="typeof backend.getSessionInterceptors === 'function'"
+            :logs="logs"
           />
         </div>
         <LogTable ref="logTable" :logs="logs" />

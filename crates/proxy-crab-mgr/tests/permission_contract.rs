@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 81);
+    assert_eq!(actions.len(), 80);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -83,7 +83,6 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
     let approval = BTreeSet::from([
         "PUT /api/redaction-scripts/{name}",
         "DELETE /api/redaction-scripts/{name}",
-        "PUT /api/session-shares/{id}/redaction",
         "PUT /api/clash-subscription",
         "DELETE /api/clash-subscription",
         "POST /api/archived-sessions/{id}/restore",

@@ -18,7 +18,6 @@ export const ACTION_META: Readonly<Record<string, PermissionActionMeta>> = {
   "GET /api/redaction-scripts/{name}": { label: "读取脱敏脚本", impact: "danger" },
   "PUT /api/redaction-scripts/{name}": { label: "更新脱敏脚本", impact: "write" },
   "DELETE /api/redaction-scripts/{name}": { label: "删除脱敏脚本", impact: "write" },
-  "PUT /api/session-shares/{id}/redaction": { label: "绑定分享脱敏脚本", impact: "write" },
   "GET /api/agents.md": { label: "读取 Agent 指令", impact: "read" },
   "GET /api/assets/{*asset_id}": { label: "读取资源", impact: "read" },
   "POST /api/assets/{*asset_id}": { label: "上传资源", impact: "write" },

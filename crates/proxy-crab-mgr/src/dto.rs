@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     RedactionFailed,
+    ShareRedactionForbidden,
     MessageContentUnavailable,
     MessageContentHidden,
     RedactionManagementDisabled,
@@ -51,6 +52,7 @@ impl ErrorCode {
         match self {
             Self::RedactionManagementDisabled => "redaction_management_disabled",
             Self::RedactionFailed => "redaction_failed",
+            Self::ShareRedactionForbidden => "share_redaction_forbidden",
             Self::MessageContentUnavailable => "message_content_unavailable",
             Self::MessageContentHidden => "message_content_hidden",
             Self::BadRequest => "bad_request",

@@ -3,7 +3,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path as FilePath, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
 
@@ -33,6 +33,7 @@ use crate::{
     ProxyCrabManager,
     dto::{BodyQuery, ErrorCode, LogIdsRequest, LogViewsRequest, ManagerError, SessionViewPayload},
     http::body_response,
+    permission::{PermissionManager, RedactionIdentity},
 };
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -40,7 +41,18 @@ use crate::{
 pub struct SessionShareConfig {
     #[serde(default)]
     pub persistent: bool,
-    pub redaction_script: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "provided_redaction",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub redaction_script: Option<Option<String>>,
+}
+
+fn provided_redaction<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -58,6 +70,8 @@ pub struct SessionShareState {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redaction_identity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -131,12 +145,14 @@ struct ShareEntry {
     redaction_script: Option<String>,
     token: String,
     digest: [u8; 32],
+    redaction_identity: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 struct ShareScope {
     redaction_script: Option<String>,
     session_id: u64,
+    redaction_identity: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Eq)]
@@ -144,6 +160,8 @@ struct StoredShare {
     session_id: u64,
     token: String,
     redaction_script: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    redaction_identity: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -156,9 +174,54 @@ struct ShareFile {
 pub struct SessionShareService {
     path: Option<PathBuf>,
     entries: Mutex<BTreeMap<u64, ShareEntry>>,
+    permissions: RwLock<Option<Arc<dyn PermissionManager>>>,
 }
 
 impl SessionShareService {
+    pub fn set_permissions(&self, permissions: Arc<dyn PermissionManager>) {
+        *self
+            .permissions
+            .write()
+            .expect("share policy lock poisoned") = Some(permissions);
+    }
+
+    async fn effective_redaction(
+        &self,
+        scope: &ShareScope,
+    ) -> Result<Option<String>, ManagerError> {
+        if let Some(script) = &scope.redaction_script {
+            return Ok((!script.is_empty()).then(|| script.clone()));
+        }
+        let permissions = self
+            .permissions
+            .read()
+            .expect("share policy lock poisoned")
+            .clone();
+        let Some(permissions) = permissions else {
+            return if scope.redaction_identity.is_none() {
+                Ok(None)
+            } else {
+                Err(ManagerError::new(
+                    ErrorCode::RedactionFailed,
+                    "redaction identity unavailable",
+                ))
+            };
+        };
+        let failed =
+            |_| ManagerError::new(ErrorCode::RedactionFailed, "redaction identity unavailable");
+        let mut script = permissions
+            .identity_redaction(scope.redaction_identity.as_deref().unwrap_or("local"))
+            .await
+            .map_err(failed)?;
+        if script.is_none() && scope.redaction_identity.is_some() {
+            script = permissions
+                .identity_redaction("local")
+                .await
+                .map_err(failed)?;
+        }
+        Ok(script.filter(|value| !value.is_empty()))
+    }
+
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
@@ -170,7 +233,7 @@ impl SessionShareService {
             Ok(bytes) => {
                 let stored: ShareFile = serde_json::from_slice(&bytes)
                     .map_err(|_| ManagerError::internal("invalid session-shares.json"))?;
-                if stored.version != 1 {
+                if !matches!(stored.version, 1 | 2) {
                     return Err(ManagerError::internal(
                         "unsupported session-shares.json version",
                     ));
@@ -195,7 +258,12 @@ impl SessionShareService {
                             persistent: true,
                             digest: Sha256::digest(share.token.as_bytes()).into(),
                             token: share.token,
-                            redaction_script: share.redaction_script,
+                            redaction_script: if stored.version == 1 {
+                                Some(share.redaction_script.unwrap_or_default())
+                            } else {
+                                share.redaction_script
+                            },
+                            redaction_identity: share.redaction_identity,
                         },
                     );
                 }
@@ -210,6 +278,7 @@ impl SessionShareService {
         Ok(Arc::new(Self {
             path: Some(path),
             entries: Mutex::new(entries),
+            permissions: RwLock::new(None),
         }))
     }
 
@@ -227,11 +296,12 @@ impl SessionShareService {
                     session_id: *id,
                     token: entry.token.clone(),
                     redaction_script: entry.redaction_script.clone(),
+                    redaction_identity: entry.redaction_identity.clone(),
                 })
                 .collect::<Vec<_>>()
         };
         let stored = ShareFile {
-            version: 1,
+            version: 2,
             shares: persisted(&next),
         };
         if persisted(entries) != stored.shares {
@@ -333,6 +403,7 @@ impl SessionShareService {
             Some(entry) => SessionShareState {
                 persistent: entry.persistent,
                 redaction_script: entry.redaction_script.clone(),
+                redaction_identity: entry.redaction_identity.clone(),
                 session_id,
                 enabled: true,
                 token: Some(entry.token.clone()),
@@ -340,6 +411,7 @@ impl SessionShareService {
             None => SessionShareState {
                 persistent: false,
                 redaction_script: None,
+                redaction_identity: None,
                 session_id,
                 enabled: false,
                 token: None,
@@ -365,7 +437,7 @@ impl SessionShareService {
             manager,
             session_id,
             Some(SessionShareConfig {
-                redaction_script,
+                redaction_script: redaction_script.map(Some),
                 persistent: false,
             }),
         )
@@ -378,10 +450,42 @@ impl SessionShareService {
         session_id: u64,
         config: Option<SessionShareConfig>,
     ) -> Result<SessionShareState, ManagerError> {
+        self.enable_for_identity(manager, session_id, config, None)
+            .await
+    }
+
+    pub async fn enable_for_identity(
+        &self,
+        manager: &Arc<dyn ProxyCrabManager>,
+        session_id: u64,
+        config: Option<SessionShareConfig>,
+        identity: Option<RedactionIdentity>,
+    ) -> Result<SessionShareState, ManagerError> {
+        if identity
+            .as_ref()
+            .is_some_and(|key| key.redaction_script.as_deref() != Some(""))
+            && config
+                .as_ref()
+                .is_some_and(|value| value.redaction_script.is_some())
+        {
+            return Err(ManagerError::new(
+                ErrorCode::ShareRedactionForbidden,
+                "only an API key explicitly configured with no redaction may set share redaction_script",
+            ));
+        }
+        let redaction_identity = identity
+            .filter(|key| {
+                key.redaction_script
+                    .as_deref()
+                    .is_some_and(|name| !name.is_empty())
+            })
+            .map(|key| key.id);
         Self::ensure_session(manager, session_id).await?;
         if let Some(name) = config
             .as_ref()
             .and_then(|config| config.redaction_script.as_ref())
+            .and_then(|script| script.as_ref())
+            .filter(|name| !name.is_empty())
         {
             manager.redaction_script(name.clone()).await?;
         }
@@ -397,18 +501,29 @@ impl SessionShareService {
                 ShareEntry {
                     persistent: false,
                     redaction_script: None,
+                    redaction_identity: None,
                     digest: Sha256::digest(token.as_bytes()).into(),
                     token,
                 }
             }
         };
+        if let Some(key_id) = redaction_identity {
+            entry.redaction_script = None;
+            entry.redaction_identity = Some(key_id);
+        } else if let Some(script) = config
+            .as_ref()
+            .and_then(|value| value.redaction_script.clone())
+        {
+            entry.redaction_script = script;
+            entry.redaction_identity = None;
+        }
         if let Some(config) = config {
             entry.persistent = config.persistent;
-            entry.redaction_script = config.redaction_script;
         }
         let result = SessionShareState {
             persistent: entry.persistent,
             redaction_script: entry.redaction_script.clone(),
+            redaction_identity: entry.redaction_identity.clone(),
             session_id,
             enabled: true,
             token: Some(entry.token.clone()),
@@ -417,26 +532,6 @@ impl SessionShareService {
         next.insert(session_id, entry);
         self.commit(&mut entries, next)?;
         Ok(result)
-    }
-
-    pub async fn set_redaction(
-        &self,
-        manager: &Arc<dyn ProxyCrabManager>,
-        session_id: u64,
-        script: Option<String>,
-    ) -> Result<SessionShareState, ManagerError> {
-        if let Some(name) = &script {
-            manager.redaction_script(name.clone()).await?;
-        }
-        {
-            let mut entries = self.entries.lock().expect("session share lock poisoned");
-            let mut next = entries.clone();
-            next.get_mut(&session_id)
-                .ok_or_else(|| ManagerError::not_found("share is not enabled"))?
-                .redaction_script = script;
-            self.commit(&mut entries, next)?;
-        }
-        self.status(manager, session_id).await
     }
 
     pub async fn disable(
@@ -449,6 +544,7 @@ impl SessionShareService {
         Ok(SessionShareState {
             persistent: false,
             redaction_script: None,
+            redaction_identity: None,
             session_id,
             enabled: false,
             token: None,
@@ -466,6 +562,7 @@ impl SessionShareService {
             .find(|(_, entry)| bool::from(entry.digest.ct_eq(&digest)))
             .map(|(session_id, entry)| ShareScope {
                 redaction_script: entry.redaction_script.clone(),
+                redaction_identity: entry.redaction_identity.clone(),
                 session_id: *session_id,
             })
             .ok_or(ShareAuthError::Invalid)
@@ -492,6 +589,7 @@ pub fn router(manager: Arc<dyn ProxyCrabManager>, shares: Arc<SessionShareServic
         .route("/share-api/proxy/status", get(proxy_status))
         .route("/share-api/proxy/changes", get(proxy_changes))
         .route("/share-api/session-view", get(session_view))
+        .route("/share-api/session-interceptors", get(session_interceptors))
         .route("/share-api/logs/ids", post(log_ids))
         .route("/share-api/logs/views", post(log_views))
         .route("/share-api/logs/{id}", get(log))
@@ -545,7 +643,7 @@ async fn authorize_share(
     let Some(token) = query_token(&request) else {
         return ShareAuthError::Invalid.into_response();
     };
-    let scope = match state.shares.authenticate(&token) {
+    let mut scope = match state.shares.authenticate(&token) {
         Ok(scope) => scope,
         Err(error) => return error.into_response(),
     };
@@ -556,6 +654,10 @@ async fn authorize_share(
                 .iter()
                 .any(|session| session.id == scope.session_id) =>
         {
+            scope.redaction_script = match state.shares.effective_redaction(&scope).await {
+                Ok(script) => script,
+                Err(error) => return ShareApiError(error).into_response(),
+            };
             request.extensions_mut().insert(scope);
             next.run(request).await
         }
@@ -654,6 +756,18 @@ async fn session_view(
         .manager
         .reader(scope.redaction_script.as_deref(), "/share-api/session-view")?;
     success(manager.session_view(Some(scope.session_id)).await?)
+}
+
+async fn session_interceptors(
+    State(state): State<Arc<ShareState>>,
+    Extension(scope): Extension<ShareScope>,
+) -> Result<Json<serde_json::Value>, ShareApiError> {
+    success(
+        state
+            .manager
+            .session_interceptors(Some(scope.session_id))
+            .await?,
+    )
 }
 
 async fn log_ids(
@@ -931,6 +1045,277 @@ mod tests {
         dto::{ActiveSession, CreateSessionRequest, ErrorCode, ScriptRequest},
     };
 
+    #[derive(Default)]
+    struct TestPolicies(RwLock<BTreeMap<String, Option<String>>>);
+    #[async_trait::async_trait]
+    impl PermissionManager for TestPolicies {
+        async fn check_permission(
+            &self,
+            _: crate::permission::PermissionAction,
+        ) -> Option<crate::permission::PermissionDenied> {
+            None
+        }
+        async fn identity_redaction(
+            &self,
+            id: &str,
+        ) -> Result<Option<String>, crate::permission::PermissionDenied> {
+            self.0.read().unwrap().get(id).cloned().ok_or_else(|| {
+                crate::permission::PermissionDenied::forbidden(
+                    "redaction_failed",
+                    "missing identity",
+                )
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn inheritance_tracks_local_and_key_bindings_without_storing_credentials() {
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
+        let session = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        let policies = Arc::new(TestPolicies::default());
+        policies
+            .0
+            .write()
+            .unwrap()
+            .insert("local".into(), Some("local-a".into()));
+        policies
+            .0
+            .write()
+            .unwrap()
+            .insert("key-id".into(), Some("key-a".into()));
+        let shares = SessionShareService::open(directory.path()).unwrap();
+        shares.set_permissions(policies.clone());
+        let state = shares
+            .enable_with_config(
+                &manager,
+                session.id,
+                Some(SessionShareConfig {
+                    persistent: true,
+                    redaction_script: None,
+                }),
+            )
+            .await
+            .unwrap();
+        let token = state.token.as_ref().unwrap();
+        let scope = shares.authenticate(token).unwrap();
+        assert_eq!(
+            shares.effective_redaction(&scope).await.unwrap().as_deref(),
+            Some("local-a")
+        );
+        policies
+            .0
+            .write()
+            .unwrap()
+            .insert("local".into(), Some("local-b".into()));
+        assert_eq!(
+            shares.effective_redaction(&scope).await.unwrap().as_deref(),
+            Some("local-b")
+        );
+        let keyed = shares
+            .enable_for_identity(
+                &manager,
+                session.id,
+                None,
+                Some(RedactionIdentity {
+                    id: "key-id".into(),
+                    redaction_script: Some("key-a".into()),
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(keyed.token.as_ref(), Some(token));
+        assert_eq!(keyed.redaction_identity.as_deref(), Some("key-id"));
+        let restored = SessionShareService::open(directory.path()).unwrap();
+        restored.set_permissions(policies.clone());
+        let scope = restored.authenticate(token).unwrap();
+        assert_eq!(
+            restored
+                .effective_redaction(&scope)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("key-a")
+        );
+        policies
+            .0
+            .write()
+            .unwrap()
+            .insert("key-id".into(), Some("key-b".into()));
+        assert_eq!(
+            restored
+                .effective_redaction(&scope)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("key-b")
+        );
+        policies
+            .0
+            .write()
+            .unwrap()
+            .insert("key-id".into(), Some(String::new()));
+        assert_eq!(restored.effective_redaction(&scope).await.unwrap(), None);
+        policies.0.write().unwrap().remove("key-id");
+        assert_eq!(
+            restored.effective_redaction(&scope).await.unwrap_err().code,
+            ErrorCode::RedactionFailed
+        );
+        let disk = std::fs::read_to_string(directory.path().join("session-shares.json")).unwrap();
+        assert!(disk.contains("key-id") && !disk.contains("key-a") && !disk.contains("key-b"));
+    }
+
+    #[tokio::test]
+    async fn only_explicitly_unredacted_keys_can_supply_any_share_redaction_field() {
+        let directory = tempdir().unwrap();
+        let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(
+            ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap(),
+        );
+        let session = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        manager
+            .create_redaction_script(ScriptRequest {
+                name: "mask".into(),
+                content: "return true".into(),
+            })
+            .await
+            .unwrap();
+        let shares = SessionShareService::new();
+        for key_binding in [None, Some("mask".to_owned())] {
+            for field in [serde_json::Value::Null, json!(""), json!("mask")] {
+                let config: SessionShareConfig =
+                    serde_json::from_value(json!({"redaction_script": field})).unwrap();
+                assert!(config.redaction_script.is_some());
+                let error = shares
+                    .enable_for_identity(
+                        &manager,
+                        session.id,
+                        Some(config),
+                        Some(RedactionIdentity {
+                            id: "key".into(),
+                            redaction_script: key_binding.clone(),
+                        }),
+                    )
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code, ErrorCode::ShareRedactionForbidden);
+                assert!(!shares.status(&manager, session.id).await.unwrap().enabled);
+            }
+        }
+        for field in [serde_json::Value::Null, json!(""), json!("mask")] {
+            let config: SessionShareConfig =
+                serde_json::from_value(json!({"redaction_script": field.clone()})).unwrap();
+            let state = shares
+                .enable_for_identity(
+                    &manager,
+                    session.id,
+                    Some(config),
+                    Some(RedactionIdentity {
+                        id: "key".into(),
+                        redaction_script: Some(String::new()),
+                    }),
+                )
+                .await
+                .unwrap();
+            assert_eq!(state.redaction_script, field.as_str().map(str::to_owned));
+            assert_eq!(state.redaction_identity, None);
+        }
+        // Bound keys cannot reuse an existing unredacted share without installing their constraint.
+        let keyed = shares
+            .enable_for_identity(
+                &manager,
+                session.id,
+                None,
+                Some(RedactionIdentity {
+                    id: "restricted".into(),
+                    redaction_script: Some("mask".into()),
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(keyed.redaction_script, None);
+        assert_eq!(keyed.redaction_identity.as_deref(), Some("restricted"));
+    }
+
+    #[tokio::test]
+    async fn explicit_empty_disables_redaction_and_old_null_shares_keep_their_behavior() {
+        let directory = tempdir().unwrap();
+        let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(
+            ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap(),
+        );
+        let session = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        let shares = SessionShareService::open(directory.path()).unwrap();
+        let state = shares
+            .enable_with_config(
+                &manager,
+                session.id,
+                Some(SessionShareConfig {
+                    persistent: true,
+                    redaction_script: Some(Some(String::new())),
+                }),
+            )
+            .await
+            .unwrap();
+        let policies = Arc::new(TestPolicies::default());
+        policies
+            .0
+            .write()
+            .unwrap()
+            .insert("local".into(), Some("mask".into()));
+        shares.set_permissions(policies.clone());
+        let token = state.token.as_ref().unwrap();
+        assert_eq!(
+            shares
+                .effective_redaction(&shares.authenticate(token).unwrap())
+                .await
+                .unwrap(),
+            None
+        );
+        let path = directory.path().join("session-shares.json");
+        std::fs::write(&path, serde_json::to_vec(&json!({"version":1,"shares":[{"session_id":session.id,"token":token,"redaction_script":null}]})).unwrap()).unwrap();
+        let migrated = SessionShareService::open(directory.path()).unwrap();
+        migrated.set_permissions(policies);
+        assert_eq!(
+            migrated
+                .status(&manager, session.id)
+                .await
+                .unwrap()
+                .redaction_script
+                .as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            migrated
+                .effective_redaction(&migrated.authenticate(token).unwrap())
+                .await
+                .unwrap(),
+            None
+        );
+        let inherited: SessionShareConfig =
+            serde_json::from_value(json!({"persistent":true,"redaction_script":null})).unwrap();
+        migrated
+            .enable_with_config(&manager, session.id, Some(inherited))
+            .await
+            .unwrap();
+        assert_eq!(
+            migrated
+                .effective_redaction(&migrated.authenticate(token).unwrap())
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("mask")
+        );
+    }
+
     #[tokio::test]
     async fn share_summary_excludes_credentials_disabled_and_archived_sessions() {
         let directory = tempdir().unwrap();
@@ -1121,7 +1506,14 @@ mod tests {
             .unwrap();
         assert!(
             service
-                .set_redaction(&manager, session.id, Some("mask".into()))
+                .enable_with_config(
+                    &manager,
+                    session.id,
+                    Some(SessionShareConfig {
+                        persistent: true,
+                        redaction_script: Some(Some("mask".into()))
+                    })
+                )
                 .await
                 .is_err()
         );
@@ -1183,7 +1575,7 @@ mod tests {
                 &manager,
                 session.id,
                 Some(SessionShareConfig {
-                    redaction_script: Some("mask".into()),
+                    redaction_script: Some(Some("mask".into())),
                     persistent: true,
                 }),
             )
@@ -1207,7 +1599,14 @@ mod tests {
             enabled
         );
         restored
-            .set_redaction(&manager, session.id, None)
+            .enable_with_config(
+                &manager,
+                session.id,
+                Some(SessionShareConfig {
+                    persistent: true,
+                    redaction_script: Some(Some(String::new())),
+                }),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -1217,10 +1616,17 @@ mod tests {
                 .await
                 .unwrap()
                 .redaction_script,
-            None
+            Some(String::new())
         );
         restored
-            .set_redaction(&manager, session.id, Some("mask".into()))
+            .enable_with_config(
+                &manager,
+                session.id,
+                Some(SessionShareConfig {
+                    persistent: true,
+                    redaction_script: Some(Some("mask".into())),
+                }),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -1310,7 +1716,7 @@ mod tests {
         let request: EnableSessionShareRequest = serde_json::from_value(json!({"session_id":3,"session_share_config":{"redaction_script":"mask","persistent":true}})).unwrap();
         let config = request.session_share_config.unwrap();
         assert!(config.persistent);
-        assert_eq!(config.redaction_script.as_deref(), Some("mask"));
+        assert_eq!(config.redaction_script, Some(Some("mask".into())));
     }
 
     #[test]
@@ -1505,6 +1911,7 @@ mod tests {
             SessionShareState {
                 persistent: false,
                 redaction_script: None,
+                redaction_identity: None,
                 session_id: session.id,
                 enabled: false,
                 token: None,
@@ -1524,6 +1931,7 @@ mod tests {
             SessionShareState {
                 persistent: false,
                 redaction_script: None,
+                redaction_identity: None,
                 session_id: session.id,
                 enabled: false,
                 token: None,
@@ -1543,6 +1951,170 @@ mod tests {
 
         let error = service.enable(&manager, u64::MAX).await.unwrap_err();
         assert_eq!(error.code, ErrorCode::NotFound);
+    }
+
+    #[tokio::test]
+    async fn shared_interceptors_are_scoped_readonly_and_never_include_source() {
+        use crate::dto::{
+            InterceptorCreateRequest, InterceptorUpdateRequest, ReplaceSessionInterceptorsRequest,
+            SessionInterceptorInput,
+        };
+        use proxy_crab_mitm::model::InterceptorKind;
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
+        let shared = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        let other = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        for (kind, name) in [
+            (InterceptorKind::Request, "auth"),
+            (InterceptorKind::Response, "mask"),
+            (InterceptorKind::Request, "other-only"),
+        ] {
+            manager
+                .create_interceptor(InterceptorCreateRequest {
+                    kind,
+                    name: name.into(),
+                    content: "-- #display_name: shared label\n-- secret source must stay private"
+                        .into(),
+                })
+                .await
+                .unwrap();
+        }
+        manager
+            .replace_session_interceptors(
+                Some(shared.id),
+                ReplaceSessionInterceptorsRequest {
+                    request: vec![SessionInterceptorInput {
+                        name: "auth".into(),
+                        enabled: true,
+                    }],
+                    response: vec![SessionInterceptorInput {
+                        name: "mask".into(),
+                        enabled: false,
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        manager
+            .replace_session_interceptors(
+                Some(other.id),
+                ReplaceSessionInterceptorsRequest {
+                    request: vec![SessionInterceptorInput {
+                        name: "other-only".into(),
+                        enabled: true,
+                    }],
+                    response: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        let shares = SessionShareService::new();
+        let token = shares
+            .enable(&manager, shared.id)
+            .await
+            .unwrap()
+            .token
+            .unwrap();
+        let app = router(manager.clone(), shares.clone());
+        let uri = format!(
+            "/share-api/session-interceptors?token={token}&session_id={}",
+            other.id
+        );
+        for (label, enabled) in [("shared label", true), ("updated label", false)] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let text = String::from_utf8(bytes.to_vec()).unwrap();
+            assert!(
+                !text.contains("secret source")
+                    && !text.contains("other-only")
+                    && !text.contains("content")
+            );
+            let data: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(data["data"]["session_id"], shared.id);
+            assert_eq!(
+                data["data"]["request"],
+                json!([{"name":"auth","display_name":label,"enabled":enabled,"valid":true}])
+            );
+            assert_eq!(data["data"]["response"][0]["enabled"], false);
+            manager
+                .update_interceptor(
+                    InterceptorKind::Request,
+                    "auth".into(),
+                    InterceptorUpdateRequest {
+                        content:
+                            "-- #display_name: updated label\n-- secret source must stay private"
+                                .into(),
+                    },
+                )
+                .await
+                .unwrap();
+            manager
+                .replace_session_interceptors(
+                    Some(shared.id),
+                    ReplaceSessionInterceptorsRequest {
+                        request: vec![SessionInterceptorInput {
+                            name: "auth".into(),
+                            enabled: false,
+                        }],
+                        response: vec![SessionInterceptorInput {
+                            name: "mask".into(),
+                            enabled: false,
+                        }],
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        for method in ["POST", "PUT", "DELETE"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(&uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        }
+        for suffix in [
+            "".to_owned(),
+            "?token=invalid".to_owned(),
+            format!("?token={token}&token={token}"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/share-api/session-interceptors{suffix}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        shares.disable(&manager, shared.id).await.unwrap();
+        let response = app
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

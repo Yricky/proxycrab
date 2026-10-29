@@ -139,3 +139,151 @@ test("share policy revisions invalidate views once and detect failed/recovered b
     stop();
   }
 });
+
+test("share interceptor reads ignore supplied session IDs and expose no editing or breakpoint methods", async () => {
+  const config = {
+    session_id: 1,
+    request: [{ name: "auth", enabled: true, valid: true }],
+    response: [],
+  };
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, data: config })));
+  vi.stubGlobal("fetch", fetchMock);
+  const backend = createShareBackend("http://localhost", "share secret", {
+    session: { id: 1, name: "shared", created_at: 0, description: null },
+    view: { session_id: 1, columns: [], filter: { option: null, input: "" } },
+    proxy_status: { status: "stopped" },
+    api_port: 18089,
+  });
+  expect(await backend.getSessionInterceptors(999)).toEqual(config);
+  const url = fetchMock.mock.calls[0]![0] as URL;
+  expect(url.pathname).toBe("/share-api/session-interceptors");
+  expect(url.searchParams.getAll("token")).toEqual(["share secret"]);
+  expect(url.searchParams.has("session_id")).toBe(false);
+  for (const method of [
+    "replaceSessionInterceptors",
+    "listInterceptors",
+    "getInterceptor",
+    "createInterceptor",
+    "updateInterceptor",
+    "deleteInterceptor",
+    "listBreakpoints",
+    "getBreakpoint",
+  ] as const) {
+    expect(backend[method]).toBeUndefined();
+  }
+});
+
+test("share polls interceptor order, labels, enabled and valid state and stops after unsubscribe", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("window", {
+    setInterval,
+    clearInterval,
+    setTimeout,
+    clearTimeout,
+    dispatchEvent: vi.fn(),
+  });
+  const bootstrap: ShareBootstrap = {
+    session: { id: 1, name: "shared", created_at: 0, description: null },
+    view: { session_id: 1, columns: [], filter: { option: null, input: "" } },
+    proxy_status: { status: "stopped" },
+    api_port: 18089,
+  };
+  let config = {
+    session_id: 1,
+    request: [{ name: "auth", display_name: "Auth", enabled: true, valid: true }],
+    response: [],
+  };
+  const fetchMock = vi.fn(async (input: URL, init: RequestInit) => {
+    if (input.pathname === "/share-api/proxy/changes")
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    const data =
+      input.pathname === "/share-api/session-view"
+        ? bootstrap.view
+        : input.pathname === "/share-api/session-interceptors"
+          ? config
+          : [];
+    return new Response(JSON.stringify({ ok: true, data }));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const changes: HttpApiChange[] = [];
+  const stop = await createShareBackend("http://localhost", "token", bootstrap).subscribeChanges(
+    (change) => changes.push(change),
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(1500);
+    changes.length = 0;
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(changes).toEqual([]);
+    for (const request of [
+      [{ name: "auth", display_name: "Renamed", enabled: true, valid: true }],
+      [{ name: "auth", display_name: "Renamed", enabled: false, valid: true }],
+      [{ name: "auth", display_name: "Renamed", enabled: false, valid: false }],
+      [
+        { name: "new", display_name: "New", enabled: true, valid: true },
+        { name: "auth", display_name: "Renamed", enabled: false, valid: false },
+      ],
+      [],
+    ]) {
+      config = { ...config, request };
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(changes).toEqual([{ resources: ["session_interceptors"], session_id: 1 }]);
+      changes.length = 0;
+    }
+  } finally {
+    stop();
+  }
+  const requests = fetchMock.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(fetchMock).toHaveBeenCalledTimes(requests);
+});
+
+test("slow share metadata polling never overlaps or emits late changes after unsubscribe", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("window", {
+    setInterval,
+    clearInterval,
+    setTimeout,
+    clearTimeout,
+    dispatchEvent: vi.fn(),
+  });
+  const bootstrap: ShareBootstrap = {
+    session: { id: 1, name: "shared", created_at: 0, description: null },
+    view: { session_id: 1, columns: [], filter: { option: null, input: "" } },
+    proxy_status: { status: "stopped" },
+    api_port: 18089,
+  };
+  let resolveInterceptors!: (response: Response) => void;
+  const fetchMock = vi.fn(async (input: URL, init: RequestInit) => {
+    if (input.pathname === "/share-api/proxy/changes")
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    if (input.pathname === "/share-api/session-interceptors")
+      return new Promise<Response>((resolve) => {
+        resolveInterceptors = resolve;
+      });
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        data: input.pathname === "/share-api/session-view" ? bootstrap.view : [],
+      }),
+    );
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const changes = vi.fn();
+  const stop = await createShareBackend("http://localhost", "token", bootstrap).subscribeChanges(
+    changes,
+  );
+  await vi.advanceTimersByTimeAsync(4500);
+  expect(
+    fetchMock.mock.calls.filter(([url]) => url.pathname === "/share-api/session-interceptors"),
+  ).toHaveLength(1);
+  stop();
+  resolveInterceptors(
+    new Response(JSON.stringify({ ok: true, data: { session_id: 1, request: [], response: [] } })),
+  );
+  await vi.advanceTimersByTimeAsync(1500);
+  expect(changes).not.toHaveBeenCalled();
+});

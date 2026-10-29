@@ -85,6 +85,7 @@ async fn enable_session_share(
     session_id: u64,
     session_share_config: Option<SessionShareConfig>,
 ) -> Result<SessionShareState, ManagerError> {
+    state.permissions()?;
     state
         .shares
         .enable_with_config(&state.manager(), session_id, session_share_config)
@@ -1049,6 +1050,9 @@ pub fn run() {
             );
             let permission_error = permissions.as_ref().err().map(ToString::to_string);
             let permissions = permissions.ok();
+            if let Some(permissions) = &permissions {
+                shares.set_permissions(permissions.clone());
+            }
             let (http, http_error) = if let Some(permissions) = permissions.as_ref() {
                 let share_manager = manager.clone();
                 let share_service = shares.clone();
@@ -1166,7 +1170,6 @@ pub fn run() {
             update_redaction_script,
             delete_redaction_script,
             set_http_identity_redaction,
-            set_session_share_redaction,
             list_filter_scripts,
             create_filter_script,
             get_filter_script,
@@ -1318,19 +1321,8 @@ async fn set_http_identity_redaction(
     id: String,
     redaction_script: Option<String>,
 ) -> Result<IdentityPermissions, ManagerError> {
-    if let Some(name) = &redaction_script {
+    if let Some(name) = redaction_script.as_ref().filter(|name| !name.is_empty()) {
         state.manager().redaction_script(name.clone()).await?;
     }
     state.permissions()?.set_redaction(&id, redaction_script)
-}
-#[tauri::command]
-async fn set_session_share_redaction(
-    state: State<'_, BackendState>,
-    session_id: u64,
-    redaction_script: Option<String>,
-) -> Result<SessionShareState, ManagerError> {
-    state
-        .shares
-        .set_redaction(&state.manager(), session_id, redaction_script)
-        .await
 }

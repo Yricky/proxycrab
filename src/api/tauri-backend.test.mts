@@ -131,3 +131,23 @@ test("desktop picker cancellation returns no writer", async () => {
   expect(await createTauriBackend().saveFile({ filename: "capture.har" })).toBeNull();
   expect(invoke).toHaveBeenCalledTimes(1);
 });
+
+test("share IPC distinguishes omitted, inherited and explicitly unredacted policy", async () => {
+  const backend = createTauriBackend();
+  await backend.enableSessionShare(7, { persistent: true });
+  expect(vi.mocked(invoke).mock.calls.at(-1)![1]).toEqual({
+    sessionId: 7,
+    sessionShareConfig: { persistent: true },
+  });
+  await backend.enableSessionShare(7, { persistent: true, redactionScript: "" });
+  expect(vi.mocked(invoke).mock.calls.at(-1)![1]).toEqual({
+    sessionId: 7,
+    sessionShareConfig: { persistent: true, redaction_script: "" },
+  });
+  await backend.enableSessionShare(7, { persistent: true, redactionScript: null });
+  expect(vi.mocked(invoke).mock.calls.at(-1)![1]).toEqual({
+    sessionId: 7,
+    sessionShareConfig: { persistent: true, redaction_script: null },
+  });
+  expect(Reflect.get(backend, "setSessionShareRedaction")).toBeUndefined();
+});

@@ -105,12 +105,46 @@ sharing. The desktop and CLI read enabled, non-archived summaries through one ba
 (`GET /api/session-shares`, desktop `list_session_shares`), without fetching share tokens. Icons
 refresh after share changes and Session archive/restore operations.
 
+Share redaction is resolved by the backend, not copied by the frontend. For a new owner-created
+share, omitting `session_share_config.redaction_script` inherits the current local no-API-key binding.
+Explicit `null` selects that same inheritance; `""` explicitly disables share-level redaction; a
+nonempty name selects a library script. On updates, an omitted redaction field preserves the current
+policy; use explicit null to switch back to local inheritance. A supplied config updates persistence
+without rotating the token; an omitted config preserves an existing owner share.
+
+API keys have stricter rules. A Key bound to a nonempty script must omit the share redaction field
+and the share follows that Key's binding dynamically, including on updates. An unconfigured Key
+(null/missing binding) also cannot supply the field; new shares inherit local. Only a Key whose own
+binding is explicitly `""` may supply the field, including null, empty, or a script name. Violations
+return HTTP 403 `share_redaction_forbidden` before modifying share state. Owner Tauri IPC, local
+management requests and the trusted CLI UI may select policies normally. Ordinary route permission
+checks still apply. Existing null Key bindings are not treated as explicit opt-out.
+
+Inherited policies resolve their identity on each share request, so changing local or Key bindings
+updates share reads without rotating links. A missing/deleted Key or failed identity lookup fails
+closed (`redaction_failed`); it never falls back to original data. Status reports the configured
+`redaction_script` and optional `redaction_identity` (a stable Key ID, never an API Key credential).
+The frontend shows inheritance separately from explicit no redaction and never reads local defaults.
+The startup `--redaction-script` policy still overrides all these settings.
+
+Updates use `POST /api/session-shares` exclusively. The old
+`PUT /api/session-shares/{id}/redaction` route and desktop `set_session_share_redaction` command
+have been removed; persisted permissions drop that obsolete action.
+
+Persistent share files use version 2 and retain policy references. Version 1 files remain readable:
+old null share bindings migrate to explicit `""` to preserve their original unredacted behavior;
+named script bindings and tokens are preserved. New inherited shares retain null policy references
+across restart and resolve the current binding when read.
+
 The `/session?token=…` page renders only the main traffic content. It follows new/finished captures
 and owner column changes, starts with the Session's current filter, and keeps every viewer's later
 filter stateless. An optional `id` query parameter focuses the matching record: the list scrolls to
 that row and opens its inline detail panel. Sorting, copying, log details, complete bodies, historical interceptor results,
-and script snapshots remain readable. Toolbar/sidebar management, column editing, interceptors,
-breakpoints, exports, and every other write surface are absent. Its token is accepted only by the
+and script snapshots remain readable. The interceptor pipeline shows the shared Session's current
+request/response chain, including labels, order, enabled and valid state, and follows owner changes.
+It reuses the main UI component: missing Backend methods hide add/edit/remove/toggle/drag and
+breakpoint operations; HAR export remains available through the existing read/save methods.
+Toolbar/sidebar management, column editing, interceptor writes and other write surfaces are absent. Its token is accepted only by the
 dedicated Session-scoped `/share-api/*` routes as exactly one `token` query parameter and is never an
 Agent API key. These routes ignore `Authorization` and return `Cache-Control: no-store`; the share UI
 uses a no-referrer policy. Agents can also read a supplied Session link directly through these

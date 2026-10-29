@@ -291,11 +291,12 @@ export interface SessionSharesPayload {
 }
 
 export interface SessionShareConfig {
-  redactionScript: string | null;
+  redactionScript?: string | null;
   persistent: boolean;
 }
 
 export interface SessionShareState {
+  redaction_identity?: string | null;
   persistent: boolean;
   redaction_script?: string | null;
   session_id: number;

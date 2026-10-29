@@ -388,7 +388,11 @@ async fn set_identity_redaction(
     Path(id): Path<String>,
     Json(binding): Json<proxy_crab_mgr::dto::RedactionBinding>,
 ) -> Response {
-    if let Some(name) = &binding.redaction_script {
+    if let Some(name) = binding
+        .redaction_script
+        .as_ref()
+        .filter(|name| !name.is_empty())
+    {
         if let Err(error) = state.manager.redaction_script(name.clone()).await {
             return result::<()>(Err(error));
         }

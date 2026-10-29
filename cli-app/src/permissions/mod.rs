@@ -130,12 +130,44 @@ impl PermissionManager for CliPermissionService {
             .map_err(|_| PermissionDenied::unauthorized("invalid_api_key", "invalid API key"))?;
         self.store
             .identity_permissions(&identity.summary.id)
-            .map(|view| view.redaction_script)
+            .map(|view| view.redaction_script.filter(|name| !name.is_empty()))
             .map_err(|_| {
                 PermissionDenied::internal(
                     "permission_check_failed",
                     "cannot load redaction binding",
                 )
+            })
+    }
+    async fn share_identity(
+        &self,
+        credential: &ManagementCredential,
+    ) -> Result<Option<proxy_crab_mgr::permission::RedactionIdentity>, PermissionDenied> {
+        if self
+            .ui_access
+            .as_ref()
+            .is_some_and(|access| access.allows(credential))
+        {
+            return Ok(None);
+        }
+        let identity = self
+            .store
+            .authenticate(credential)
+            .map_err(|_| PermissionDenied::unauthorized("invalid_api_key", "invalid API key"))?;
+        if identity.summary.id == "local" {
+            return Ok(None);
+        }
+        let binding = self.identity_redaction(&identity.summary.id).await?;
+        Ok(Some(proxy_crab_mgr::permission::RedactionIdentity {
+            id: identity.summary.id,
+            redaction_script: binding,
+        }))
+    }
+    async fn identity_redaction(&self, id: &str) -> Result<Option<String>, PermissionDenied> {
+        self.store
+            .identity_permissions(id)
+            .map(|view| view.redaction_script)
+            .map_err(|_| {
+                PermissionDenied::forbidden("redaction_failed", "redaction identity unavailable")
             })
     }
     async fn check_permission(&self, action: PermissionAction) -> Option<PermissionDenied> {
@@ -260,7 +292,7 @@ mod tests {
         );
         assert_eq!(
             service
-                .redaction_script(&ManagementCredential::Bearer(key.api_key))
+                .redaction_script(&ManagementCredential::Bearer(key.api_key.clone()))
                 .await
                 .unwrap()
                 .as_deref(),
@@ -272,6 +304,34 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none()
+        );
+        let credential = ManagementCredential::Bearer(key.api_key.clone());
+        let bound = service.share_identity(&credential).await.unwrap().unwrap();
+        assert_eq!(bound.id, key.identity.id);
+        assert_eq!(bound.redaction_script.as_deref(), Some("token-mask"));
+        service
+            .set_redaction(&key.identity.id, Some(String::new()))
+            .unwrap();
+        assert_eq!(service.redaction_script(&credential).await.unwrap(), None);
+        assert_eq!(
+            service
+                .share_identity(&credential)
+                .await
+                .unwrap()
+                .unwrap()
+                .redaction_script
+                .as_deref(),
+            Some("")
+        );
+        service.set_redaction(&key.identity.id, None).unwrap();
+        assert_eq!(
+            service
+                .share_identity(&credential)
+                .await
+                .unwrap()
+                .unwrap()
+                .redaction_script,
+            None
         );
     }
 

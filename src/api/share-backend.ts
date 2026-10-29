@@ -10,6 +10,7 @@ import type {
   ProxyStatus,
   Script,
   SessionMetadata,
+  SessionInterceptorsPayload,
   SessionViewPayload,
 } from "./types";
 
@@ -108,15 +109,19 @@ export function createShareBackend(
       let redactionRevision = bootstrap.view.redaction_revision ?? null;
       let columnScripts = "";
       let filterScripts = "";
+      let interceptors = "";
+      let polling = false;
       let proxyRevision: string | undefined;
       const proxyAbort = new AbortController();
       const poll = async () => {
-        if (stopped) return;
+        if (stopped || polling) return;
+        polling = true;
         try {
-          const [view, nextColumns, nextFilters] = await Promise.all([
+          const [view, nextColumns, nextFilters, nextInterceptors] = await Promise.all([
             call<SessionViewPayload>("/share-api/session-view"),
             call<Script[]>("/share-api/column-scripts"),
             call<Script[]>("/share-api/filter-scripts"),
+            call<SessionInterceptorsPayload>("/share-api/session-interceptors"),
           ]);
           if (stopped) return;
           const revision = view.redaction_revision ?? null;
@@ -128,6 +133,11 @@ export function createShareBackend(
           if (next !== columns) {
             columns = next;
             handler({ resources: ["session_view"], session_id: bootstrap.session.id });
+          }
+          const nextInterceptorConfig = JSON.stringify(nextInterceptors);
+          if (nextInterceptorConfig !== interceptors) {
+            interceptors = nextInterceptorConfig;
+            handler({ resources: ["session_interceptors"], session_id: bootstrap.session.id });
           }
           const nextColumnScripts = JSON.stringify(nextColumns);
           const nextFilterScripts = JSON.stringify(nextFilters);
@@ -149,6 +159,8 @@ export function createShareBackend(
             window.dispatchEvent(new CustomEvent("proxycrab-redaction-changed"));
           }
           // The request helper announces terminal share errors; network errors retry.
+        } finally {
+          polling = false;
         }
       };
       const watchProxy = async () => {
@@ -244,6 +256,8 @@ export function createShareBackend(
         `/share-api/logs/${id}/interceptors/${executionId}/snapshot`,
       ),
     getSessionView: () => call("/share-api/session-view"),
+    getSessionInterceptors: () =>
+      call<SessionInterceptorsPayload>("/share-api/session-interceptors"),
     listColumnScripts: () => call<Script[]>("/share-api/column-scripts"),
     listFilterScripts: () => call<Script[]>("/share-api/filter-scripts"),
   };

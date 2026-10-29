@@ -197,7 +197,9 @@ export function createHttpBackend(
         json("POST", {
           session_id: sessionId,
           session_share_config: sessionShareConfig && {
-            redaction_script: sessionShareConfig.redactionScript,
+            ...(sessionShareConfig.redactionScript === undefined
+              ? {}
+              : { redaction_script: sessionShareConfig.redactionScript }),
             persistent: sessionShareConfig.persistent,
           },
         }),
@@ -289,11 +291,6 @@ export function createHttpBackend(
     setHttpIdentityRedaction: (id, redactionScript) =>
       call(
         `/ui-api/permissions/identities/${encodeURIComponent(id)}/redaction`,
-        json("PUT", { redaction_script: redactionScript }),
-      ),
-    setSessionShareRedaction: (id, redactionScript) =>
-      call(
-        `/api/session-shares/${id}/redaction`,
         json("PUT", { redaction_script: redactionScript }),
       ),
 

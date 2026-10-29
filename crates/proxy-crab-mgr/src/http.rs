@@ -265,6 +265,7 @@ fn router_with_changes_and_extra(
     changes: ChangeSender,
     extra: Router,
 ) -> Router {
+    shares.set_permissions(permissions.clone());
     let downloads = Router::new()
         .route("/ca.crt", get(download_certificate))
         .with_state(manager.clone())
@@ -279,10 +280,6 @@ fn router_with_changes_and_extra(
             get(redaction_script)
                 .put(update_redaction_script)
                 .delete(delete_redaction_script),
-        )
-        .route(
-            "/api/session-shares/{id}/redaction",
-            put(set_session_share_redaction),
         )
         .route("/api/agents.md", get(agents_markdown))
         .route("/api/assets", get(assets))
@@ -419,11 +416,12 @@ fn router_with_changes_and_extra(
             axum::routing::delete(delete_bypass_entry),
         )
         .route_layer(middleware::from_fn_with_state(
-            permissions,
+            permissions.clone(),
             authorize_request,
         ))
         .with_state(manager)
         .layer(Extension(shares))
+        .layer(Extension(permissions))
         .layer(Extension(changes.clone()))
         .layer(middleware::from_fn_with_state(
             changes,
@@ -549,6 +547,7 @@ async fn authorize_request(
     };
     let mut request = request;
     request.extensions_mut().insert(binding);
+    request.extensions_mut().insert(credential);
     next.run(request).await
 }
 
@@ -832,11 +831,27 @@ async fn update_session(
 async fn enable_session_share(
     State(manager): State<ManagerState>,
     Extension(shares): Extension<Arc<SessionShareService>>,
+    Extension(permissions): Extension<Arc<dyn PermissionManager>>,
+    Extension(credential): Extension<ManagementCredential>,
     ApiJson(request): ApiJson<EnableSessionShareRequest>,
 ) -> ApiResult {
+    let identity = permissions
+        .share_identity(&credential)
+        .await
+        .map_err(|error| {
+            ApiError(ManagerError::new(
+                ErrorCode::ShareRedactionForbidden,
+                error.message,
+            ))
+        })?;
     success(
         shares
-            .enable_with_config(&manager, request.session_id, request.session_share_config)
+            .enable_for_identity(
+                &manager,
+                request.session_id,
+                request.session_share_config,
+                identity,
+            )
             .await?,
     )
 }
@@ -1765,7 +1780,9 @@ impl ErrorCode {
     /// 错误码对应的 HTTP 状态码。穷尽匹配：新增错误码必须在编译期决定状态码。
     pub fn http_status(self) -> StatusCode {
         match self {
-            Self::RedactionManagementDisabled | Self::MessageContentHidden => StatusCode::FORBIDDEN,
+            Self::RedactionManagementDisabled
+            | Self::MessageContentHidden
+            | Self::ShareRedactionForbidden => StatusCode::FORBIDDEN,
             Self::MessageContentUnavailable => StatusCode::UNPROCESSABLE_ENTITY,
             Self::BadRequest | Self::InvalidAssetId | Self::InvalidAssetFormat => {
                 StatusCode::BAD_REQUEST
@@ -4272,6 +4289,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sharing_post_enforces_raw_key_policy_and_empty_string_contract() {
+        struct ShareKeys;
+        #[async_trait]
+        impl PermissionManager for ShareKeys {
+            async fn check_permission(&self, _: PermissionAction) -> Option<PermissionDenied> {
+                None
+            }
+            async fn share_identity(
+                &self,
+                credential: &ManagementCredential,
+            ) -> Result<Option<crate::permission::RedactionIdentity>, PermissionDenied>
+            {
+                let ManagementCredential::Bearer(key) = credential else {
+                    return Ok(None);
+                };
+                Ok(Some(crate::permission::RedactionIdentity {
+                    id: key.clone(),
+                    redaction_script: match key.as_str() {
+                        "bound" => Some("mask".into()),
+                        "plain" => Some(String::new()),
+                        _ => None,
+                    },
+                }))
+            }
+        }
+        let directory = tempdir().unwrap();
+        let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(
+            ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap(),
+        );
+        let session = manager
+            .create_session(crate::dto::CreateSessionRequest::default())
+            .await
+            .unwrap();
+        manager
+            .create_redaction_script(crate::dto::ScriptRequest {
+                name: "mask".into(),
+                content: "return true".into(),
+            })
+            .await
+            .unwrap();
+        let app = router(manager, Arc::new(ShareKeys));
+        for key in ["bound", "unset", "plain"] {
+            for value in [
+                None,
+                Some(serde_json::Value::Null),
+                Some(json!("")),
+                Some(json!("mask")),
+            ] {
+                let mut config = json!({"persistent":false});
+                if let Some(value) = value.clone() {
+                    config["redaction_script"] = value;
+                }
+                let request = Request::builder()
+                    .method("POST")
+                    .uri("/api/session-shares")
+                    .header("authorization", format!("Bearer {key}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"session_id":session.id,"session_share_config":config}).to_string(),
+                    ))
+                    .unwrap();
+                let response = app.clone().oneshot(request).await.unwrap();
+                let allowed = key == "plain" || value.is_none();
+                assert_eq!(
+                    response.status(),
+                    if allowed {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::FORBIDDEN
+                    }
+                );
+                let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                if !allowed {
+                    assert_eq!(body["error"]["code"], "share_redaction_forbidden");
+                } else if key == "bound" {
+                    assert_eq!(body["data"]["redaction_identity"], "bound");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn removed_har_routes_are_not_available() {
         let directory = tempdir().unwrap();
         let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
@@ -4281,6 +4381,7 @@ mod tests {
             ("GET", "/api/session-har-shares/1"),
             ("DELETE", "/api/session-har-shares/1"),
             ("PUT", "/api/session-har-shares/1/redaction"),
+            ("PUT", "/api/session-shares/1/redaction"),
             ("GET", "/session.har?token=old"),
         ] {
             let response = app
@@ -4690,17 +4791,4 @@ async fn delete_redaction_script(
 ) -> ApiResult {
     manager.delete_redaction_script(name).await?;
     success(json!({}))
-}
-
-async fn set_session_share_redaction(
-    State(manager): State<ManagerState>,
-    Extension(shares): Extension<Arc<SessionShareService>>,
-    ApiPath(id): ApiPath<u64>,
-    ApiJson(binding): ApiJson<crate::dto::RedactionBinding>,
-) -> ApiResult {
-    success(
-        shares
-            .set_redaction(&manager, id, binding.redaction_script)
-            .await?,
-    )
 }

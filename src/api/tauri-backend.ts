@@ -171,7 +171,9 @@ export function createTauriBackend(): Backend {
       call<SessionShareState>("enable_session_share", {
         sessionId,
         sessionShareConfig: sessionShareConfig && {
-          redaction_script: sessionShareConfig.redactionScript,
+          ...(sessionShareConfig.redactionScript === undefined
+            ? {}
+            : { redaction_script: sessionShareConfig.redactionScript }),
           persistent: sessionShareConfig.persistent,
         },
       }),
@@ -223,8 +225,6 @@ export function createTauriBackend(): Backend {
     deleteRedactionScript: (name) => call("delete_redaction_script", { name }),
     setHttpIdentityRedaction: (id, redactionScript) =>
       call("set_http_identity_redaction", { id, redactionScript }),
-    setSessionShareRedaction: (sessionId, redactionScript) =>
-      call("set_session_share_redaction", { sessionId, redactionScript }),
 
     listColumnScripts: () => call("list_column_scripts"),
     createColumnScript: (request: ScriptRequest) => call("create_column_script", { request }),

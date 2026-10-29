@@ -262,7 +262,7 @@
     {
       "id": 44,
       "prompt": "Create a read-time redaction script that hides Authorization and cookies, and bind it to the enabled Session 7 page share. Preserve persistence and live capture behavior.",
-      "expected_output": "Uses context.req.header/context.resp.header loaded guards and handles URI-only req.headers=nil, creates the redaction library entry, updates only /api/session-shares/7/redaction, does not print the share token, and explains that modifications history is out of scope.",
+      "expected_output": "Uses context.req.header/context.resp.header loaded guards and handles URI-only req.headers=nil, creates the redaction library entry, uses POST /api/session-shares with session_share_config while preserving persistence, does not print the share token, and explains that modifications history is out of scope.",
       "files": []
     },
     {
@@ -342,13 +342,31 @@
     {
       "id": 58,
       "prompt": "Enable a persistent ProxyCrab Session 3 share with redaction mask, change it to temporary without rotating its token, and explain restart, revocation, and HAR behavior.",
-      "expected_output": "Uses existing permission-controlled POST /api/session-shares with session_id:3 and session_share_config:{redaction_script:\"mask\",persistent:true}, then the same POST with persistent:false and the preserved redaction_script. No new persistence route or IPC command. Reads persistent in state, verifies same token without reporting it, explains optional omitted config preserves enabled state, config replaces both settings, persistent entries restore with token/binding, disable removes disk state, re-enable rotates token, and HAR export is now a local frontend action without a sharing token.",
+      "expected_output": "Uses existing permission-controlled POST /api/session-shares with session_id:3 and session_share_config:{redaction_script:\"mask\",persistent:true}, then the same POST with persistent:false and the preserved redaction_script. No new persistence route or IPC command. Reads persistent in state, verifies same token without reporting it, explains optional omitted config preserves enabled state, omitted redaction fields preserve existing policy; explicit null restores local inheritance, persistent entries restore with token/binding, disable removes disk state, re-enable rotates token, and HAR export is now a local frontend action without a sharing token.",
       "files": []
     },
     {
       "id": 59,
       "prompt": "List all currently shared ProxyCrab Sessions, distinguish temporary and persistent sharing, and explain why an archived Session without an enabled page share is absent. Do not retrieve tokens.",
       "expected_output": "Calls session-share-list.mjs or permission-controlled GET /api/session-shares once, consumes shares:[{session_id,persistent}], and joins names from the Session list if needed. Only enabled non-archived page shares are returned; Token/redaction bindings are excluded; HAR link sharing has been removed. Does not issue N per-Session status queries or equate denied/failed reads with all shares disabled. Recognizes default allow and restored enabled Sessions reappearing.",
+      "files": []
+    },
+    {
+      "id": 60,
+      "prompt": "Given a ProxyCrab Session sharing link, inspect its currently configured request/response interceptor chain and explain how the shared UI follows owner changes. Do not modify configuration or retrieve library source.",
+      "expected_output": "Uses GET /share-api/session-interceptors with exactly one token query parameter on the supplied link origin. Treats session_id as server-scoped, preserves order, and reads only name/display_name/enabled/valid. Distinguishes current configuration from per-capture historical execution. Does not invent writes or use management credentials or library source. Explains the shared pipeline reuses the component with capabilities inferred from Backend methods; no add/edit/toggle/drag/sweep/breakpoint controls, frontend HAR export remains, and existing metadata polling detects changes with scoped session_interceptors events. Reports invalid/revoked/unavailable shares without bypass.",
+      "files": []
+    },
+    {
+      "id": 61,
+      "prompt": "Explain the default redaction choice when creating a ProxyCrab Session share from its sharing window or a log-row focused-link shortcut. What happens to existing shares, an explicit no-redaction selection, later local binding changes, and lookup failures?",
+      "expected_output": "Backend enforces defaults: omitted field on creation inherits local dynamically, explicit null restores inheritance, empty string explicitly disables share-level redaction, and nonempty values select scripts. Bound Keys must omit the field and shares follow their Key binding; unconfigured Keys must omit it; only explicitly unredacted Keys may supply it. Forbidden fields return share_redaction_forbidden and identity lookup failure fails closed. Existing omitted-field updates preserve policy. Frontend reads no local defaults and every update uses POST /api/session-shares, with no separate redaction route. Inherited binding changes propagate; startup forced redaction still overrides.",
+      "files": []
+    },
+    {
+      "id": 62,
+      "prompt": "A ProxyCrab API Key bound to mask gets 403 share_redaction_forbidden when POST /api/session-shares includes redaction_script:null. How should it create or update a share? May an unconfigured Key or a Key explicitly bound to empty string send that field?",
+      "expected_output": "Removes the share redaction field entirely, not merely null, and uses the same permission-controlled POST; the bound Key share dynamically follows its stable identity binding. Unconfigured/null-bound Keys also cannot supply the field. Only a Key explicitly configured with empty-string no-redaction may supply null/empty/named policy. Does not change credentials or remove the Key binding, does not call the removed PUT redaction route, and preserves persistence/token on updates. Explains identity deletion or lookup failure denies inherited reads and startup redaction cannot be disabled.",
       "files": []
     }
   ]

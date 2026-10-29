@@ -5,11 +5,18 @@ import type { Script } from "../api/types";
 import { scriptLabel } from "../utils/script-label";
 import { reportError } from "../stores/app";
 import CustomSelect from "./CustomSelect.vue";
-const props = defineProps<{ modelValue: string | null; disabled?: boolean }>();
+const props = defineProps<{
+  modelValue: string | null;
+  disabled?: boolean;
+  inheritLabel?: string;
+  inheritedValueLabel?: string;
+}>();
 const emit = defineEmits<{ "update:modelValue": [value: string | null] }>();
 const backend = useBackend();
 const scripts = ref<Script[]>([]);
+const INHERIT = "\0inherit";
 const options = computed(() => [
+  { value: INHERIT, label: props.inheritLabel ?? "未配置" },
   { value: "", label: "不脱敏" },
   ...scripts.value.map((script) => ({ value: script.name, label: scriptLabel(script) })),
   ...(props.modelValue && !scripts.value.some((s) => s.name === props.modelValue)
@@ -33,10 +40,11 @@ onBeforeUnmount(() => window.removeEventListener("redaction-scripts-changed", lo
   <label class="redaction-select"
     ><span>脱敏脚本</span
     ><CustomSelect
-      :model-value="modelValue ?? ''"
+      :model-value="modelValue === null ? INHERIT : modelValue"
+      :display-value="modelValue === null ? inheritedValueLabel : undefined"
       :options="options"
       :disabled="disabled"
-      @update:model-value="emit('update:modelValue', $event || null)"
+      @update:model-value="emit('update:modelValue', $event === INHERIT ? null : $event)"
   /></label>
 </template>
 <style scoped>

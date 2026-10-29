@@ -13,7 +13,7 @@ import { useBackend } from "../api";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
 import type { HttpApiChange, InterceptorKind, SessionInterceptorItem } from "../api/types";
 import { appStore, reportError } from "../stores/app";
-import { confirmDialog, openContextMenu } from "../stores/dialog";
+import { confirmDialog, openContextMenu, type MenuItem } from "../stores/dialog";
 import { interceptorsStore } from "../stores/interceptors";
 import { sessionsStore } from "../stores/sessions";
 import { breakpointsStore } from "../stores/breakpoints";
@@ -38,6 +38,22 @@ const picker = ref({
 });
 const dragging = ref<{ kind: InterceptorKind; index: number } | null>(null);
 const dragTarget = ref<{ kind: InterceptorKind; index: number } | null>(null);
+
+const canMutate = computed(() => typeof backend.replaceSessionInterceptors === "function");
+const canAdd = computed(() => canMutate.value && typeof backend.listInterceptors === "function");
+const canEditScript = computed(() =>
+  [
+    backend.listInterceptors,
+    backend.getInterceptor,
+    backend.createInterceptor,
+    backend.updateInterceptor,
+    backend.deleteInterceptor,
+  ].every((method) => typeof method === "function"),
+);
+const canCreateScript = computed(() => typeof backend.createInterceptor === "function");
+const canInspectBreakpoints = computed(() =>
+  [backend.listBreakpoints, backend.getBreakpoint].every((method) => typeof method === "function"),
+);
 
 const requestItems = computed(() => interceptorsStore.request);
 const responseItems = computed(() => interceptorsStore.response);
@@ -85,12 +101,14 @@ function kindLabel(kind: InterceptorKind): string {
 }
 
 function statusLabel(item: SessionInterceptorItem): string {
-  if (!item.valid) return "脚本文件不存在 · 右键可重新创建";
+  if (!item.valid)
+    return canCreateScript.value ? "脚本文件不存在 · 右键可重新创建" : "脚本文件不存在";
+  if (!canMutate.value) return item.enabled ? "已开启" : "已关闭";
   return item.enabled ? "已开启 · 点击关闭" : "已关闭 · 点击开启";
 }
 
 function breakpointCount(kind: InterceptorKind, name: string): number {
-  return breakpointsStore.count(kind, name);
+  return canInspectBreakpoints.value ? breakpointsStore.count(kind, name) : 0;
 }
 
 function breakpointBadge(kind: InterceptorKind, name: string): string {
@@ -108,11 +126,11 @@ function nodeClick(kind: InterceptorKind, item: SessionInterceptorItem, index: n
     openBreakpointList(sessionId, kind, item.name, scriptLabel(item));
     return;
   }
-  void interceptorsStore.toggle(kind, index);
+  if (canMutate.value) void interceptorsStore.toggle(kind, index);
 }
 
 function openPicker(kind: InterceptorKind, index: number, x: number, y: number): void {
-  picker.value = { visible: true, kind, index, x, y };
+  if (canAdd.value) picker.value = { visible: true, kind, index, x, y };
 }
 
 function openPickerAtElement(kind: InterceptorKind, index: number, event: MouseEvent): void {
@@ -121,17 +139,20 @@ function openPickerAtElement(kind: InterceptorKind, index: number, event: MouseE
 }
 
 async function selectScript(name: string): Promise<void> {
+  if (!canAdd.value) return;
   const { kind, index } = picker.value;
   picker.value.visible = false;
   await interceptorsStore.insert(kind, index, name);
 }
 
 async function recreate(kind: InterceptorKind, item: SessionInterceptorItem): Promise<void> {
+  if (!canCreateScript.value) return;
   try {
     await backend.createInterceptor({ kind, name: item.name, content: "" });
     window.dispatchEvent(new CustomEvent("interceptors-changed"));
-    await interceptorsStore.refresh(logs.sessionId);
-    openScriptEditor(kind, item.name);
+    if (typeof backend.getSessionInterceptors === "function")
+      await interceptorsStore.refresh(logs.sessionId);
+    if (canEditScript.value) openScriptEditor(kind, item.name);
   } catch (error) {
     reportError(error, "重新创建拦截器失败");
   }
@@ -143,34 +164,42 @@ function nodeMenu(
   item: SessionInterceptorItem,
   index: number,
 ): void {
-  openContextMenu(event, [
-    {
+  const items: MenuItem[] = [];
+  if (canEditScript.value)
+    items.push({
       label: "编辑脚本",
       icon: Io5Create,
       disabled: !item.valid,
-      action: () => openScriptEditor(kind, item.name),
-    },
-    ...(item.valid
-      ? []
-      : [
-          {
-            label: "重新创建同名脚本",
-            icon: Io5Refresh,
-            dividerBefore: true,
-            action: () => void recreate(kind, item),
-          },
-        ]),
-    {
+      action: () => {
+        if (canEditScript.value) openScriptEditor(kind, item.name);
+      },
+    });
+  if (!item.valid && canCreateScript.value)
+    items.push({
+      label: "重新创建同名脚本",
+      icon: Io5Refresh,
+      dividerBefore: items.length > 0,
+      action: () => void recreate(kind, item),
+    });
+  if (canMutate.value)
+    items.push({
       label: "从当前会话移除",
       icon: Io5Trash,
       danger: true,
-      dividerBefore: true,
-      action: () => void interceptorsStore.remove(kind, index),
-    },
-  ]);
+      dividerBefore: items.length > 0,
+      action: () => {
+        if (canMutate.value) void interceptorsStore.remove(kind, index);
+      },
+    });
+  if (items.length) openContextMenu(event, items);
+  else event.preventDefault();
 }
 
 function dragStart(event: DragEvent, kind: InterceptorKind, index: number): void {
+  if (!canMutate.value) {
+    event.preventDefault();
+    return;
+  }
   dragging.value = { kind, index };
   dragTarget.value = { kind, index };
   event.dataTransfer?.setData("text/plain", `${kind}:${index}`);
@@ -178,7 +207,7 @@ function dragStart(event: DragEvent, kind: InterceptorKind, index: number): void
 }
 
 function dragOver(event: DragEvent, kind: InterceptorKind, index: number): void {
-  if (dragging.value?.kind !== kind) return;
+  if (!canMutate.value || dragging.value?.kind !== kind) return;
   event.preventDefault();
   dragTarget.value = { kind, index };
   if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
@@ -189,7 +218,7 @@ async function drop(event: DragEvent, kind: InterceptorKind, index: number): Pro
   const source = dragging.value;
   dragging.value = null;
   dragTarget.value = null;
-  if (!source || source.kind !== kind) return;
+  if (!canMutate.value || !source || source.kind !== kind) return;
   await interceptorsStore.move(kind, source.index, index);
 }
 
@@ -199,7 +228,8 @@ function dragEnd(): void {
 }
 
 function refresh(): void {
-  void interceptorsStore.refresh(logs.sessionId);
+  if (typeof backend.getSessionInterceptors === "function")
+    void interceptorsStore.refresh(logs.sessionId);
 }
 
 // 自己没有后端订阅：全局只有 http-api-sync 一条订阅，这里只挑自己关心的事件。
@@ -246,6 +276,7 @@ onBeforeUnmount(() => {
         </AppTooltip>
 
         <AppTooltip
+          v-if="canAdd"
           title="添加请求拦截器"
           detail="点击在此位置插入"
           :status="requestItems.length >= 12 ? '已达到 12 个上限' : undefined"
@@ -259,6 +290,7 @@ onBeforeUnmount(() => {
             <Io5ArrowForward class="pipeline-arrow" :size="13" />
           </button>
         </AppTooltip>
+        <Io5ArrowForward v-else class="pipeline-arrow" :size="13" />
 
         <template v-if="requestItems.length">
           <template v-for="(item, index) in requestItems" :key="`request-${item.name}`">
@@ -280,7 +312,8 @@ onBeforeUnmount(() => {
                     dragTarget.index === index &&
                     dragging?.index !== index,
                 }"
-                :draggable="true"
+                :draggable="canMutate"
+                :aria-disabled="!canMutate && !canInspectBreakpoints"
                 :aria-label="scriptLabel(item)"
                 @click="nodeClick('request', item, index)"
                 @contextmenu="nodeMenu($event, 'request', item, index)"
@@ -297,6 +330,7 @@ onBeforeUnmount(() => {
               </button>
             </AppTooltip>
             <AppTooltip
+              v-if="canAdd"
               title="添加请求拦截器"
               detail="点击在此位置插入"
               :status="requestItems.length >= 12 ? '已达到 12 个上限' : undefined"
@@ -310,6 +344,7 @@ onBeforeUnmount(() => {
                 <Io5ArrowForward class="pipeline-arrow" :size="13" />
               </button>
             </AppTooltip>
+            <Io5ArrowForward v-else class="pipeline-arrow" :size="13" />
           </template>
         </template>
 
@@ -320,6 +355,7 @@ onBeforeUnmount(() => {
         </AppTooltip>
 
         <AppTooltip
+          v-if="canAdd"
           title="添加响应拦截器"
           detail="点击在此位置插入"
           :status="responseItems.length >= 12 ? '已达到 12 个上限' : undefined"
@@ -333,6 +369,7 @@ onBeforeUnmount(() => {
             <Io5ArrowForward class="pipeline-arrow" :size="13" />
           </button>
         </AppTooltip>
+        <Io5ArrowForward v-else class="pipeline-arrow" :size="13" />
 
         <template v-if="responseItems.length">
           <template v-for="(item, index) in responseItems" :key="`response-${item.name}`">
@@ -354,7 +391,8 @@ onBeforeUnmount(() => {
                     dragTarget.index === index &&
                     dragging?.index !== index,
                 }"
-                :draggable="true"
+                :draggable="canMutate"
+                :aria-disabled="!canMutate && !canInspectBreakpoints"
                 :aria-label="scriptLabel(item)"
                 @click="nodeClick('response', item, index)"
                 @contextmenu="nodeMenu($event, 'response', item, index)"
@@ -371,6 +409,7 @@ onBeforeUnmount(() => {
               </button>
             </AppTooltip>
             <AppTooltip
+              v-if="canAdd"
               title="添加响应拦截器"
               detail="点击在此位置插入"
               :status="responseItems.length >= 12 ? '已达到 12 个上限' : undefined"
@@ -384,6 +423,7 @@ onBeforeUnmount(() => {
                 <Io5ArrowForward class="pipeline-arrow" :size="13" />
               </button>
             </AppTooltip>
+            <Io5ArrowForward v-else class="pipeline-arrow" :size="13" />
           </template>
         </template>
 
@@ -423,6 +463,7 @@ onBeforeUnmount(() => {
     </AppTooltip>
 
     <InterceptorPicker
+      v-if="canAdd"
       :visible="picker.visible"
       :kind="picker.kind"
       :used-names="entries(picker.kind).map((item) => item.name)"
@@ -554,7 +595,10 @@ onBeforeUnmount(() => {
     box-shadow 0.14s ease,
     opacity 0.14s ease;
 }
-.pipeline-node:hover {
+.pipeline-node[aria-disabled="true"] {
+  cursor: default;
+}
+.pipeline-node:hover:not([aria-disabled="true"]) {
   transform: scale(1.1);
 }
 .pipeline-node.enabled {

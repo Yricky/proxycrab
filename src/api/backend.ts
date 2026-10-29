@@ -205,10 +205,6 @@ export interface Backend {
     id: string,
     redactionScript: string | null,
   ): Promise<IdentityPermissions>;
-  setSessionShareRedaction?(
-    sessionId: number,
-    redactionScript: string | null,
-  ): Promise<SessionShareState>;
 
   // column scripts
   listColumnScripts(): Promise<Script[]>;

@@ -78,6 +78,12 @@ impl PermissionDenied {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct RedactionIdentity {
+    pub id: String,
+    pub redaction_script: Option<String>,
+}
+
 #[async_trait]
 pub trait PermissionManager: Send + Sync {
     async fn redaction_script(
@@ -85,6 +91,30 @@ pub trait PermissionManager: Send + Sync {
         _credential: &ManagementCredential,
     ) -> Result<Option<String>, PermissionDenied> {
         Ok(None)
+    }
+    /// None is a trusted owner/UI caller; API keys must return their stable identity.
+    async fn share_identity(
+        &self,
+        credential: &ManagementCredential,
+    ) -> Result<Option<RedactionIdentity>, PermissionDenied> {
+        match credential {
+            ManagementCredential::LocalLoopback => Ok(None),
+            ManagementCredential::Bearer(_) => Err(PermissionDenied::forbidden(
+                "share_policy_denied",
+                "cannot resolve share caller",
+            )),
+        }
+    }
+    async fn identity_redaction(&self, id: &str) -> Result<Option<String>, PermissionDenied> {
+        if id == "local" {
+            self.redaction_script(&ManagementCredential::LocalLoopback)
+                .await
+        } else {
+            Err(PermissionDenied::forbidden(
+                "redaction_failed",
+                "redaction identity unavailable",
+            ))
+        }
     }
     async fn check_permission(&self, action: PermissionAction) -> Option<PermissionDenied>;
 }
@@ -106,7 +136,6 @@ pub static API_ACTIONS: &[ApiAction] = &[
     action!("GET", "/api/redaction-scripts/{name}", Deny),
     action!("PUT", "/api/redaction-scripts/{name}", Approval),
     action!("DELETE", "/api/redaction-scripts/{name}", Approval),
-    action!("PUT", "/api/session-shares/{id}/redaction", Approval),
     action!("GET", "/api/agents.md", Allow),
     action!("GET", "/api/assets", Allow),
     action!("GET", "/api/assets/{*asset_id}", Allow),
@@ -197,6 +226,7 @@ pub static API_ACTIONS: &[ApiAction] = &[
 ];
 
 pub const OBSOLETE_API_ACTION_IDS: &[&str] = &[
+    "PUT /api/session-shares/{id}/redaction",
     "PUT /api/session-har-shares/{id}/redaction",
     "GET /api/session-har-shares/{id}",
     "POST /api/session-har-shares",

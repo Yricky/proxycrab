@@ -26,3 +26,19 @@ test("removed HAR mode is rejected before any request", async () => {
     await import(${JSON.stringify(script)});
   `]), (error) => { assert.match(error.stderr, /HAR link sharing has been removed/); return true; });
 });
+for (const [flag, value] of [["clear", ""], ["inherit", null]]) {
+  test(`${flag} uses the POST config contract and preserves persistence`, async () => {
+    const { stdout } = await exec(process.execPath, ["--input-type=module", "-e", `
+      globalThis.fetch = async (url, init) => {
+        if (url.pathname === '/api/session-shares/7') return new Response(JSON.stringify({ok:true,data:{enabled:true,persistent:true}}));
+        if (url.pathname !== '/api/session-shares' || init.method !== 'POST') throw Error('removed route used');
+        const config = JSON.parse(init.body).session_share_config;
+        if (config.redaction_script !== ${JSON.stringify(value)} || !config.persistent) throw Error('incorrect policy');
+        return new Response(JSON.stringify({ok:true,data:{enabled:true,token:'private'}}));
+      };
+      process.argv = ['node', ${JSON.stringify(script)}, '--session', '7', '--${flag}', 'true'];
+      await import(${JSON.stringify(script)});
+    `]);
+    assert.deepEqual(JSON.parse(stdout), {enabled:true});
+  });
+}
