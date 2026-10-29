@@ -390,7 +390,7 @@
     {
       "id": 66,
       "prompt": "Import this ZIP accepting only session-123. If resources conflict, show me the options before proceeding.",
-      "expected_output": "Submits file and explicit accepted_intent_ids, retains import_id for conflict resolution, presents same/conflicting files, obtains explicit keep/overwrite or script rename decisions with fingerprints. Does not import unaccepted intents or activate sessions. Explains whole-batch rollback on failure.",
+      "expected_output": "Submits file and explicit accepted_intent_ids, retains import_id for conflict resolution, presents same/conflicting files, obtains explicit keep/overwrite or script rename decisions with fingerprints. Handles the independent write permissions for POST /api/imports and POST /api/imports/{id}/resolve, both default approval. Does not import unaccepted intents or activate sessions. Explains whole-batch rollback on failure.",
       "files": []
     }
   ]

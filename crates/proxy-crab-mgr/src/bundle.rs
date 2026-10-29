@@ -124,11 +124,12 @@ fn read_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut total = 0usize;
     for i in 0..archive.len() {
         let file = archive.by_index(i)?;
+        let name = file.name()?.into_owned();
         if file.is_dir() {
-            valid_path(file.name().trim_end_matches('/'))?;
+            valid_path(name.trim_end_matches('/'))?;
             continue;
         }
-        valid_path(file.name())?;
+        valid_path(&name)?;
         if file
             .unix_mode()
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
@@ -141,7 +142,6 @@ fn read_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>> {
         if total > MAX_BYTES {
             bail!("expanded bundle exceeds 128 MiB");
         }
-        let name = file.name().to_owned();
         let mut data = Vec::new();
         file.take((MAX_BYTES + 1) as u64).read_to_end(&mut data)?;
         if data.len() > MAX_BYTES || files.insert(name.clone(), data).is_some() {

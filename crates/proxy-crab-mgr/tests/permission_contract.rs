@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 80);
+    assert_eq!(actions.len(), 82);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -92,6 +92,8 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "POST /api/breakpoints/{id}/release",
         "POST /api/column-scripts",
         "POST /api/filter-scripts",
+        "POST /api/imports",
+        "POST /api/imports/{id}/resolve",
         "POST /api/interceptors",
         "POST /api/proxy/start",
         "POST /api/proxy/stop",

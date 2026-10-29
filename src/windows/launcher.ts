@@ -364,11 +364,13 @@ export async function openBundleImport(file: File): Promise<void> {
   if (!getBackend().importBundle || !getBackend().resolveBundle) return;
   if (file.size > MAX_BUNDLE_BYTES) throw new Error("分享包超过 128 MiB");
   const preview = parseBundle(new Uint8Array(await file.arrayBuffer()));
-  windowsStore.open(`bundle-import-${++bundleWindowId}`, {
+  const id = `bundle-import-${++bundleWindowId}`;
+  windowsStore.open(id, {
     title: "导入分享包",
     component: BundleImportWindow,
-    props: { file, preview },
+    props: { file, preview, windowId: id },
     width: 680,
     height: 460,
   });
 }
+

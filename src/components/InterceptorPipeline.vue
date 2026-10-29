@@ -8,6 +8,7 @@ import {
   Io5ServerOutline,
   Io5Trash,
   Io5DownloadOutline,
+  Io5ArchiveOutline,
 } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
@@ -476,7 +477,7 @@ onBeforeUnmount(() => {
         aria-label="下载 Session 配置"
         @click="downloadConfig"
       >
-        <Io5DownloadOutline :size="16" />
+        <Io5ArchiveOutline :size="16" />
       </button>
     </AppTooltip>
     <AppTooltip v-if="canSweep" title="清扫会话" detail="新建配置一致的活跃会话，原会话转入已归档">

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, watch } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { openBundleImport } from "./windows/launcher";
 import { reportError } from "./stores/app";
 import AppToolbar from "./components/AppToolbar.vue";
@@ -63,6 +63,7 @@ watch(
 );
 
 onMounted(async () => {
+  window.addEventListener("proxycrab-open-session", onOpenSession);
   await startHttpApiSync();
   if (backend.listHttpApprovals) await approvalsStore.start();
   void skillStore.refresh();
@@ -78,16 +79,35 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener("proxycrab-open-session", onOpenSession);
   proxyStore.dispose();
   logs.dispose();
   breakpointsStore.stopPolling();
   stopHttpApiSync();
   if (backend.listHttpApprovals) approvalsStore.stop();
 });
+// 拖放导入：dragenter/dragleave 计数决定覆盖层，避免在子元素间移动时闪烁。
+const draggingFiles = ref(false);
+let dragDepth = 0;
+function carriesFiles(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+}
+function fileDragEnter(event: DragEvent): void {
+  if (!backend.importBundle || !carriesFiles(event)) return;
+  dragDepth++;
+  draggingFiles.value = true;
+}
+function fileDragLeave(): void {
+  if (!draggingFiles.value) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) draggingFiles.value = false;
+}
 function fileDrag(event: DragEvent): void {
-  if (backend.importBundle && event.dataTransfer?.types.includes("Files")) event.preventDefault();
+  if (backend.importBundle && carriesFiles(event)) event.preventDefault();
 }
 async function fileDrop(event: DragEvent): Promise<void> {
+  dragDepth = 0;
+  draggingFiles.value = false;
   if (!backend.importBundle || !event.dataTransfer?.files.length) return;
   event.preventDefault();
   event.stopPropagation();
@@ -99,10 +119,20 @@ async function fileDrop(event: DragEvent): Promise<void> {
     }
   }
 }
+function onOpenSession(event: Event): void {
+  const sessionId = (event as CustomEvent<number>).detail;
+  if (typeof sessionId === "number") logs.view(sessionId);
+}
 </script>
 
 <template>
-  <div class="app-shell" @dragover="fileDrag" @drop="fileDrop">
+  <div
+    class="app-shell"
+    @dragenter="fileDragEnter"
+    @dragover="fileDrag"
+    @dragleave="fileDragLeave"
+    @drop="fileDrop"
+  >
     <AppToolbar :session-id="logs.sessionId" />
     <div class="app-main">
       <SessionSidebar :logs="logs" />
@@ -118,6 +148,10 @@ async function fileDrop(event: DragEvent): Promise<void> {
         </div>
         <LogTable :logs="logs" />
       </section>
+    </div>
+
+    <div v-if="draggingFiles" class="drop-overlay">
+      <span class="drop-hint">松开以导入分享包</span>
     </div>
 
     <FloatingWindow v-for="win in windowsStore.windows" :key="win.id" :win="win" />
@@ -153,5 +187,32 @@ async function fileDrop(event: DragEvent): Promise<void> {
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-panel) 72%, var(--bg-app));
+}
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-app) 65%, transparent);
+  pointer-events: none;
+}
+.drop-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.drop-hint {
+  position: relative;
+  padding: 8px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popup);
+  font-size: 13px;
 }
 </style>

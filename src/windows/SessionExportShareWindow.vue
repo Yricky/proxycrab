@@ -1,27 +1,35 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
-import ShareAssetsEditor from "../components/ShareAssetsEditor.vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { Io5ChevronDown, Io5ChevronForward } from "vue-icons-plus/io5";
 import RedactionSelect from "../components/RedactionSelect.vue";
+import ShareAssetTree from "../components/ShareAssetTree.vue";
 import { useBackend } from "../api";
-import type { HttpApiChange, SessionShareState } from "../api/types";
+import type { AssetMetadata, HttpApiChange, SessionShareState } from "../api/types";
 import { sessionsStore } from "../stores/sessions";
 import { appStore, reportError } from "../stores/app";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
+import { resourceMatches } from "../utils/bundle";
+import { formatBytes } from "../utils/format";
 import { copyText } from "../utils/clipboard";
 import { buildSessionShareLinks } from "../utils/session-share";
 
 const props = defineProps<{ sessionId: number }>();
 
 const backend = useBackend();
+const canShare = computed(() => typeof backend.enableSessionShare === "function");
+const canPickAssets = computed(() => canShare.value && typeof backend.listAssets === "function");
 const pageShare = ref<SessionShareState | null>(null);
 const pageLinks = ref<string[]>([]);
 const pagePersistent = ref(false);
 const configShare = ref<{ assets: string[] } | null>(null);
-const editingAssets = ref(false);
 const pageRedaction = ref<string | null>(null);
 const loading = ref(false);
 const pageMutating = ref(false);
 const serviceRunning = ref(true);
+const assets = ref<AssetMetadata[]>([]);
+const assetsLoading = ref(false);
+const assetsError = ref("");
+const treeExpanded = ref(false);
 let loadSequence = 0;
 
 async function load(): Promise<void> {
@@ -70,9 +78,7 @@ async function setRedaction(value: string | null): Promise<void> {
   }
 }
 
-async function setPagePersistent(event: Event): Promise<void> {
-  const input = event.target as HTMLInputElement;
-  const persistent = input.checked;
+async function setPagePersistent(persistent: boolean): Promise<void> {
   if (!pageShare.value?.enabled) {
     pagePersistent.value = persistent;
     return;
@@ -85,7 +91,6 @@ async function setPagePersistent(event: Event): Promise<void> {
     sessionsStore.updateShare(pageShare.value);
     pagePersistent.value = pageShare.value.persistent;
   } catch (error) {
-    input.checked = pagePersistent.value;
     reportError(error, "保存分享持久化设置失败");
   } finally {
     pageMutating.value = false;
@@ -135,11 +140,10 @@ async function copyLink(url: string): Promise<void> {
   }
 }
 
-async function saveConfigShare(value: { assets: string[] } | null): Promise<void> {
+async function saveConfigShare(value: { assets: string[] } | null): Promise<boolean> {
   if (!pageShare.value?.enabled) {
     configShare.value = value;
-    editingAssets.value = false;
-    return;
+    return true;
   }
   pageMutating.value = true;
   try {
@@ -150,16 +154,56 @@ async function saveConfigShare(value: { assets: string[] } | null): Promise<void
     pageShare.value = next;
     configShare.value = next.session_config_share ?? null;
     sessionsStore.updateShare(next);
-    editingAssets.value = false;
+    return true;
   } catch (e) {
     reportError(e, "保存配置分享设置失败");
+    return false;
   } finally {
     pageMutating.value = false;
   }
 }
+
 function toggleConfigShare(): void {
-  if (configShare.value) void saveConfigShare(null);
-  else editingAssets.value = true;
+  treeExpanded.value = !configShare.value;
+  void saveConfigShare(configShare.value ? null : { assets: [] });
+}
+
+function setRules(rules: string[]): void {
+  if (!configShare.value) return;
+  void saveConfigShare({ assets: rules });
+}
+
+const configHint = computed(() => {
+  if (!pageShare.value?.enabled) return "开启链接分享后可配置。";
+  if (configShare.value === null) return "开启后，分享包内附带此 Session 的配置与脚本。";
+  return "";
+});
+
+const configSummary = computed(() => {
+  const rules = configShare.value?.assets ?? [];
+  if (!rules.length) return "未随附资源";
+  if (assetsLoading.value) return `${rules.length} 条规则 · 正在读取资源…`;
+  const matched = resourceMatches(
+    rules,
+    assets.value.map((asset) => asset.id),
+  );
+  const size = assets.value
+    .filter((asset) => matched.includes(asset.id))
+    .reduce((sum, asset) => sum + asset.size, 0);
+  return `${rules.length} 条规则 · 匹配 ${matched.length} 个资源 · ${formatBytes(size)}`;
+});
+
+async function loadAssets(): Promise<void> {
+  if (!canPickAssets.value) return;
+  assetsLoading.value = true;
+  assetsError.value = "";
+  try {
+    assets.value = await backend.listAssets();
+  } catch (error) {
+    assetsError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    assetsLoading.value = false;
+  }
 }
 
 function onRefreshRequest(event: Event): void {
@@ -178,6 +222,7 @@ function onHttpApiChange(event: Event): void {
 
 onMounted(() => {
   void load();
+  void loadAssets();
   window.addEventListener("proxycrab-refresh-session-share", onRefreshRequest);
   window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
@@ -191,174 +236,223 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="share-root">
-    <section class="share-card" aria-labelledby="page-share-title">
-      <header class="card-heading">
-        <div>
-          <h3 id="page-share-title">链接分享</h3>
-          <p>
-            只读查看此 Session；{{
-              pagePersistent
-                ? "重启后保留原链接，关闭分享后失效。"
-                : "应用退出或关闭分享后链接失效。"
-            }}
-          </p>
-        </div>
+    <header class="share-heading">
+      <div>
+        <h3>链接分享</h3>
+        <p>
+          只读查看此 Session；{{
+            pagePersistent
+              ? "重启后保留原链接，关闭分享后失效。"
+              : "应用退出或关闭分享后链接失效。"
+          }}
+        </p>
+      </div>
+      <button
+        class="switch"
+        :class="{ on: pageShare?.enabled }"
+        type="button"
+        :disabled="loading || pageMutating || !pageShare"
+        :aria-pressed="pageShare?.enabled ?? false"
+        :aria-label="pageShare?.enabled ? '关闭链接分享' : '开启链接分享'"
+        :title="pageShare?.enabled ? '关闭链接分享' : '开启链接分享'"
+        @click="togglePageShare"
+      />
+    </header>
+
+    <div v-if="canShare" class="settings">
+      <div class="setting-row">
+        <span>重启后保留</span>
+        <span class="setting-spacer" />
         <button
           class="switch"
-          :class="{ on: pageShare?.enabled }"
+          :class="{ on: pagePersistent }"
           type="button"
+          role="switch"
+          aria-label="重启后保留"
+          title="重启后保留"
+          :aria-checked="pagePersistent"
           :disabled="loading || pageMutating || !pageShare"
-          :aria-pressed="pageShare?.enabled ?? false"
-          :aria-label="pageShare?.enabled ? '关闭链接分享' : '开启链接分享'"
-          :title="pageShare?.enabled ? '关闭链接分享' : '开启链接分享'"
-          @click="togglePageShare"
+          @click="setPagePersistent(!pagePersistent)"
         />
-      </header>
-
-      <label v-if="typeof backend.enableSessionShare === 'function'" class="persistence-option">
-        <input
-          type="checkbox"
-          :checked="pagePersistent"
-          :disabled="loading || pageMutating || !pageShare"
-          @change="setPagePersistent"
-        />
-        重启后保留
-      </label>
+      </div>
       <RedactionSelect
-        v-if="typeof backend.enableSessionShare === 'function' && backend.listRedactionScripts"
+        v-if="backend.listRedactionScripts"
         inherit-label="跟随本机无 API Key"
         :inherited-value-label="pageShare?.redaction_identity ? '跟随 API Key 脱敏配置' : undefined"
         :model-value="pageRedaction"
         :disabled="loading || pageMutating"
         @update:model-value="setRedaction($event)"
       />
-      <div v-if="backend.listAssets && backend.enableSessionShare" class="config-share">
-        <div class="config-share-row">
-          <label
-            ><input
-              type="checkbox"
-              :checked="!!configShare"
-              :disabled="loading || pageMutating"
-              @change="toggleConfigShare"
-            />
-            允许下载 Session 配置</label
-          >
+      <div v-if="canPickAssets" class="setting-block">
+        <div class="setting-row">
+          <span>允许下载 Session 配置</span>
+          <span class="setting-spacer" />
           <button
-            v-if="configShare"
-            class="btn"
-            :disabled="pageMutating"
-            @click="editingAssets = true"
+            class="switch"
+            :class="{ on: !!configShare }"
+            type="button"
+            role="switch"
+            aria-label="允许下载 Session 配置"
+            title="允许下载 Session 配置"
+            :aria-checked="!!configShare"
+            :disabled="loading || pageMutating || !pageShare?.enabled"
+            @click="toggleConfigShare"
+          />
+        </div>
+        <p v-if="configHint" class="setting-hint">{{ configHint }}</p>
+        <template v-if="configShare">
+          <button
+            class="tree-toggle"
+            type="button"
+            :aria-expanded="treeExpanded"
+            @click="treeExpanded = !treeExpanded"
           >
-            随附资源 {{ configShare.assets.length }} 条规则 · 编辑
+            <component :is="treeExpanded ? Io5ChevronDown : Io5ChevronForward" :size="11" />
+            <span>{{ configSummary }}</span>
           </button>
-        </div>
-        <p>下载时使用最新配置、脚本及资源；目录前缀包含其下后续新增的资源。</p>
-        <ShareAssetsEditor
-          v-if="editingAssets"
-          :initial="configShare?.assets ?? []"
-          @save="(assets) => saveConfigShare({ assets })"
-          @cancel="editingAssets = false"
-        />
-      </div>
-      <div v-if="loading && !pageShare" class="share-empty">正在读取分享状态…</div>
-      <template v-else-if="pageShare?.enabled">
-        <div v-if="pageLinks.length" class="share-links">
-          <div
-            v-for="url in pageLinks"
-            :key="url"
-            class="share-link-row"
-            role="link"
-            tabindex="0"
-            @click="openLink(url)"
-            @keydown.enter="openLink(url)"
-            @keydown.space.prevent="openLink(url)"
-          >
-            <span class="share-link mono">{{ url }}</span>
-            <button class="btn" type="button" @click.stop="copyLink(url)">复制</button>
+          <div v-if="treeExpanded" class="tree-panel">
+            <p v-if="assetsLoading" class="tree-note">正在读取工作区资源…</p>
+            <p v-else-if="assetsError" class="tree-note text-danger">{{ assetsError }}</p>
+            <p v-else-if="!assets.length" class="tree-note">工作区暂无资源。</p>
+            <ShareAssetTree
+              v-else
+              :assets="assets"
+              :rules="configShare.assets"
+              :disabled="pageMutating"
+              @rules="setRules"
+            />
           </div>
+        </template>
+      </div>
+    </div>
+
+    <div v-if="loading && !pageShare" class="share-empty">正在读取分享状态…</div>
+    <template v-else-if="pageShare?.enabled">
+      <div v-if="pageLinks.length" class="share-links">
+        <div
+          v-for="url in pageLinks"
+          :key="url"
+          class="share-link-row"
+          role="link"
+          tabindex="0"
+          @click="openLink(url)"
+          @keydown.enter="openLink(url)"
+          @keydown.space.prevent="openLink(url)"
+        >
+          <span class="share-link mono">{{ url }}</span>
+          <button class="btn" type="button" @click.stop="copyLink(url)">复制</button>
         </div>
-        <div v-else class="share-empty">暂无可用的本机 IPv4 地址</div>
-        <p v-if="!serviceRunning" class="share-warning">
-          管理 HTTP 服务未运行，以上地址当前无法访问。
-        </p>
-      </template>
-      <div v-else class="share-empty">开启后将在这里列出可打开和复制的分享地址。</div>
-    </section>
+      </div>
+      <div v-else class="share-empty">暂无可用的本机 IPv4 地址</div>
+      <p v-if="!serviceRunning" class="share-warning">
+        管理 HTTP 服务未运行，以上地址当前无法访问。
+      </p>
+    </template>
+    <div v-else class="share-empty">开启后将在这里列出可打开和复制的分享地址。</div>
   </main>
 </template>
 
 <style scoped>
-.config-share {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.config-share-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.config-share p {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
 .share-root {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   padding: 18px;
   overflow-y: auto;
 }
-.share-card {
-  flex: none;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-panel);
-}
-.card-heading,
-.share-link-row {
+.share-heading {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
-.card-heading {
-  align-items: flex-start;
-}
-.card-heading h3 {
+.share-heading h3 {
   margin: 0;
   font-size: 13px;
 }
-.card-heading p {
+.share-heading p {
   margin: 4px 0 0;
   color: var(--text-secondary);
   font-size: 12px;
+}
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 24px;
+  font-size: 12px;
+}
+.setting-spacer {
+  flex: 1;
+}
+.setting-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+.setting-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tree-toggle {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  max-width: 100%;
+  gap: 5px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.tree-toggle:hover {
+  color: var(--text);
+}
+.tree-toggle span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-panel {
+  max-height: 240px;
+  margin: 2px 0 4px;
+  padding-top: 2px;
+  border-top: 1px solid var(--border);
+  overflow: auto;
+}
+.tree-note {
+  margin: 6px 0;
+  font-size: 11px;
+  color: var(--text-faint);
 }
 .switch:disabled {
   cursor: default;
   opacity: 0.5;
 }
-.persistence-option {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 10px;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
 .share-links {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  margin-top: 14px;
 }
 .share-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   min-width: 0;
+  gap: 12px;
   padding: 7px 7px 7px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -379,7 +473,6 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 .share-empty {
-  margin-top: 14px;
   padding: 16px;
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius-md);
