@@ -124,8 +124,8 @@ export async function apiRequest(args, pathname, { method = "GET", body } = {}) 
   try {
     response = await fetch(url, {
       method,
-      headers: requestHeaders({ json: body !== undefined }),
-      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: requestHeaders({ json: body !== undefined && !(body instanceof FormData) }),
+      body: body === undefined ? undefined : body instanceof FormData ? body : JSON.stringify(body),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (error) {

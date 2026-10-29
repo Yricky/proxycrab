@@ -13,6 +13,8 @@ interface PermissionActionMeta {
 
 /** 动作 id（`METHOD /route/template`）→ 展示元数据。 */
 export const ACTION_META: Readonly<Record<string, PermissionActionMeta>> = {
+  "POST /api/imports": { label: "导入分享包", impact: "write" },
+  "POST /api/imports/{id}/resolve": { label: "解决分享包导入冲突", impact: "write" },
   "GET /api/redaction-scripts": { label: "列出脱敏脚本", impact: "read" },
   "POST /api/redaction-scripts": { label: "创建脱敏脚本", impact: "write" },
   "GET /api/redaction-scripts/{name}": { label: "读取脱敏脚本", impact: "danger" },

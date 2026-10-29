@@ -105,3 +105,28 @@ test("asset upload preserves binary data and explicit content type", async () =>
   expect(options.headers.get("Content-Type")).toBe("image/png");
   expect(options.headers.get("Authorization")).toBe("Bearer test-key");
 });
+
+test("bundle imports submit the original file and explicit accepted IDs, then resolve by import ID", async () => {
+  const response = { import_id: "pending", files: [], sessions: [] };
+  const fetchMock = vi
+    .fn()
+    .mockImplementation(async () => new Response(JSON.stringify({ ok: true, data: response })));
+  vi.stubGlobal("fetch", fetchMock);
+  const backend = createHttpBackend("http://localhost", "key", {
+    target: "cli",
+    workspace: { current_path: "/workspace", configured_path: "/workspace" },
+    http_service: { running: true, host: "0.0.0.0", port: 18089, error: null },
+  });
+  const file = new File(["zip bytes"], "bundle.zip", { type: "application/zip" });
+  expect(await backend.importBundle!(file, ["chosen"])).toEqual(response);
+  const [url, init] = fetchMock.mock.calls[0]!;
+  expect(url.pathname).toBe("/api/imports");
+  expect(init.headers.get("Content-Type")).toBeNull();
+  expect(init.headers.get("Authorization")).toBe("Bearer key");
+  expect(init.body.get("accepted_intent_ids")).toBe('["chosen"]');
+  expect(await init.body.get("file").text()).toBe("zip bytes");
+  await backend.resolveBundle!("pending", [
+    { path: "assets/a.txt", fingerprint: "sha", action: "keep" },
+  ]);
+  expect(fetchMock.mock.calls[1]![0].pathname).toBe("/api/imports/pending/resolve");
+});

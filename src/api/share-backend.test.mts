@@ -287,3 +287,52 @@ test("slow share metadata polling never overlaps or emits late changes after uns
   await vi.advanceTimersByTimeAsync(1500);
   expect(changes).not.toHaveBeenCalled();
 });
+
+test("configuration download capability follows owner changes and is absent without authorization", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("window", {
+    setInterval,
+    clearInterval,
+    setTimeout,
+    clearTimeout,
+    dispatchEvent: vi.fn(),
+  });
+  let enabled = false;
+  const bootstrap: ShareBootstrap = {
+    session: { id: 1, name: "shared", created_at: 0, description: null },
+    view: { session_id: 1, columns: [], filter: { option: null, input: "" } },
+    proxy_status: { status: "stopped" },
+    api_port: 18089,
+  };
+  vi.stubGlobal("fetch", async (input: URL, init: RequestInit) => {
+    const path = input.pathname;
+    if (path === "/share-api/proxy/changes")
+      return new Promise<Response>((_, reject) =>
+        init.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+      );
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        data:
+          path === "/share-api/capabilities"
+            ? { session_config_download: enabled }
+            : path === "/share-api/session-view"
+              ? bootstrap.view
+              : [],
+      }),
+    );
+  });
+  const backend = createShareBackend("http://localhost", "token", bootstrap);
+  expect(backend.downloadSessionConfig).toBeUndefined();
+  expect(backend.importBundle).toBeUndefined();
+  const changes: HttpApiChange[] = [];
+  const stop = await backend.subscribeChanges((c) => changes.push(c));
+  enabled = true;
+  await vi.advanceTimersByTimeAsync(1500);
+  expect(backend.downloadSessionConfig).toBeTypeOf("function");
+  enabled = false;
+  await vi.advanceTimersByTimeAsync(1500);
+  expect(backend.downloadSessionConfig).toBeUndefined();
+  expect(changes.filter((c) => c.resources.includes("session_share"))).toHaveLength(2);
+  stop();
+});

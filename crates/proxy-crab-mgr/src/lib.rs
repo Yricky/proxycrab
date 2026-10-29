@@ -1,6 +1,7 @@
 //! Transport-neutral management API for ProxyCrab.
 
 mod agents;
+pub mod bundle;
 pub mod clash_subscription;
 pub mod dto;
 pub mod http;

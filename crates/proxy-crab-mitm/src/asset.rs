@@ -58,6 +58,7 @@ pub enum AssetError {
 
 #[derive(Debug, Clone)]
 pub struct AssetStore {
+    pub(crate) file_mutation: std::sync::Arc<std::sync::Mutex<()>>,
     assets: PathBuf,
     metadata: PathBuf,
     uploads: PathBuf,
@@ -71,6 +72,7 @@ impl AssetStore {
         std::fs::create_dir_all(&metadata).map_err(map_directory_error)?;
         std::fs::create_dir_all(&uploads).map_err(map_directory_error)?;
         Ok(Self {
+            file_mutation: std::sync::Arc::new(std::sync::Mutex::new(())),
             assets,
             metadata,
             uploads,
@@ -229,6 +231,8 @@ impl AssetUpload {
         file.sync_all().await?;
         drop(file);
 
+        let mutation = self.store.file_mutation.clone();
+        let _mutation = mutation.lock().unwrap();
         let asset_path = self.store.asset_path(&self.id);
         let metadata_path = self.store.metadata_path(&self.id);
         create_parent(&asset_path, &self.id)?;

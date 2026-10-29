@@ -1,3 +1,5 @@
+import BundleImportWindow from "./BundleImportWindow.vue";
+import { parseBundle, MAX_BUNDLE_BYTES } from "../utils/bundle";
 import AssetManagerWindow from "./AssetManagerWindow.vue";
 import HarExportWindow from "./HarExportWindow.vue";
 import type { LogsStore } from "../stores/logs";
@@ -354,5 +356,19 @@ export function openAssetManager(): void {
     component: AssetManagerWindow,
     width: 760,
     height: 520,
+  });
+}
+
+let bundleWindowId = 0;
+export async function openBundleImport(file: File): Promise<void> {
+  if (!getBackend().importBundle || !getBackend().resolveBundle) return;
+  if (file.size > MAX_BUNDLE_BYTES) throw new Error("分享包超过 128 MiB");
+  const preview = parseBundle(new Uint8Array(await file.arrayBuffer()));
+  windowsStore.open(`bundle-import-${++bundleWindowId}`, {
+    title: "导入分享包",
+    component: BundleImportWindow,
+    props: { file, preview },
+    width: 680,
+    height: 460,
   });
 }

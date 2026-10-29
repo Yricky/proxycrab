@@ -380,6 +380,18 @@
       "prompt": "Upload a file named Demo-Image.png into the images directory from the workspace resource manager, then upload another file from the replay asset picker. Explain how root and directory creation differ, without overwriting existing resources.",
       "expected_output": "Uses the directory plus or dashed root plus, selects one file, presents its unchanged name for confirmation, reports uppercase as invalid and allows explicit editing to demo-image.png. Conflicts remain errors. Upload requires backend capability, works via HTTP or Tauri binary IPC, and replay selects the new resource and refreshes its list. Script toolbar input filters; script creation uses directory/root plus and the default template.",
       "files": []
+    },
+    {
+      "id": 65,
+      "prompt": "Enable live Session configuration sharing with attached resources fixtures/login/ and certs/demo.pem. Explain how to document dependencies in Lua.",
+      "expected_output": "Uses session_config_share.assets with an exact asset ID and trailing-slash prefix; explains that future prefix matches are included, missing matches fail, and Lua header comments document resource locations without automatic analysis.",
+      "files": []
+    },
+    {
+      "id": 66,
+      "prompt": "Import this ZIP accepting only session-123. If resources conflict, show me the options before proceeding.",
+      "expected_output": "Submits file and explicit accepted_intent_ids, retains import_id for conflict resolution, presents same/conflicting files, obtains explicit keep/overwrite or script rename decisions with fingerprints. Does not import unaccepted intents or activate sessions. Explains whole-batch rollback on failure.",
+      "files": []
     }
   ]
 }

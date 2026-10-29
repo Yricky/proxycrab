@@ -79,7 +79,7 @@ async function request<T>(
 ): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Authorization", authorization(token));
-  if (init.body !== undefined && !headers.has("Content-Type"))
+  if (init.body !== undefined && !(init.body instanceof FormData) && !headers.has("Content-Type"))
     headers.set("Content-Type", "application/json");
   let response: Response;
   try {
@@ -178,6 +178,14 @@ export function createHttpBackend(
     stopProxy: () => call("/api/proxy/stop", json("POST")),
     listLocalIps: async () => [window.location.hostname],
 
+    importBundle: (file, acceptedIntentIds) => {
+      const body = new FormData();
+      body.set("file", file);
+      body.set("accepted_intent_ids", JSON.stringify(acceptedIntentIds));
+      return call("/api/imports", { method: "POST", body });
+    },
+    resolveBundle: (id, resolutions) =>
+      call(`/api/imports/${encodeURIComponent(id)}/resolve`, json("POST", resolutions)),
     listSessions: () => call("/api/sessions"),
     listArchivedSessions: () => call("/api/archived-sessions"),
     createSession: (requestValue: CreateSessionRequest) =>
@@ -202,6 +210,9 @@ export function createHttpBackend(
               ? {}
               : { redaction_script: sessionShareConfig.redactionScript }),
             persistent: sessionShareConfig.persistent,
+            ...(sessionShareConfig.sessionConfigShare === undefined
+              ? {}
+              : { session_config_share: sessionShareConfig.sessionConfigShare }),
           },
         }),
       ),

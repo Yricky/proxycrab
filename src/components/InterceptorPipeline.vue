@@ -66,6 +66,19 @@ const canSweep = computed(
     logs.sessionId !== null &&
     logs.sessionId === sessionsStore.activeSessionId,
 );
+const configDownload = ref(backend.downloadSessionConfig);
+const downloadingConfig = ref(false);
+async function downloadConfig(): Promise<void> {
+  if (!configDownload.value || downloadingConfig.value) return;
+  downloadingConfig.value = true;
+  try {
+    await configDownload.value();
+  } catch (e) {
+    reportError(e, "下载 Session 配置失败");
+  } finally {
+    downloadingConfig.value = false;
+  }
+}
 const sweeping = ref(false);
 
 async function sweepSession(): Promise<void> {
@@ -234,6 +247,7 @@ function refresh(): void {
 
 // 自己没有后端订阅：全局只有 http-api-sync 一条订阅，这里只挑自己关心的事件。
 function onHttpApiChange(event: Event): void {
+  configDownload.value = backend.downloadSessionConfig;
   const change = (event as CustomEvent<HttpApiChange>).detail;
   if (change.session_id !== undefined && change.session_id !== logs.sessionId) return;
   if (
@@ -446,6 +460,21 @@ onBeforeUnmount(() => {
         :disabled="logs.loading || logs.sessionId === null"
         aria-label="导出 HAR"
         @click="openHarExport(logs)"
+      >
+        <Io5DownloadOutline :size="16" />
+      </button>
+    </AppTooltip>
+    <AppTooltip
+      v-if="configDownload"
+      title="下载 Session 配置"
+      detail="下载配置、引用脚本和分享者选择的随附资源"
+    >
+      <button
+        class="pipeline-sweep"
+        type="button"
+        :disabled="downloadingConfig"
+        aria-label="下载 Session 配置"
+        @click="downloadConfig"
       >
         <Io5DownloadOutline :size="16" />
       </button>

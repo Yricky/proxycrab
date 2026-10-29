@@ -48,6 +48,22 @@ const MAX_BLOCKING_MANAGEMENT_TASKS: usize = 8;
 
 #[async_trait]
 pub trait ProxyCrabManager: Send + Sync {
+    async fn export_session_config(
+        &self,
+        id: u64,
+        config: crate::bundle::ConfigShare,
+    ) -> ManagerResult<Vec<u8>>;
+    async fn import_bundle(
+        &self,
+        bytes: Vec<u8>,
+        accepted: Vec<String>,
+    ) -> ManagerResult<crate::bundle::ImportResult>;
+    async fn resolve_bundle(
+        &self,
+        id: String,
+        resolutions: Vec<crate::bundle::Resolution>,
+    ) -> ManagerResult<crate::bundle::ImportResult>;
+
     fn reader(&self, script: Option<&str>, api: &str) -> ManagerResult<Arc<dyn ProxyCrabManager>>;
     async fn redaction_scripts(&self) -> ManagerResult<Vec<Script>>;
     async fn redaction_script(&self, name: String) -> ManagerResult<Script>;
@@ -257,6 +273,7 @@ pub trait ProxyCrabManager: Send + Sync {
 
 #[derive(Clone)]
 pub struct MitmManager {
+    imports: Arc<crate::bundle::BundleImports>,
     forced_redaction: Option<Script>,
     read_policy: Option<ReadPolicy>,
     runtime: Arc<ProxyCrab>,
@@ -295,6 +312,7 @@ impl MitmManager {
         }
         let clash_subscription = Arc::new(ClashSubscription::new(runtime.workspace().root()));
         Arc::new(Self {
+            imports: Arc::new(crate::bundle::BundleImports::default()),
             forced_redaction: None,
             read_policy: None,
             runtime,
@@ -532,6 +550,47 @@ impl MitmManager {
 
 #[async_trait]
 impl ProxyCrabManager for MitmManager {
+    async fn export_session_config(
+        &self,
+        id: u64,
+        config: crate::bundle::ConfigShare,
+    ) -> ManagerResult<Vec<u8>> {
+        let runtime = self.runtime.clone();
+        self.run_blocking("export configuration", move || {
+            crate::bundle::export(&runtime, id, &config)
+                .map_err(|e| ManagerError::bad_request(format!("{e:#}")))
+        })
+        .await
+    }
+    async fn import_bundle(
+        &self,
+        bytes: Vec<u8>,
+        accepted: Vec<String>,
+    ) -> ManagerResult<crate::bundle::ImportResult> {
+        let runtime = self.runtime.clone();
+        let imports = self.imports.clone();
+        self.run_blocking("import bundle", move || {
+            imports
+                .import(&runtime, bytes, accepted)
+                .map_err(|e| ManagerError::bad_request(format!("{e:#}")))
+        })
+        .await
+    }
+    async fn resolve_bundle(
+        &self,
+        id: String,
+        resolutions: Vec<crate::bundle::Resolution>,
+    ) -> ManagerResult<crate::bundle::ImportResult> {
+        let runtime = self.runtime.clone();
+        let imports = self.imports.clone();
+        self.run_blocking("resolve bundle", move || {
+            imports
+                .resolve(&runtime, id, resolutions)
+                .map_err(|e| ManagerError::bad_request(format!("{e:#}")))
+        })
+        .await
+    }
+
     fn reader(&self, script: Option<&str>, api: &str) -> ManagerResult<Arc<dyn ProxyCrabManager>> {
         let mut reader = self.clone();
         let script = match &self.forced_redaction {

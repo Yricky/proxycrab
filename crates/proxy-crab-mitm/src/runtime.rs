@@ -82,7 +82,8 @@ impl ProxyCrab {
         let workspace_root = workspace_root.into();
         std::fs::create_dir_all(&workspace_root)?;
         let workspace = Workspace::open(workspace_root)?;
-        let assets = AssetStore::open(workspace.root())?;
+        let mut assets = AssetStore::open(workspace.root())?;
+        assets.file_mutation = workspace.file_mutation.clone();
         let authority = Arc::new(CertificateAuthority::load_or_generate(workspace.root())?);
         let bypass = BypassStore::open(workspace.root())?;
         Ok(Arc::new(Self {

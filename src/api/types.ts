@@ -291,11 +291,13 @@ export interface SessionSharesPayload {
 }
 
 export interface SessionShareConfig {
+  sessionConfigShare?: { assets: string[] } | null;
   redactionScript?: string | null;
   persistent: boolean;
 }
 
 export interface SessionShareState {
+  session_config_share?: { assets: string[] } | null;
   redaction_identity?: string | null;
   persistent: boolean;
   redaction_script?: string | null;
@@ -684,4 +686,28 @@ export interface AssetMetadata {
   content_type: string;
   sha256: string;
   created_at: number;
+}
+
+export interface BundleIntent {
+  id: string;
+  type: string;
+  path: string;
+  assets: string[];
+}
+export interface BundleFileStatus {
+  path: string;
+  status: "same" | "conflict" | "new";
+  fingerprint: string | null;
+  can_rename: boolean;
+}
+export interface BundleResolution {
+  path: string;
+  action: "keep" | "overwrite" | "rename";
+  fingerprint: string | null;
+  name?: string;
+}
+export interface BundleImportResult {
+  import_id: string | null;
+  files: BundleFileStatus[];
+  sessions: SessionMetadata[];
 }

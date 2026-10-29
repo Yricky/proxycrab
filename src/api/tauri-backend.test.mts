@@ -161,3 +161,29 @@ test("desktop asset upload sends binary IPC with its path and MIME type", async 
     headers: { "x-asset-id": metadata.id, "x-asset-content-type": "image/png" },
   });
 });
+
+test("desktop bundle import passes file bytes and explicit intent IDs through IPC", async () => {
+  vi.mocked(invoke).mockResolvedValue({ import_id: null, files: [], sessions: [] });
+  const backend = createTauriBackend();
+  await backend.importBundle!(new File([new Uint8Array([1, 2, 3])], "bundle.zip"), ["chosen"]);
+  expect(invoke).toHaveBeenCalledExactlyOnceWith(
+    "import_bundle",
+    {
+      bytes: [1, 2, 3],
+      acceptedIntentIds: ["chosen"],
+    },
+    undefined,
+  );
+  vi.mocked(invoke).mockClear();
+  await backend.resolveBundle!("pending", [
+    { path: "assets/a.txt", action: "keep", fingerprint: "sha" },
+  ]);
+  expect(invoke).toHaveBeenCalledExactlyOnceWith(
+    "resolve_bundle",
+    {
+      id: "pending",
+      resolutions: [{ path: "assets/a.txt", action: "keep", fingerprint: "sha" }],
+    },
+    undefined,
+  );
+});

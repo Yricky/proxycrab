@@ -10,7 +10,7 @@ license = "MIT"
 [workspace.dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 async-compression = { version = "0.4", features = ["tokio", "brotli", "gzip", "zlib", "zstd"] }
 base64 = "0.22"
 brotli = "9.0.0"

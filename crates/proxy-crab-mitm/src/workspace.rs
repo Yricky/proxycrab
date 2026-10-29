@@ -2,7 +2,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -26,7 +26,15 @@ pub fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
+/// A staged bundle write, including the bytes observed during conflict checking.
+pub struct ImportFile {
+    pub path: String,
+    pub data: Vec<u8>,
+    pub expected: Option<Vec<u8>>,
+}
+
 pub struct Workspace {
+    pub(crate) file_mutation: Arc<Mutex<()>>,
     root: PathBuf,
     _lock: File,
     config: RwLock<AppConfig>,
@@ -103,6 +111,7 @@ impl Workspace {
         write_json_atomic(&config_path, &config)?;
 
         Ok(Arc::new(Self {
+            file_mutation: Arc::new(Mutex::new(())),
             root,
             _lock: lock,
             config: RwLock::new(config),
@@ -236,6 +245,93 @@ impl Workspace {
             return Err(error);
         }
         Ok(session)
+    }
+
+    /// Publish new sessions only after every file and session has been written successfully.
+    pub fn import_batch(
+        &self,
+        files: Vec<ImportFile>,
+        params: Vec<NewSession>,
+    ) -> Result<Vec<SessionMetadata>> {
+        let _mutation = self.file_mutation.lock().unwrap();
+        let mut sessions = self
+            .sessions
+            .write()
+            .map_err(|_| anyhow!("sessions lock poisoned"))?;
+        let archived = self
+            .archived_sessions
+            .read()
+            .map_err(|_| anyhow!("archives lock poisoned"))?;
+        // Reject changed targets before touching any files, including symlink ancestors.
+        for file in &files {
+            if !["scripts/", "assets/"]
+                .iter()
+                .any(|prefix| file.path.starts_with(prefix))
+                || file.path.contains('\\')
+                || file
+                    .path
+                    .split('/')
+                    .any(|part| part.is_empty() || part == "." || part == "..")
+            {
+                anyhow::bail!("invalid import target: {}", file.path);
+            }
+            let path = self.root.join(&file.path);
+            for ancestor in path.ancestors().take_while(|p| *p != self.root) {
+                if fs::symlink_metadata(ancestor).is_ok_and(|m| m.is_symlink()) {
+                    anyhow::bail!("symlink target: {}", file.path);
+                }
+            }
+            let current = match fs::read(&path) {
+                Ok(bytes) => Some(bytes),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => return Err(e.into()),
+            };
+            if current != file.expected {
+                anyhow::bail!("import target changed: {}", file.path);
+            }
+        }
+        let mut written = Vec::new();
+        let mut created: Vec<SessionMetadata> = Vec::new();
+        let result: Result<()> = (|| {
+            for file in &files {
+                let path = self.root.join(&file.path);
+                fs::create_dir_all(path.parent().unwrap())?;
+                // Track before writing: partial writes must also be restored.
+                written.push(file);
+                write_import_file(&path, &file.data)?;
+            }
+            let mut reserved = sessions.clone();
+            for param in &params {
+                let session = self.create_session_locked(&reserved, &archived, param)?;
+                reserved.push(session.clone());
+                created.push(session);
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let mut failures = Vec::new();
+            for session in &created {
+                if let Err(e) = fs::remove_dir_all(self.session_dir(session.id)) {
+                    failures.push(e.to_string());
+                }
+            }
+            for file in written.into_iter().rev() {
+                let path = self.root.join(&file.path);
+                let restored = match &file.expected {
+                    Some(bytes) => write_import_file(&path, bytes),
+                    None => fs::remove_file(path).map_err(anyhow::Error::from),
+                };
+                if let Err(e) = restored {
+                    failures.push(e.to_string());
+                }
+            }
+            if !failures.is_empty() {
+                anyhow::bail!("{error}; rollback failed: {}", failures.join("; "));
+            }
+            return Err(error);
+        }
+        sessions.extend(created.clone());
+        Ok(created)
     }
 
     pub fn update_session(
@@ -452,6 +548,7 @@ impl Workspace {
     }
 
     pub fn save_script(&self, kind: ScriptKind, script: Script, overwrite: bool) -> Result<()> {
+        let _mutation = self.file_mutation.lock().unwrap();
         let path = self.script_path(kind, &script.name)?;
         if !overwrite && path.exists() {
             return Err(Error::ScriptAlreadyExists(script.name.clone()).into());
@@ -461,6 +558,7 @@ impl Workspace {
     }
 
     pub fn delete_script(&self, kind: ScriptKind, name: &str) -> Result<()> {
+        let _mutation = self.file_mutation.lock().unwrap();
         let path = self.script_path(kind, name)?;
         match fs::remove_file(path) {
             Ok(()) => Ok(()),
@@ -545,6 +643,15 @@ pub(crate) fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<(
 
 fn write_text_atomic(path: &Path, content: &str) -> Result<()> {
     write_bytes_atomic(path, content.as_bytes())
+}
+
+// Separate from script persistence: arbitrary asset extensions must not alias .tmp paths.
+fn write_import_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut temporary = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
+    temporary.write_all(bytes)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path)?;
+    Ok(())
 }
 
 fn write_bytes_atomic(path: &Path, content: &[u8]) -> Result<()> {
@@ -1042,5 +1149,88 @@ mod tests {
             .unwrap();
 
         assert_eq!(workspace.session_interceptors(session.id).unwrap(), value);
+    }
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::*;
+    #[test]
+    fn overwrites_preserve_already_open_resource_streams() {
+        use std::io::Read;
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::open(dir.path()).unwrap();
+        fs::create_dir_all(dir.path().join("assets")).unwrap();
+        let path = dir.path().join("assets/body.bin");
+        fs::write(&path, b"old").unwrap();
+        let mut stream = File::open(&path).unwrap();
+        workspace
+            .import_batch(
+                vec![ImportFile {
+                    path: "assets/body.bin".into(),
+                    data: b"replacement".to_vec(),
+                    expected: Some(b"old".to_vec()),
+                }],
+                vec![],
+            )
+            .unwrap();
+        let mut old = Vec::new();
+        stream.read_to_end(&mut old).unwrap();
+        assert_eq!(old, b"old");
+        assert_eq!(fs::read(path).unwrap(), b"replacement");
+    }
+
+    #[test]
+    fn failed_file_placement_restores_overwrites_and_removes_new_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = Workspace::open(directory.path()).unwrap();
+        fs::write(
+            directory.path().join("scripts/request/old.lua"),
+            b"original",
+        )
+        .unwrap();
+        let file = |path: &str, data: &[u8], expected| ImportFile {
+            path: path.into(),
+            data: data.into(),
+            expected,
+        };
+        // The last file cannot be placed because the previous staged file occupies its parent.
+        let result = workspace.import_batch(
+            vec![
+                file(
+                    "scripts/request/old.lua",
+                    b"replacement",
+                    Some(b"original".to_vec()),
+                ),
+                file("assets/block", b"new", None),
+                file("assets/block/child", b"unreachable", None),
+            ],
+            vec![NewSession::default(), NewSession::default()],
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            fs::read(directory.path().join("scripts/request/old.lua")).unwrap(),
+            b"original"
+        );
+        assert!(!directory.path().join("assets/block").exists());
+        assert!(workspace.sessions().is_empty());
+    }
+    #[test]
+    fn sessions_are_not_published_when_creation_fails_and_assets_are_restored() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = Workspace::open(directory.path()).unwrap();
+        fs::remove_dir(directory.path().join("sessions")).unwrap();
+        fs::write(directory.path().join("sessions"), b"obstruction").unwrap();
+        let result = workspace.import_batch(
+            vec![ImportFile {
+                path: "assets/new.txt".into(),
+                data: b"new".to_vec(),
+                expected: None,
+            }],
+            vec![NewSession::default()],
+        );
+        assert!(result.is_err());
+        assert!(workspace.sessions().is_empty());
+        assert!(!directory.path().join("assets/new.txt").exists());
     }
 }

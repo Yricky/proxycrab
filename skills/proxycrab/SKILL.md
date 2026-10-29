@@ -72,6 +72,7 @@ surface has no `/api/agents.md` endpoint and needs no management API key or loca
 | Goal | Start here |
 | --- | --- |
 | Read active Agent instructions | `scripts/agents-get.mjs` |
+| Import explicitly accepted bundle intents / resolve conflicts | `scripts/bundle-import.mjs`; see `references/http-api.md#session-configuration-zips-and-intent-imports` |
 | List enabled Session shares without tokens | `scripts/session-share-list.mjs` |
 | Enable or configure sharing, including restart persistence | `POST /api/session-shares` with optional `session_share_config`; see `references/http-api.md` |
 | Read a supplied Session sharing link | [Session sharing workflow](#read-a-session-sharing-link), then `references/http-api.md#session-share-read-api` |
@@ -443,3 +444,5 @@ file is selected, then its destination name is confirmed. Names are not automati
 conflicts never overwrite existing assets. Script trees use the same creation locations and their
 top text field filters scripts. Tauri uploads use binary IPC; agent uploads still use
 `scripts/asset-upload.mjs` and the existing HTTP endpoint.
+
+Configuration ZIP downloads require the link owner to enable `session_config_share`. Asset dependencies are manually selected exact IDs or slash-terminated prefixes; see the asset best practices in `references/lua-api.md`. Import only intent IDs and conflict choices explicitly accepted by the user; never activate sessions as part of import.

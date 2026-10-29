@@ -1120,3 +1120,12 @@ count without changing zoom. Returning to full extent resumes continuous fitting
 Zoom is absolute: 1× means 100 CSS pixels per second, capped at 64× (6.4 px/ms,
 100px = 15.625ms), independent of the captured time range. Full-extent fitting also respects
 this cap; a short capture may leave unused space to the right.
+
+
+## Session configuration ZIPs and intent imports
+
+Share configuration accepts `session_share_config.session_config_share: {assets: ["mock/"]}` to enable live ZIP downloads, `null` to disable, and omission to preserve settings. Selectors are exact asset IDs or prefixes ending in `/`; missing matches fail. Persistent links retain this setting. Share bootstrap/capabilities expose `session_config_download`; token-authorized `GET /share-api/session-config` returns the ZIP only when enabled. It includes saved session configuration, directly referenced scripts, selected assets and their metadata, and descriptive `intents.json` entries `{id,type:"session",path,assets}`. No captures, activation or Lua dependency detection.
+
+`POST /api/imports` takes multipart `file` plus required `accepted_intent_ids` (a nonempty JSON string array). Only user-accepted intents and their dependencies are imported. It executes when conflict-free, otherwise returns `{import_id, files, sessions:[]}`; files include `path`, `status` (`new`/`same`/`conflict`), `fingerprint`, `can_rename`. `POST /api/imports/{id}/resolve` takes an array of `{path,action,fingerprint,name?}`. Actions: `keep`, `overwrite`, or scripts-only `rename` with a new script name excluding `.lua`. Resources retain original asset IDs. Recheck changed conflicts; never guess decisions. Batch failure rolls back files and new sessions. Temporary packages expire after 30 minutes; import returns new local session IDs without activating them. Both management endpoints require their own write permission (default approval).
+
+Use `scripts/bundle-import.mjs --file bundle.zip --accepted-intent-ids '["session-123"]'`; resolve with `--import-id ID --resolutions-file choices.json`. Only submit IDs and conflict choices explicitly accepted by the user. Limits: 128 MiB compressed/uncompressed, 4096 entries; current workspace schema required.

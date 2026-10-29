@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, watch } from "vue";
+import { openBundleImport } from "./windows/launcher";
+import { reportError } from "./stores/app";
 import AppToolbar from "./components/AppToolbar.vue";
 import SessionSidebar from "./components/SessionSidebar.vue";
 import FilterBar from "./components/FilterBar.vue";
@@ -82,10 +84,25 @@ onBeforeUnmount(() => {
   stopHttpApiSync();
   if (backend.listHttpApprovals) approvalsStore.stop();
 });
+function fileDrag(event: DragEvent): void {
+  if (backend.importBundle && event.dataTransfer?.types.includes("Files")) event.preventDefault();
+}
+async function fileDrop(event: DragEvent): Promise<void> {
+  if (!backend.importBundle || !event.dataTransfer?.files.length) return;
+  event.preventDefault();
+  event.stopPropagation();
+  for (const file of Array.from(event.dataTransfer.files)) {
+    try {
+      await openBundleImport(file);
+    } catch (e) {
+      reportError(e, "打开分享包失败");
+    }
+  }
+}
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" @dragover="fileDrag" @drop="fileDrop">
     <AppToolbar :session-id="logs.sessionId" />
     <div class="app-main">
       <SessionSidebar :logs="logs" />

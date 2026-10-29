@@ -155,6 +155,12 @@ export function createTauriBackend(): Backend {
     stopProxy: () => call("stop_proxy"),
     listLocalIps: () => call("list_local_ips"),
 
+    importBundle: async (file, acceptedIntentIds) =>
+      call("import_bundle", {
+        bytes: Array.from(new Uint8Array(await file.arrayBuffer())),
+        acceptedIntentIds,
+      }),
+    resolveBundle: (id, resolutions) => call("resolve_bundle", { id, resolutions }),
     listSessions: () => call("list_sessions"),
     listArchivedSessions: () => call("list_archived_sessions"),
     createSession: (request: CreateSessionRequest) => call("create_session", { request }),
@@ -175,6 +181,9 @@ export function createTauriBackend(): Backend {
             ? {}
             : { redaction_script: sessionShareConfig.redactionScript }),
           persistent: sessionShareConfig.persistent,
+          ...(sessionShareConfig.sessionConfigShare === undefined
+            ? {}
+            : { session_config_share: sessionShareConfig.sessionConfigShare }),
         },
       }),
     disableSessionShare: (sessionId: number) =>

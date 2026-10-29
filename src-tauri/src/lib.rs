@@ -72,6 +72,48 @@ async fn list_session_shares(
 }
 
 #[tauri::command]
+async fn import_bundle(
+    app: tauri::AppHandle,
+    state: State<'_, BackendState>,
+    bytes: Vec<u8>,
+    accepted_intent_ids: Vec<String>,
+) -> Result<proxy_crab_mgr::bundle::ImportResult, ManagerError> {
+    let result = state
+        .manager()
+        .import_bundle(bytes, accepted_intent_ids)
+        .await?;
+    if result.import_id.is_none() {
+        let _ = app.emit(
+            "proxycrab://http-api-change",
+            HttpApiChange {
+                resources: vec![HttpApiResource::All],
+                session_id: None,
+            },
+        );
+    }
+    Ok(result)
+}
+#[tauri::command]
+async fn resolve_bundle(
+    app: tauri::AppHandle,
+    state: State<'_, BackendState>,
+    id: String,
+    resolutions: Vec<proxy_crab_mgr::bundle::Resolution>,
+) -> Result<proxy_crab_mgr::bundle::ImportResult, ManagerError> {
+    let result = state.manager().resolve_bundle(id, resolutions).await?;
+    if result.import_id.is_none() {
+        let _ = app.emit(
+            "proxycrab://http-api-change",
+            HttpApiChange {
+                resources: vec![HttpApiResource::All],
+                session_id: None,
+            },
+        );
+    }
+    Ok(result)
+}
+
+#[tauri::command]
 async fn get_session_share(
     state: State<'_, BackendState>,
     session_id: u64,
@@ -1245,6 +1287,8 @@ pub fn run() {
             get_http_service_status,
             list_session_shares,
             get_session_share,
+            import_bundle,
+            resolve_bundle,
             enable_session_share,
             disable_session_share,
             get_http_permission_catalog,

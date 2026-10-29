@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
+import ShareAssetsEditor from "../components/ShareAssetsEditor.vue";
 import RedactionSelect from "../components/RedactionSelect.vue";
 import { useBackend } from "../api";
 import type { HttpApiChange, SessionShareState } from "../api/types";
@@ -15,6 +16,8 @@ const backend = useBackend();
 const pageShare = ref<SessionShareState | null>(null);
 const pageLinks = ref<string[]>([]);
 const pagePersistent = ref(false);
+const configShare = ref<{ assets: string[] } | null>(null);
+const editingAssets = ref(false);
 const pageRedaction = ref<string | null>(null);
 const loading = ref(false);
 const pageMutating = ref(false);
@@ -32,6 +35,7 @@ async function load(): Promise<void> {
     ]);
     if (sequence !== loadSequence) return;
     pageShare.value = nextPageShare;
+    if (nextPageShare.enabled) configShare.value = nextPageShare.session_config_share ?? null;
     sessionsStore.updateShare(nextPageShare);
     if (nextPageShare.enabled) pagePersistent.value = nextPageShare.persistent;
     if (nextPageShare.enabled) pageRedaction.value = nextPageShare.redaction_script ?? null;
@@ -99,6 +103,7 @@ async function togglePageShare(): Promise<void> {
       appStore.toast("链接分享已关闭", "success");
     } else {
       pageShare.value = await backend.enableSessionShare(props.sessionId, {
+        sessionConfigShare: configShare.value,
         redactionScript: pageRedaction.value ?? undefined,
         persistent: pagePersistent.value,
       });
@@ -128,6 +133,33 @@ async function copyLink(url: string): Promise<void> {
   } catch (error) {
     reportError(error, "复制分享链接失败");
   }
+}
+
+async function saveConfigShare(value: { assets: string[] } | null): Promise<void> {
+  if (!pageShare.value?.enabled) {
+    configShare.value = value;
+    editingAssets.value = false;
+    return;
+  }
+  pageMutating.value = true;
+  try {
+    const next = await backend.enableSessionShare(props.sessionId, {
+      persistent: pagePersistent.value,
+      sessionConfigShare: value,
+    });
+    pageShare.value = next;
+    configShare.value = next.session_config_share ?? null;
+    sessionsStore.updateShare(next);
+    editingAssets.value = false;
+  } catch (e) {
+    reportError(e, "保存配置分享设置失败");
+  } finally {
+    pageMutating.value = false;
+  }
+}
+function toggleConfigShare(): void {
+  if (configShare.value) void saveConfigShare(null);
+  else editingAssets.value = true;
 }
 
 function onRefreshRequest(event: Event): void {
@@ -200,6 +232,34 @@ onBeforeUnmount(() => {
         :disabled="loading || pageMutating"
         @update:model-value="setRedaction($event)"
       />
+      <div v-if="backend.listAssets && backend.enableSessionShare" class="config-share">
+        <div class="config-share-row">
+          <label
+            ><input
+              type="checkbox"
+              :checked="!!configShare"
+              :disabled="loading || pageMutating"
+              @change="toggleConfigShare"
+            />
+            允许下载 Session 配置</label
+          >
+          <button
+            v-if="configShare"
+            class="btn"
+            :disabled="pageMutating"
+            @click="editingAssets = true"
+          >
+            随附资源 {{ configShare.assets.length }} 条规则 · 编辑
+          </button>
+        </div>
+        <p>下载时使用最新配置、脚本及资源；目录前缀包含其下后续新增的资源。</p>
+        <ShareAssetsEditor
+          v-if="editingAssets"
+          :initial="configShare?.assets ?? []"
+          @save="(assets) => saveConfigShare({ assets })"
+          @cancel="editingAssets = false"
+        />
+      </div>
       <div v-if="loading && !pageShare" class="share-empty">正在读取分享状态…</div>
       <template v-else-if="pageShare?.enabled">
         <div v-if="pageLinks.length" class="share-links">
@@ -228,6 +288,22 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.config-share {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.config-share-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.config-share p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
 .share-root {
   flex: 1;
   min-height: 0;

@@ -652,3 +652,18 @@ remain available: original timing, direction, type and byte size are intentional
 Identity/share bindings and process-forced policies use the existing precedence. No binding means
 original content according to ordinary read permission. URI/handshake redaction remains the existing
 HTTP flow. Under policies, close reasons are suppressed rather than exposed outside message redaction.
+
+
+## Asset best practices for configuration sharing
+
+Keep resources used by a script together under one asset directory. Document the asset IDs or directory prefixes in comments at the top of the Lua script, for example:
+
+```lua
+-- 随附资源：
+-- mock/login/
+-- certs/demo.pem
+```
+
+When enabling Session configuration sharing, manually select those asset IDs or slash-terminated prefixes. Prefixes include all nested assets and later additions at download time. Comments are documentation for the author; the sharing feature does not parse Lua code or comments to discover dependencies.
+
+Ordinary asset uploads never overwrite existing IDs. Bundle import can replace an existing asset only after the receiver explicitly chooses overwrite for that conflict.

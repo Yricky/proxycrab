@@ -132,6 +132,16 @@ export interface Backend {
   stopProxy(): Promise<ProxyStatus>;
   listLocalIps?(): Promise<string[]>;
 
+  importBundle?(
+    file: File,
+    acceptedIntentIds: string[],
+  ): Promise<import("./types").BundleImportResult>;
+  resolveBundle?(
+    id: string,
+    resolutions: import("./types").BundleResolution[],
+  ): Promise<import("./types").BundleImportResult>;
+  downloadSessionConfig?(): Promise<void>;
+
   // sessions
   listSessions(): Promise<SessionsPayload>;
   listArchivedSessions(): Promise<SessionMetadata[]>;

@@ -83,3 +83,9 @@ test("write-capable backends retain add, toggle, drag, script and breakpoint beh
   expect(html).toContain("breakpoint-count");
   expect(html).toContain('aria-label="清扫会话"');
 });
+
+test("configuration download is shown only when the backend exposes it", async () => {
+  expect(await render()).not.toContain('aria-label="下载 Session 配置"');
+  backend.downloadSessionConfig = vi.fn();
+  expect(await render()).toContain('aria-label="下载 Session 配置"');
+});

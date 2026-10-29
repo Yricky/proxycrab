@@ -27,6 +27,8 @@ tokio-util.workspace = true
 tracing.workspace = true
 url.workspace = true
 time = { workspace = true, features = ["formatting"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tempfile = "3"
 
 [dev-dependencies]
 rusqlite.workspace = true

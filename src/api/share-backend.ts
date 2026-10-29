@@ -21,6 +21,7 @@ interface ApiEnvelope<T> {
 }
 
 export interface ShareBootstrap {
+  session_config_download?: boolean;
   session: SessionMetadata;
   view: SessionViewPayload;
   proxy_status: ProxyStatus;
@@ -93,7 +94,21 @@ export function createShareBackend(
   };
   // 分享后端只实现 /share-api 暴露的只读方法：未实现的方法（replay、Session 写入、
   // 审批等）保持 undefined，UI 直接以方法是否存在决定入口是否展示。
+  const downloadConfig = async () => {
+    const url = new URL("/share-api/session-config", baseUrl);
+    url.searchParams.set("token", token);
+    const response = await fetch(url);
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { error?: ManagerError } | null;
+      throw new BackendError(
+        payload?.error ?? { code: `http_${response.status}`, message: "下载 Session 配置失败" },
+      );
+    }
+    const { saveBlobInWebview } = await import("./save-file");
+    await saveBlobInWebview(await response.blob(), "session-config.zip");
+  };
   const implemented: Partial<Backend> = {
+    downloadSessionConfig: bootstrap.session_config_download ? downloadConfig : undefined,
     host: undefined,
     downloadBody: (target, side, filename) => {
       if (target.kind === "breakpoint") return unsupported("download breakpoint body")();
@@ -117,13 +132,23 @@ export function createShareBackend(
         if (stopped || polling) return;
         polling = true;
         try {
-          const [view, nextColumns, nextFilters, nextInterceptors] = await Promise.all([
-            call<SessionViewPayload>("/share-api/session-view"),
-            call<Script[]>("/share-api/column-scripts"),
-            call<Script[]>("/share-api/filter-scripts"),
-            call<SessionInterceptorsPayload>("/share-api/session-interceptors"),
-          ]);
+          const [view, nextColumns, nextFilters, nextInterceptors, capabilities] =
+            await Promise.all([
+              call<SessionViewPayload>("/share-api/session-view"),
+              call<Script[]>("/share-api/column-scripts"),
+              call<Script[]>("/share-api/filter-scripts"),
+              call<SessionInterceptorsPayload>("/share-api/session-interceptors"),
+              call<{ session_config_download: boolean }>("/share-api/capabilities"),
+            ]);
           if (stopped) return;
+          if (
+            Boolean(implemented.downloadSessionConfig) !==
+            (capabilities.session_config_download === true)
+          ) {
+            implemented.downloadSessionConfig =
+              capabilities.session_config_download === true ? downloadConfig : undefined;
+            handler({ resources: ["session_share"], session_id: bootstrap.session.id });
+          }
           const revision = view.redaction_revision ?? null;
           if (revision !== redactionRevision) {
             redactionRevision = revision;

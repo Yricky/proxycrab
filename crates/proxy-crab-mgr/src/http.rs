@@ -299,6 +299,11 @@ fn router_with_changes_and_extra(
             axum::routing::delete(delete_archived_session),
         )
         .route("/api/active-session", put(replace_active_session))
+        .route(
+            "/api/imports",
+            post(import_bundle).layer(axum::extract::DefaultBodyLimit::max(129 * 1024 * 1024)),
+        )
+        .route("/api/imports/{id}/resolve", post(resolve_bundle))
         .route("/api/sessions/{id}", put(update_session))
         .route(
             "/api/session-shares",
@@ -647,6 +652,9 @@ async fn publish_successful_http_changes(
 
 fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Option<HttpApiChange> {
     let resources = match (method, path) {
+        (&Method::POST, value) if value == "/api/imports" || value.starts_with("/api/imports/") => {
+            vec![HttpApiResource::All]
+        }
         (&Method::POST | &Method::PUT | &Method::DELETE, value)
             if value.starts_with("/api/redaction-scripts") || value.ends_with("/redaction") =>
         {
@@ -804,6 +812,62 @@ async fn sessions(State(manager): State<ManagerState>) -> ApiResult {
 
 async fn archived_sessions(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.archived_sessions().await?)
+}
+
+async fn import_bundle(
+    State(manager): State<ManagerState>,
+    mut multipart: axum::extract::Multipart,
+) -> ApiResult {
+    let mut bytes = None;
+    let mut accepted = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ManagerError::bad_request(e.to_string()))?
+    {
+        match field.name() {
+            Some("file") if bytes.is_none() => {
+                bytes = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| ManagerError::bad_request(e.to_string()))?
+                        .to_vec(),
+                )
+            }
+            Some("accepted_intent_ids") if accepted.is_none() => {
+                accepted = Some(
+                    serde_json::from_str::<Vec<String>>(
+                        &field
+                            .text()
+                            .await
+                            .map_err(|e| ManagerError::bad_request(e.to_string()))?,
+                    )
+                    .map_err(|e| ManagerError::bad_request(e.to_string()))?,
+                )
+            }
+            _ => {
+                return Err(
+                    ManagerError::bad_request("unexpected or duplicate import field").into(),
+                );
+            }
+        }
+    }
+    success(
+        manager
+            .import_bundle(
+                bytes.ok_or_else(|| ManagerError::bad_request("missing file"))?,
+                accepted.ok_or_else(|| ManagerError::bad_request("missing accepted_intent_ids"))?,
+            )
+            .await?,
+    )
+}
+async fn resolve_bundle(
+    State(manager): State<ManagerState>,
+    ApiPath(id): ApiPath<String>,
+    ApiJson(resolutions): ApiJson<Vec<crate::bundle::Resolution>>,
+) -> ApiResult {
+    success(manager.resolve_bundle(id, resolutions).await?)
 }
 
 async fn replace_active_session(
@@ -2051,6 +2115,47 @@ mod tests {
             }
         }
         assert!(manager.redaction_script("token-mask".into()).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn bundle_multipart_requires_explicit_intents_and_runs_without_activation() {
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
+        let zip = crate::bundle::export(
+            &runtime,
+            session.id,
+            &crate::bundle::ConfigShare { assets: vec![] },
+        )
+        .unwrap();
+        let app = router(MitmManager::new(runtime.clone()), allow_all());
+        for (ids, expected) in [
+            ("[]".to_string(), StatusCode::BAD_REQUEST),
+            (format!("[\"session-{}\"]", session.id), StatusCode::OK),
+        ] {
+            let mut body = format!("--bundle-boundary\r\nContent-Disposition: form-data; name=\"accepted_intent_ids\"\r\n\r\n{ids}\r\n--bundle-boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"bundle.zip\"\r\nContent-Type: application/zip\r\n\r\n").into_bytes();
+            body.extend_from_slice(&zip);
+            body.extend_from_slice(b"\r\n--bundle-boundary--\r\n");
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/imports")
+                        .header(
+                            "content-type",
+                            "multipart/form-data; boundary=bundle-boundary",
+                        )
+                        .header("authorization", "Bearer test")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        assert_eq!(runtime.sessions().len(), 2);
+        assert_eq!(runtime.active_session_id(), None);
     }
 
     struct AllowAll;
