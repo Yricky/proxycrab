@@ -8,7 +8,7 @@ import test from "node:test";
 const exec = promisify(execFile);
 const script = new URL("./redaction-upsert.mjs", import.meta.url).href;
 
-async function runUpsert(respond) {
+async function runUpsert(respond, name = "mask") {
   const dir = await mkdtemp(path.join(tmpdir(), "redaction-upsert-"));
   const file = path.join(dir, "mask.lua");
   await writeFile(file, "context.req.headers:set('authorization', '***')\n");
@@ -21,7 +21,7 @@ async function runUpsert(respond) {
     };
     const respond = ${respond};
     globalThis.__respond = respond;
-    process.argv = ["node", ${JSON.stringify(script)}, "--name", "mask", "--file", ${JSON.stringify(file)}];
+    process.argv = ["node", ${JSON.stringify(script)}, "--name", ${JSON.stringify(name)}, "--file", ${JSON.stringify(file)}];
     await import(${JSON.stringify(script)});
   `]);
   return JSON.parse(stdout);
@@ -61,4 +61,19 @@ test("disabled management is reported without attempting an update", async () =>
     assert.doesNotMatch(error.stderr, /unexpected retry/);
     return true;
   });
+});
+
+
+test("nested script identity is raw in JSON and encoded as one URL parameter", async () => {
+  const result = await runUpsert(`(method, pathname, body) => {
+    if (method === "POST" && pathname === "/api/redaction-scripts") {
+      if (JSON.parse(body).name !== "business/mask") throw new Error("incorrect name");
+      return new Response(JSON.stringify({ ok: false, error: { code: "conflict", message: "exists" } }), { status: 409 });
+    }
+    if (method === "PUT" && pathname === "/api/redaction-scripts/business%2Fmask") {
+      return new Response(JSON.stringify({ ok: true, data: {} }));
+    }
+    throw new Error("unexpected " + method + " " + pathname);
+  }`, "business/mask");
+  assert.deepEqual(result, { action: "updated", name: "business/mask" });
 });

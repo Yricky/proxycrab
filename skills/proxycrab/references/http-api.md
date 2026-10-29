@@ -23,6 +23,23 @@ This reference documents the complete local HTTP surface used by ProxyCrab agent
 17. [Clash subscription](#clash-subscription)
 18. [Redaction library and bindings](#redaction-library-and-bindings)
 
+## Script relative paths
+
+For all six libraries (column, filter, routing, request, response, redaction), `name` is a
+relative path without the automatically appended `.lua` extension. For example,
+`business/errors` resolves to `scripts/filter/business/errors.lua` in the filter library.
+Lists include nested scripts and preserve the full relative path. Creation makes missing
+parent directories. Existing root-level names remain valid. Bindings use the full path.
+
+Names are limited to 128 UTF-8 bytes. Each `/`-separated segment may contain letters, numbers,
+`.`, `_`, and `-`; empty segments, `.` and `..`, absolute paths and backslashes are rejected.
+Script operations do not follow symlinks within the library. Encode the **whole** name as one
+URL parameter: `/api/filter-scripts/business%2Ferrors` (and append `/debug` for debugging).
+JSON bodies and helper `--name` arguments use the unencoded value `business/errors`.
+
+The script managers show a compact, directory-first file tree. Directories are derived from
+script paths; empty-directory management, rename and drag-and-drop moves are not supported.
+
 ## Script display metadata
 
 Script list/detail and interceptor library/Session-chain responses may contain `display_name`.
@@ -62,10 +79,11 @@ There is no environment-variable or persisted-config option. Both forms authoriz
 routes and trusted UI calls, are not Agent API keys, and must never be copied into
 `PROXYCRAB_API_KEY`. A custom UIKey cannot bypass a startup `--redaction-script` policy.
 
-Session sharing uses separate `pcrab_share_…` tokens and `/share-api/*` browser routes. Those tokens
-are scoped to one read-only Session, live only for the current process while sharing remains
-enabled, are not accepted by the Agent API, and must never be copied into `PROXYCRAB_API_KEY`, Agent
-commands, logs, or reports.
+Session sharing uses separate `pcrab_share_…` tokens and `/share-api/*` routes for browsers and
+agents. Those tokens are scoped to one read-only Session and live only for the current process
+while sharing remains enabled. Agents may use a supplied link directly with the share read API
+below, without a management key. Share tokens are not accepted by `/api/*` and are not
+`PROXYCRAB_API_KEY` values or Bearer credentials.
 
 HAR sharing uses an independent `pcrab_har_…` browser token for a frozen set of capture IDs. It is
 also process-local, is accepted only by `/session.har`, and must not be copied into Agent commands,
@@ -364,14 +382,14 @@ permission-controlled Agent API action whose default mode is `approval` on deskt
 
 The response contains `session_id`, `enabled: true`, and the cleartext `pcrab_share_…` token. The
 owner management service retains that token in process memory so the UI can reopen the same link.
-Never use the token as a Bearer credential or print it in a report: the share browser sends it only
-as exactly one `token` query parameter to the read-only `/share-api/*` surface.
+Browsers and agents send the token as exactly one `token` query parameter to the read-only
+`/share-api/*` surface. It is not a Bearer credential.
 
 ### `GET /api/session-shares/{id}`
 
 Returns the current process-local share state for one non-archived Session. Its default permission
 is `allow`. A disabled response contains `session_id` and `enabled: false`; an enabled response also
-contains the current browser token. Treat the token as sensitive and do not expose it in output.
+contains the current share token, usable by browsers and agents through the share read API below.
 
 ### `DELETE /api/session-shares/{id}`
 
@@ -386,6 +404,44 @@ other Session activity and the global bypass activity count are never returned. 
 `POST /share-api/logs/ids` route uses the same read-only request and
 `matched_ids`/`in_progress_ids` response as the management route, while forcibly scoping the
 Session and exposing no filter-persistence route.
+
+### Session share read API
+
+Given `/session?token=…`, preserve the origin and send the decoded token as exactly one URL-encoded
+`token` query parameter on each route below. These routes need no management API key or
+`Authorization` header (that header is ignored). POST bodies use `Content-Type: application/json`.
+The server fixes the Session from the token; omit `session_id` because any supplied value is ignored.
+The page URL may also have `id`, which selects a capture, not a Session. Start with bootstrap and
+then query IDs and details; see the runnable example in [SKILL.md](../SKILL.md#read-a-session-sharing-link).
+
+All paths below are relative to the link's origin and require `?token=…` (or `&token=…` when other
+query parameters are present). JSON success responses use `{"ok":true,"data":…}`; errors use
+`{"ok":false,"error":{"code":"…","message":"…"}}`. Body and interceptor source successes are raw.
+
+| Method and path | Input and result |
+| --- | --- |
+| `GET /share-api/bootstrap` | Returns `{session, view, proxy_status, api_port}` for the shared Session. |
+| `GET /share-api/session-view` | Returns the shared Session view, including columns, saved filter, and optional `redaction_revision`. |
+| `GET /share-api/proxy/status` | Returns scoped proxy status; use `running.active_netlog` for current activity. Other Sessions and global bypass counts are excluded. |
+| `GET /share-api/proxy/changes` | Optional `after` revision string. Returns `{revision, changed}`; matching revisions long-poll for up to 25 seconds. Use the returned revision on the next call. |
+| `POST /share-api/logs/ids` | Same body/result as `POST /api/logs/ids` below: optional `filter`, `ids`, exclusive `min_id`/`max_id`, `limit` (default/max 10000). Returns `{matched_ids, in_progress_ids}`. `{}` matches all, without changing the saved filter. |
+| `POST /share-api/logs/views` | `{"logs":[{"id":42,"updated_at":123}],"view":{"columns":[{"kind":"method","width":50}]}}`. At most 200 rows; timestamps and `view` are optional. Same table payload and conditional row semantics as `/api/logs/views`. |
+| `GET /share-api/logs/{id}` | Same `LogDetail` as `/api/logs/{id}`; ID must belong to the shared Session. |
+| `GET /share-api/logs/{id}/body` | Required `side=request|response`; optional positive `max_size` (default 16777216), `execution_id` for an interceptor-entry body. Raw bytes with normal Body encoding negotiation; use `Accept-Encoding: identity` for decoded bytes and save to a file. A missing snapshot never falls back to the final Body. |
+| `GET /share-api/logs/{id}/websocket/messages` | Required `side=request|response`; optional `after_id`, `limit` (default 500). Same message metadata/pagination as the management equivalent; continue with `next_after_id`. |
+| `GET /share-api/logs/{id}/websocket/messages/{message_id}/body` | Required `side`; optional `max_size` (default 16777216). Raw message bytes; respect hidden/unavailable content errors. Message IDs are per direction. |
+| `GET /share-api/logs/{id}/interceptors/{execution_id}/content` | Raw executed Lua source, `text/plain`, with `x-proxycrab-script-sha256` header. |
+| `GET /share-api/logs/{id}/interceptors/{execution_id}/snapshot` | Same interceptor-entry snapshot JSON as the management equivalent. Use an execution ID from log detail. |
+| `GET /share-api/column-scripts` | Script metadata array `{name, display_name, content:""}`; library source is not exposed. |
+| `GET /share-api/filter-scripts` | Same metadata-only shape for filter scripts. |
+| `POST /share-api/validate-filter-regex` | `{"pattern":"…"}`; data is `null` for a valid Rust regex, otherwise a validation error string. |
+
+Only the routes above exist on the share surface; there are no Session writes, filter persistence,
+replay, export, breakpoint control, or `/agents.md` routes. Share reads honor effective redaction.
+`invalid_share_token` (401) means missing, duplicate, invalid, or revoked token;
+`share_session_unavailable` means the Session is unavailable (for example archived). Disabling sharing
+or process exit invalidates the token. Report these errors rather than falling back to management
+credentials; report `redaction_failed` without changing the policy.
 
 ### Session HAR shares
 
@@ -1076,19 +1132,12 @@ that generation's unfinished rows failed with `error: "proxy_shutdown"`.
 
 ## Certificate authority
 
-### `GET /api/ca`
-
-Returns:
-
-```json
-{ "pem": "-----BEGIN CERTIFICATE-----\n..." }
-```
-
 ### `GET /ca.crt`
 
 Public raw-file download on the management HTTP port. No proxy setup, running proxy, Bearer key,
 subscription token, or active Session is required. It returns only the current public certificate
 as PEM (`application/x-x509-ca-cert`, attachment `proxycrab-ca.crt`, `Cache-Control: no-store`).
+This is the sole HTTP certificate-read endpoint; it has no management permission entry.
 Regenerating the CA updates the file at the same URL. Use a non-loopback IPv4 reachable from
 the device downloading the certificate.
 

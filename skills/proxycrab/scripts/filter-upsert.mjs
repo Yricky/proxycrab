@@ -18,6 +18,8 @@ run(async () => {
     printHelp(`
 Usage: node filter-upsert.mjs --name NAME --file SCRIPT.lua [--base-url URL]
 
+NAME accepts a relative path, e.g. business/example (without the automatic .lua extension).
+
 Create a filter script or replace the source of an existing filter with the same name.
 `);
     return;

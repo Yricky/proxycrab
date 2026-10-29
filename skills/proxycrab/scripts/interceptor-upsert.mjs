@@ -19,6 +19,8 @@ run(async () => {
     printHelp(`
 Usage: node interceptor-upsert.mjs --kind request|response --name NAME --file SCRIPT.lua
 
+NAME accepts a relative path, e.g. business/example (without the automatic .lua extension).
+
 Create an interceptor or replace the source of an existing interceptor with the same kind/name.
 `);
     return;

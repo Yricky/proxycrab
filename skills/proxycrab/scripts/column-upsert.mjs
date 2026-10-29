@@ -18,6 +18,8 @@ run(async () => {
     printHelp(`
 Usage: node column-upsert.mjs --name NAME --file SCRIPT.lua [--base-url URL]
 
+NAME accepts a relative path, e.g. business/example (without the automatic .lua extension).
+
 Create a custom-column script or replace the source of an existing script with the same name.
 `);
     return;

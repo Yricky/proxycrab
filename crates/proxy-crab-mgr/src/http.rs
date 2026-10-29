@@ -416,7 +416,6 @@ fn router_with_changes_and_extra(
                 .put(update_interceptor)
                 .delete(delete_interceptor),
         )
-        .route("/api/ca", get(certificate))
         .route(
             "/api/clash-subscription",
             get(clash_subscription)
@@ -1466,10 +1465,6 @@ async fn save_clash_config(
 
 async fn reset_clash_config(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.reset_clash_config().await?)
-}
-
-async fn certificate(State(manager): State<ManagerState>) -> ApiResult {
-    success(manager.certificate().await?)
 }
 
 async fn download_certificate(State(manager): State<ManagerState>) -> Response {
@@ -3681,6 +3676,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nested_script_names_round_trip_through_http() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let app = router(MitmManager::new(runtime), allow_all());
+        for (collection, item, kind) in [
+            ("column-scripts", "column-scripts", None),
+            ("filter-scripts", "filter-scripts", None),
+            ("routing-scripts", "routing-scripts", None),
+            ("redaction-scripts", "redaction-scripts", None),
+            ("interceptors", "interceptors/request", Some("request")),
+            ("interceptors", "interceptors/response", Some("response")),
+        ] {
+            let mut payload =
+                serde_json::json!({"name": "group/nested/example", "content": "return true"});
+            if let Some(kind) = kind {
+                payload["kind"] = kind.into();
+            }
+            let item_uri = format!("/api/{item}/group%2Fnested%2Fexample");
+            for (method, uri, body) in [
+                ("POST", format!("/api/{collection}"), payload.to_string()),
+                ("GET", item_uri.clone(), String::new()),
+                (
+                    "PUT",
+                    item_uri.clone(),
+                    r#"{"content":"return false"}"#.into(),
+                ),
+                ("GET", item_uri.clone(), String::new()),
+                ("DELETE", item_uri.clone(), String::new()),
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(&uri)
+                            .header("content-type", "application/json")
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let status = response.status();
+                let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                assert_eq!(
+                    status,
+                    axum::http::StatusCode::OK,
+                    "{method} {uri}: {}",
+                    String::from_utf8_lossy(&body)
+                );
+                if method == "GET" {
+                    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(json["data"]["name"], "group/nested/example");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn script_updates_reject_the_removed_rename_shape() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
@@ -3771,7 +3824,7 @@ mod tests {
                 .await
                 .unwrap()
                 .status(),
-            StatusCode::UNAUTHORIZED
+            StatusCode::NOT_FOUND
         );
         assert_eq!(
             runtime.proxy_status(),

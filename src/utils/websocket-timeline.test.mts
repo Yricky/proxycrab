@@ -220,22 +220,22 @@ describe("adaptive timeline ticks", () => {
 
 describe("message origin and disposition", () => {
   const producer = { execution_id: 7, name: "reply", invocation_id: 3, send_index: 1 };
-  test("origin defines border and disposition overrides only fill", () => {
+  test("origin defines fill and disposition overrides only border", () => {
     for (const origin of [undefined, producer]) {
-      const border = origin ? "--accent" : "--success";
-      expect(messageColors({ ...message, producer: origin })).toEqual({ border, fill: border });
+      const fill = origin ? "--accent" : "--success";
+      expect(messageColors({ ...message, producer: origin })).toEqual({ border: fill, fill });
       expect(messageColors({ ...message, producer: origin, status: "sent" })).toEqual({
-        border,
-        fill: border,
+        border: fill,
+        fill,
       });
       expect(messageColors({ ...message, producer: origin, status: "dropped" })).toEqual({
-        border,
-        fill: "--text-faint",
+        border: "--text-faint",
+        fill,
       });
       for (const status of ["unsent", "failed"] as const) {
         expect(messageColors({ ...message, producer: origin, status })).toEqual({
-          border,
-          fill: "--danger",
+          border: "--danger",
+          fill,
         });
       }
     }

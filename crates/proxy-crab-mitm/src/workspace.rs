@@ -406,29 +406,36 @@ impl Workspace {
 
     pub fn list_scripts(&self, kind: ScriptKind) -> Result<Vec<Script>> {
         let mut scripts = Vec::new();
-        for entry in fs::read_dir(self.script_dir(kind))? {
-            let entry = entry?;
-            if entry.path().extension().and_then(|value| value.to_str()) != Some("lua") {
-                continue;
+        let root = self.script_dir(kind);
+        let mut directories = vec![root.clone()];
+        while let Some(directory) = directories.pop() {
+            for entry in fs::read_dir(directory)? {
+                let entry = entry?;
+                let file_type = entry.file_type()?;
+                let path = entry.path();
+                if file_type.is_dir() {
+                    directories.push(path);
+                } else if file_type.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("lua")
+                {
+                    let name = path
+                        .strip_prefix(&root)?
+                        .with_extension("")
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    scripts.push(Script {
+                        name,
+                        content: fs::read_to_string(path)?,
+                    });
+                }
             }
-            let name = entry
-                .path()
-                .file_stem()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default()
-                .to_string();
-            scripts.push(Script {
-                name,
-                content: fs::read_to_string(entry.path())?,
-            });
         }
         scripts.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(scripts)
     }
 
     pub fn get_script(&self, kind: ScriptKind, name: &str) -> Result<Script> {
-        validate_script_name(name)?;
-        let path = self.script_dir(kind).join(format!("{name}.lua"));
+        let path = self.script_path(kind, name)?;
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -445,23 +452,41 @@ impl Workspace {
     }
 
     pub fn save_script(&self, kind: ScriptKind, script: Script, overwrite: bool) -> Result<()> {
-        validate_script_name(&script.name)?;
-        let path = self.script_dir(kind).join(format!("{}.lua", script.name));
+        let path = self.script_path(kind, &script.name)?;
         if !overwrite && path.exists() {
             return Err(Error::ScriptAlreadyExists(script.name.clone()).into());
         }
+        fs::create_dir_all(path.parent().unwrap())?;
         write_text_atomic(&path, &script.content)
     }
 
     pub fn delete_script(&self, kind: ScriptKind, name: &str) -> Result<()> {
-        validate_script_name(name)?;
-        match fs::remove_file(self.script_dir(kind).join(format!("{name}.lua"))) {
+        let path = self.script_path(kind, name)?;
+        match fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 Err(Error::ScriptNotFound(name.to_string()).into())
             }
             Err(error) => Err(error).with_context(|| format!("failed to delete script {name}")),
         }
+    }
+
+    fn script_path(&self, kind: ScriptKind, name: &str) -> Result<PathBuf> {
+        validate_script_name(name)?;
+        let root = self.script_dir(kind);
+        let path = root.join(format!("{name}.lua"));
+        // Do not follow symlinks in script paths, including the atomic-write temporary file.
+        for candidate in path.ancestors().take_while(|ancestor| *ancestor != root) {
+            if fs::symlink_metadata(candidate).is_ok_and(|metadata| metadata.is_symlink()) {
+                return Err(Error::InvalidScriptName.into());
+            }
+        }
+        if fs::symlink_metadata(path.with_extension("tmp"))
+            .is_ok_and(|metadata| metadata.is_symlink())
+        {
+            return Err(Error::InvalidScriptName.into());
+        }
+        Ok(path)
     }
 
     fn script_dir(&self, kind: ScriptKind) -> PathBuf {
@@ -480,11 +505,14 @@ impl Workspace {
 fn validate_script_name(name: &str) -> Result<()> {
     if name.is_empty()
         || name.len() > 128
-        || !name
-            .chars()
-            .all(|character| character.is_alphanumeric() || matches!(character, '-' | '_' | '.'))
-        || name == "."
-        || name == ".."
+        || name.split('/').any(|part| {
+            part.is_empty()
+                || part == "."
+                || part == ".."
+                || !part.chars().all(|character| {
+                    character.is_alphanumeric() || matches!(character, '-' | '_' | '.')
+                })
+        })
     {
         return Err(Error::InvalidScriptName.into());
     }
@@ -538,6 +566,136 @@ mod tests {
     };
 
     use super::Workspace;
+
+    #[test]
+    fn nested_scripts_round_trip_for_every_kind() {
+        use crate::model::{Script, ScriptKind};
+        let root = tempdir().unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+        for kind in [
+            ScriptKind::Column,
+            ScriptKind::Filter,
+            ScriptKind::Routing,
+            ScriptKind::RequestInterceptor,
+            ScriptKind::ResponseInterceptor,
+            ScriptKind::Redaction,
+        ] {
+            for name in ["root", "业务/nested/example"] {
+                workspace
+                    .save_script(
+                        kind,
+                        Script {
+                            name: name.into(),
+                            content: "return true".into(),
+                        },
+                        false,
+                    )
+                    .unwrap();
+                assert!(
+                    workspace
+                        .save_script(
+                            kind,
+                            Script {
+                                name: name.into(),
+                                content: "".into()
+                            },
+                            false
+                        )
+                        .is_err()
+                );
+                assert_eq!(
+                    workspace.get_script(kind, name).unwrap().content,
+                    "return true"
+                );
+                workspace
+                    .save_script(
+                        kind,
+                        Script {
+                            name: name.into(),
+                            content: "return false".into(),
+                        },
+                        true,
+                    )
+                    .unwrap();
+            }
+            assert_eq!(
+                workspace
+                    .list_scripts(kind)
+                    .unwrap()
+                    .iter()
+                    .map(|script| script.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["root", "业务/nested/example"]
+            );
+            workspace
+                .delete_script(kind, "业务/nested/example")
+                .unwrap();
+            assert_eq!(workspace.list_scripts(kind).unwrap().len(), 1);
+            for name in [
+                "../escape",
+                "/absolute",
+                "a/../../escape",
+                "a//b",
+                "a/",
+                "./a",
+                "a\\b",
+            ] {
+                assert!(
+                    workspace
+                        .save_script(
+                            kind,
+                            Script {
+                                name: name.into(),
+                                content: "".into()
+                            },
+                            false
+                        )
+                        .is_err(),
+                    "{name}"
+                );
+                assert!(workspace.get_script(kind, name).is_err());
+                assert!(workspace.delete_script(kind, name).is_err());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nested_scripts_do_not_follow_symlinks() {
+        use crate::model::{Script, ScriptKind};
+        use std::os::unix::fs::symlink;
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+        std::fs::write(outside.path().join("secret.lua"), "secret").unwrap();
+        symlink(outside.path(), root.path().join("scripts/filter/link")).unwrap();
+        for name in ["link/secret", "link/new"] {
+            assert!(workspace.get_script(ScriptKind::Filter, name).is_err());
+            assert!(workspace.delete_script(ScriptKind::Filter, name).is_err());
+            assert!(
+                workspace
+                    .save_script(
+                        ScriptKind::Filter,
+                        Script {
+                            name: name.into(),
+                            content: "changed".into()
+                        },
+                        true
+                    )
+                    .is_err()
+            );
+        }
+        assert!(
+            workspace
+                .list_scripts(ScriptKind::Filter)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("secret.lua")).unwrap(),
+            "secret"
+        );
+    }
 
     #[test]
     fn selection_accepts_empty_directories_and_ignores_dot_entries_without_writing() {

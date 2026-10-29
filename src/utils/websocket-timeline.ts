@@ -146,15 +146,15 @@ export function unseenMessageIds(
   return remaining;
 }
 
-/** Origin stays visible in the border even when disposition overrides the fill. */
+/** Origin fills the bar; an exceptional disposition turns the outline into the status color. */
 export function messageColors(message: WebSocketMessage) {
-  const border = message.producer ? "--accent" : "--success";
-  const fill =
+  const fill = message.producer ? "--accent" : "--success";
+  const border =
     message.status === "dropped"
       ? "--text-faint"
       : message.status === "failed" || message.status === "unsent"
         ? "--danger"
-        : border;
+        : fill;
   return { border, fill };
 }
 

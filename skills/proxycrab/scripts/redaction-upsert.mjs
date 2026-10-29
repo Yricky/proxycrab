@@ -18,6 +18,8 @@ run(async () => {
     printHelp(`
 Usage: node redaction-upsert.mjs --name NAME --file SCRIPT.lua [--base-url URL]
 
+NAME accepts a relative path, e.g. business/example (without the automatic .lua extension).
+
 Create a read-time redaction script or replace its source. Does not bind it or alter captured traffic.
 Unavailable when the server uses --redaction-script; disabled management errors are not retried.
 `);

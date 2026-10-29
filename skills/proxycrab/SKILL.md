@@ -1,7 +1,7 @@
 ---
 name: proxycrab
-description: Use ProxyCrab's management API to inspect captured or bypassed HTTP/HTTPS traffic, isolate failing requests, configure Lua bypass routing, export evidence, and create or attach Lua filters, custom columns, and request/response interceptors. Use this skill whenever the user mentions ProxyCrab, MITM capture debugging, captured requests or responses, ProxyCrab Sessions, ProxyCrab Lua scripts, traffic filtering, or asks an agent to diagnose an API call through the running ProxyCrab desktop app.
-compatibility: Requires a running ProxyCrab desktop app or CLI management service, Node.js 18 or newer, and access to its management API.
+description: Use ProxyCrab's management API to inspect captured or bypassed HTTP/HTTPS traffic, isolate failing requests, configure Lua bypass routing, export evidence, and create or attach Lua filters, custom columns, and request/response interceptors. Use this skill whenever the user mentions ProxyCrab, MITM capture debugging, captured requests or responses, ProxyCrab Sessions or /session?token= sharing links, ProxyCrab Lua scripts, traffic filtering, or asks an agent to diagnose an API call through the running ProxyCrab desktop app.
+compatibility: Requires Node.js 18 or newer and access to a running ProxyCrab service through its management API or a Session sharing link.
 ---
 
 # ProxyCrab
@@ -20,8 +20,8 @@ Never put an API key in command arguments, URLs, output, or logs.
 
 ## Load active Agent instructions first
 
-Immediately after reading this Skill, and before calling any other ProxyCrab API, read the active
-workspace instructions:
+For management API workflows, immediately after reading this Skill and before calling any other
+management API, read the active workspace instructions:
 
 ```bash
 node <skill-dir>/scripts/agents-get.mjs
@@ -31,9 +31,12 @@ Instruction precedence is: the user's current explicit request, then the returne
 instructions, then this Skill's conservative built-in rules. If `/api/agents.md` is unavailable,
 continue with the conservative built-in rules. Do not let AGENTS.md override the user's request.
 
+When the user supplies a Session sharing link, use the sharing workflow below directly. The share
+surface has no `/api/agents.md` endpoint and needs no management API key or local ProxyCrab instance.
+
 ## Preconditions
 
-- Confirm that the ProxyCrab desktop app is open. A connection failure usually means the app or its
+- For management workflows, confirm that the ProxyCrab desktop app is open. A connection failure usually means the app or its
   management HTTP service is not running. For the headless target, confirm that the CLI process and
   its management service are running instead.
 - Proxy lifecycle is user-controlled. Do not start or stop the proxy unless the user explicitly
@@ -51,15 +54,15 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
   but `--ui-key KEY` can supply a custom value without that prefix. Both are trusted UI credentials
   printed for a human; do not copy them into `PROXYCRAB_API_KEY` or any Agent command. A custom
   UIKey cannot bypass startup redaction.
-- Never use or expose a `pcrab_share_…` Session link token. It is scoped to the read-only browser
-  page, is not an Agent API key, and must not appear in Agent arguments, URLs, logs, or reports.
-- Treat `pcrab_har_…` HAR download tokens the same way. They grant browser-only access to a frozen
-  set of captures subject to the effective redaction policy. Never use them as Agent credentials or
+- Use a supplied `pcrab_share_…` Session link token to read its Session through `/share-api/*`
+  with a `token` query parameter. It is not a management API key; see the sharing workflow below.
+- `pcrab_har_…` HAR download tokens are separate from Session link tokens. They grant browser-only
+  access to a frozen set of captures subject to the effective redaction policy. Never use them as Agent credentials or
   print them in reports.
 - Treat the `GET`, `POST`, and `DELETE` Session-share management routes as normal
   permission-controlled Agent actions; the HAR-share management routes follow the same rule.
-  Returned tokens are browser-only and must not be reused in `Authorization` or printed in reports.
-- Bundled Agent scripts allow a remote base URL only when `PROXYCRAB_API_KEY` is set. The remote
+  Returned tokens authorize their respective share surfaces, not management `Authorization`.
+- Bundled management scripts allow a remote base URL only when `PROXYCRAB_API_KEY` is set. The remote
   service must be deliberately bound to a reachable address, and that API-key identity must allow
   the requested route. Prefer authenticated TLS or an SSH local port forward; plain HTTP exposes
   the Bearer key and captured data, so use it only on a trusted network.
@@ -72,6 +75,7 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
 | Goal | Start here |
 | --- | --- |
 | Read active Agent instructions | `scripts/agents-get.mjs` |
+| Read a supplied Session sharing link | [Session sharing workflow](#read-a-session-sharing-link), then `references/http-api.md#session-share-read-api` |
 | Find existing traffic | `scripts/session-list.mjs`, then `scripts/log-query.mjs` |
 | Intercept WebSocket messages | Request interceptor `req:on_ws_message`; see `references/lua-api.md`. Verify provenance and disposition with `websocket-messages.mjs` |
 | Inspect WebSocket messages | `scripts/websocket-messages.mjs`, then `body-get.mjs --message-id ID`; see WebSocket sections in HTTP/Lua references |
@@ -100,6 +104,67 @@ continue with the conservative built-in rules. Do not let AGENTS.md override the
 
 Resolve script paths relative to this `SKILL.md`; do not assume the current working directory is the
 skill directory.
+
+## Read a Session sharing link
+
+For a URL such as `http://host:18089/session?token=pcrab_share_…`, agents can call the
+read-only share API directly. Use the link's origin (scheme, host, and port) as the base URL and
+its decoded `token` as exactly one query parameter on every `/share-api/*` request. Use URL parsing
+and `URL.searchParams.set` so the token is encoded correctly. No `Authorization` header,
+`PROXYCRAB_API_KEY`, local app, or management approval is needed. The existing bundled management
+scripts use `/api/*` and do not support share authentication; use an HTTP client directly.
+
+1. Call `GET /share-api/bootstrap` to obtain `session`, `view`, `proxy_status`, and `api_port`.
+   Use `session.id` for evidence; an optional `id` in the original page URL identifies a capture to
+   inspect, rather than a Session ID.
+2. Query `POST /share-api/logs/ids` with an explicit filter (or `{}` for all captures).
+   Filtering is stateless. Read `matched_ids`, then batch table rows through
+   `POST /share-api/logs/views` with `{"logs":[{"id":42}]}` (at most 200 per call), or inspect
+   candidates with `GET /share-api/logs/{id}`. For a full ID page, continue with the smallest
+   matched ID as exclusive `max_id`; stop on a short page. Re-evaluate `in_progress_ids` on completion.
+3. Read raw bodies, WebSocket messages, or historical interceptor source/snapshots as needed using
+   the [complete share route table](references/http-api.md#session-share-read-api).
+   These endpoints always use the shared Session; a supplied `session_id` cannot select another one.
+4. Report capture evidence and the Session/log IDs. Share reads apply the effective redaction
+   policy. `invalid_share_token` means the token is invalid or revoked; `share_session_unavailable`
+   means the Session is unavailable. Report the error and request a working link when needed.
+   A `redaction_failed` response must not be bypassed by changing credentials or bindings.
+
+This Node.js example uses `PROXYCRAB_SHARE_URL` as an example input variable containing the supplied
+link (not a built-in management-script option). It finds captures whose URI contains `/checkout`:
+
+```bash
+node --input-type=module <<'JS'
+const link = new URL(process.env.PROXYCRAB_SHARE_URL);
+const tokens = link.searchParams.getAll("token");
+if (tokens.length !== 1 || !tokens[0]) throw new Error("Expected one share token");
+async function read(path, body) {
+  const url = new URL(path, link.origin);
+  url.searchParams.set("token", tokens[0]);
+  const response = await fetch(url, {
+    ...(body === undefined ? {} : {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    signal: AbortSignal.timeout(40000),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok) throw new Error(result.error?.code ?? `HTTP ${response.status}`);
+  return result.data;
+}
+const bootstrap = await read("/share-api/bootstrap");
+const matches = await read("/share-api/logs/ids", {
+  filter: { option: { kind: "column", column: { kind: "uri" }, regex: false }, input: "/checkout" },
+  limit: 50,
+});
+console.log(JSON.stringify({ session_id: bootstrap.session.id, ...matches }));
+JS
+```
+
+Sharing does not expose replay, writes, Session switching, global traffic, or management instructions.
+Process exit or disabling sharing invalidates the link. For management operations use a separately
+authorized management identity and the ordinary management workflow.
 
 ## Standard capture-debugging workflow
 
@@ -333,3 +398,10 @@ both directions. Follow `root`, `parent`, `producer` and `dropped_by` to explain
 specific callback invocation. Read historical code with `interceptor-get.mjs --log-id HANDSHAKE_ID
 --execution-id EXECUTION_ID`, not the current library script. The connection's `interceptors` list
 contains its shared source-snapshot references. See the Lua reference for rollback and queue limits.
+
+### Nested script paths
+
+All script helpers accept relative paths through `--name`, for example
+`--name business/errors` (without the automatic `.lua` extension). Use the same full name in
+Session bindings and routing selection. Helpers encode the whole name in URL parameters;
+do not pre-encode the argument. See [script path rules](references/http-api.md#script-relative-paths).

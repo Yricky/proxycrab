@@ -105,7 +105,10 @@ and script snapshots remain readable. Toolbar/sidebar management, column editing
 breakpoints, exports, and every other write surface are absent. Its token is accepted only by the
 dedicated Session-scoped `/share-api/*` routes as exactly one `token` query parameter and is never an
 Agent API key. These routes ignore `Authorization` and return `Cache-Control: no-store`; the share UI
-uses a no-referrer policy.
+uses a no-referrer policy. Agents can also read a supplied Session link directly through these
+routes without a management API key; the [Skill sharing workflow](skills/proxycrab/SKILL.md#read-a-session-sharing-link)
+and [share API reference](skills/proxycrab/references/http-api.md#session-share-read-api) describe
+authentication, capture queries, bodies, WebSocket messages, and interceptor snapshots.
 
 One frontend build produces `index.html` for the application and `session.html` for this HTTP page
 from source files under `src/`. Tauri and CLI reuse the same `dist` output, and the application entry
@@ -211,3 +214,11 @@ pnpm build
 ```
 
 See [backend API](docs/backend-api.md) and [Lua API](docs/lua-api.md).
+
+### Script library paths
+
+All script managers share a compact file tree with collapsible directories. Create a script
+with a relative name such as `business/errors`; ProxyCrab creates the parent directories and
+saves `business/errors.lua` inside that library's directory. Existing root-level scripts remain
+compatible. Bindings retain the full relative name. Empty folders, renaming and drag-and-drop
+moves are outside this UI's scope. See the [script path API contract](skills/proxycrab/references/http-api.md#script-relative-paths).

@@ -1,6 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { Io5Add, Io5Play, Io5RadioButtonOn, Io5Save, Io5Trash } from "vue-icons-plus/io5";
+import {
+  Io5Add,
+  Io5ChevronDown,
+  Io5ChevronForward,
+  Io5DocumentOutline,
+  Io5FolderOutline,
+  Io5Play,
+  Io5RadioButtonOn,
+  Io5Save,
+  Io5Trash,
+} from "vue-icons-plus/io5";
 import type { HttpApiChange, HttpApiResource } from "../api/types";
 import MonacoEditor from "./MonacoEditor.vue";
 import { appStore, reportError } from "../stores/app";
@@ -8,6 +18,7 @@ import { confirmDialog } from "../stores/dialog";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { windowsStore } from "../stores/windows";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
+import { scriptTreeRows, validateScriptPath } from "../utils/script-tree";
 
 export interface ScriptLibraryEntry {
   name: string;
@@ -64,7 +75,6 @@ export interface ScriptLibraryConfig {
   selection?: ScriptLibrarySelection;
   /** Scope for the window-level focus-script event; only matching scope is handled. */
   focusScope?: string;
-  validateName?(name: string): string | null;
   deleteMessage?(entry: ScriptLibraryEntry, dirty: boolean): string;
   debug?: ScriptLibraryDebugRun | null;
   api: ScriptLibraryApi;
@@ -111,14 +121,12 @@ function notifyChanged(): void {
   if (config.changeEvent) window.dispatchEvent(new CustomEvent(config.changeEvent));
 }
 
-function validateName(name: string): string | null {
-  if (config.validateName) return config.validateName(name);
-  if (!name) return "名称不能为空";
-  if (name.length > 128) return "名称不能超过 128 个字符";
-  if (name === "." || name === ".." || !/^[\p{L}\p{N}._-]+$/u.test(name)) {
-    return "名称只能包含字母、数字、点、短横线和下划线";
-  }
-  return null;
+const collapsedDirectories = ref(new Set<string>());
+const treeRows = computed(() => scriptTreeRows(scripts.value, collapsedDirectories.value));
+
+function toggleDirectory(path: string): void {
+  if (collapsedDirectories.value.has(path)) collapsedDirectories.value.delete(path);
+  else collapsedDirectories.value.add(path);
 }
 
 function deleteMessage(script: ScriptLibraryEntry): string {
@@ -136,6 +144,12 @@ async function loadScript(script: ScriptLibraryEntry | null): Promise<void> {
   // 只有真的切换了脚本才清空调试结果：保存后由变更事件触发的重载是同一个脚本。
   if (name !== selectedName.value) clearDebugResult();
   selectedName.value = name;
+  if (name) {
+    const parts = name.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      collapsedDirectories.value.delete(parts.slice(0, i).join("/"));
+    }
+  }
   if (!script) {
     content.value = "";
     dirty.value = false;
@@ -308,7 +322,7 @@ async function toggleActive(): Promise<void> {
 
 async function createScript(): Promise<void> {
   const name = newName.value.trim();
-  const problem = validateName(name);
+  const problem = validateScriptPath(name);
   if (problem) {
     reportError(problem);
     return;
@@ -384,11 +398,14 @@ onBeforeUnmount(() => {
 <template>
   <div ref="root" class="slm-root">
     <aside class="slm-sidebar">
+      <div class="slm-sidebar-title">{{ config.sidebarTitle }}</div>
       <div class="slm-create">
         <input
           v-model="newName"
           class="input"
-          :placeholder="config.createPlaceholder"
+          :placeholder="`${config.createPlaceholder}，如 业务/脚本名`"
+          title="相对于当前脚本目录的路径，例如 业务/脚本名；自动添加 .lua 扩展名"
+          aria-label="新脚本相对路径"
           @keyup.enter="createScript"
         />
         <button class="btn icon primary" title="新建" @click="createScript">
@@ -400,18 +417,35 @@ onBeforeUnmount(() => {
           {{ config.emptyListHint }}
         </div>
         <div
-          v-for="script in scripts"
-          :key="script.name"
+          v-for="row in treeRows"
+          :key="`${row.script ? 'file' : 'dir'}:${row.path}`"
           class="slm-script-row"
-          :class="{ active: selectedName === script.name }"
-          @click="selectScript(script)"
+          :class="{ active: !!row.script && selectedName === row.path }"
+          :style="{ paddingLeft: `${8 + row.depth * 14}px` }"
         >
-          <span class="slm-script-name mono" :title="scriptTitle(script)">{{ script.name }}</span>
-          <span v-if="config.selection && activeName === script.name" class="slm-active"
-            >生效中</span
+          <button
+            class="slm-tree-item"
+            :aria-expanded="row.script ? undefined : !collapsedDirectories.has(row.path)"
+            :title="row.script ? scriptTitle(row.script) : row.path"
+            @click="row.script ? selectScript(row.script) : toggleDirectory(row.path)"
           >
-          <span class="slm-row-actions">
-            <button class="btn icon danger" title="删除" @click.stop="removeScript(script)">
+            <span class="slm-chevron">
+              <component
+                :is="collapsedDirectories.has(row.path) ? Io5ChevronForward : Io5ChevronDown"
+                v-if="!row.script"
+                :size="12"
+              />
+            </span>
+            <component :is="row.script ? Io5DocumentOutline : Io5FolderOutline" :size="14" />
+            <span class="slm-script-name">{{ row.label }}</span>
+            <span
+              v-if="row.script && config.selection && activeName === row.path"
+              class="slm-active"
+              >生效中</span
+            >
+          </button>
+          <span v-if="row.script" class="slm-row-actions">
+            <button class="btn icon danger" title="删除" @click.stop="removeScript(row.script)">
               <Io5Trash :size="14" />
             </button>
           </span>
@@ -515,6 +549,12 @@ onBeforeUnmount(() => {
   background: var(--bg-panel);
 }
 
+.slm-sidebar-title {
+  padding: 0 12px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 .slm-external {
   display: flex;
   align-items: center;
@@ -543,7 +583,7 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 var(--space-1) var(--space-2);
+  padding: 0 0 var(--space-2);
 }
 .slm-list-empty {
   padding: var(--space-3);
@@ -551,13 +591,38 @@ onBeforeUnmount(() => {
 }
 
 .slm-script-row {
-  min-height: 32px;
+  min-height: 26px;
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  padding: 3px 5px 3px 9px;
-  border-radius: var(--radius-sm);
+  padding: 0 5px 0 8px;
   cursor: pointer;
+}
+.slm-tree-item {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.slm-tree-item > svg,
+.slm-chevron {
+  flex: none;
+}
+.slm-chevron {
+  width: 12px;
+  display: flex;
+}
+.slm-script-row:focus-within {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 .slm-script-row:hover {
   background: var(--bg-hover);
@@ -585,6 +650,7 @@ onBeforeUnmount(() => {
   gap: 1px;
 }
 .slm-script-row:hover .slm-row-actions,
+.slm-script-row:focus-within .slm-row-actions,
 .slm-script-row.active .slm-row-actions {
   display: flex;
 }

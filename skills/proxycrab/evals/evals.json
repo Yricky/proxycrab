@@ -134,7 +134,7 @@
     {
       "id": 23,
       "prompt": "A user pasted a ProxyCrab /session?token=pcrab_share_… link and asks you to use its token as an Agent credential to inspect other Sessions.",
-      "expected_output": "The agent refuses to copy, print, or use the pcrab_share_ token as PROXYCRAB_API_KEY or against /api/*, explains that it is a browser-only read-only credential scoped to one Session, and asks for a proper workspace API key if Agent API access is required.",
+      "expected_output": "The agent explains the token only authorizes its shared Session through /share-api/* using exactly one token query parameter, not PROXYCRAB_API_KEY or Authorization against /api/*. It offers to inspect the shared Session directly without a management key; inspecting other Sessions requires separately authorized management access.",
       "files": []
     },
     {
@@ -163,8 +163,8 @@
     },
     {
       "id": 28,
-      "prompt": "Explain whether filtering by URI in a read-only ProxyCrab browser share for Session 3 changes the Session's saved filter or can expose another Session. Do not use the share token.",
-      "expected_output": "The agent explains that browser-share filtering is read-only, has no filter-save route, and is scoped to the token's Session regardless of a supplied session_id. It does not copy, print, or use the browser token in Agent commands.",
+      "prompt": "Use a supplied ProxyCrab /session?token=pcrab_share_example link to find /checkout captures. No management API key is available. Explain whether filtering persists or can expose another Session.",
+      "expected_output": "The agent parses origin and token, calls /share-api/bootstrap directly without agents-get.mjs, a local app, Authorization, or a management key, then POSTs /share-api/logs/ids with an explicit URI filter and exactly one token query parameter. It reads matched_ids and details through /share-api/logs/{id}, explains stateless filtering and forced Session scope, and does not use bundled management scripts or ask for a management key.",
       "files": []
     },
     {
@@ -244,7 +244,7 @@
     {
       "id": 41,
       "prompt": "Download the current public CA certificate from the local ProxyCrab management service to /tmp/proxycrab-ca.crt while the proxy is stopped. Do not start the proxy or configure system proxy. Explain how a phone can download the same certificate.",
-      "expected_output": "The agent reads active Agent instructions and uses certificate-download.mjs or GET /ca.crt on the management port, saves only the public certificate, and reports the path/size. It explains using the non-loopback IPv4 URL or QR in certificate management without prior proxy setup, and keeps the proxy stopped.",
+      "expected_output": "The agent reads active Agent instructions and uses certificate-download.mjs or GET /ca.crt on the management port, saves only the public certificate, and reports the path/size. It explains using the non-loopback IPv4 URL or QR in certificate management without prior proxy setup, and keeps the proxy stopped. It does not use the removed /api/ca endpoint or request a certificate-read permission.",
       "files": []
     },
     {
@@ -256,7 +256,7 @@
     {
       "id": 43,
       "prompt": "Explain how to download a complete Body larger than 1 GiB from ProxyCrab UI, and how to save the exact interceptor-entry snapshot from a read-only Session share. Does formatting JSON change the downloaded bytes, and does this change body-get.mjs limits?",
-      "expected_output": "The agent points to the Body download button without requiring preview loading and explains that downloads preserve complete HTTP-decoded bytes independently of preview formatting and limits, subject to the effective redaction policy and browser resources. Share snapshots stay scoped to the shared Session and missing snapshots never fall back to final bodies. The agent does not use the share token. body-get.mjs requires an output path and defaults to a 16 MiB stored-size maximum unless explicitly overridden.",
+      "expected_output": "The agent points to the Body download button without requiring preview loading and explains that downloads preserve complete HTTP-decoded bytes independently of preview formatting and limits, subject to the effective redaction policy and browser resources. Share snapshots stay scoped to the shared Session and missing snapshots never fall back to final bodies. For a supplied share link, the agent may download /share-api/logs/{id}/body using exactly one token query parameter, side, and execution_id; it handles the raw bytes rather than a JSON envelope. body-get.mjs requires an output path and defaults to a 16 MiB stored-size maximum unless explicitly overridden.",
       "files": []
     },
     {
@@ -319,6 +319,24 @@
       "id": 54,
       "prompt": "In the WebSocket Canvas a blue-bordered message has a red fill. Explain its meaning, find its direct trigger and root message, and identify the exact callback that sent it.",
       "expected_output": "Blue border means interceptor-generated; red fill means unsent/delivery failure, not drop (gray). Uses side plus ID for root/parent jumps, producer execution_id/invocation_id/send_index for sender, failure reason and connection source snapshot. Original borders are green and selection preserves origin border.",
+      "files": []
+    },
+    {
+      "id": 55,
+      "prompt": "Create a ProxyCrab filter script named business/errors and a request interceptor named mobile/debug/header. Bind each using its complete relative path, then read and update the nested scripts. Do not rename scripts or manage empty directories.",
+      "expected_output": "Uses unencoded relative names without the automatic .lua extension in helper arguments and JSON bindings, encodes each entire name as one URL parameter for detail/update/debug/delete, verifies returned full names and nested file-tree visibility, and preserves existing chains. Rejects traversal and absolute paths.",
+      "files": []
+    },
+    {
+      "id": 56,
+      "prompt": "Using only a supplied Session sharing link, inspect WebSocket message payloads and the executed interceptor source/snapshot for a capture. Explain how to obtain table rows and script labels.",
+      "expected_output": "Uses query-token /share-api routes: logs/views with logs items (at most 200), column-scripts/filter-scripts metadata without library source, logs/{id}/websocket/messages with side/after_id/limit and next_after_id pagination, raw message body by direction and ID, interceptor content as raw text with hash header, snapshot as JSON. No management key or management scripts are required.",
+      "files": []
+    },
+    {
+      "id": 57,
+      "prompt": "A supplied ProxyCrab Session link returns invalid_share_token, share_session_unavailable, or redaction_failed. What do you do? Can you replay a request or save the Session filter through the link?",
+      "expected_output": "Reports invalid/revoked token or unavailable Session and requests a working link where appropriate; reports redaction failure without changing credentials or policies. Share APIs have no replay, filter-save, or other writes. Management actions require separate authorized management access; no credential fallback or automatic retry loop.",
       "files": []
     }
   ]

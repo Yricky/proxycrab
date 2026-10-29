@@ -568,7 +568,7 @@ onBeforeUnmount(() => {
     </div>
     <div class="ws-toolbar ws-legend" aria-label="消息颜色图例">
       <span class="original">原始消息</span><span class="generated">拦截器发送</span>
-      <span class="dropped">灰底：已丢弃</span><span class="failed">红底：未发送／失败</span>
+      <span class="dropped">灰框：已丢弃</span><span class="failed">红框：未发送／失败</span>
     </div>
     <div v-if="listError" class="ws-error">{{ listError }}</div>
     <div class="waterfall">
