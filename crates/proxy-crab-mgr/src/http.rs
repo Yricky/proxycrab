@@ -3650,6 +3650,7 @@ mod tests {
             ("GET", "/api/workspace"),
             ("PUT", "/api/workspace"),
             ("PUT", "/api/config"),
+            ("GET", "/api/ca"),
             ("POST", "/api/ca"),
             ("POST", "/api/logs/export"),
         ] {
@@ -3818,13 +3819,6 @@ mod tests {
                 .unwrap()
                 .status(),
             StatusCode::METHOD_NOT_ALLOWED
-        );
-        assert_eq!(
-            app.oneshot(request("GET", "/api/ca"))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::NOT_FOUND
         );
         assert_eq!(
             runtime.proxy_status(),

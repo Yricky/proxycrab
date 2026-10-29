@@ -610,7 +610,7 @@ mod tests {
             permissions
                 .permissions
                 .iter()
-                .find(|entry| entry.action_id == "GET /api/ca")
+                .find(|entry| entry.action_id == "GET /api/redaction-scripts/{name}")
                 .unwrap()
                 .mode,
             PermissionMode::Deny

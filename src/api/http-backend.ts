@@ -353,7 +353,21 @@ export function createHttpBackend(
         json("PUT", requestValue),
       ),
 
-    getCertificate: () => call("/api/ca"),
+    getCertificate: async () => {
+      let response: Response;
+      try {
+        response = await fetch(new URL("/ca.crt", baseUrl));
+      } catch (cause) {
+        throw new BackendError({ code: "network_error", message: String(cause) });
+      }
+      if (!response.ok) {
+        throw new BackendError({
+          code: `http_${response.status}`,
+          message: `HTTP ${response.status}`,
+        });
+      }
+      return { pem: await response.text() };
+    },
     clashSubscription: {
       getState: () => call("/api/clash-subscription"),
       enable: (server) => call("/api/clash-subscription", json("PUT", { server })),

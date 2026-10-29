@@ -236,7 +236,6 @@ browser UI.
 | `/api/routing-script-selection` | `GET`, `PUT` nullable current selection |
 | `/api/interceptors`, `/api/interceptors/{kind}/{name}` | global interceptor script CRUD |
 | `/api/bypass`, `/api/bypass/{id}`, `/api/bypass/delete` | query/delete transparent forwarding metadata |
-| `/api/ca` | `GET` |
 | `/api/clash-subscription` | `GET` current state (default: `allow`); `PUT` enable/update selected IPv4; `DELETE` disable (both default: `approval`) |
 | `/api/clash-config` | `GET` full YAML and default; `PUT` validate/write; `DELETE` reset (all default: `allow`) |
 | `/api/system-logs` | `GET`, `DELETE` |
@@ -931,7 +930,7 @@ Each workspace has an independent generated CA. Missing or corrupt CA files are 
 with `Content-Type: application/x-x509-ca-cert`, download filename `proxycrab-ca.crt`, and
 `Cache-Control: no-store`. It requires no Bearer key, token, running proxy, or active Session, and
 never returns the private key. Regenerating the CA changes the downloaded certificate at the same
-URL. The permission-controlled JSON endpoint `GET /api/ca` remains available for management reads.
+URL.
 The certificate window shares one non-loopback IPv4 selector across its certificate and Clash
 tabs; the Clash tab's lower half edits the complete YAML. Both URLs and QR codes use that address
 and the management service port. An unavailable service or
@@ -958,8 +957,8 @@ In Settings > 管理接口, a redaction icon to the left of an endpoint’s perm
 support for identity-bound redaction. It is always shown for supported endpoints, even when no
 script is bound; it does not indicate that redaction is currently active.
 The UI’s impact groups are explicitly configured display metadata, independent of HTTP method
-and default permission. `GET /api/ca` appears in 仅读取 while retaining its default `deny`
-permission. Actions without display metadata appear in 其他; grouping never changes authorization.
+and default permission. Actions without display metadata appear in 其他; grouping never changes
+authorization.
 
 | Endpoint | Contract |
 | --- | --- |

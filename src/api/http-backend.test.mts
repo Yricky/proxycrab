@@ -19,3 +19,23 @@ test.each([
   expect(await backend.listLocalIps!()).toEqual([hostname]);
   expect(fetchMock).not.toHaveBeenCalled();
 });
+
+test("certificate reads public PEM from the backend without management credentials", async () => {
+  const pem = "-----BEGIN CERTIFICATE-----\npublic-ca\n-----END CERTIFICATE-----\n";
+  const fetchMock = vi.fn().mockResolvedValue(new Response(pem));
+  vi.stubGlobal("fetch", fetchMock);
+  const backend = createHttpBackend("http://certificate-backend:18089", "test-key", {
+    target: "cli",
+    workspace: { current_path: "/workspace", configured_path: "/workspace" },
+    http_service: { running: true, host: "0.0.0.0", port: 18089, error: null },
+  });
+  expect(await backend.getCertificate()).toEqual({ pem });
+  expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+    new URL("http://certificate-backend:18089/ca.crt"),
+  );
+
+  fetchMock.mockResolvedValueOnce(new Response("unavailable", { status: 500 }));
+  await expect(backend.getCertificate()).rejects.toMatchObject({ code: "http_500" });
+  fetchMock.mockRejectedValueOnce(new TypeError("connection closed"));
+  await expect(backend.getCertificate()).rejects.toMatchObject({ code: "network_error" });
+});

@@ -67,11 +67,16 @@ test.each<PermissionGroupDimension>(["function", "impact"])(
   },
 );
 
-test("impact grouping ignores method/default mode and keeps CA permissions unchanged", async () => {
+test("impact grouping ignores method/default mode and keeps permissions unchanged", async () => {
   const html = await renderToString(
     createSSRApp(PermissionEditor, {
       catalog: [
-        { id: "GET /api/ca", method: "GET", route_template: "/api/ca", default_mode: "deny" },
+        {
+          id: "GET /api/sessions",
+          method: "GET",
+          route_template: "/api/sessions",
+          default_mode: "deny",
+        },
         {
           id: "POST /api/logs/ids",
           method: "GET",
@@ -97,7 +102,7 @@ test("impact grouping ignores method/default mode and keeps CA permissions uncha
   );
   const sections = html.split('<section class="permission-group"').slice(1);
   const read = sections.find((section) => section.includes(">仅读取</strong>"));
-  expect(read).toContain(">/api/ca</code>");
+  expect(read).toContain(">/api/sessions</code>");
   expect(read).toMatch(/<button[^>]*class="[^"]*\bm-deny\b[^"]*"[^>]*aria-pressed="true"/);
   expect(sections.find((section) => section.includes(">有写操作</strong>"))).toContain(
     ">/api/logs/ids</code>",

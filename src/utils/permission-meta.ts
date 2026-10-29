@@ -96,7 +96,6 @@ export const ACTION_META: Readonly<Record<string, PermissionActionMeta>> = {
   "DELETE /api/bypass": { label: "清空 Bypass 流量", impact: "danger" },
   "POST /api/bypass/delete": { label: "批量删除 Bypass 流量", impact: "danger" },
   "DELETE /api/bypass/{id}": { label: "删除 Bypass 流量", impact: "danger" },
-  "GET /api/ca": { label: "读取 CA 证书", impact: "read" },
   "GET /api/clash-subscription": { label: "读取 Clash 订阅状态", impact: "read" },
   "PUT /api/clash-subscription": { label: "开启或更新 Clash 订阅", impact: "write" },
   "DELETE /api/clash-subscription": { label: "关闭 Clash 订阅", impact: "write" },
@@ -159,7 +158,6 @@ export const FUNCTION_GROUPS: FunctionGroupDef[] = [
   },
   { key: "breakpoints", label: "断点", prefixes: ["/api/breakpoints"] },
   { key: "bypass", label: "Bypass 流量", prefixes: ["/api/bypass"] },
-  { key: "ca", label: "CA 证书", prefixes: ["/api/ca"] },
   { key: "system_logs", label: "系统日志", prefixes: ["/api/system-logs"] },
 ];
 

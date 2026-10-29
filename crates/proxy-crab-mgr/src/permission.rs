@@ -189,7 +189,6 @@ pub static API_ACTIONS: &[ApiAction] = &[
     action!("DELETE", "/api/bypass", Deny),
     action!("POST", "/api/bypass/delete", Deny),
     action!("DELETE", "/api/bypass/{id}", Deny),
-    action!("GET", "/api/ca", Deny),
     action!("GET", "/api/clash-subscription", Allow),
     action!("PUT", "/api/clash-subscription", Approval),
     action!("DELETE", "/api/clash-subscription", Approval),
@@ -204,6 +203,7 @@ pub const OBSOLETE_API_ACTION_IDS: &[&str] = &[
     "GET /api/workspace",
     "PUT /api/workspace",
     "PUT /api/config",
+    "GET /api/ca",
     "POST /api/ca",
     "POST /api/logs/export",
 ];

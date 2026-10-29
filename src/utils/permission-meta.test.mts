@@ -19,8 +19,8 @@ test("every configured action has a Chinese label instead of a route placeholder
   }
 });
 
-test("impact groups are explicit, with CA in read and unknown actions in other", () => {
-  expect(impactGroupOf("GET /api/ca")).toBe("read");
+test("impact groups are explicit, with unknown actions in other", () => {
+  expect(impactGroupOf("GET /api/sessions")).toBe("read");
   expect(impactGroupOf("GET /api/redaction-scripts/{name}")).toBe("danger");
   expect(impactGroupOf("POST /api/logs/ids")).toBe("write");
   expect(impactGroupOf("DELETE /api/filter-scripts/{name}")).toBe("danger");

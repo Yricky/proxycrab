@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 85);
+    assert_eq!(actions.len(), 84);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -124,7 +124,6 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "DELETE /api/interceptors/{kind}/{name}",
         "DELETE /api/routing-scripts/{name}",
         "DELETE /api/system-logs",
-        "GET /api/ca",
         "POST /api/bypass/delete",
         "POST /api/sessions/{id}/archive",
     ]);
@@ -148,10 +147,8 @@ fn permission_lookup_uses_both_method_and_route_template() {
             .default_mode,
         PermissionMode::Approval
     );
-    assert_eq!(
-        find_api_action("GET", "/api/ca").unwrap().default_mode,
-        PermissionMode::Deny
-    );
+    assert!(find_api_action("GET", "/api/ca").is_none());
+    assert!(find_api_action("GET", "/ca.crt").is_none());
     assert!(find_api_action("POST", "/api/ca").is_none());
     assert!(find_api_action("PUT", "/api/config").is_none());
     assert!(find_api_action("PUT", "/api/workspace").is_none());
