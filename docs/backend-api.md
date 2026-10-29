@@ -118,7 +118,7 @@ the browser bundle, which may be hosted remotely.
 
 `GET /api/session-shares` (default `allow`) and desktop `list_session_shares` return
 `{shares:[{session_id,persistent}]}` for enabled, non-archived Session page shares. Summaries exclude
-tokens, redaction bindings, and HAR state. The frontend reads this once alongside Session lists,
+tokens, redaction bindings, and other unrelated state. The frontend reads this once alongside Session lists,
 then refreshes it on share/Session lifecycle changes. A small link icon precedes shared Session
 names, with temporary/persistent tooltips. Local share changes update the cache immediately;
 delayed reads cannot overwrite newer changes. Failed reads preserve last known summaries.
@@ -179,8 +179,7 @@ revision-based proxy-change long poll and then reloads its Session-scoped status
 | Session create/update/archive/restore | Active and archived Session lists | Archiving the viewed Session selects the first remaining Session |
 | Archived Session delete | Archived Session list | Refreshes the archived Session window |
 | `PUT /api/active-session` | Active Session and settings | Refreshes the active indicator without changing the viewed Session |
-| Session share enable/disable | Target Session share state | Refreshes an open “导出和分享” window; enabling refreshes all such windows because the Session ID is carried in the request body |
-| HAR share enable/disable | Target HAR share state | Refreshes the independent HAR card in an open “导出和分享” window |
+| Session share enable/disable | Target Session share state | Refreshes an open “链接分享” window; enabling refreshes all such windows because the Session ID is carried in the request body |
 | Routing-script create/update/delete/selection | Routing library and selection | Refreshes the routing manager |
 | Bypass delete/batch delete/clear | Bypass table | Refreshes the bypass window |
 | `PUT /api/sessions/{id}/filter` | Target Session filter and visible log set | Reloads the table only when that Session is being viewed; ID queries stay silent |
@@ -229,8 +228,6 @@ browser UI.
 | `/api/active-session` | `PUT` nullable active Session |
 | `/api/session-shares` | `POST` idempotently enable a scoped read-only link (default: `approval`) |
 | `/api/session-shares/{id}` | `GET` current state (default: `allow`); `DELETE` disable immediately (default: `approval`) |
-| `/api/session-har-shares` | `POST` idempotently enable a frozen HAR download link (default: `approval`) |
-| `/api/session-har-shares/{id}` | `GET` current state (default: `allow`); `DELETE` disable immediately (default: `approval`) |
 | `/api/assets` | `GET` list every Asset's metadata sorted by id |
 | `/api/assets/{id}` | `POST` immutable raw upload; `GET` metadata or raw bytes with `format=raw` |
 | `/api/replay?session={id}` | `POST` send a fully specified request through one Session's pipeline (source `ProxyCrabRequest`) |
@@ -513,66 +510,35 @@ as `YYYY-MM-DD HH:mm:ss GMT±HH:mm`. Time columns are not filter options.
 
 `updated_at` is a monotonic Unix-millisecond version for the complete log. Metadata transitions and request/response body writes advance it, even when multiple updates happen in the same wall-clock millisecond.
 
-### Share logs as HAR
+### Frontend HAR export
 
-HAR sharing is independent from the read-only Session page share. Both trusted targets expose
-`get_har_share`, `enable_har_share`, and `disable_har_share`; HTTP management clients use
-permission-controlled `GET /api/session-har-shares/{id}`, `POST /api/session-har-shares`, and
-`DELETE /api/session-har-shares/{id}` with the same allow/approval/approval defaults as Session page
-sharing. Enable accepts a strict body:
+The export button beside the sweep action opens a floating window. Its Export HAR button freezes
+all matching list IDs and their displayed order, then reads details and bodies through existing
+Backend methods (`getLog`, `fetchBody`). No HAR export or sharing HTTP endpoint exists. The shared
+Session page uses the existing scoped read APIs and exports their policy-filtered data.
 
-```json
-{
-  "session_id": 1,
-  "scope": "filtered",
-  "log_ids": [123, 124]
-}
-```
+Entries are generated one at a time. Failed and unfinished ordinary HTTP records are retained;
+missing responses have status 0 and `_proxyCrab` carries outcome/error metadata. WebSocket connection
+rows and synthetic TLS CONNECT records are skipped; HTTP upgrade handshakes remain. Body read
+failures (including decode and size errors) become text explaining the failure and `bodyErrors`
+metadata, with warnings in the export window. Unavailable details produce a failed placeholder
+entry. Empty selections produce valid HAR. Body bytes are read separately rather than reusing JSON
+previews, preserving formatting; binary content uses Base64 (`encoding` for responses, `_encoding`
+for request postData). Detailed timings/header sizes are unknown (-1).
 
-`scope` is `all` or `filtered` and records which option the owner selected. `log_ids` is the exact
-ID snapshot collected by the UI through the existing log-ID query. The service deduplicates and
-sorts it, then retains it with an independent `pcrab_har_…` token in process memory. Re-enabling an
-existing share is idempotent and preserves its original scope, IDs, and token. State responses
-include `scope` and `log_count` while enabled. Disable immediately invalidates the old token.
+`saveFile({filename})` returns `FileWriter | null`; null means the desktop picker was cancelled.
+The Writer offers async `append(bytes)`, `markAsFinish()`, and `markAsError()`. Desktop chunks use
+binary IPC (at most 256 KiB each) and a same-directory temporary file; finish publishes the file,
+error discards it. Failed writes cannot be committed. Browser writers buffer Blob parts and start
+a download only on finish; this acknowledges download initiation, not completion on disk. Abort
+never starts a download. No new management or share HTTP route is needed for writing.
 
-The owner UI produces one `http://<local-ip>:<api-port>/session.har?token=…` link per usable local
-IPv4 address. `GET /session.har` authenticates only that query token, checks that the Session remains
-active, and generates the HAR from the frozen IDs. An empty array creates a valid HAR with no
-entries. IDs are emitted in ascending order; if a frozen ID no longer exists in that Session, the
-download returns `404 log_not_found`.
-
-Only captures with `outcome: success` and a response are eligible. Synthetic `CONNECT` captures at
-the `tls_mitm` stage are skipped; ordinary HTTP responses and `101` upgrade handshakes remain
-eligible. Ineligible frozen IDs are silently skipped. The download generates the complete file
-as an entry-granular stream after validating the Session and frozen IDs. Each entry is loaded,
-serialized, and released before the next one is generated, and the response has no `Content-Length`.
-An error before streaming starts returns the normal structured HTTP error; a body or storage error
-after HTTP 200 interrupts the connection and leaves a partial, invalid HAR. There is no
-application-level body or export-size limit.
-
-The successful response is the raw UTF-8 HAR 1.2 JSON document. Headers include:
-
-```text
-Content-Type: application/json; charset=utf-8
-Content-Disposition: attachment; filename="proxycrab-session-1.har"
-```
-
-Request and response bodies are complete. gzip, br, deflate, zstd, and stacked content encodings
-are decoded first. Textual content is written as text; binary response content uses HAR
-`encoding: "base64"`, while binary request `postData` uses `_encoding: "base64"`. Unsupported or
-malformed content encoding falls back to raw Base64 and sets the corresponding
-`_proxyCrab.requestBodyDecoded` or `_proxyCrab.responseBodyDecoded` field to `false`.
-`request.bodySize` and `response.bodySize` are captured stored byte counts; `response.content.size`
-is the exported decoded/fallback byte count. Header sizes and all detailed timings are `-1`, while
-entry `time` is `updated_at - created_at`.
-
-Each entry includes `_proxyCrab` with the log/Session IDs, request tags, stage, client source
-address, and original millisecond timestamps. Interceptor source and execution history are not
-embedded. Query parameters, redirects, and cookies are populated on a best-effort basis while the
-original headers are always retained.
-
-Unbound HAR generation performs no redaction; a bound HAR Token applies its redaction script during download. Authorization headers, Cookie/Set-Cookie values, and request and
-response bodies can contain credentials or personal data; treat the file as sensitive.
+Progress includes processed/exported/skipped records and warning counts. The window retains the
+latest 1000 log lines; cancel/close abandons an unfinished export. Each Body still uses the existing
+read interface (explicit 1 GiB stored-size ceiling); a single entry is buffered, and the browser
+fallback buffers the final file. Export does not provide an atomic snapshot of changing captures
+or pin one redaction revision across separate reads. Original content is never used as a fallback
+for policy-denied reads. Exported files may contain sensitive data from the authorized read view.
 
 ### Read one complete log
 
@@ -656,7 +622,7 @@ after a successful write. Browser Backends retain their existing Bearer/share-to
 request the existing Body endpoint with an explicit `Number.MAX_SAFE_INTEGER` stored-size ceiling,
 and use `Response.blob()` plus browser download, without creating a full JavaScript ArrayBuffer.
 Browser transfer must finish before the download is handed to the browser; Blob resource limits
-remain browser-dependent. Preview fetches and the existing `saveFile` contract are unchanged.
+remain browser-dependent. Preview fetches remain unchanged; small generated exports use the Writer-based `saveFile` contract described above.
 
 ### Replay a request
 
@@ -968,7 +934,7 @@ Entries are not persisted and are consumed through incremental polling.
 ## Redaction library and bindings
 
 The desktop and CLI owner UI expose a global redaction script library and one script selector for
-each local identity/API key, Session share and HAR share. Normal capture and forwarding are unaffected.
+each local identity/API key, Session share. Normal capture and forwarding are unaffected.
 In Settings > 管理接口, a redaction icon to the left of an endpoint’s permission controls marks
 support for identity-bound redaction. It is always shown for supported endpoints, even when no
 script is bound; it does not indicate that redaction is currently active.
@@ -984,14 +950,13 @@ authorization.
 | `PUT /api/redaction-scripts/{name}` | Replace `{ "content": "..." }` (approval) |
 | `DELETE /api/redaction-scripts/{name}` | Delete script; existing bindings remain and fail closed (approval) |
 | `PUT /api/session-shares/{id}/redaction` | Set `{ "redaction_script": "mask" }`, or null to unbind an enabled share (approval) |
-| `PUT /api/session-har-shares/{id}/redaction` | Same for enabled HAR shares (approval) |
 
 The headless CLI accepts `--redaction-script /path/to/mask.lua` (with or without `run`).
 It reads and compiles the file before starting the HTTP API or proxy; a missing/unreadable file or
 invalid Lua aborts startup. The source is pinned in memory for the process lifetime, is not added to
 the workspace library, and changes require a restart. This policy overrides identity and share
 bindings, including missing bindings and the UI access token (`UIKey`). It applies to the existing
-redaction-supported reads marked in the permissions UI and to Session/HAR share reads; it does not
+redaction-supported reads marked in the permissions UI and to Session share reads; it does not
 expand the redaction data contract below or change capture/forwarding.
 
 In this mode, all five library operations above reject authorized calls with HTTP 403,
@@ -1002,10 +967,9 @@ library script also fails its library validation while management is disabled. D
 another identity or treat this error as an upsert conflict. Without the flag, existing behavior is
 unchanged.
 
-`POST /api/session-shares` groups redaction and persistence in `session_share_config` and updates
-enabled shares without rotating tokens. `POST /api/session-har-shares` accepts optional
-`redaction_script` on initial creation and remains idempotent; use the binding endpoint to
-change its policy. Share-state responses include nullable `redaction_script`.
+`POST /api/session-shares` accepts redaction and persistence together in `session_share_config`,
+including updates to enabled shares without rotating tokens. Share-state responses include
+nullable `redaction_script`.
 Owner-only CLI `PUT /ui-api/permissions/identities/{id}/redaction` accepts the same binding object;
 the desktop command is `set_http_identity_redaction`. Identity permission reads include the binding,
 and permission-table updates preserve it. Without a startup redaction script, the CLI UI access
@@ -1013,7 +977,7 @@ token and ordinary Tauri IPC reads are unbound. Desktop Body previews (`fetch_bo
 downloads (`download_body`) use trusted Tauri IPC and do not use the local HTTP identity binding.
 
 Redaction applies to log details, body reads, snapshot details/bodies, URL/custom-column view cells,
-URI/custom filters, filter debugging, breakpoint details/bodies/summary URLs, bypass URLs and HAR.
+URI/custom filters, filter debugging, breakpoint details/bodies/summary URLs, bypass URLs. Frontend HAR uses those same authorized reads.
 It does not sanitize interceptor modification history, script source, tags, system logs or Asset
 raw downloads. Column output is not post-processed; column scripts receive sanitized inputs.
 
@@ -1022,8 +986,8 @@ Every read resolves a script version. Missing/failed bound scripts return HTTP 5
 is lazy and failures are propagated even if a downstream column/filter catches the body error.
 Bound view requests re-render requested rows even when `updated_at` is unchanged. Session-view
 responses include `redaction_revision` when bound; share clients invalidate membership, rows and
-open detail/body views when it changes. HAR downloads execute the pinned version while streaming,
-and abort on a failing entry without emitting that entry's original contents.
+open detail/body views when it changes. Frontend HAR reads resolve policies independently per
+request and replace failed reads with diagnostics; they never retry with original data.
 
 See the Lua reference's **Read-time redaction scripts** section for the three-state context contract.
 

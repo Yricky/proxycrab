@@ -3,7 +3,7 @@ import QRCode from "qrcode";
 import { onBeforeUnmount, ref, watch } from "vue";
 import { Io5Download, Io5Trash } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import { base64ToBytes } from "../api/save-file";
+import { base64ToBytes, saveBytesFile } from "../api/save-file";
 import { reportError } from "../stores/app";
 
 const backend = useBackend();
@@ -60,7 +60,7 @@ async function download(): Promise<void> {
   const base64 = qrCodeDataUrl.value.split(",", 2)[1];
   if (!base64) return;
   try {
-    await backend.saveFile({ filename: "qrcode.png", data: base64ToBytes(base64) });
+    await saveBytesFile(backend, "qrcode.png", base64ToBytes(base64));
   } catch (error) {
     reportError(error, "保存二维码失败");
   }

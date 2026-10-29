@@ -254,7 +254,7 @@ mod tests {
         let service = HttpPermissionService::open(directory.path(), Arc::new(|_| {})).unwrap();
         let catalog = service.catalog();
 
-        assert_eq!(catalog.len(), 85);
+        assert_eq!(catalog.len(), 81);
         assert!(
             catalog
                 .iter()
@@ -277,6 +277,11 @@ mod tests {
             action.id == "POST /api/assets/{*asset_id}"
                 && action.route_template == "/api/assets/{*asset_id}"
         }));
+        assert!(
+            !catalog
+                .iter()
+                .any(|action| action.route_template.starts_with("/api/session-har-shares"))
+        );
         assert!(catalog.iter().any(|action| {
             action.id == "POST /api/session-shares"
                 && action.route_template == "/api/session-shares"
@@ -288,18 +293,6 @@ mod tests {
         assert!(catalog.iter().any(|action| {
             action.id == "DELETE /api/session-shares/{id}"
                 && action.route_template == "/api/session-shares/{id}"
-        }));
-        assert!(catalog.iter().any(|action| {
-            action.id == "POST /api/session-har-shares"
-                && action.route_template == "/api/session-har-shares"
-        }));
-        assert!(catalog.iter().any(|action| {
-            action.id == "GET /api/session-har-shares/{id}"
-                && action.route_template == "/api/session-har-shares/{id}"
-        }));
-        assert!(catalog.iter().any(|action| {
-            action.id == "DELETE /api/session-har-shares/{id}"
-                && action.route_template == "/api/session-har-shares/{id}"
         }));
     }
 }

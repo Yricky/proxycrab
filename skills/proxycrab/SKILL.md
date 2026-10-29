@@ -56,12 +56,9 @@ surface has no `/api/agents.md` endpoint and needs no management API key or loca
   UIKey cannot bypass startup redaction.
 - Use a supplied `pcrab_share_…` Session link token to read its Session through `/share-api/*`
   with a `token` query parameter. It is not a management API key; see the sharing workflow below.
-- `pcrab_har_…` HAR download tokens are separate from Session link tokens. They grant browser-only
-  access to a frozen set of captures subject to the effective redaction policy. Never use them as Agent credentials or
-  print them in reports.
 - Treat the `GET`, `POST`, and `DELETE` Session-share management routes as normal
-  permission-controlled Agent actions; the HAR-share management routes follow the same rule.
-  Returned tokens authorize their respective share surfaces, not management `Authorization`.
+  permission-controlled Agent actions.
+  Returned tokens authorize the Session share surface, not management `Authorization`.
 - Bundled management scripts allow a remote base URL only when `PROXYCRAB_API_KEY` is set. The remote
   service must be deliberately bound to a reachable address, and that API-key identity must allow
   the requested route. Prefer authenticated TLS or an SSH local port forward; plain HTTP exposes
@@ -361,13 +358,13 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
 Management reads may be transformed by the selected identity's bound Lua redaction script. An
 unbound identity normally returns original data; a failed/missing bound script refuses the read. Do not retry
 with another credential or remove a binding to bypass that failure. Ordinary captures are unchanged.
-The owner can manage bindings in settings and Session sharing; HAR policies run during download.
+The owner can manage bindings in settings and Session sharing. Frontend HAR exports use the
+existing authorized detail/Body reads, with no separate HAR policy or download API.
 
 Use `scripts/redaction-upsert.mjs --name NAME --file SCRIPT.lua` to create/update an authorized
-redaction script. Use `scripts/share-redaction-set.mjs --session ID --kind page|har --name NAME`
-(or `--clear true` only when explicitly requested) to change an enabled share's binding. For page
-shares the helper reads the current persistence mode and updates both settings through
-`POST /api/session-shares`; HAR shares retain their binding endpoint. Binding changes do not print
+redaction script. Use `scripts/share-redaction-set.mjs --session ID --kind page --name NAME`
+(or `--clear true` only when explicitly requested) to change an enabled share's binding. The helper reads the current persistence mode and updates both settings through
+`POST /api/session-shares`. Binding changes do not print
 the share token. Listing and creating scripts are allowed by default, replacing
 or deleting one needs owner approval, and reading one script's source is denied by default; the
 upsert script creates first and treats a conflict as an update instead of reading the script. Never
@@ -410,3 +407,14 @@ All script helpers accept relative paths through `--name`, for example
 `--name business/errors` (without the automatic `.lua` extension). Use the same full name in
 Session bindings and routing selection. Helpers encode the whole name in URL parameters;
 do not pre-encode the argument. See [script path rules](references/http-api.md#script-relative-paths).
+
+## HAR export
+
+Use the UI export button beside sweep, then start export inside its progress/log window. The
+selection includes every current filtered row in displayed order, frozen on start. Failed and
+unfinished HTTP records remain (missing response status 0); WS connection rows and synthetic TLS
+CONNECT are skipped. Body read failures become failure text and warnings, not truncated downloads.
+The browser buffers Blob parts; desktop writes temporary-file chunks and commits on finish. Closing
+the export window cancels it. There is no HAR link sharing or backend HAR generation API. Agents
+should read supplied Session links through the existing share routes rather than invent export
+routes. Read failures never authorize changing credentials or bypassing redaction.

@@ -89,7 +89,7 @@ The Tauri command surface also reports the management HTTP service's `running`, 
 
 ## Session sharing links
 
-The desktop and CLI management UIs open a managed application window from “导出和分享” in a
+The desktop and CLI management UIs open a managed application window from “链接分享” in a
 Session's context menu. Sharing creates one 256-bit `pcrab_share_…` token scoped to that Session.
 It is temporary by default. Select “重启后保留” to save its token and redaction binding in
 `<workspace>/session-shares.json`; desktop and CLI restore it enabled with the same token on restart.
@@ -103,7 +103,7 @@ must be running to use a link; an IP or port change still requires updating its 
 Shared Session names carry a small link icon, with a tooltip indicating temporary or persistent
 sharing. The desktop and CLI read enabled, non-archived summaries through one batch call
 (`GET /api/session-shares`, desktop `list_session_shares`), without fetching share tokens. Icons
-refresh after share changes and Session archive/restore operations. HAR-only sharing has no icon.
+refresh after share changes and Session archive/restore operations.
 
 The `/session?token=…` page renders only the main traffic content. It follows new/finished captures
 and owner column changes, starts with the Session's current filter, and keeps every viewer's later
@@ -128,19 +128,38 @@ back to `127.0.0.1`. Each row can be opened or copied directly. These links use 
 so the token and captured data must be shared only on a trusted network or protected by a TLS
 reverse proxy.
 
-The same window contains a separate HAR sharing card. Before enabling it, choose either all
-captures or the Session's currently applied filter. Enabling freezes the matching capture IDs and
-creates an independent process-local `pcrab_har_…` token; later captures and filter changes do not
-change the file. Opening `/session.har?token=…` directly downloads
-`proxycrab-session-<id>.har`. The HAR switch has its own state and revocation, so it does not affect
-the read-only page share. Empty selections produce a valid empty HAR, while failed, unfinished, and
-synthetic TLS CONNECT captures are skipped during generation. Downloads stream one capture entry at
-a time without `Content-Length`; a body or storage failure after streaming starts interrupts the
-download and leaves the partial file invalid.
+## HAR export
 
-HAR files are not redacted and can contain Authorization headers, Cookie/Set-Cookie values, and
-complete request and response bodies. The link and downloaded file must be treated as sensitive.
-HAR shares remain temporary: disabling, process exit, or Session archival makes the HAR link unavailable.
+The export button beside the sweep action opens a floating window. Its Export HAR button freezes
+all matching list IDs and their displayed order, then reads details and bodies through existing
+Backend methods (`getLog`, `fetchBody`). No HAR export or sharing HTTP endpoint exists. The shared
+Session page uses the existing scoped read APIs and exports their policy-filtered data.
+
+Entries are generated one at a time. Failed and unfinished ordinary HTTP records are retained;
+missing responses have status 0 and `_proxyCrab` carries outcome/error metadata. WebSocket connection
+rows and synthetic TLS CONNECT records are skipped; HTTP upgrade handshakes remain. Body read
+failures (including decode and size errors) become text explaining the failure and `bodyErrors`
+metadata, with warnings in the export window. Unavailable details produce a failed placeholder
+entry. Empty selections produce valid HAR. Body bytes are read separately rather than reusing JSON
+previews, preserving formatting; binary content uses Base64 (`encoding` for responses, `_encoding`
+for request postData). Detailed timings/header sizes are unknown (-1).
+
+`saveFile({filename})` returns `FileWriter | null`; null means the desktop picker was cancelled.
+The Writer offers async `append(bytes)`, `markAsFinish()`, and `markAsError()`. Desktop chunks use
+binary IPC (at most 256 KiB each) and a same-directory temporary file; finish publishes the file,
+error discards it. Failed writes cannot be committed. Browser writers buffer Blob parts and start
+a download only on finish; this acknowledges download initiation, not completion on disk. Abort
+never starts a download. No new management or share HTTP route is needed for writing.
+
+Progress includes processed/exported/skipped records and warning counts. The window retains the
+latest 1000 log lines; cancel/close abandons an unfinished export. Each Body still uses the existing
+read interface (explicit 1 GiB stored-size ceiling); a single entry is buffered, and the browser
+fallback buffers the final file. Export does not provide an atomic snapshot of changing captures
+or pin one redaction revision across separate reads. Original content is never used as a fallback
+for policy-denied reads. Exported files may contain sensitive data from the authorized read view.
+
+Sweep now asks for confirmation before creating a new active Session, archiving the current one,
+and disconnecting active traffic.
 
 ## CLI browser UI
 
@@ -169,7 +188,7 @@ Run the CLI with a workspace:
 target/debug/proxycrab-cli run --workspace /path/to/workspace
 ```
 
-To enforce read-time redaction for every supported identity, including UIKey and Session/HAR
+To enforce read-time redaction for every supported identity, including UIKey and Session
 shares, supply a Lua file:
 
 ```bash

@@ -7,18 +7,19 @@ import {
   Io5Refresh,
   Io5ServerOutline,
   Io5Trash,
+  Io5DownloadOutline,
 } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
 import type { HttpApiChange, InterceptorKind, SessionInterceptorItem } from "../api/types";
 import { appStore, reportError } from "../stores/app";
-import { openContextMenu } from "../stores/dialog";
+import { confirmDialog, openContextMenu } from "../stores/dialog";
 import { interceptorsStore } from "../stores/interceptors";
 import { sessionsStore } from "../stores/sessions";
 import { breakpointsStore } from "../stores/breakpoints";
 import type { LogsStore } from "../stores/logs";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
-import { openBreakpointList, openScriptEditor } from "../windows/launcher";
+import { openHarExport, openBreakpointList, openScriptEditor } from "../windows/launcher";
 import AppTooltip from "./AppTooltip.vue";
 import InterceptorPicker from "./InterceptorPicker.vue";
 import { GiBroom } from "vue-icons-plus/gi";
@@ -42,7 +43,12 @@ const requestItems = computed(() => interceptorsStore.request);
 const responseItems = computed(() => interceptorsStore.response);
 /** 清扫只在“当前查看的会话就是活跃会话”时可用。 */
 const canSweep = computed(
-  () => logs.sessionId !== null && logs.sessionId === sessionsStore.activeSessionId,
+  () =>
+    [backend.createSession, backend.replaceActiveSession, backend.archiveSession].every(
+      (method) => typeof method === "function",
+    ) &&
+    logs.sessionId !== null &&
+    logs.sessionId === sessionsStore.activeSessionId,
 );
 const sweeping = ref(false);
 
@@ -50,7 +56,17 @@ async function sweepSession(): Promise<void> {
   if (sweeping.value) return;
   sweeping.value = true;
   try {
-    const created = await sessionsStore.sweep(logs.sessionId);
+    const sessionId = logs.sessionId;
+    if (
+      !(await confirmDialog({
+        title: "清扫会话",
+        message: "将新建配置一致的活跃会话，当前会话转入已归档，并断开当前活跃连接。是否继续？",
+        confirmText: "确认清扫",
+      }))
+    )
+      return;
+    if (sessionId === null || logs.sessionId !== sessionId || !canSweep.value) return;
+    const created = await sessionsStore.sweep(sessionId);
     if (created) {
       logs.view(created.id);
       appStore.toast(`已新建会话「${created.name}」并归档原会话`, "success");
@@ -379,6 +395,21 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <AppTooltip
+      v-if="backend.getLog && backend.fetchBody && backend.saveFile"
+      title="导出 HAR"
+      detail="导出当前列表的全部筛选结果"
+    >
+      <button
+        class="pipeline-sweep"
+        type="button"
+        :disabled="logs.loading || logs.sessionId === null"
+        aria-label="导出 HAR"
+        @click="openHarExport(logs)"
+      >
+        <Io5DownloadOutline :size="16" />
+      </button>
+    </AppTooltip>
     <AppTooltip v-if="canSweep" title="清扫会话" detail="新建配置一致的活跃会话，原会话转入已归档">
       <button
         class="pipeline-sweep"

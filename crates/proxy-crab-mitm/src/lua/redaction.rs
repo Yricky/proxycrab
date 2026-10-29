@@ -18,7 +18,7 @@ impl PartState {
     }
 }
 
-/// One compiled evaluator per API request (or HAR download), with fresh globals per invocation.
+/// One compiled evaluator per API request, with fresh globals per invocation.
 #[derive(Clone)]
 pub struct RedactionEvaluator(Arc<Mutex<ReusableScript>>, bool);
 impl RedactionEvaluator {

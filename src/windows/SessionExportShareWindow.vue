@@ -2,58 +2,31 @@
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import RedactionSelect from "../components/RedactionSelect.vue";
 import { useBackend } from "../api";
-import type {
-  HarShareScope,
-  HarShareState,
-  HttpApiChange,
-  SessionFilter,
-  SessionShareState,
-} from "../api/types";
+import type { HttpApiChange, SessionShareState } from "../api/types";
 import { sessionsStore } from "../stores/sessions";
 import { appStore, reportError } from "../stores/app";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
-import { emptySessionFilter } from "../stores/logs";
 import { copyText } from "../utils/clipboard";
-import { buildHarShareLinks, buildSessionShareLinks } from "../utils/session-share";
+import { buildSessionShareLinks } from "../utils/session-share";
 
 const props = defineProps<{ sessionId: number }>();
 
 const backend = useBackend();
 const pageShare = ref<SessionShareState | null>(null);
-const harShare = ref<HarShareState | null>(null);
 const pageLinks = ref<string[]>([]);
-const harLinks = ref<string[]>([]);
 const pagePersistent = ref(false);
 const pageRedaction = ref<string | null>(null);
-const harRedaction = ref<string | null>(null);
-const harScope = ref<HarShareScope>("all");
 const loading = ref(false);
 const pageMutating = ref(false);
-const harMutating = ref(false);
 const serviceRunning = ref(true);
 let loadSequence = 0;
-
-const ID_PAGE_SIZE = 10_000;
-
-function linksForState(
-  state: SessionShareState | HarShareState,
-  addresses: string[],
-  port: number,
-  kind: "page" | "har",
-): string[] {
-  if (!state.token) return [];
-  return kind === "page"
-    ? buildSessionShareLinks(addresses, port, state.token)
-    : buildHarShareLinks(addresses, port, state.token);
-}
 
 async function load(): Promise<void> {
   const sequence = ++loadSequence;
   loading.value = true;
   try {
-    const [nextPageShare, nextHarShare, status, addresses] = await Promise.all([
+    const [nextPageShare, status, addresses] = await Promise.all([
       backend.getSessionShare(props.sessionId),
-      backend.getHarShare(props.sessionId),
       backend.getHttpServiceStatus(),
       backend.listLocalIps?.() ?? [],
     ]);
@@ -62,12 +35,10 @@ async function load(): Promise<void> {
     sessionsStore.updateShare(nextPageShare);
     if (nextPageShare.enabled) pagePersistent.value = nextPageShare.persistent;
     if (nextPageShare.enabled) pageRedaction.value = nextPageShare.redaction_script ?? null;
-    if (nextHarShare.enabled) harRedaction.value = nextHarShare.redaction_script ?? null;
-    harShare.value = nextHarShare;
-    if (nextHarShare.scope) harScope.value = nextHarShare.scope;
     serviceRunning.value = status.running;
-    pageLinks.value = linksForState(nextPageShare, addresses, status.port, "page");
-    harLinks.value = linksForState(nextHarShare, addresses, status.port, "har");
+    pageLinks.value = nextPageShare.token
+      ? buildSessionShareLinks(addresses, status.port, nextPageShare.token)
+      : [];
   } catch (error) {
     if (sequence === loadSequence) reportError(error, "读取分享状态失败");
   } finally {
@@ -75,28 +46,23 @@ async function load(): Promise<void> {
   }
 }
 
-async function setRedaction(kind: "page" | "har", value: string | null): Promise<void> {
-  const target = kind === "page" ? pageRedaction : harRedaction;
-  const share = kind === "page" ? pageShare : harShare;
-  const busy = kind === "page" ? pageMutating : harMutating;
-  if (!share.value?.enabled) {
-    target.value = value;
+async function setRedaction(value: string | null): Promise<void> {
+  if (!pageShare.value?.enabled) {
+    pageRedaction.value = value;
     return;
   }
-  busy.value = true;
+  pageMutating.value = true;
   try {
-    if (kind === "page") {
-      pageShare.value = await backend.enableSessionShare(props.sessionId, {
-        redactionScript: value,
-        persistent: pagePersistent.value,
-      });
-      sessionsStore.updateShare(pageShare.value);
-    } else harShare.value = await backend.setHarShareRedaction!(props.sessionId, value);
-    target.value = value;
+    pageShare.value = await backend.enableSessionShare(props.sessionId, {
+      redactionScript: value,
+      persistent: pagePersistent.value,
+    });
+    sessionsStore.updateShare(pageShare.value);
+    pageRedaction.value = value;
   } catch (error) {
     reportError(error, "保存脱敏脚本绑定失败");
   } finally {
-    busy.value = false;
+    pageMutating.value = false;
   }
 }
 
@@ -148,75 +114,20 @@ async function togglePageShare(): Promise<void> {
   }
 }
 
-async function collectFrozenIds(filter: SessionFilter): Promise<number[]> {
-  const latest = await backend.getLogIds({
-    session_id: props.sessionId,
-    filter: emptySessionFilter(),
-    limit: 1,
-  });
-  const initialMaxId = latest.matched_ids[0] ?? 0;
-  let cursor = initialMaxId > 0 ? initialMaxId + 1 : undefined;
-  const ids = new Set<number>();
-
-  while (true) {
-    const payload = await backend.getLogIds({
-      session_id: props.sessionId,
-      filter,
-      max_id: cursor,
-      limit: ID_PAGE_SIZE,
-    });
-    for (const id of payload.matched_ids) ids.add(id);
-    if (payload.matched_ids.length < ID_PAGE_SIZE) break;
-    cursor = Math.min(...payload.matched_ids);
-  }
-
-  return [...ids].sort((left, right) => left - right);
-}
-
-async function toggleHarShare(): Promise<void> {
-  if (harMutating.value || !harShare.value) return;
-  harMutating.value = true;
-  try {
-    if (harShare.value.enabled) {
-      harShare.value = await backend.disableHarShare(props.sessionId);
-      harLinks.value = [];
-      appStore.toast("HAR 分享已关闭", "success");
-    } else {
-      const filter =
-        harScope.value === "filtered"
-          ? (await backend.getSessionView(props.sessionId)).filter
-          : emptySessionFilter();
-      const logIds = await collectFrozenIds(filter);
-      await backend.enableHarShare({
-        session_id: props.sessionId,
-        scope: harScope.value,
-        log_ids: logIds,
-        redaction_script: harRedaction.value,
-      });
-      await load();
-      appStore.toast(`HAR 分享已开启，已固化 ${logIds.length} 条记录`, "success");
-    }
-  } catch (error) {
-    reportError(error, harShare.value.enabled ? "关闭 HAR 分享失败" : "开启 HAR 分享失败");
-  } finally {
-    harMutating.value = false;
-  }
-}
-
-async function openLink(url: string, kind: "page" | "har"): Promise<void> {
+async function openLink(url: string): Promise<void> {
   try {
     await backend.openExternal(url);
   } catch (error) {
-    reportError(error, kind === "har" ? "打开 HAR 分享链接失败" : "打开分享链接失败");
+    reportError(error, "打开分享链接失败");
   }
 }
 
-async function copyLink(url: string, kind: "page" | "har"): Promise<void> {
+async function copyLink(url: string): Promise<void> {
   try {
     await copyText(url);
-    appStore.toast(kind === "har" ? "HAR 分享链接已复制" : "分享链接已复制", "success");
+    appStore.toast("分享链接已复制", "success");
   } catch (error) {
-    reportError(error, kind === "har" ? "复制 HAR 分享链接失败" : "复制分享链接失败");
+    reportError(error, "复制分享链接失败");
   }
 }
 
@@ -227,9 +138,7 @@ function onRefreshRequest(event: Event): void {
 function onHttpApiChange(event: Event): void {
   const change = (event as CustomEvent<HttpApiChange>).detail;
   if (
-    (change.resources.includes("all") ||
-      change.resources.includes("session_share") ||
-      change.resources.includes("session_har_share")) &&
+    (change.resources.includes("all") || change.resources.includes("session_share")) &&
     (change.session_id === undefined || change.session_id === props.sessionId)
   ) {
     void load();
@@ -287,7 +196,7 @@ onBeforeUnmount(() => {
         v-if="typeof backend.enableSessionShare === 'function' && backend.listRedactionScripts"
         :model-value="pageRedaction"
         :disabled="loading || pageMutating"
-        @update:model-value="setRedaction('page', $event)"
+        @update:model-value="setRedaction($event)"
       />
       <div v-if="loading && !pageShare" class="share-empty">正在读取分享状态…</div>
       <template v-else-if="pageShare?.enabled">
@@ -298,12 +207,12 @@ onBeforeUnmount(() => {
             class="share-link-row"
             role="link"
             tabindex="0"
-            @click="openLink(url, 'page')"
-            @keydown.enter="openLink(url, 'page')"
-            @keydown.space.prevent="openLink(url, 'page')"
+            @click="openLink(url)"
+            @keydown.enter="openLink(url)"
+            @keydown.space.prevent="openLink(url)"
           >
             <span class="share-link mono">{{ url }}</span>
-            <button class="btn" type="button" @click.stop="copyLink(url, 'page')">复制</button>
+            <button class="btn" type="button" @click.stop="copyLink(url)">复制</button>
           </div>
         </div>
         <div v-else class="share-empty">暂无可用的本机 IPv4 地址</div>
@@ -312,80 +221,6 @@ onBeforeUnmount(() => {
         </p>
       </template>
       <div v-else class="share-empty">开启后将在这里列出可打开和复制的分享地址。</div>
-    </section>
-
-    <section class="share-card" aria-labelledby="har-share-title">
-      <header class="card-heading">
-        <div>
-          <h3 id="har-share-title">HAR 分享</h3>
-          <p>生成直接下载 HAR 文件的链接，记录范围在开启分享时固化。</p>
-        </div>
-        <button
-          class="switch"
-          :class="{ on: harShare?.enabled }"
-          type="button"
-          :disabled="loading || harMutating || !harShare"
-          :aria-pressed="harShare?.enabled ?? false"
-          :aria-label="harShare?.enabled ? '关闭 HAR 分享' : '开启 HAR 分享'"
-          :title="harShare?.enabled ? '关闭 HAR 分享' : '开启 HAR 分享'"
-          @click="toggleHarShare"
-        />
-      </header>
-
-      <RedactionSelect
-        v-if="backend.setHarShareRedaction && backend.listRedactionScripts"
-        :model-value="harRedaction"
-        :disabled="loading || harMutating"
-        @update:model-value="setRedaction('har', $event)"
-      />
-
-      <div v-if="loading && !harShare" class="share-empty">正在读取分享状态…</div>
-      <template v-else-if="harShare?.enabled">
-        <p class="snapshot-summary">
-          已固化 {{ harShare.log_count }} 条记录 ·
-          {{ harShare.scope === "filtered" ? "当前筛选结果" : "全部结果" }}
-        </p>
-        <div v-if="harLinks.length" class="share-links">
-          <div
-            v-for="url in harLinks"
-            :key="url"
-            class="share-link-row"
-            role="link"
-            tabindex="0"
-            @click="openLink(url, 'har')"
-            @keydown.enter="openLink(url, 'har')"
-            @keydown.space.prevent="openLink(url, 'har')"
-          >
-            <span class="share-link mono">{{ url }}</span>
-            <button class="btn" type="button" @click.stop="copyLink(url, 'har')">复制</button>
-          </div>
-        </div>
-        <div v-else class="share-empty">暂无可用的本机 IPv4 地址</div>
-        <p v-if="!serviceRunning" class="share-warning">
-          管理 HTTP 服务未运行，以上地址当前无法访问。
-        </p>
-      </template>
-      <template v-else>
-        <div class="scope-picker" role="group" aria-label="HAR 分享范围">
-          <button type="button" :class="{ active: harScope === 'all' }" @click="harScope = 'all'">
-            全部结果
-          </button>
-          <button
-            type="button"
-            :class="{ active: harScope === 'filtered' }"
-            @click="harScope = 'filtered'"
-          >
-            当前筛选结果
-          </button>
-        </div>
-        <p class="scope-hint">
-          {{
-            harScope === "filtered"
-              ? "开启时固化当前 Session 已应用筛选命中的记录 ID。"
-              : "开启时固化当前 Session 的全部记录 ID。"
-          }}
-        </p>
-      </template>
     </section>
   </main>
 </template>
@@ -477,37 +312,6 @@ onBeforeUnmount(() => {
 .share-warning {
   margin: 8px 0 0;
   color: var(--warning);
-  font-size: 11px;
-}
-.snapshot-summary {
-  margin: 14px 0 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-.scope-picker {
-  display: inline-flex;
-  margin-top: 14px;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-app);
-}
-.scope-picker button {
-  padding: 5px 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 12px;
-}
-.scope-picker button.active {
-  background: var(--bg-active);
-  color: var(--text-primary);
-}
-.scope-hint {
-  margin: 8px 0 0;
-  color: var(--text-faint);
   font-size: 11px;
 }
 </style>

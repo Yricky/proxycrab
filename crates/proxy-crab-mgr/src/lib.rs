@@ -3,8 +3,6 @@
 mod agents;
 pub mod clash_subscription;
 pub mod dto;
-mod har;
-pub mod har_share;
 pub mod http;
 pub mod manager;
 pub mod permission;

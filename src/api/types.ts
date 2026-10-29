@@ -203,10 +203,9 @@ export interface WorkspacePaths {
   configured_path: string;
 }
 
-/** 保存文件请求：data 为文件原始字节内容。 */
+/** 创建一次保存，字节通过返回的 Writer 追加。 */
 export interface SaveFileRequest {
   filename: string;
-  data: Uint8Array<ArrayBuffer>;
 }
 
 export type HttpApiResource =
@@ -217,7 +216,6 @@ export type HttpApiResource =
   | "archived_sessions"
   | "active_session"
   | "session_share"
-  | "session_har_share"
   | "session_view"
   | "column_scripts"
   | "filter_scripts"
@@ -302,24 +300,6 @@ export interface SessionShareState {
   redaction_script?: string | null;
   session_id: number;
   enabled: boolean;
-  token?: string;
-}
-
-export type HarShareScope = "all" | "filtered";
-
-export interface EnableHarShareRequest {
-  redaction_script?: string | null;
-  session_id: number;
-  scope: HarShareScope;
-  log_ids: number[];
-}
-
-export interface HarShareState {
-  redaction_script?: string | null;
-  session_id: number;
-  enabled: boolean;
-  scope?: HarShareScope;
-  log_count: number;
   token?: string;
 }
 

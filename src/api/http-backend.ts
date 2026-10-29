@@ -15,8 +15,6 @@ import type {
   DebugFilterScriptRequest,
   ExecuteTemporaryScriptRequest,
   ExtendBreakpointRequest,
-  EnableHarShareRequest,
-  HarShareState,
   HttpApiChange,
   HttpServiceStatus,
   IdentityPermissions,
@@ -206,11 +204,6 @@ export function createHttpBackend(
       ),
     disableSessionShare: (sessionId: number) =>
       call<SessionShareState>(`/api/session-shares/${sessionId}`, json("DELETE")),
-    getHarShare: (sessionId: number) => call<HarShareState>(`/api/session-har-shares/${sessionId}`),
-    enableHarShare: (requestValue: EnableHarShareRequest) =>
-      call<HarShareState>("/api/session-har-shares", json("POST", requestValue)),
-    disableHarShare: (sessionId: number) =>
-      call<HarShareState>(`/api/session-har-shares/${sessionId}`, json("DELETE")),
 
     getLogIds: (requestValue: LogIdsRequest) => call("/api/logs/ids", json("POST", requestValue)),
     getLogViews: (requestValue: LogViewsRequest) =>
@@ -301,11 +294,6 @@ export function createHttpBackend(
     setSessionShareRedaction: (id, redactionScript) =>
       call(
         `/api/session-shares/${id}/redaction`,
-        json("PUT", { redaction_script: redactionScript }),
-      ),
-    setHarShareRedaction: (id, redactionScript) =>
-      call(
-        `/api/session-har-shares/${id}/redaction`,
         json("PUT", { redaction_script: redactionScript }),
       ),
 

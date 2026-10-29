@@ -47,7 +47,6 @@ use crate::{
         RoutingSelection, ScriptRequest, SessionQuery, SystemLogsQuery, UpdateScriptRequest,
         UpdateSessionRequest, WebSocketQuery, default_body_max_size,
     },
-    har_share::{EnableHarShareRequest, HarShareService},
     manager::ProxyCrabManager,
     permission::{
         ManagementCredential, PermissionAction, PermissionDenied, PermissionDeniedStatus,
@@ -160,16 +159,9 @@ pub async fn start_http_server(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
 ) -> Result<HttpServerHandle, ManagerError> {
-    let har_shares = HarShareService::new();
-    let har_manager = manager.clone();
-    let har_service = har_shares.clone();
-    start_http_server_with_routes(
-        manager,
-        permissions,
-        SessionShareService::new(),
-        har_shares,
-        |_| crate::har_share::router(har_manager, har_service),
-    )
+    start_http_server_with_routes(manager, permissions, SessionShareService::new(), |_| {
+        Router::new()
+    })
     .await
 }
 
@@ -177,7 +169,6 @@ pub async fn start_http_server_with_routes<F>(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
     shares: Arc<SessionShareService>,
-    har_shares: Arc<HarShareService>,
     extra_routes: F,
 ) -> Result<HttpServerHandle, ManagerError>
 where
@@ -198,14 +189,8 @@ where
         cancellation.clone(),
     );
     let extra = extra_routes(changes.clone());
-    let app = secured_router_with_changes_and_extra(
-        manager,
-        permissions,
-        shares,
-        har_shares,
-        changes.clone(),
-        extra,
-    );
+    let app =
+        secured_router_with_changes_and_extra(manager, permissions, shares, changes.clone(), extra);
     let task = tokio::spawn(async move {
         if let Err(error) = axum::serve(
             listener,
@@ -267,7 +252,6 @@ fn router_with_changes(
         manager,
         permissions,
         SessionShareService::new(),
-        HarShareService::new(),
         changes,
         Router::new(),
     )
@@ -278,7 +262,6 @@ fn router_with_changes_and_extra(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
     shares: Arc<SessionShareService>,
-    har_shares: Arc<HarShareService>,
     changes: ChangeSender,
     extra: Router,
 ) -> Router {
@@ -300,10 +283,6 @@ fn router_with_changes_and_extra(
         .route(
             "/api/session-shares/{id}/redaction",
             put(set_session_share_redaction),
-        )
-        .route(
-            "/api/session-har-shares/{id}/redaction",
-            put(set_har_share_redaction),
         )
         .route("/api/agents.md", get(agents_markdown))
         .route("/api/assets", get(assets))
@@ -331,11 +310,6 @@ fn router_with_changes_and_extra(
         .route(
             "/api/session-shares/{id}",
             get(get_session_share).delete(disable_session_share),
-        )
-        .route("/api/session-har-shares", post(enable_har_share))
-        .route(
-            "/api/session-har-shares/{id}",
-            get(get_har_share).delete(disable_har_share),
         )
         .route("/api/logs/ids", post(log_ids))
         .route("/api/logs/views", post(log_views))
@@ -450,7 +424,6 @@ fn router_with_changes_and_extra(
         ))
         .with_state(manager)
         .layer(Extension(shares))
-        .layer(Extension(har_shares))
         .layer(Extension(changes.clone()))
         .layer(middleware::from_fn_with_state(
             changes,
@@ -477,7 +450,6 @@ fn secured_router_with_changes(
         manager,
         permissions,
         SessionShareService::new(),
-        HarShareService::new(),
         changes,
         Router::new(),
     )
@@ -487,11 +459,10 @@ fn secured_router_with_changes_and_extra(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
     shares: Arc<SessionShareService>,
-    har_shares: Arc<HarShareService>,
     changes: ChangeSender,
     extra: Router,
 ) -> Router {
-    router_with_changes_and_extra(manager, permissions, shares, har_shares, changes, extra)
+    router_with_changes_and_extra(manager, permissions, shares, changes, extra)
         .layer(middleware::from_fn(auth::prepare_management_request))
 }
 
@@ -715,12 +686,6 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
         (&Method::DELETE, value) if value.starts_with("/api/session-shares/") => {
             vec![HttpApiResource::SessionShare]
         }
-        (&Method::POST, "/api/session-har-shares") => {
-            vec![HttpApiResource::SessionHarShare]
-        }
-        (&Method::DELETE, value) if value.starts_with("/api/session-har-shares/") => {
-            vec![HttpApiResource::SessionHarShare]
-        }
         (&Method::PUT, "/api/session-view") => vec![HttpApiResource::SessionView],
         (&Method::POST, "/api/column-scripts") => {
             vec![HttpApiResource::ColumnScripts, HttpApiResource::SessionView]
@@ -770,8 +735,7 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
         resources,
         session_id: session_id_from_query(query)
             .or_else(|| session_filter_id_from_path(path))
-            .or_else(|| session_share_id_from_path(path))
-            .or_else(|| session_har_share_id_from_path(path)),
+            .or_else(|| session_share_id_from_path(path)),
     })
 }
 
@@ -784,10 +748,6 @@ fn session_filter_id_from_path(path: &str) -> Option<u64> {
 
 fn session_share_id_from_path(path: &str) -> Option<u64> {
     path.strip_prefix("/api/session-shares/")?.parse().ok()
-}
-
-fn session_har_share_id_from_path(path: &str) -> Option<u64> {
-    path.strip_prefix("/api/session-har-shares/")?.parse().ok()
 }
 
 fn session_id_from_query(query: Option<&str>) -> Option<u64> {
@@ -899,30 +859,6 @@ async fn get_session_share(
 async fn disable_session_share(
     State(manager): State<ManagerState>,
     Extension(shares): Extension<Arc<SessionShareService>>,
-    ApiPath(id): ApiPath<u64>,
-) -> ApiResult {
-    success(shares.disable(&manager, id).await?)
-}
-
-async fn enable_har_share(
-    State(manager): State<ManagerState>,
-    Extension(shares): Extension<Arc<HarShareService>>,
-    ApiJson(request): ApiJson<EnableHarShareRequest>,
-) -> ApiResult {
-    success(shares.enable(&manager, request).await?)
-}
-
-async fn get_har_share(
-    State(manager): State<ManagerState>,
-    Extension(shares): Extension<Arc<HarShareService>>,
-    ApiPath(id): ApiPath<u64>,
-) -> ApiResult {
-    success(shares.status(&manager, id).await?)
-}
-
-async fn disable_har_share(
-    State(manager): State<ManagerState>,
-    Extension(shares): Extension<Arc<HarShareService>>,
     ApiPath(id): ApiPath<u64>,
 ) -> ApiResult {
     success(shares.disable(&manager, id).await?)
@@ -1831,10 +1767,9 @@ impl ErrorCode {
         match self {
             Self::RedactionManagementDisabled | Self::MessageContentHidden => StatusCode::FORBIDDEN,
             Self::MessageContentUnavailable => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::BadRequest
-            | Self::InvalidAssetId
-            | Self::InvalidAssetFormat
-            | Self::UnsupportedExportFormat => StatusCode::BAD_REQUEST,
+            Self::BadRequest | Self::InvalidAssetId | Self::InvalidAssetFormat => {
+                StatusCode::BAD_REQUEST
+            }
             Self::InvalidApiKey | Self::InvalidUiToken => StatusCode::UNAUTHORIZED,
             Self::NotFound
             | Self::LogNotFound
@@ -2892,20 +2827,6 @@ mod tests {
                 Some(42),
             ),
             (
-                "POST",
-                "/api/session-har-shares",
-                None,
-                vec![HttpApiResource::SessionHarShare],
-                None,
-            ),
-            (
-                "DELETE",
-                "/api/session-har-shares/42",
-                None,
-                vec![HttpApiResource::SessionHarShare],
-                Some(42),
-            ),
-            (
                 "PUT",
                 "/api/column-scripts/host",
                 None,
@@ -3510,8 +3431,8 @@ mod tests {
     #[tokio::test]
     async fn share_summaries_are_read_only_and_permission_controlled() {
         use super::{
-            CreateSessionRequest, HarShareService, InProcessLocalRequest, ManagerState,
-            SessionShareService, router_with_changes_and_extra,
+            CreateSessionRequest, InProcessLocalRequest, ManagerState, SessionShareService,
+            router_with_changes_and_extra,
         };
         let directory = tempdir().unwrap();
         let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
@@ -3527,7 +3448,6 @@ mod tests {
             manager.clone(),
             allow_all(),
             shares,
-            HarShareService::new(),
             sender,
             axum::Router::new(),
         )
@@ -3571,8 +3491,8 @@ mod tests {
     #[tokio::test]
     async fn share_config_updates_are_authorized_and_notify() {
         use super::{
-            CreateSessionRequest, HarShareService, InProcessLocalRequest, ManagerState,
-            SessionShareService, router_with_changes_and_extra,
+            CreateSessionRequest, InProcessLocalRequest, ManagerState, SessionShareService,
+            router_with_changes_and_extra,
         };
         let directory = tempdir().unwrap();
         let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
@@ -3588,7 +3508,6 @@ mod tests {
             manager.clone(),
             allow_all(),
             shares.clone(),
-            HarShareService::new(),
             sender,
             axum::Router::new(),
         )
@@ -4353,62 +4272,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn har_share_management_routes_expose_frozen_state() {
-        let app_data = tempdir().unwrap();
-        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let session = runtime.create_session(NewSession::default()).unwrap();
+    async fn removed_har_routes_are_not_available() {
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/session-har-shares")
-                    .header("content-type", "application/json")
-                    .body(Body::from(format!(
-                        r#"{{"session_id":{},"scope":"filtered","log_ids":[]}}"#,
-                        session.id
-                    )))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["data"]["scope"], "filtered");
-        assert_eq!(body["data"]["log_count"], 0);
-        assert!(
-            body["data"]["token"]
-                .as_str()
-                .unwrap()
-                .starts_with("pcrab_har_")
-        );
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/session-har-shares/{}", session.id))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/api/session-har-shares/{}", session.id))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        for (method, path) in [
+            ("POST", "/api/session-har-shares"),
+            ("GET", "/api/session-har-shares/1"),
+            ("DELETE", "/api/session-har-shares/1"),
+            ("PUT", "/api/session-har-shares/1/redaction"),
+            ("GET", "/session.har?token=old"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                response.status(),
+                StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+            ));
+        }
     }
 
     #[tokio::test]
@@ -4805,18 +4695,6 @@ async fn delete_redaction_script(
 async fn set_session_share_redaction(
     State(manager): State<ManagerState>,
     Extension(shares): Extension<Arc<SessionShareService>>,
-    ApiPath(id): ApiPath<u64>,
-    ApiJson(binding): ApiJson<crate::dto::RedactionBinding>,
-) -> ApiResult {
-    success(
-        shares
-            .set_redaction(&manager, id, binding.redaction_script)
-            .await?,
-    )
-}
-async fn set_har_share_redaction(
-    State(manager): State<ManagerState>,
-    Extension(shares): Extension<Arc<HarShareService>>,
     ApiPath(id): ApiPath<u64>,
     ApiJson(binding): ApiJson<crate::dto::RedactionBinding>,
 ) -> ApiResult {

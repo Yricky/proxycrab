@@ -2,13 +2,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use futures::TryStreamExt;
-use proxy_crab_mgr::{
-    MitmManager, ProxyCrabManager,
-    dto::*,
-    har_share::{EnableHarShareRequest, HarShareScope, HarShareService},
-    session_share::SessionShareService,
-};
+use proxy_crab_mgr::{MitmManager, ProxyCrabManager, dto::*, session_share::SessionShareService};
 use proxy_crab_mitm::{
     ProxyCrab,
     log_buffer::LogBuffer,
@@ -363,96 +357,13 @@ async fn redaction_shared_snapshot_and_body_are_scoped_and_transformed() {
 }
 
 #[tokio::test]
-async fn redaction_har_download_transforms_derived_fields_and_pins_script() {
-    let f = Fixture::new(MASK).await;
-    let manager: Arc<dyn ProxyCrabManager> = f.manager.clone();
-    let shares = HarShareService::new();
-    let share = shares
-        .enable(
-            &manager,
-            EnableHarShareRequest {
-                redaction_script: Some("mask".into()),
-                session_id: f.sid,
-                scope: HarShareScope::All,
-                log_ids: vec![f.id],
-            },
-        )
-        .await
-        .unwrap();
-    let app = proxy_crab_mgr::har_share::router(manager, shares);
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/session.har?token={}", share.token.unwrap()))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    // The download keeps the version resolved before streaming starts.
-    f.manager
-        .update_redaction_script(
-            "mask".into(),
-            UpdateScriptRequest {
-                content: "error('changed')".into(),
-            },
-        )
-        .await
-        .unwrap();
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8(bytes.to_vec()).unwrap();
-    assert!(!text.contains("secret"));
-    let har: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let entry = &har["log"]["entries"][0];
-    assert_eq!(entry["request"]["queryString"][0]["value"], "hidden");
-    assert_eq!(entry["request"]["cookies"], serde_json::json!([]));
-    assert_eq!(entry["response"]["redirectURL"], "https://example.com/safe");
-    assert_eq!(entry["response"]["content"]["text"], "masked response");
-}
-
-#[tokio::test]
-async fn redaction_har_stops_after_error_and_never_emits_original_entry() {
-    let f = Fixture::new("error('secret')").await;
-    let reader = f.manager.reader(Some("mask"), "/session.har").unwrap();
-    let mut output = reader
-        .export_logs(ExportLogsRequest {
-            format: "har".into(),
-            session_id: Some(f.sid),
-            log_ids: Some(vec![f.id]),
-        })
-        .await
-        .unwrap()
-        .body;
-    assert!(output.try_next().await.unwrap().is_some());
-    assert_eq!(
-        output.try_next().await.unwrap_err().code,
-        ErrorCode::RedactionFailed
-    );
-    assert!(output.try_next().await.unwrap().is_none());
-}
-
-#[tokio::test]
-async fn forced_redaction_overrides_missing_and_unbound_page_and_har_policies() {
+async fn forced_redaction_overrides_missing_and_unbound_page_policies() {
     let f = Fixture::new(MASK).await;
     for binding in [None, Some("mask".to_string())] {
         let original: Arc<dyn ProxyCrabManager> = f.manager.clone();
         let pages = SessionShareService::new();
         let page = pages
             .enable_with_script(&original, f.sid, binding.clone())
-            .await
-            .unwrap();
-        let hars = HarShareService::new();
-        let har = hars
-            .enable(
-                &original,
-                EnableHarShareRequest {
-                    session_id: f.sid,
-                    scope: HarShareScope::All,
-                    log_ids: vec![f.id],
-                    redaction_script: binding,
-                },
-            )
             .await
             .unwrap();
         let forced: Arc<dyn ProxyCrabManager> = f
@@ -469,16 +380,10 @@ async fn forced_redaction_overrides_missing_and_unbound_page_and_har_policies() 
                 .await
                 .unwrap();
         }
-        for (app, uri) in [
-            (
-                proxy_crab_mgr::session_share::router(forced.clone(), pages),
-                format!("/share-api/logs/{}?token={}", f.id, page.token.unwrap()),
-            ),
-            (
-                proxy_crab_mgr::har_share::router(forced, hars),
-                format!("/session.har?token={}", har.token.unwrap()),
-            ),
-        ] {
+        for (app, uri) in [(
+            proxy_crab_mgr::session_share::router(forced.clone(), pages),
+            format!("/share-api/logs/{}?token={}", f.id, page.token.unwrap()),
+        )] {
             let response = app
                 .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
                 .await

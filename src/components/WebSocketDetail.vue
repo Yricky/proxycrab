@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { saveBytesFile } from "../api/save-file";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import {
   Io5ChevronBack,
@@ -486,10 +487,11 @@ async function copy() {
 async function download() {
   if (!body.value || !selected.value) return;
   try {
-    await backend.saveFile({
-      filename: `websocket-${props.detail.id}-${selected.value.side}-${selected.value.message.id}.${selected.value.message.type === "text" ? "txt" : "bin"}`,
-      data: new Uint8Array(body.value.bytes),
-    });
+    await saveBytesFile(
+      backend,
+      `websocket-${props.detail.id}-${selected.value.side}-${selected.value.message.id}.${selected.value.message.type === "text" ? "txt" : "bin"}`,
+      new Uint8Array(body.value.bytes),
+    );
   } catch (error) {
     reportError(error, "下载消息失败");
   }

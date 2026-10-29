@@ -1,3 +1,4 @@
+import type { FileWriter } from "./save-file";
 import type {
   ActiveSession,
   ApiActionView,
@@ -52,8 +53,6 @@ import type {
   SessionShareState,
   SessionSharesPayload,
   SessionShareConfig,
-  EnableHarShareRequest,
-  HarShareState,
   SessionInterceptorsPayload,
   SessionViewPayload,
   SystemLogEntry,
@@ -112,10 +111,10 @@ export interface Backend {
   subscribeApprovalChanges(handler: (count: number) => void): Promise<Unsubscribe>;
   openExternal(url: string): Promise<void>;
   /**
-   * 保存文件到本地：Tauri 弹系统保存对话框（用户取消时返回 false），
-   * Webview 环境直接触发浏览器下载。
+   * 创建本地文件 Writer：Tauri 弹保存对话框（用户取消时返回 null），
+   * 浏览器在 markAsFinish 时触发下载；markAsError 放弃保存。
    */
-  saveFile(request: SaveFileRequest): Promise<boolean>;
+  saveFile(request: SaveFileRequest): Promise<FileWriter | null>;
 
   // workspace & config
   getWorkspace(): Promise<WorkspacePaths>;
@@ -149,9 +148,6 @@ export interface Backend {
     sessionShareConfig?: SessionShareConfig,
   ): Promise<SessionShareState>;
   disableSessionShare(sessionId: number): Promise<SessionShareState>;
-  getHarShare(sessionId: number): Promise<HarShareState>;
-  enableHarShare(request: EnableHarShareRequest): Promise<HarShareState>;
-  disableHarShare(sessionId: number): Promise<HarShareState>;
 
   getWebSocketMessages?(
     sessionId: number,
@@ -213,7 +209,6 @@ export interface Backend {
     sessionId: number,
     redactionScript: string | null,
   ): Promise<SessionShareState>;
-  setHarShareRedaction?(sessionId: number, redactionScript: string | null): Promise<HarShareState>;
 
   // column scripts
   listColumnScripts(): Promise<Script[]>;

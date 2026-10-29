@@ -1,24 +1,20 @@
 #!/usr/bin/env node
-import { apiRequest, assertAllowedArgs, optionalString, parseArgs, printHelp, printJson, requiredInteger, requiredString, run } from "./lib/common.mjs";
+import { apiRequest, assertAllowedArgs, optionalString, parseArgs, printHelp, printJson, requiredInteger, run } from "./lib/common.mjs";
 run(async () => {
   const args = parseArgs();
   assertAllowedArgs(args, ["session", "kind", "name", "clear"]);
   if (args.help) {
-    printHelp("Usage: node share-redaction-set.mjs --session ID --kind page|har (--name SCRIPT | --clear true) [--base-url URL]\nBind or clear the redaction script of an already enabled share.");
+    printHelp("Usage: node share-redaction-set.mjs --session ID [--kind page] (--name SCRIPT | --clear true) [--base-url URL]\nBind or clear the redaction script of an already enabled Session share.");
     return;
   }
   const id = requiredInteger(args, "session", { min: 1 });
-  const kind = requiredString(args, "kind");
-  if (kind !== "page" && kind !== "har") throw new Error("--kind must be page or har");
+  if (args.kind !== undefined && args.kind !== "page") throw new Error("--kind only supports page; HAR link sharing has been removed");
   const name = optionalString(args, "name");
   const clear = optionalString(args, "clear");
   if ((name === undefined) === (clear === undefined) || (clear !== undefined && clear !== "true")) throw new Error("provide exactly one of --name or --clear true");
-  const current = kind === "page" ? await apiRequest(args, `/api/session-shares/${id}`) : null;
-  if (current && !current.enabled) throw new Error("share is not enabled");
-  const result = kind === "page"
-    ? await apiRequest(args, "/api/session-shares", { method: "POST", body: { session_id: id, session_share_config: { redaction_script: name ?? null, persistent: current.persistent ?? false } } })
-    : await apiRequest(args, `/api/${kind === "page" ? "session-shares" : "session-har-shares"}/${id}/redaction`, { method: "PUT", body: { redaction_script: name ?? null } });
-  // Share tokens are credentials; binding changes never print them.
+  const current = await apiRequest(args, `/api/session-shares/${id}`);
+  if (!current.enabled) throw new Error("share is not enabled");
+  const result = await apiRequest(args, "/api/session-shares", { method: "POST", body: { session_id: id, session_share_config: { redaction_script: name ?? null, persistent: current.persistent ?? false } } });
   const { token: _token, ...state } = result;
   printJson(state);
 });

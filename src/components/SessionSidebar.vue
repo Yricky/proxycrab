@@ -178,7 +178,7 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
   openContextMenu(event, [
     { label: "查看", icon: Io5Eye, action: () => logs.view(session.id) },
     {
-      label: "导出和分享",
+      label: "链接分享",
       icon: Io5Link,
       action: () => openSessionExportShare(session.id, session.name),
     },

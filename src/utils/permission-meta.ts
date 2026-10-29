@@ -19,7 +19,6 @@ export const ACTION_META: Readonly<Record<string, PermissionActionMeta>> = {
   "PUT /api/redaction-scripts/{name}": { label: "更新脱敏脚本", impact: "write" },
   "DELETE /api/redaction-scripts/{name}": { label: "删除脱敏脚本", impact: "write" },
   "PUT /api/session-shares/{id}/redaction": { label: "绑定分享脱敏脚本", impact: "write" },
-  "PUT /api/session-har-shares/{id}/redaction": { label: "绑定 HAR 脱敏脚本", impact: "write" },
   "GET /api/agents.md": { label: "读取 Agent 指令", impact: "read" },
   "GET /api/assets/{*asset_id}": { label: "读取资源", impact: "read" },
   "POST /api/assets/{*asset_id}": { label: "上传资源", impact: "write" },
@@ -40,9 +39,6 @@ export const ACTION_META: Readonly<Record<string, PermissionActionMeta>> = {
   "GET /api/session-shares": { label: "列出 Session 分享状态", impact: "read" },
   "GET /api/session-shares/{id}": { label: "查看 Session 分享状态", impact: "read" },
   "DELETE /api/session-shares/{id}": { label: "禁用 Session 分享", impact: "write" },
-  "POST /api/session-har-shares": { label: "启用 HAR 分享", impact: "write" },
-  "GET /api/session-har-shares/{id}": { label: "查看 HAR 分享状态", impact: "read" },
-  "DELETE /api/session-har-shares/{id}": { label: "禁用 HAR 分享", impact: "write" },
   "POST /api/logs/ids": { label: "查询日志 ID", impact: "write", redaction: true },
   "POST /api/logs/views": { label: "批量渲染日志", impact: "write", redaction: true },
   "GET /api/logs/{id}/websocket/messages": {
@@ -134,7 +130,6 @@ export const FUNCTION_GROUPS: FunctionGroupDef[] = [
     prefixes: [
       "/api/sessions",
       "/api/session-shares",
-      "/api/session-har-shares",
       "/api/archived-sessions",
       "/api/active-session",
     ],

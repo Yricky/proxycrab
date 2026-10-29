@@ -107,7 +107,6 @@ pub static API_ACTIONS: &[ApiAction] = &[
     action!("PUT", "/api/redaction-scripts/{name}", Approval),
     action!("DELETE", "/api/redaction-scripts/{name}", Approval),
     action!("PUT", "/api/session-shares/{id}/redaction", Approval),
-    action!("PUT", "/api/session-har-shares/{id}/redaction", Approval),
     action!("GET", "/api/agents.md", Allow),
     action!("GET", "/api/assets", Allow),
     action!("GET", "/api/assets/{*asset_id}", Allow),
@@ -130,9 +129,6 @@ pub static API_ACTIONS: &[ApiAction] = &[
     action!("GET", "/api/session-shares/{id}", Allow),
     action!("POST", "/api/session-shares", Approval),
     action!("DELETE", "/api/session-shares/{id}", Approval),
-    action!("GET", "/api/session-har-shares/{id}", Allow),
-    action!("POST", "/api/session-har-shares", Approval),
-    action!("DELETE", "/api/session-har-shares/{id}", Approval),
     action!("POST", "/api/logs/ids", Allow),
     action!("POST", "/api/logs/views", Allow),
     action!("GET", "/api/logs/{id}/body", Allow),
@@ -201,6 +197,10 @@ pub static API_ACTIONS: &[ApiAction] = &[
 ];
 
 pub const OBSOLETE_API_ACTION_IDS: &[&str] = &[
+    "PUT /api/session-har-shares/{id}/redaction",
+    "GET /api/session-har-shares/{id}",
+    "POST /api/session-har-shares",
+    "DELETE /api/session-har-shares/{id}",
     "GET /api/workspace",
     "PUT /api/workspace",
     "PUT /api/config",

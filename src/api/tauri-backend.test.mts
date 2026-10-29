@@ -110,3 +110,24 @@ test("desktop batch share summaries use their dedicated read IPC", async () => {
   expect(await createTauriBackend().listSessionShares!()).toEqual(payload);
   expect(invoke).toHaveBeenLastCalledWith("list_session_shares", undefined, undefined);
 });
+
+test("desktop writer opens before data, sends bounded raw chunks and commits", async () => {
+  vi.mocked(invoke).mockResolvedValueOnce("writer-7").mockResolvedValue(undefined);
+  const writer = await createTauriBackend().saveFile({ filename: "capture.har" });
+  expect(invoke).toHaveBeenCalledExactlyOnceWith(
+    "save_file_open",
+    { filename: "capture.har" },
+    undefined,
+  );
+  await writer!.append(new Uint8Array(256 * 1024 + 1));
+  const calls = vi.mocked(invoke).mock.calls.filter(([method]) => method === "save_file_append");
+  expect(calls.map(([, data]) => (data as Uint8Array).length)).toEqual([256 * 1024, 1]);
+  expect(calls[0]![2]).toEqual({ headers: { "x-proxycrab-writer": "writer-7" } });
+  await writer!.markAsFinish();
+  expect(invoke).toHaveBeenLastCalledWith("save_file_finish", { handle: "writer-7" }, undefined);
+});
+test("desktop picker cancellation returns no writer", async () => {
+  vi.mocked(invoke).mockResolvedValueOnce(null);
+  expect(await createTauriBackend().saveFile({ filename: "capture.har" })).toBeNull();
+  expect(invoke).toHaveBeenCalledTimes(1);
+});

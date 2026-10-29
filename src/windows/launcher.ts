@@ -1,3 +1,5 @@
+import HarExportWindow from "./HarExportWindow.vue";
+import type { LogsStore } from "../stores/logs";
 import { scriptTitle } from "../utils/script-label";
 // Central launchers for floating windows. Keeping component imports here
 // avoids spreading window ids / default sizes across the UI code.
@@ -223,7 +225,7 @@ export function openArchivedSessions(): void {
 
 export function openSessionExportShare(sessionId: number, sessionName: string): void {
   windowsStore.open(`session-export-share-${sessionId}`, {
-    title: `导出和分享 — ${sessionName}`,
+    title: `链接分享 — ${sessionName}`,
     component: SessionExportShareWindow,
     props: { sessionId },
     width: 700,
@@ -328,5 +330,18 @@ export function openRedactionManager(): void {
     component: RedactionManagerWindow,
     width: 1000,
     height: 600,
+  });
+}
+
+/** A single export window follows the list until the user starts a frozen export. */
+export function openHarExport(logs: LogsStore): void {
+  const backend = getBackend();
+  if (!backend.getLog || !backend.fetchBody || !backend.saveFile) return;
+  windowsStore.open("har-export", {
+    title: "导出 HAR",
+    component: HarExportWindow,
+    props: { logs },
+    width: 720,
+    height: 460,
   });
 }

@@ -34,3 +34,25 @@ test("replay capability remains required to open a window", () => {
   openReplay();
   expect(windowsStore.windows).toHaveLength(0);
 });
+
+test("HAR opens a progress window without starting export and requires read/save capabilities", async () => {
+  const { openHarExport } = await import("./launcher");
+  const api = backend as typeof backend & Record<string, unknown>;
+  const logs = { sessionId: 7, sortedIds: [9, 3], loading: false };
+  api.getLog = vi.fn();
+  api.fetchBody = vi.fn();
+  api.saveFile = vi.fn();
+  openHarExport(logs as any);
+  expect(windowsStore.windows).toHaveLength(1);
+  expect(windowsStore.windows[0]!.title).toBe("导出 HAR");
+  expect(windowsStore.windows[0]!.props.logs).toEqual(logs);
+  expect(api.getLog).not.toHaveBeenCalled();
+  expect(api.saveFile).not.toHaveBeenCalled();
+  windowsStore.windows = [];
+  api.saveFile = undefined;
+  openHarExport(logs as any);
+  expect(windowsStore.windows).toHaveLength(0);
+  delete api.getLog;
+  delete api.fetchBody;
+  delete api.saveFile;
+});

@@ -1,7 +1,5 @@
-use std::{collections::BTreeMap, pin::Pin};
+use std::collections::BTreeMap;
 
-use bytes::Bytes;
-use futures::Stream;
 use proxy_crab_mitm::{
     bypass::BypassEntry,
     model::{
@@ -35,7 +33,6 @@ pub enum ErrorCode {
     AssetPathConflict,
     InvalidAssetId,
     InvalidAssetFormat,
-    UnsupportedExportFormat,
     NotAcceptableEncoding,
     BodyTooLarge,
     BodyDecodeFailed,
@@ -72,7 +69,6 @@ impl ErrorCode {
             Self::AssetPathConflict => "asset_path_conflict",
             Self::InvalidAssetId => "invalid_asset_id",
             Self::InvalidAssetFormat => "invalid_asset_format",
-            Self::UnsupportedExportFormat => "unsupported_export_format",
             Self::NotAcceptableEncoding => "not_acceptable_encoding",
             Self::BodyTooLarge => "body_too_large",
             Self::BodyDecodeFailed => "body_decode_failed",
@@ -306,31 +302,6 @@ pub struct LogViewsPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ExportLogsRequest {
-    pub format: String,
-    pub session_id: Option<u64>,
-    pub log_ids: Option<Vec<u64>>,
-}
-
-pub struct LogExport {
-    pub session_id: u64,
-    pub filename: String,
-    pub body: Pin<Box<dyn Stream<Item = ManagerResult<Bytes>> + Send>>,
-}
-
-impl std::fmt::Debug for LogExport {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("LogExport")
-            .field("session_id", &self.session_id)
-            .field("filename", &self.filename)
-            .field("body", &"<stream>")
-            .finish()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionViewPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redaction_revision: Option<String>,
@@ -546,7 +517,6 @@ pub enum HttpApiResource {
     ArchivedSessions,
     ActiveSession,
     SessionShare,
-    SessionHarShare,
     SessionView,
     ColumnScripts,
     FilterScripts,

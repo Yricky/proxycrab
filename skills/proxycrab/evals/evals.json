@@ -193,8 +193,8 @@
     },
     {
       "id": 33,
-      "prompt": "Check whether ProxyCrab Session 3 has an active HAR download share, then disable it without exposing or using its browser token as an Agent credential.",
-      "expected_output": "The agent calls permission-controlled GET /api/session-har-shares/3, does not print any pcrab_har_ token, then calls DELETE /api/session-har-shares/3, handles approval or denial normally, and reports only that the frozen HAR share was disabled and its link immediately revoked.",
+      "prompt": "Explain how to export the current ProxyCrab list as HAR from desktop or a shared Session page, including Body read failures. Is a HAR sharing token or new share API needed?",
+      "expected_output": "Uses the export button beside sweep to open a progress/log window, then starts export inside it. Freezes all matching IDs and displayed order; retains failed/in-progress HTTP entries with missing-response status 0. Uses existing authorized detail/Body APIs. Body errors become diagnostic text with warnings while continuing. Desktop Writer appends chunks and commits/aborts temporary files; browser buffers Blob parts. Closing cancels. No backend HAR generator, HAR tokens, HAR share routes, or new share API. Never bypasses redaction.",
       "files": []
     },
     {
@@ -261,7 +261,7 @@
     },
     {
       "id": 44,
-      "prompt": "Create a read-time redaction script that hides Authorization and cookies, and bind it to the enabled Session 7 page share. Preserve the HAR binding and live capture behavior.",
+      "prompt": "Create a read-time redaction script that hides Authorization and cookies, and bind it to the enabled Session 7 page share. Preserve persistence and live capture behavior.",
       "expected_output": "Uses context.req.header/context.resp.header loaded guards and handles URI-only req.headers=nil, creates the redaction library entry, updates only /api/session-shares/7/redaction, does not print the share token, and explains that modifications history is out of scope.",
       "files": []
     },
@@ -342,13 +342,13 @@
     {
       "id": 58,
       "prompt": "Enable a persistent ProxyCrab Session 3 share with redaction mask, change it to temporary without rotating its token, and explain restart, revocation, and HAR behavior.",
-      "expected_output": "Uses existing permission-controlled POST /api/session-shares with session_id:3 and session_share_config:{redaction_script:\"mask\",persistent:true}, then the same POST with persistent:false and the preserved redaction_script. No new persistence route or IPC command. Reads persistent in state, verifies same token without reporting it, explains optional omitted config preserves enabled state, config replaces both settings, persistent entries restore with token/binding, disable removes disk state, re-enable rotates token, and HAR remains temporary.",
+      "expected_output": "Uses existing permission-controlled POST /api/session-shares with session_id:3 and session_share_config:{redaction_script:\"mask\",persistent:true}, then the same POST with persistent:false and the preserved redaction_script. No new persistence route or IPC command. Reads persistent in state, verifies same token without reporting it, explains optional omitted config preserves enabled state, config replaces both settings, persistent entries restore with token/binding, disable removes disk state, re-enable rotates token, and HAR export is now a local frontend action without a sharing token.",
       "files": []
     },
     {
       "id": 59,
-      "prompt": "List all currently shared ProxyCrab Sessions, distinguish temporary and persistent sharing, and explain why an archived or HAR-only Session is absent. Do not retrieve tokens.",
-      "expected_output": "Calls session-share-list.mjs or permission-controlled GET /api/session-shares once, consumes shares:[{session_id,persistent}], and joins names from the Session list if needed. Only enabled non-archived page shares are returned; HAR state and token/redaction bindings are excluded. Does not issue N per-Session status queries or equate denied/failed reads with all shares disabled. Recognizes default allow and restored enabled Sessions reappearing.",
+      "prompt": "List all currently shared ProxyCrab Sessions, distinguish temporary and persistent sharing, and explain why an archived Session without an enabled page share is absent. Do not retrieve tokens.",
+      "expected_output": "Calls session-share-list.mjs or permission-controlled GET /api/session-shares once, consumes shares:[{session_id,persistent}], and joins names from the Session list if needed. Only enabled non-archived page shares are returned; Token/redaction bindings are excluded; HAR link sharing has been removed. Does not issue N per-Session status queries or equate denied/failed reads with all shares disabled. Recognizes default allow and restored enabled Sessions reappearing.",
       "files": []
     }
   ]

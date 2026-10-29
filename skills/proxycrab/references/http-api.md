@@ -85,10 +85,6 @@ process; optional persistent shares restore the same token after restart while s
 below, without a management key. Share tokens are not accepted by `/api/*` and are not
 `PROXYCRAB_API_KEY` values or Bearer credentials.
 
-HAR sharing uses an independent `pcrab_har_…` browser token for a frozen set of capture IDs. It is
-also process-local, is accepted only by `/session.har`, and must not be copied into Agent commands,
-logs, reports, or `Authorization`.
-
 The service binds to every IPv4 interface. Public CLI UI and Session-share assets can load remotely,
 but a remote Host or Origin on `/api/*` requires Bearer authorization. Remote CORS preflight is
 accepted only when it requests `Authorization`; the subsequent request still passes normal token
@@ -379,7 +375,7 @@ uses ordinary management authentication. It returns only currently non-archived 
 ```
 
 Presence means sharing is enabled; disabled, archived, and deleted Sessions are omitted. No token,
-redaction binding, or HAR-share state is returned. Restored Sessions reappear if sharing remains
+redaction binding, or unrelated state is returned. Restored Sessions reappear if sharing remains
 enabled. Ordering is unspecified. Use `scripts/session-share-list.mjs` to inspect summaries.
 The desktop equivalent is `list_session_shares`; both backends expose optional `listSessionShares()`.
 List indicators consume this batch rather than querying each Session. A denied/failed read does not
@@ -482,37 +478,35 @@ replay, export, breakpoint control, or `/agents.md` routes. Share reads honor ef
 restore the same token on restart. Report these errors rather than falling back to management
 credentials; report `redaction_failed` without changing the policy.
 
-### Session HAR shares
+### Frontend HAR export
 
-HAR download sharing is independent from the read-only browser share. Use
-`GET /api/session-har-shares/{id}` to inspect its state, `POST /api/session-har-shares` to enable it,
-and `DELETE /api/session-har-shares/{id}` to disable it. The defaults are `allow`, `approval`, and
-`approval`, respectively. Enabling accepts one Session, a display scope, and the exact capture IDs
-to freeze:
+The export button beside the sweep action opens a floating window. Its Export HAR button freezes
+all matching list IDs and their displayed order, then reads details and bodies through existing
+Backend methods (`getLog`, `fetchBody`). No HAR export or sharing HTTP endpoint exists. The shared
+Session page uses the existing scoped read APIs and exports their policy-filtered data.
 
-```json
-{
-  "session_id": 3,
-  "scope": "filtered",
-  "log_ids": [1041, 1042]
-}
-```
+Entries are generated one at a time. Failed and unfinished ordinary HTTP records are retained;
+missing responses have status 0 and `_proxyCrab` carries outcome/error metadata. WebSocket connection
+rows and synthetic TLS CONNECT records are skipped; HTTP upgrade handshakes remain. Body read
+failures (including decode and size errors) become text explaining the failure and `bodyErrors`
+metadata, with warnings in the export window. Unavailable details produce a failed placeholder
+entry. Empty selections produce valid HAR. Body bytes are read separately rather than reusing JSON
+previews, preserving formatting; binary content uses Base64 (`encoding` for responses, `_encoding`
+for request postData). Detailed timings/header sizes are unknown (-1).
 
-`scope` is `all` or `filtered`; it describes the owner UI selection and does not cause a later
-query. IDs are deduplicated and frozen for the lifetime of the share. Re-enabling is idempotent and
-keeps the original scope, IDs, and token until the share is disabled. The enabled state includes
-`scope`, `log_count`, and a sensitive process-local `pcrab_har_…` token; disabled state has
-`log_count: 0` and no token.
+`saveFile({filename})` returns `FileWriter | null`; null means the desktop picker was cancelled.
+The Writer offers async `append(bytes)`, `markAsFinish()`, and `markAsError()`. Desktop chunks use
+binary IPC (at most 256 KiB each) and a same-directory temporary file; finish publishes the file,
+error discards it. Failed writes cannot be committed. Browser writers buffer Blob parts and start
+a download only on finish; this acknowledges download initiation, not completion on disk. Abort
+never starts a download. No new management or share HTTP route is needed for writing.
 
-The owner UI builds `http://<local-ip>:<api-port>/session.har?token=…`. A GET downloads
-`proxycrab-session-<id>.har` directly. Only successful captures with responses are emitted;
-in-progress, failed, and synthetic TLS CONNECT records in the frozen selection are skipped. An
-empty selection downloads a valid empty HAR. The download contains complete stored headers and
-bodies, applying the HAR Token’s bound redaction script when present. Treat the URL as a credential. Disabling, process exit, or
-archiving the Session makes the link unavailable. This browser token is not an Agent Bearer
-credential. HAR JSON is streamed one capture entry at a time and has no `Content-Length`; a body or
-storage failure after HTTP 200 interrupts the download and leaves a partial file that must be
-discarded.
+Progress includes processed/exported/skipped records and warning counts. The window retains the
+latest 1000 log lines; cancel/close abandons an unfinished export. Each Body still uses the existing
+read interface (explicit 1 GiB stored-size ceiling); a single entry is buffered, and the browser
+fallback buffers the final file. Export does not provide an atomic snapshot of changing captures
+or pin one redaction revision across separate reads. Original content is never used as a fallback
+for policy-denied reads. Exported files may contain sensitive data from the authorized read view.
 
 ### `PUT /api/sessions/{id}`
 
@@ -1345,7 +1339,7 @@ Routing and capture lifecycle details:
 ## Redaction library and bindings
 
 The desktop and CLI owner UI expose a global redaction script library and one script selector for
-each local identity/API key, Session share and HAR share. Normal capture and forwarding are unaffected.
+each local identity/API key, Session share. Normal capture and forwarding are unaffected.
 
 | Endpoint | Contract |
 | --- | --- |
@@ -1355,14 +1349,13 @@ each local identity/API key, Session share and HAR share. Normal capture and for
 | `PUT /api/redaction-scripts/{name}` | Replace `{ "content": "..." }` (approval) |
 | `DELETE /api/redaction-scripts/{name}` | Delete script; existing bindings remain and fail closed (approval) |
 | `PUT /api/session-shares/{id}/redaction` | Set `{ "redaction_script": "mask" }`, or null to unbind an enabled share (approval) |
-| `PUT /api/session-har-shares/{id}/redaction` | Same for enabled HAR shares (approval) |
 
 The headless CLI accepts `--redaction-script /path/to/mask.lua` (with or without `run`).
 It reads and compiles the file before starting the HTTP API or proxy; a missing/unreadable file or
 invalid Lua aborts startup. The source is pinned in memory for the process lifetime, is not added to
 the workspace library, and changes require a restart. This policy overrides identity and share
 bindings, including missing bindings and the UI access token (`UIKey`). It applies to the existing
-redaction-supported reads marked in the permissions UI and to Session/HAR share reads; it does not
+redaction-supported reads marked in the permissions UI and to Session share reads; it does not
 expand the redaction data contract below or change capture/forwarding.
 
 In this mode, all five library operations above reject authorized calls with HTTP 403,
@@ -1372,9 +1365,8 @@ library script also fails its library validation while management is disabled. D
 another identity or treat this error as an upsert conflict.
 
 `POST /api/session-shares` accepts redaction and persistence together in `session_share_config`,
-including updates to enabled shares. `POST /api/session-har-shares` accepts optional `redaction_script`
-on initial creation and remains idempotent when already enabled; use the binding endpoint to
-change its policy. Share-state responses include nullable `redaction_script`.
+including updates to enabled shares without rotating tokens. Share-state responses include
+nullable `redaction_script`.
 Owner-only CLI `PUT /ui-api/permissions/identities/{id}/redaction` accepts the same binding object;
 the desktop command is `set_http_identity_redaction`. Identity permission reads include the binding,
 and permission-table updates preserve it. Without a startup redaction script, the CLI UI access
@@ -1382,7 +1374,7 @@ token and ordinary Tauri IPC reads are unbound. Desktop Body previews (`fetch_bo
 downloads (`download_body`) use trusted Tauri IPC and do not use the local HTTP identity binding.
 
 Redaction applies to log details, body reads, snapshot details/bodies, URL/custom-column view cells,
-URI/custom filters, filter debugging, breakpoint details/bodies/summary URLs, bypass URLs and HAR.
+URI/custom filters, filter debugging, breakpoint details/bodies/summary URLs, bypass URLs. Frontend HAR uses those same authorized reads.
 It does not sanitize interceptor modification history, script source, tags, system logs or Asset
 raw downloads. Column output is not post-processed; column scripts receive sanitized inputs.
 
@@ -1391,8 +1383,8 @@ Every read resolves a script version. Missing/failed bound scripts return HTTP 5
 is lazy and failures are propagated even if a downstream column/filter catches the body error.
 Bound view requests re-render requested rows even when `updated_at` is unchanged. Session-view
 responses include `redaction_revision` when bound; share clients invalidate membership, rows and
-open detail/body views when it changes. HAR downloads execute the pinned version while streaming,
-and abort on a failing entry without emitting that entry's original contents.
+open detail/body views when it changes. Frontend HAR reads resolve policies independently per
+request and replace failed reads with diagnostics; they never retry with original data.
 
 See the Lua reference's **Read-time redaction scripts** section for the three-state context contract.
 

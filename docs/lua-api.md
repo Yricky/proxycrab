@@ -318,8 +318,7 @@ Interceptor changes made before a runtime error remain applied. The error is sto
 
 ## Read-time redaction scripts
 
-Redaction is a read policy bound to a local management identity, ordinary API key, Session share,
-or HAR share. An unbound identity receives the original data. A bound missing/broken script causes
+Redaction is a read policy bound to a local management identity, ordinary API key, or Session share. An unbound identity receives the original data. A bound missing/broken script causes
 `redaction_failed`; there is no fallback to original content. Forwarding, live interceptor execution,
 and persisted captures never run redaction. Interceptor modification history and executed source are
 outside this policy; historical snapshots and their bodies are redacted independently.
@@ -344,8 +343,7 @@ if resp and context.resp.body == "loaded" then
 end
 ```
 
-`context.api` is the route template (for example `/api/logs/{id}`, `/share-api/logs/views`, or
-`/session.har`), without IDs or query tokens. `context.req.header`, `context.req.body`,
+`context.api` is the route template (for example `/api/logs/{id}` or `/share-api/logs/views`), without IDs or query tokens. `context.req.header`, `context.req.body`,
 `context.resp.header`, and `context.resp.body` each contain `unloaded`, `loaded`, or `redacted`.
 Header state includes request URI and message metadata. Body availability implies header
 availability. Unloaded fields are nil. URI built-in filtering and URI-only summaries provide only
@@ -367,10 +365,10 @@ errors and size-limit errors fail the read. Binary `as_string/as_json` returns n
 body with a string is supported without reading its original bytes.
 
 Each API request compiles its selected script once and isolates globals between records/stages.
-States and output are scoped to a record/snapshot in that request. HAR pins the script version for
-the download and redacts entries before deriving query strings, cookies, redirect URLs and body
-fields. A failing HAR entry terminates the stream; earlier successfully redacted entries may already
-have been sent. No cross-request or cross-snapshot result cache is used.
+States and output are scoped to a record/snapshot in that request. Frontend HAR derives query
+strings, cookies, redirects and Body fields from these authorized reads. Each request resolves its
+own policy version; failed reads become export diagnostics without fallback to original data.
+No cross-request or cross-snapshot result cache is used.
 
 ## WebSocket interception callbacks
 

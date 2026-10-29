@@ -1,4 +1,5 @@
 mod body_download;
+mod file_writer;
 mod http_permissions;
 mod share_ui;
 mod skill_manager;
@@ -23,7 +24,6 @@ use proxy_crab_mgr::{
         ScriptRequest, SessionInterceptorsPayload, SessionViewPayload, SessionsPayload,
         SystemLogsQuery, UpdateAgentsPresetRequest, UpdateScriptRequest, UpdateSessionRequest,
     },
-    har_share::{EnableHarShareRequest, HarShareService, HarShareState},
     http::{HttpServerHandle, start_http_server_with_routes},
     session_share::{
         SessionShareConfig, SessionShareService, SessionShareState, SessionSharesPayload,
@@ -60,7 +60,6 @@ struct BackendState {
     http: Mutex<Option<HttpServerHandle>>,
     http_error: RwLock<Option<String>>,
     shares: Arc<SessionShareService>,
-    har_shares: Arc<HarShareService>,
     skill_manager: SkillManager,
     workspace: WorkspaceSelection,
 }
@@ -98,30 +97,6 @@ async fn disable_session_share(
     session_id: u64,
 ) -> Result<SessionShareState, ManagerError> {
     state.shares.disable(&state.manager(), session_id).await
-}
-
-#[tauri::command]
-async fn get_har_share(
-    state: State<'_, BackendState>,
-    session_id: u64,
-) -> Result<HarShareState, ManagerError> {
-    state.har_shares.status(&state.manager(), session_id).await
-}
-
-#[tauri::command]
-async fn enable_har_share(
-    state: State<'_, BackendState>,
-    request: EnableHarShareRequest,
-) -> Result<HarShareState, ManagerError> {
-    state.har_shares.enable(&state.manager(), request).await
-}
-
-#[tauri::command]
-async fn disable_har_share(
-    state: State<'_, BackendState>,
-    session_id: u64,
-) -> Result<HarShareState, ManagerError> {
-    state.har_shares.disable(&state.manager(), session_id).await
 }
 
 impl BackendState {
@@ -770,50 +745,6 @@ async fn regenerate_certificate(
     state.manager().regenerate_certificate().await
 }
 
-/// 保存文件：弹系统保存对话框并写入内容；用户取消时返回 false。
-/// 请求体为 raw bytes（application/octet-stream），文件名经 URL 编码后放在 header。
-#[tauri::command]
-async fn save_file(
-    window: tauri::WebviewWindow,
-    request: tauri::ipc::Request<'_>,
-) -> Result<bool, ManagerError> {
-    use tauri::ipc::InvokeBody;
-
-    let InvokeBody::Raw(data) = request.body() else {
-        return Err(ManagerError::bad_request("保存文件请求体必须是二进制数据"));
-    };
-    let data = data.clone();
-    let filename = request
-        .headers()
-        .get("x-proxycrab-filename")
-        .and_then(|value| value.to_str().ok())
-        .map(|value| {
-            percent_encoding::percent_decode_str(value)
-                .decode_utf8_lossy()
-                .into_owned()
-        })
-        .ok_or_else(|| ManagerError::bad_request("保存文件请求缺少文件名"))?;
-    let selected = tauri::async_runtime::spawn_blocking(move || {
-        window
-            .dialog()
-            .file()
-            .set_parent(&window)
-            .set_file_name(&filename)
-            .blocking_save_file()
-    })
-    .await
-    .map_err(|error| ManagerError::internal(format!("打开保存对话框失败：{error}")))?;
-    let Some(selected) = selected else {
-        return Ok(false);
-    };
-    let path = selected
-        .into_path()
-        .map_err(|error| ManagerError::bad_request(format!("无法访问所选路径：{error}")))?;
-    std::fs::write(&path, &data)
-        .map_err(|error| ManagerError::internal(format!("写入文件失败：{error}")))?;
-    Ok(true)
-}
-
 #[tauri::command]
 async fn get_system_logs(
     state: State<'_, BackendState>,
@@ -1049,6 +980,21 @@ fn setup_global_menu(app: &tauri::App) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .manage(file_writer::FileWriters::default())
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                webview
+                    .state::<file_writer::FileWriters>()
+                    .cleanup(webview.label());
+            }
+        })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                window
+                    .state::<file_writer::FileWriters>()
+                    .cleanup(window.label());
+            }
+        })
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1091,7 +1037,6 @@ pub fn run() {
                 }
             });
             let shares = SessionShareService::open(&workspace_path)?;
-            let har_shares = HarShareService::new();
             let share_assets = app.asset_resolver();
             let approval_handle = app.handle().clone();
             let permissions = HttpPermissionService::open(
@@ -1107,23 +1052,15 @@ pub fn run() {
             let (http, http_error) = if let Some(permissions) = permissions.as_ref() {
                 let share_manager = manager.clone();
                 let share_service = shares.clone();
-                let har_share_manager = manager.clone();
-                let har_share_service = har_shares.clone();
                 match tauri::async_runtime::block_on(start_http_server_with_routes(
                     manager.clone(),
                     permissions.clone(),
                     shares.clone(),
-                    har_shares.clone(),
                     move |_| {
-                        share_ui::router(share_assets)
-                            .merge(proxy_crab_mgr::session_share::router(
-                                share_manager,
-                                share_service,
-                            ))
-                            .merge(proxy_crab_mgr::har_share::router(
-                                har_share_manager,
-                                har_share_service,
-                            ))
+                        share_ui::router(share_assets).merge(proxy_crab_mgr::session_share::router(
+                            share_manager,
+                            share_service,
+                        ))
                     },
                 )) {
                     Ok(handle) => (Some(handle), None),
@@ -1165,7 +1102,6 @@ pub fn run() {
                 http: Mutex::new(http),
                 http_error: RwLock::new(http_error),
                 shares,
-                har_shares,
                 skill_manager,
                 workspace,
             });
@@ -1231,7 +1167,6 @@ pub fn run() {
             delete_redaction_script,
             set_http_identity_redaction,
             set_session_share_redaction,
-            set_har_share_redaction,
             list_filter_scripts,
             create_filter_script,
             get_filter_script,
@@ -1260,7 +1195,10 @@ pub fn run() {
             save_clash_config,
             reset_clash_config,
             regenerate_certificate,
-            save_file,
+            file_writer::save_file_open,
+            file_writer::save_file_append,
+            file_writer::save_file_finish,
+            file_writer::save_file_abort,
             body_download::fetch_body,
             body_download::download_body,
             get_system_logs,
@@ -1275,9 +1213,6 @@ pub fn run() {
             get_session_share,
             enable_session_share,
             disable_session_share,
-            get_har_share,
-            enable_har_share,
-            disable_har_share,
             get_http_permission_catalog,
             list_http_permission_identities,
             get_http_identity_permissions,
@@ -1396,17 +1331,6 @@ async fn set_session_share_redaction(
 ) -> Result<SessionShareState, ManagerError> {
     state
         .shares
-        .set_redaction(&state.manager(), session_id, redaction_script)
-        .await
-}
-#[tauri::command]
-async fn set_har_share_redaction(
-    state: State<'_, BackendState>,
-    session_id: u64,
-    redaction_script: Option<String>,
-) -> Result<HarShareState, ManagerError> {
-    state
-        .har_shares
         .set_redaction(&state.manager(), session_id, redaction_script)
         .await
 }

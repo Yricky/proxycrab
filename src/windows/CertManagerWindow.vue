@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { saveBytesFile } from "../api/save-file";
 import QRCode from "qrcode";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Io5Copy, Io5Download, Io5Refresh, Io5Warning } from "vue-icons-plus/io5";
@@ -149,10 +150,7 @@ async function openDownloadUrl(): Promise<void> {
 async function downloadPem(): Promise<void> {
   if (!pem.value) return;
   try {
-    await backend.saveFile({
-      filename: "proxycrab-ca.pem",
-      data: new TextEncoder().encode(pem.value),
-    });
+    await saveBytesFile(backend, "proxycrab-ca.pem", new TextEncoder().encode(pem.value));
   } catch (error) {
     reportError(error, "保存证书失败");
   }

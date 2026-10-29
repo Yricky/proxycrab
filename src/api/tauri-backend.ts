@@ -1,3 +1,4 @@
+import { createFileWriter } from "./save-file";
 import { invoke } from "@tauri-apps/api/core";
 import type { InvokeArgs, InvokeOptions } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -19,8 +20,6 @@ import type {
   DebugFilterScriptRequest,
   ExecuteTemporaryScriptRequest,
   ExtendBreakpointRequest,
-  EnableHarShareRequest,
-  HarShareState,
   InterceptorCreateRequest,
   InterceptorContent,
   InterceptorKind,
@@ -123,12 +122,21 @@ export function createTauriBackend(): Backend {
       return unlisten;
     },
     openExternal: (url) => openUrl(url),
-    // 整个 payload 为 Uint8Array 时 IPC 走 application/octet-stream 原始字节传输，
-    // 文件名经 URL 编码后通过 header 传递。
-    saveFile: (request: SaveFileRequest) =>
-      call("save_file", request.data, {
-        headers: { "x-proxycrab-filename": encodeURIComponent(request.filename) },
-      }),
+    saveFile: async ({ filename }: SaveFileRequest) => {
+      const handle = await call<string | null>("save_file_open", { filename });
+      if (handle === null) return null;
+      return createFileWriter({
+        async append(data) {
+          for (let offset = 0; offset < data.length; offset += 256 * 1024) {
+            await call("save_file_append", data.subarray(offset, offset + 256 * 1024), {
+              headers: { "x-proxycrab-writer": handle },
+            });
+          }
+        },
+        markAsFinish: () => call<void>("save_file_finish", { handle }),
+        markAsError: () => call<void>("save_file_abort", { handle }),
+      });
+    },
     downloadBody: (target, side, filename) => call("download_body", { target, side, filename }),
 
     getWorkspace: () => call("get_workspace"),
@@ -169,10 +177,6 @@ export function createTauriBackend(): Backend {
       }),
     disableSessionShare: (sessionId: number) =>
       call<SessionShareState>("disable_session_share", { sessionId }),
-    getHarShare: (sessionId: number) => call<HarShareState>("get_har_share", { sessionId }),
-    enableHarShare: (request: EnableHarShareRequest) =>
-      call<HarShareState>("enable_har_share", { request }),
-    disableHarShare: (sessionId: number) => call<HarShareState>("disable_har_share", { sessionId }),
 
     getLogIds: (request: LogIdsRequest) => call("get_log_ids", { request }),
     getLogViews: (request: LogViewsRequest) => call("get_log_views", { request }),
@@ -221,8 +225,6 @@ export function createTauriBackend(): Backend {
       call("set_http_identity_redaction", { id, redactionScript }),
     setSessionShareRedaction: (sessionId, redactionScript) =>
       call("set_session_share_redaction", { sessionId, redactionScript }),
-    setHarShareRedaction: (sessionId, redactionScript) =>
-      call("set_har_share_redaction", { sessionId, redactionScript }),
 
     listColumnScripts: () => call("list_column_scripts"),
     createColumnScript: (request: ScriptRequest) => call("create_column_script", { request }),
