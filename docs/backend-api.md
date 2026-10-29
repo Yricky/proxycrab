@@ -116,12 +116,29 @@ the browser bundle, which may be hosted remotely.
 
 ### Read-only Session sharing
 
-Both trusted targets can inspect, enable, and disable one in-memory share per Session. Tauri uses
-`get_session_share`, `enable_session_share`, and `disable_session_share`; HTTP clients, including the
-CLI browser, use permission-controlled `GET /api/session-shares/{id}`, `POST /api/session-shares`,
-and `DELETE /api/session-shares/{id}`. Enable accepts only `session_id`, is idempotent, and returns
-the same cleartext `pcrab_share_…` token while enabled. The token and its SHA-256 digest are retained
-only in process memory so the owner UI can reopen the same links; disable removes them immediately.
+`GET /api/session-shares` (default `allow`) and desktop `list_session_shares` return
+`{shares:[{session_id,persistent}]}` for enabled, non-archived Session page shares. Summaries exclude
+tokens, redaction bindings, and HAR state. The frontend reads this once alongside Session lists,
+then refreshes it on share/Session lifecycle changes. A small link icon precedes shared Session
+names, with temporary/persistent tooltips. Local share changes update the cache immediately;
+delayed reads cannot overwrite newer changes. Failed reads preserve last known summaries.
+
+Both trusted targets can inspect, enable, and disable one share per Session. Tauri uses
+`get_session_share`, `enable_session_share`, and `disable_session_share`; HTTP clients use
+permission-controlled `GET /api/session-shares/{id}`, `POST /api/session-shares`, and
+`DELETE /api/session-shares/{id}`. Enable takes `session_id` and optional `session_share_config`
+containing `redaction_script` and `persistent`. An omitted config preserves an enabled share, or
+creates a temporary share with no binding. A supplied config replaces both settings without
+rotating the token. The frontend groups these as `enableSessionShare(sessionId,
+{redactionScript, persistent})`; no additional route or IPC command is needed.
+
+Shares default to temporary. Persistent entries save their plaintext token and redaction binding in
+`<workspace>/session-shares.json` and automatically restore enabled on desktop/CLI restart. Status
+includes `persistent`; disabled state returns false. Mode changes keep the same token, disabling
+removes the durable entry, and re-enabling generates a new token. Atomic private file replacement
+precedes in-memory updates; corrupt files surface startup failures. Permanent Session deletion
+cleans up its share record. See the [Skill HTTP reference](../skills/proxycrab/references/http-api.md#post-apisession-shares)
+for the complete request/response contract.
 
 The browser bundle serves `/session?token=…`, plus an optional `id` query parameter that focuses the
 matching record (scrolls the list to that row and opens its inline detail panel). The shared frontend
@@ -141,10 +158,9 @@ these limits as missing optional `Backend` methods: the share Backend omits `rep
 writes, approvals, and local-IP lookup, so the UI hides the send-request entry, replay buttons, and
 editable column controls instead of offering actions the surface would reject. Column widths stay
 adjustable in each viewer's own page; the overrides live only in memory and are never written back.
-Disable or process
-restart invalidates it. An archived Session is unavailable; restoring it in the same process
-preserves its still-enabled share. The token is not accepted by `/api/*` and is not an Agent
-credential.
+Disabling invalidates the token; restart invalidates only temporary shares. An archived Session
+is unavailable, and restoring it preserves its enabled share. Agents may use the token on
+`/share-api/*`; it is not accepted as a management credential on `/api/*`.
 
 ## HTTP changes and desktop UI synchronization
 
@@ -986,8 +1002,9 @@ library script also fails its library validation while management is disabled. D
 another identity or treat this error as an upsert conflict. Without the flag, existing behavior is
 unchanged.
 
-`POST /api/session-shares` and `POST /api/session-har-shares` accept optional `redaction_script`
-on initial creation. Re-enabling an enabled share remains idempotent; use the binding endpoint to
+`POST /api/session-shares` groups redaction and persistence in `session_share_config` and updates
+enabled shares without rotating tokens. `POST /api/session-har-shares` accepts optional
+`redaction_script` on initial creation and remains idempotent; use the binding endpoint to
 change its policy. Share-state responses include nullable `redaction_script`.
 Owner-only CLI `PUT /ui-api/permissions/identities/{id}/redaction` accepts the same binding object;
 the desktop command is `set_http_identity_redaction`. Identity permission reads include the binding,

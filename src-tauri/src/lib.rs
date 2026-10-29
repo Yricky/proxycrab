@@ -25,7 +25,9 @@ use proxy_crab_mgr::{
     },
     har_share::{EnableHarShareRequest, HarShareService, HarShareState},
     http::{HttpServerHandle, start_http_server_with_routes},
-    session_share::{SessionShareService, SessionShareState},
+    session_share::{
+        SessionShareConfig, SessionShareService, SessionShareState, SessionSharesPayload,
+    },
     skill_install,
 };
 use proxy_crab_mitm::{
@@ -64,6 +66,13 @@ struct BackendState {
 }
 
 #[tauri::command]
+async fn list_session_shares(
+    state: State<'_, BackendState>,
+) -> Result<SessionSharesPayload, ManagerError> {
+    state.shares.list(&state.manager()).await
+}
+
+#[tauri::command]
 async fn get_session_share(
     state: State<'_, BackendState>,
     session_id: u64,
@@ -75,11 +84,11 @@ async fn get_session_share(
 async fn enable_session_share(
     state: State<'_, BackendState>,
     session_id: u64,
-    redaction_script: Option<String>,
+    session_share_config: Option<SessionShareConfig>,
 ) -> Result<SessionShareState, ManagerError> {
     state
         .shares
-        .enable_with_script(&state.manager(), session_id, redaction_script)
+        .enable_with_config(&state.manager(), session_id, session_share_config)
         .await
 }
 
@@ -319,7 +328,10 @@ async fn delete_archived_session(
     state: State<'_, BackendState>,
     id: u64,
 ) -> Result<(), ManagerError> {
-    state.manager().delete_archived_session(id).await
+    state
+        .shares
+        .delete_archived_session(&state.manager(), id)
+        .await
 }
 
 #[tauri::command]
@@ -1078,7 +1090,7 @@ pub fn run() {
                     }
                 }
             });
-            let shares = SessionShareService::new();
+            let shares = SessionShareService::open(&workspace_path)?;
             let har_shares = HarShareService::new();
             let share_assets = app.asset_resolver();
             let approval_handle = app.handle().clone();
@@ -1259,6 +1271,7 @@ pub fn run() {
             clear_bypass_entries,
             get_http_service_error,
             get_http_service_status,
+            list_session_shares,
             get_session_share,
             enable_session_share,
             disable_session_share,

@@ -1,20 +1,58 @@
 import { reactive } from "vue";
 import { runtimeBackend as backend } from "../api/runtime-backend";
-import type { SessionMetadata } from "../api/types";
+import type { SessionMetadata, SessionShareState, SessionShareSummary } from "../api/types";
 import { sweepCreateRequest } from "../utils/session-sweep";
 import { reportError } from "./app";
+
+let shareRevision = 0;
+let shareReadSequence = 0;
+const shareWrites = new Map<number, number>();
 
 export const sessionsStore = reactive({
   sessions: [] as SessionMetadata[],
   archivedSessions: [] as SessionMetadata[],
   activeSessionId: null as number | null,
   loading: false,
+  shares: {} as Record<number, SessionShareSummary>,
+
+  async refreshShares(): Promise<void> {
+    const sequence = ++shareReadSequence;
+    const revision = shareRevision;
+    if (!backend.listSessionShares) return;
+    try {
+      const { shares } = await backend.listSessionShares();
+      if (sequence !== shareReadSequence) return;
+      const next: Record<number, SessionShareSummary> = Object.fromEntries(
+        shares.map((share) => [share.session_id, share]),
+      );
+      for (const [id, changedAt] of shareWrites) {
+        if (changedAt <= revision) {
+          shareWrites.delete(id);
+        } else if (this.shares[id]) next[id] = this.shares[id];
+        else delete next[id];
+      }
+      this.shares = next;
+    } catch (error) {
+      if (sequence === shareReadSequence) reportError(error, "读取会话分享状态失败");
+    }
+  },
+
+  updateShare(state: SessionShareState): void {
+    shareWrites.set(state.session_id, ++shareRevision);
+    if (state.enabled)
+      this.shares[state.session_id] = {
+        session_id: state.session_id,
+        persistent: state.persistent,
+      };
+    else delete this.shares[state.session_id];
+  },
 
   async refresh(): Promise<void> {
     try {
       const [sessionList, archivedSessions] = await Promise.all([
         backend.listSessions(),
         backend.listArchivedSessions(),
+        this.refreshShares(),
       ]);
       this.sessions = sessionList.sessions;
       this.archivedSessions = archivedSessions;
@@ -30,6 +68,7 @@ export const sessionsStore = reactive({
       const [sessionList, archivedSessions] = await Promise.all([
         backend.listSessions(),
         backend.listArchivedSessions(),
+        this.refreshShares(),
       ]);
       this.sessions = sessionList.sessions;
       this.archivedSessions = archivedSessions;
@@ -46,6 +85,7 @@ export const sessionsStore = reactive({
       const [sessionList, archivedSessions] = await Promise.all([
         backend.listSessions(),
         backend.listArchivedSessions(),
+        this.refreshShares(),
       ]);
       this.sessions = sessionList.sessions;
       this.archivedSessions = archivedSessions;

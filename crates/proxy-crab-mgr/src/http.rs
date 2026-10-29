@@ -324,7 +324,10 @@ fn router_with_changes_and_extra(
         )
         .route("/api/active-session", put(replace_active_session))
         .route("/api/sessions/{id}", put(update_session))
-        .route("/api/session-shares", post(enable_session_share))
+        .route(
+            "/api/session-shares",
+            get(list_session_shares).post(enable_session_share),
+        )
         .route(
             "/api/session-shares/{id}",
             get(get_session_share).delete(disable_session_share),
@@ -873,9 +876,16 @@ async fn enable_session_share(
 ) -> ApiResult {
     success(
         shares
-            .enable_with_script(&manager, request.session_id, request.redaction_script)
+            .enable_with_config(&manager, request.session_id, request.session_share_config)
             .await?,
     )
+}
+
+async fn list_session_shares(
+    State(manager): State<ManagerState>,
+    Extension(shares): Extension<Arc<SessionShareService>>,
+) -> ApiResult {
+    success(shares.list(&manager).await?)
 }
 
 async fn get_session_share(
@@ -934,9 +944,10 @@ async fn restore_session(
 
 async fn delete_archived_session(
     State(manager): State<ManagerState>,
+    Extension(shares): Extension<Arc<SessionShareService>>,
     ApiPath(id): ApiPath<u64>,
 ) -> ApiResult {
-    manager.delete_archived_session(id).await?;
+    shares.delete_archived_session(&manager, id).await?;
     success(json!({}))
 }
 
@@ -3494,6 +3505,166 @@ mod tests {
         let change = receiver.try_recv().unwrap();
         assert_eq!(change.resources, vec![HttpApiResource::SessionView]);
         assert_eq!(change.session_id, Some(session.id));
+    }
+
+    #[tokio::test]
+    async fn share_summaries_are_read_only_and_permission_controlled() {
+        use super::{
+            CreateSessionRequest, HarShareService, InProcessLocalRequest, ManagerState,
+            SessionShareService, router_with_changes_and_extra,
+        };
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager: ManagerState = MitmManager::new(runtime);
+        let session = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        let shares = SessionShareService::open(directory.path()).unwrap();
+        shares.enable(&manager, session.id).await.unwrap();
+        let (sender, mut receiver) = tokio::sync::broadcast::channel(16);
+        let app = router_with_changes_and_extra(
+            manager.clone(),
+            allow_all(),
+            shares,
+            HarShareService::new(),
+            sender,
+            axum::Router::new(),
+        )
+        .layer(axum::Extension(InProcessLocalRequest));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/session-shares")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(
+            value,
+            json!({"ok":true,"data":{"shares":[{"session_id":session.id,"persistent":false}]}})
+        );
+        assert!(receiver.try_recv().is_err());
+        let (permissions, recorded) = recording_permissions(Some(PermissionDenied::forbidden(
+            "permission_denied",
+            "denied",
+        )));
+        let denied = router(manager, permissions);
+        let response = denied
+            .oneshot(
+                Request::builder()
+                    .uri("/api/session-shares")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(recorded.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn share_config_updates_are_authorized_and_notify() {
+        use super::{
+            CreateSessionRequest, HarShareService, InProcessLocalRequest, ManagerState,
+            SessionShareService, router_with_changes_and_extra,
+        };
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager: ManagerState = MitmManager::new(runtime);
+        let session = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        let shares = SessionShareService::open(directory.path()).unwrap();
+        let (sender, _) = tokio::sync::broadcast::channel(16);
+        let mut receiver = sender.subscribe();
+        let app = router_with_changes_and_extra(
+            manager.clone(),
+            allow_all(),
+            shares.clone(),
+            HarShareService::new(),
+            sender,
+            axum::Router::new(),
+        )
+        .layer(axum::Extension(InProcessLocalRequest));
+        let obsolete = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/session-shares")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"session_id": session.id, "redaction_script": "mask"}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(obsolete.status(), StatusCode::BAD_REQUEST);
+        assert!(!shares.status(&manager, session.id).await.unwrap().enabled);
+        assert!(receiver.try_recv().is_err());
+        let enabled = shares.enable(&manager, session.id).await.unwrap();
+        let path = "/api/session-shares".to_string();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"session_id":session.id,"session_share_config":{"persistent":true,"redaction_script":null}}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["data"]["persistent"], true);
+        assert_eq!(body["data"]["token"].as_str(), enabled.token.as_deref());
+        let change = receiver.try_recv().unwrap();
+        assert_eq!(change.resources, vec![HttpApiResource::SessionShare]);
+        assert_eq!(change.session_id, None);
+        assert!(
+            SessionShareService::open(directory.path())
+                .unwrap()
+                .status(&manager, session.id)
+                .await
+                .unwrap()
+                .persistent
+        );
+        let (permissions, recorded) = recording_permissions(Some(PermissionDenied::forbidden(
+            "permission_denied",
+            "denied",
+        )));
+        let denied = router(manager.clone(), permissions);
+        let response = denied
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"session_id":session.id,"session_share_config":{"persistent":false,"redaction_script":null}}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!recorded.lock().unwrap().is_empty());
+        assert!(
+            shares
+                .status(&manager, session.id)
+                .await
+                .unwrap()
+                .persistent
+        );
     }
 
     #[tokio::test]

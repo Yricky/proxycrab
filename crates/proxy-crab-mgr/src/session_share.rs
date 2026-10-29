@@ -1,5 +1,8 @@
 use std::{
     collections::BTreeMap,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path as FilePath, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -32,20 +35,40 @@ use crate::{
     http::body_response,
 };
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct EnableSessionShareRequest {
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionShareConfig {
     #[serde(default)]
+    pub persistent: bool,
     pub redaction_script: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnableSessionShareRequest {
     pub session_id: u64,
+    pub session_share_config: Option<SessionShareConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SessionShareState {
+    pub persistent: bool,
     pub redaction_script: Option<String>,
     pub session_id: u64,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SessionShareSummary {
+    pub session_id: u64,
+    pub persistent: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SessionSharesPayload {
+    pub shares: Vec<SessionShareSummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -104,6 +127,7 @@ fn scope_proxy_status(
 
 #[derive(Clone)]
 struct ShareEntry {
+    persistent: bool,
     redaction_script: Option<String>,
     token: String,
     digest: [u8; 32],
@@ -115,14 +139,152 @@ struct ShareScope {
     session_id: u64,
 }
 
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
+struct StoredShare {
+    session_id: u64,
+    token: String,
+    redaction_script: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ShareFile {
+    version: u32,
+    shares: Vec<StoredShare>,
+}
+
 #[derive(Default)]
 pub struct SessionShareService {
+    path: Option<PathBuf>,
     entries: Mutex<BTreeMap<u64, ShareEntry>>,
 }
 
 impl SessionShareService {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    pub fn open(workspace: &FilePath) -> Result<Arc<Self>, ManagerError> {
+        let path = workspace.join("session-shares.json");
+        let mut entries = BTreeMap::new();
+        match fs::read(&path) {
+            Ok(bytes) => {
+                let stored: ShareFile = serde_json::from_slice(&bytes)
+                    .map_err(|_| ManagerError::internal("invalid session-shares.json"))?;
+                if stored.version != 1 {
+                    return Err(ManagerError::internal(
+                        "unsupported session-shares.json version",
+                    ));
+                }
+                for share in stored.shares {
+                    let valid_token = share
+                        .token
+                        .strip_prefix("pcrab_share_")
+                        .and_then(|value| URL_SAFE_NO_PAD.decode(value).ok())
+                        .is_some_and(|bytes| bytes.len() == 32);
+                    if !valid_token
+                        || entries.contains_key(&share.session_id)
+                        || entries
+                            .values()
+                            .any(|entry: &ShareEntry| entry.token == share.token)
+                    {
+                        return Err(ManagerError::internal("invalid session-shares.json entry"));
+                    }
+                    entries.insert(
+                        share.session_id,
+                        ShareEntry {
+                            persistent: true,
+                            digest: Sha256::digest(share.token.as_bytes()).into(),
+                            token: share.token,
+                            redaction_script: share.redaction_script,
+                        },
+                    );
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(ManagerError::internal(format!(
+                    "read session-shares.json: {error}"
+                )));
+            }
+        }
+        Ok(Arc::new(Self {
+            path: Some(path),
+            entries: Mutex::new(entries),
+        }))
+    }
+
+    // Persist a proposed state before publishing it to readers. Temporary entries never reach disk.
+    fn commit(
+        &self,
+        entries: &mut BTreeMap<u64, ShareEntry>,
+        next: BTreeMap<u64, ShareEntry>,
+    ) -> Result<(), ManagerError> {
+        let persisted = |entries: &BTreeMap<u64, ShareEntry>| {
+            entries
+                .iter()
+                .filter(|(_, entry)| entry.persistent)
+                .map(|(id, entry)| StoredShare {
+                    session_id: *id,
+                    token: entry.token.clone(),
+                    redaction_script: entry.redaction_script.clone(),
+                })
+                .collect::<Vec<_>>()
+        };
+        let stored = ShareFile {
+            version: 1,
+            shares: persisted(&next),
+        };
+        if persisted(entries) != stored.shares {
+            let path = self.path.as_ref().ok_or_else(|| {
+                ManagerError::internal("persistent sharing requires a workspace store")
+            })?;
+            let bytes = serde_json::to_vec_pretty(&stored)
+                .map_err(|_| ManagerError::internal("encode session shares"))?;
+            let temporary = path.with_extension("tmp");
+            let result = (|| -> std::io::Result<()> {
+                let mut options = OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let mut file = options.open(&temporary)?;
+                file.write_all(&bytes)?;
+                file.sync_all()?;
+                fs::rename(&temporary, path)?;
+                #[cfg(unix)]
+                fs::File::open(path.parent().expect("share path has a parent"))?.sync_all()?;
+                Ok(())
+            })();
+            if let Err(error) = result {
+                let _ = fs::remove_file(&temporary);
+                return Err(ManagerError::internal(format!(
+                    "save session-shares.json: {error}"
+                )));
+            }
+        }
+        *entries = next;
+        Ok(())
+    }
+
+    pub async fn delete_archived_session(
+        &self,
+        manager: &Arc<dyn ProxyCrabManager>,
+        session_id: u64,
+    ) -> Result<(), ManagerError> {
+        manager.delete_archived_session(session_id).await?;
+        self.remove(session_id)
+    }
+
+    pub fn remove(&self, session_id: u64) -> Result<(), ManagerError> {
+        let mut entries = self.entries.lock().expect("session share lock poisoned");
+        if !entries.contains_key(&session_id) {
+            return Ok(());
+        }
+        let mut next = entries.clone();
+        next.remove(&session_id);
+        self.commit(&mut entries, next)
     }
 
     async fn ensure_session(
@@ -142,6 +304,24 @@ impl SessionShareService {
         }
     }
 
+    pub async fn list(
+        &self,
+        manager: &Arc<dyn ProxyCrabManager>,
+    ) -> Result<SessionSharesPayload, ManagerError> {
+        let sessions = manager.sessions().await?.sessions;
+        let entries = self.entries.lock().expect("session share lock poisoned");
+        let shares = sessions
+            .iter()
+            .filter_map(|session| {
+                entries.get(&session.id).map(|entry| SessionShareSummary {
+                    session_id: session.id,
+                    persistent: entry.persistent,
+                })
+            })
+            .collect();
+        Ok(SessionSharesPayload { shares })
+    }
+
     pub async fn status(
         &self,
         manager: &Arc<dyn ProxyCrabManager>,
@@ -151,12 +331,14 @@ impl SessionShareService {
         let entries = self.entries.lock().expect("session share lock poisoned");
         Ok(match entries.get(&session_id) {
             Some(entry) => SessionShareState {
+                persistent: entry.persistent,
                 redaction_script: entry.redaction_script.clone(),
                 session_id,
                 enabled: true,
                 token: Some(entry.token.clone()),
             },
             None => SessionShareState {
+                persistent: false,
                 redaction_script: None,
                 session_id,
                 enabled: false,
@@ -170,7 +352,7 @@ impl SessionShareService {
         manager: &Arc<dyn ProxyCrabManager>,
         session_id: u64,
     ) -> Result<SessionShareState, ManagerError> {
-        self.enable_with_script(manager, session_id, None).await
+        self.enable_with_config(manager, session_id, None).await
     }
 
     pub async fn enable_with_script(
@@ -179,36 +361,62 @@ impl SessionShareService {
         session_id: u64,
         redaction_script: Option<String>,
     ) -> Result<SessionShareState, ManagerError> {
+        self.enable_with_config(
+            manager,
+            session_id,
+            Some(SessionShareConfig {
+                redaction_script,
+                persistent: false,
+            }),
+        )
+        .await
+    }
+
+    pub async fn enable_with_config(
+        &self,
+        manager: &Arc<dyn ProxyCrabManager>,
+        session_id: u64,
+        config: Option<SessionShareConfig>,
+    ) -> Result<SessionShareState, ManagerError> {
         Self::ensure_session(manager, session_id).await?;
-        if let Some(name) = &redaction_script {
+        if let Some(name) = config
+            .as_ref()
+            .and_then(|config| config.redaction_script.as_ref())
+        {
             manager.redaction_script(name.clone()).await?;
         }
         let mut entries = self.entries.lock().expect("session share lock poisoned");
-        if let Some(entry) = entries.get(&session_id) {
-            return Ok(SessionShareState {
-                redaction_script: entry.redaction_script.clone(),
-                session_id,
-                enabled: true,
-                token: Some(entry.token.clone()),
-            });
-        }
-
-        let mut bytes = [0_u8; 32];
-        getrandom::fill(&mut bytes)
-            .map_err(|error| ManagerError::internal(format!("generate share token: {error}")))?;
-        let token = format!("pcrab_share_{}", URL_SAFE_NO_PAD.encode(bytes));
-        let entry = ShareEntry {
-            redaction_script: redaction_script.clone(),
-            token: token.clone(),
-            digest: Sha256::digest(token.as_bytes()).into(),
+        let mut entry = match entries.get(&session_id) {
+            Some(entry) => entry.clone(),
+            None => {
+                let mut bytes = [0_u8; 32];
+                getrandom::fill(&mut bytes).map_err(|error| {
+                    ManagerError::internal(format!("generate share token: {error}"))
+                })?;
+                let token = format!("pcrab_share_{}", URL_SAFE_NO_PAD.encode(bytes));
+                ShareEntry {
+                    persistent: false,
+                    redaction_script: None,
+                    digest: Sha256::digest(token.as_bytes()).into(),
+                    token,
+                }
+            }
         };
-        entries.insert(session_id, entry);
-        Ok(SessionShareState {
-            redaction_script,
+        if let Some(config) = config {
+            entry.persistent = config.persistent;
+            entry.redaction_script = config.redaction_script;
+        }
+        let result = SessionShareState {
+            persistent: entry.persistent,
+            redaction_script: entry.redaction_script.clone(),
             session_id,
             enabled: true,
-            token: Some(token),
-        })
+            token: Some(entry.token.clone()),
+        };
+        let mut next = entries.clone();
+        next.insert(session_id, entry);
+        self.commit(&mut entries, next)?;
+        Ok(result)
     }
 
     pub async fn set_redaction(
@@ -222,10 +430,11 @@ impl SessionShareService {
         }
         {
             let mut entries = self.entries.lock().expect("session share lock poisoned");
-            entries
-                .get_mut(&session_id)
+            let mut next = entries.clone();
+            next.get_mut(&session_id)
                 .ok_or_else(|| ManagerError::not_found("share is not enabled"))?
                 .redaction_script = script;
+            self.commit(&mut entries, next)?;
         }
         self.status(manager, session_id).await
     }
@@ -236,11 +445,9 @@ impl SessionShareService {
         session_id: u64,
     ) -> Result<SessionShareState, ManagerError> {
         Self::ensure_session(manager, session_id).await?;
-        self.entries
-            .lock()
-            .expect("session share lock poisoned")
-            .remove(&session_id);
+        self.remove(session_id)?;
         Ok(SessionShareState {
+            persistent: false,
             redaction_script: None,
             session_id,
             enabled: false,
@@ -725,6 +932,397 @@ mod tests {
     };
 
     #[tokio::test]
+    async fn share_summary_excludes_credentials_disabled_and_archived_sessions() {
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
+        let first = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        let second = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        let service = SessionShareService::open(directory.path()).unwrap();
+        assert!(service.list(&manager).await.unwrap().shares.is_empty());
+        service.enable(&manager, first.id).await.unwrap();
+        service
+            .enable_with_config(
+                &manager,
+                second.id,
+                Some(SessionShareConfig {
+                    persistent: true,
+                    redaction_script: None,
+                }),
+            )
+            .await
+            .unwrap();
+        let payload = service.list(&manager).await.unwrap();
+        let value = serde_json::to_value(&payload).unwrap();
+        assert_eq!(payload.shares.len(), 2);
+        for share in value["shares"].as_array().unwrap() {
+            assert_eq!(share.as_object().unwrap().len(), 2);
+            assert!(share.get("session_id").is_some());
+            assert!(share.get("persistent").is_some());
+        }
+        service.disable(&manager, first.id).await.unwrap();
+        manager.archive_session(second.id).await.unwrap();
+        assert!(service.list(&manager).await.unwrap().shares.is_empty());
+        manager.restore_session(second.id).await.unwrap();
+        assert_eq!(
+            service.list(&manager).await.unwrap().shares,
+            vec![SessionShareSummary {
+                session_id: second.id,
+                persistent: true
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn persistent_shares_restore_convert_and_revoke() {
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
+        let session = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        let service = SessionShareService::open(directory.path()).unwrap();
+        let temporary = service.enable(&manager, session.id).await.unwrap();
+        assert!(!temporary.persistent);
+        assert!(
+            !SessionShareService::open(directory.path())
+                .unwrap()
+                .status(&manager, session.id)
+                .await
+                .unwrap()
+                .enabled
+        );
+        let persistent = service
+            .enable_with_config(
+                &manager,
+                session.id,
+                Some(SessionShareConfig {
+                    persistent: true,
+                    redaction_script: None,
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(persistent.token, temporary.token);
+        assert!(persistent.persistent);
+        let restored = SessionShareService::open(directory.path()).unwrap();
+        assert_eq!(
+            restored.status(&manager, session.id).await.unwrap(),
+            persistent
+        );
+        // Repeated enable must not reset persistence or rotate the token.
+        assert_eq!(
+            restored.enable(&manager, session.id).await.unwrap(),
+            persistent
+        );
+        restored
+            .enable_with_config(
+                &manager,
+                session.id,
+                Some(SessionShareConfig {
+                    persistent: false,
+                    redaction_script: None,
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            restored
+                .authenticate(temporary.token.as_deref().unwrap())
+                .is_ok()
+        );
+        assert!(
+            !SessionShareService::open(directory.path())
+                .unwrap()
+                .status(&manager, session.id)
+                .await
+                .unwrap()
+                .enabled
+        );
+        restored
+            .enable_with_config(
+                &manager,
+                session.id,
+                Some(SessionShareConfig {
+                    persistent: true,
+                    redaction_script: None,
+                }),
+            )
+            .await
+            .unwrap();
+        restored.disable(&manager, session.id).await.unwrap();
+        let reopened = SessionShareService::open(directory.path()).unwrap();
+        assert!(
+            reopened
+                .authenticate(temporary.token.as_deref().unwrap())
+                .is_err()
+        );
+        let fresh = reopened
+            .enable_with_config(
+                &manager,
+                session.id,
+                Some(SessionShareConfig {
+                    redaction_script: None,
+                    persistent: true,
+                }),
+            )
+            .await
+            .unwrap();
+        assert_ne!(fresh.token, temporary.token);
+        reopened.remove(session.id).unwrap();
+        assert!(
+            !SessionShareService::open(directory.path())
+                .unwrap()
+                .status(&manager, session.id)
+                .await
+                .unwrap()
+                .enabled
+        );
+    }
+
+    #[tokio::test]
+    async fn persistence_write_failure_preserves_memory_and_disk() {
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
+        let session = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        let service = SessionShareService::open(directory.path()).unwrap();
+        let enabled = service
+            .enable_with_config(
+                &manager,
+                session.id,
+                Some(SessionShareConfig {
+                    redaction_script: None,
+                    persistent: true,
+                }),
+            )
+            .await
+            .unwrap();
+        let path = directory.path().join("session-shares.json");
+        let disk = std::fs::read(&path).unwrap();
+        // A directory at the staging path deterministically prevents atomic replacement.
+        std::fs::create_dir(path.with_extension("tmp")).unwrap();
+        manager
+            .create_redaction_script(ScriptRequest {
+                name: "mask".into(),
+                content: "return true".into(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            service
+                .set_redaction(&manager, session.id, Some("mask".into()))
+                .await
+                .is_err()
+        );
+        let other = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        assert!(
+            service
+                .enable_with_config(
+                    &manager,
+                    other.id,
+                    Some(SessionShareConfig {
+                        redaction_script: None,
+                        persistent: true
+                    })
+                )
+                .await
+                .is_err()
+        );
+        assert!(!service.status(&manager, other.id).await.unwrap().enabled);
+        assert!(service.disable(&manager, session.id).await.is_err());
+        assert!(
+            service
+                .enable_with_config(
+                    &manager,
+                    session.id,
+                    Some(SessionShareConfig {
+                        persistent: false,
+                        redaction_script: None
+                    })
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(service.status(&manager, session.id).await.unwrap(), enabled);
+        assert_eq!(std::fs::read(path).unwrap(), disk);
+    }
+
+    #[tokio::test]
+    async fn persistent_redaction_and_archive_lifecycle() {
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
+        let session = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        manager
+            .create_redaction_script(ScriptRequest {
+                name: "mask".into(),
+                content: "return true".into(),
+            })
+            .await
+            .unwrap();
+        let service = SessionShareService::open(directory.path()).unwrap();
+        let enabled = service
+            .enable_with_config(
+                &manager,
+                session.id,
+                Some(SessionShareConfig {
+                    redaction_script: Some("mask".into()),
+                    persistent: true,
+                }),
+            )
+            .await
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(directory.path().join("session-shares.json"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        let restored = SessionShareService::open(directory.path()).unwrap();
+        assert_eq!(
+            restored.status(&manager, session.id).await.unwrap(),
+            enabled
+        );
+        restored
+            .set_redaction(&manager, session.id, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            SessionShareService::open(directory.path())
+                .unwrap()
+                .status(&manager, session.id)
+                .await
+                .unwrap()
+                .redaction_script,
+            None
+        );
+        restored
+            .set_redaction(&manager, session.id, Some("mask".into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            SessionShareService::open(directory.path())
+                .unwrap()
+                .status(&manager, session.id)
+                .await
+                .unwrap()
+                .redaction_script
+                .as_deref(),
+            Some("mask")
+        );
+        // A rejected delete of a live Session must not revoke its share.
+        assert!(
+            restored
+                .delete_archived_session(&manager, session.id)
+                .await
+                .is_err()
+        );
+        assert!(
+            restored
+                .authenticate(enabled.token.as_deref().unwrap())
+                .is_ok()
+        );
+        manager.archive_session(session.id).await.unwrap();
+        let restored = SessionShareService::open(directory.path()).unwrap();
+        let app = router(manager.clone(), restored.clone());
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/share-api/bootstrap?token={}",
+                        enabled.token.as_deref().unwrap()
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        manager.restore_session(session.id).await.unwrap();
+        assert_eq!(
+            restored.status(&manager, session.id).await.unwrap(),
+            enabled
+        );
+        manager.archive_session(session.id).await.unwrap();
+        let blocked = directory
+            .path()
+            .join("sessions_archived")
+            .join(format!(".deleted-{}", session.id));
+        fs::create_dir_all(&blocked).unwrap();
+        fs::write(blocked.join("block"), "block").unwrap();
+        assert!(
+            restored
+                .delete_archived_session(&manager, session.id)
+                .await
+                .is_err()
+        );
+        assert!(
+            restored
+                .authenticate(enabled.token.as_deref().unwrap())
+                .is_ok()
+        );
+        fs::remove_dir_all(blocked).unwrap();
+        restored
+            .delete_archived_session(&manager, session.id)
+            .await
+            .unwrap();
+        let disk = SessionShareService::open(directory.path()).unwrap();
+        assert!(
+            disk.authenticate(enabled.token.as_deref().unwrap())
+                .is_err()
+        );
+        assert!(manager.archived_sessions().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn share_config_rejects_obsolete_or_misspelled_fields() {
+        for value in [
+            json!({"session_id":3,"redaction_script":"mask"}),
+            json!({"session_id":3,"persistent":true}),
+            json!({"session_id":3,"session_share_config":{"redactionScript":"mask","persistent":true}}),
+        ] {
+            assert!(serde_json::from_value::<EnableSessionShareRequest>(value).is_err());
+        }
+        let request: EnableSessionShareRequest = serde_json::from_value(json!({"session_id":3,"session_share_config":{"redaction_script":"mask","persistent":true}})).unwrap();
+        let config = request.session_share_config.unwrap();
+        assert!(config.persistent);
+        assert_eq!(config.redaction_script.as_deref(), Some("mask"));
+    }
+
+    #[test]
+    fn corrupt_persistent_shares_are_not_overwritten() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("session-shares.json");
+        std::fs::write(&path, b"broken").unwrap();
+        assert!(SessionShareService::open(directory.path()).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), b"broken");
+    }
+
+    #[tokio::test]
     async fn shared_body_selects_snapshot_and_preserves_session_scope_and_limits() {
         use proxy_crab_mitm::{
             model::{
@@ -905,6 +1503,7 @@ mod tests {
         assert_eq!(
             service.status(&manager, session.id).await.unwrap(),
             SessionShareState {
+                persistent: false,
                 redaction_script: None,
                 session_id: session.id,
                 enabled: false,
@@ -923,6 +1522,7 @@ mod tests {
         assert_eq!(
             service.disable(&manager, session.id).await.unwrap(),
             SessionShareState {
+                persistent: false,
                 redaction_script: None,
                 session_id: session.id,
                 enabled: false,

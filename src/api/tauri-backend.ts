@@ -43,6 +43,8 @@ import type {
   RoutingSelection,
   SaveFileRequest,
   SessionShareState,
+  SessionSharesPayload,
+  SessionShareConfig,
   ScriptRequest,
   SystemLogsQuery,
   UpdateScriptRequest,
@@ -154,10 +156,17 @@ export function createTauriBackend(): Backend {
     restoreSession: (id: number) => call("restore_session", { id }),
     deleteArchivedSession: (id: number) => call("delete_archived_session", { id }),
     replaceActiveSession: (active: ActiveSession) => call("replace_active_session", { active }),
+    listSessionShares: () => call<SessionSharesPayload>("list_session_shares"),
     getSessionShare: (sessionId: number) =>
       call<SessionShareState>("get_session_share", { sessionId }),
-    enableSessionShare: (sessionId: number, redactionScript?: string | null) =>
-      call<SessionShareState>("enable_session_share", { sessionId, redactionScript }),
+    enableSessionShare: (sessionId: number, sessionShareConfig?: SessionShareConfig) =>
+      call<SessionShareState>("enable_session_share", {
+        sessionId,
+        sessionShareConfig: sessionShareConfig && {
+          redaction_script: sessionShareConfig.redactionScript,
+          persistent: sessionShareConfig.persistent,
+        },
+      }),
     disableSessionShare: (sessionId: number) =>
       call<SessionShareState>("disable_session_share", { sessionId }),
     getHarShare: (sessionId: number) => call<HarShareState>("get_har_share", { sessionId }),

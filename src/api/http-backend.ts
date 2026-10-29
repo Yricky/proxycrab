@@ -36,6 +36,8 @@ import type {
   ReplayResult,
   RoutingSelection,
   SessionShareState,
+  SessionSharesPayload,
+  SessionShareConfig,
   ScriptRequest,
   SystemLogsQuery,
   UpdateAgentsPresetRequest,
@@ -188,12 +190,19 @@ export function createHttpBackend(
     deleteArchivedSession: (id: number) => call(`/api/archived-sessions/${id}`, json("DELETE")),
     replaceActiveSession: (active: ActiveSession) =>
       call("/api/active-session", json("PUT", active)),
+    listSessionShares: () => call<SessionSharesPayload>("/api/session-shares"),
     getSessionShare: (sessionId: number) =>
       call<SessionShareState>(`/api/session-shares/${sessionId}`),
-    enableSessionShare: (sessionId: number, redactionScript?: string | null) =>
+    enableSessionShare: (sessionId: number, sessionShareConfig?: SessionShareConfig) =>
       call<SessionShareState>(
         "/api/session-shares",
-        json("POST", { session_id: sessionId, redaction_script: redactionScript }),
+        json("POST", {
+          session_id: sessionId,
+          session_share_config: sessionShareConfig && {
+            redaction_script: sessionShareConfig.redactionScript,
+            persistent: sessionShareConfig.persistent,
+          },
+        }),
       ),
     disableSessionShare: (sessionId: number) =>
       call<SessionShareState>(`/api/session-shares/${sessionId}`, json("DELETE")),

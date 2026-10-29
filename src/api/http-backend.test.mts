@@ -39,3 +39,48 @@ test("certificate reads public PEM from the backend without management credentia
   fetchMock.mockRejectedValueOnce(new TypeError("connection closed"));
   await expect(backend.getCertificate()).rejects.toMatchObject({ code: "network_error" });
 });
+
+test("Session sharing creates and updates config through the same POST", async () => {
+  const state = { session_id: 7, enabled: true, persistent: true, token: "same-token" };
+  const fetchMock = vi
+    .fn()
+    .mockImplementation(async () => new Response(JSON.stringify({ ok: true, data: state })));
+  vi.stubGlobal("fetch", fetchMock);
+  const backend = createHttpBackend("http://backend:18089", "test-key", {
+    target: "cli",
+    workspace: { current_path: "/workspace", configured_path: "/workspace" },
+    http_service: { running: true, host: "0.0.0.0", port: 18089, error: null },
+  });
+  expect(
+    await backend.enableSessionShare(7, { redactionScript: "mask", persistent: true }),
+  ).toEqual(state);
+  expect(await backend.enableSessionShare(7, { redactionScript: null, persistent: false })).toEqual(
+    state,
+  );
+  await backend.enableSessionShare(7);
+  for (const [url, init] of fetchMock.mock.calls) {
+    expect(new URL(url).pathname).toBe("/api/session-shares");
+    expect(init.method).toBe("POST");
+  }
+  expect(fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body))).toEqual([
+    { session_id: 7, session_share_config: { redaction_script: "mask", persistent: true } },
+    { session_id: 7, session_share_config: { redaction_script: null, persistent: false } },
+    { session_id: 7 },
+  ]);
+});
+
+test("Session sharing summaries use one batch read", async () => {
+  const payload = { shares: [{ session_id: 3, persistent: true }] };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(new Response(JSON.stringify({ ok: true, data: payload })));
+  vi.stubGlobal("fetch", fetchMock);
+  const backend = createHttpBackend("http://backend:18089", "test-key", {
+    target: "cli",
+    workspace: { current_path: "/workspace", configured_path: "/workspace" },
+    http_service: { running: true, host: "0.0.0.0", port: 18089, error: null },
+  });
+  expect(await backend.listSessionShares!()).toEqual(payload);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(new URL(fetchMock.mock.calls[0][0]).pathname).toBe("/api/session-shares");
+});

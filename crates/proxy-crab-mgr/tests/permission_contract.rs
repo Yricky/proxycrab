@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 84);
+    assert_eq!(actions.len(), 85);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -71,6 +71,7 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "GET /api/routing-scripts",
         "GET /api/routing-scripts/{name}",
         "GET /api/session-interceptors",
+        "GET /api/session-shares",
         "GET /api/session-shares/{id}",
         "GET /api/session-view",
         "GET /api/sessions",

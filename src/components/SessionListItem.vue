@@ -4,11 +4,13 @@
  * 保证各处会话列表样式一致。事件（click/contextmenu/dblclick）通过属性继承
  * 落到根元素，由调用方自行绑定。
  */
-import { Io5RadioButtonOn } from "vue-icons-plus/io5";
+import { computed } from "vue";
+import { sessionsStore } from "../stores/sessions";
+import { Io5Link, Io5RadioButtonOn } from "vue-icons-plus/io5";
 import type { SessionMetadata } from "../api/types";
 import { formatActivityCount, formatRelativeTime } from "../utils/format";
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     session: SessionMetadata;
     /** 主表格正在查看的会话（侧边栏高亮项）。 */
@@ -20,13 +22,27 @@ withDefaults(
   }>(),
   { viewing: false, active: false, activeConnections: 0 },
 );
+const share = computed(() => sessionsStore.shares[props.session.id]);
 </script>
 
 <template>
   <div class="session-item" :class="{ viewing, active }">
     <div class="session-item-body">
       <div class="session-item-top">
-        <span class="session-item-name" :title="session.name">{{ session.name }}</span>
+        <span class="session-item-heading">
+          <span
+            v-if="share"
+            class="session-share-icon"
+            role="img"
+            :aria-label="
+              share.persistent ? '已开启分享 · 重启后保留' : '已开启分享 · 应用退出后失效'
+            "
+            :title="share.persistent ? '已开启分享 · 重启后保留' : '已开启分享 · 应用退出后失效'"
+          >
+            <Io5Link :size="12" />
+          </span>
+          <span class="session-item-name" :title="session.name">{{ session.name }}</span>
+        </span>
         <span
           v-if="active"
           class="session-item-active"
@@ -70,6 +86,17 @@ withDefaults(
 }
 .session-item.viewing {
   background: var(--bg-selected);
+}
+.session-item-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.session-share-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--accent);
 }
 .session-item.active .session-item-name {
   color: var(--accent);

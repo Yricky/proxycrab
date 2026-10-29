@@ -37,6 +37,7 @@ export const ACTION_META: Readonly<Record<string, PermissionActionMeta>> = {
   "PUT /api/sessions/{id}": { label: "更新 Session", impact: "write" },
   "PUT /api/sessions/{id}/filter": { label: "保存 Session 过滤条件", impact: "write" },
   "POST /api/session-shares": { label: "启用 Session 分享", impact: "write" },
+  "GET /api/session-shares": { label: "列出 Session 分享状态", impact: "read" },
   "GET /api/session-shares/{id}": { label: "查看 Session 分享状态", impact: "read" },
   "DELETE /api/session-shares/{id}": { label: "禁用 Session 分享", impact: "write" },
   "POST /api/session-har-shares": { label: "启用 HAR 分享", impact: "write" },

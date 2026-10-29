@@ -161,7 +161,7 @@ async fn run(args: RunArgs) -> Result<()> {
         let ui_manager = manager.clone();
         let ui_workspace = workspace.to_string_lossy().into_owned();
         let ui_permissions = permissions.clone();
-        let shares = SessionShareService::new();
+        let shares = SessionShareService::open(&workspace).context("open Session shares")?;
         let share_manager = manager.clone();
         let share_service = shares.clone();
         let har_shares = HarShareService::new();

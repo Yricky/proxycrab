@@ -50,6 +50,8 @@ import type {
   SessionMetadata,
   SessionsPayload,
   SessionShareState,
+  SessionSharesPayload,
+  SessionShareConfig,
   EnableHarShareRequest,
   HarShareState,
   SessionInterceptorsPayload,
@@ -140,10 +142,11 @@ export interface Backend {
   restoreSession(id: number): Promise<SessionMetadata>;
   deleteArchivedSession(id: number): Promise<void>;
   replaceActiveSession(active: ActiveSession): Promise<ActiveSession>;
+  listSessionShares?(): Promise<SessionSharesPayload>;
   getSessionShare(sessionId: number): Promise<SessionShareState>;
   enableSessionShare(
     sessionId: number,
-    redactionScript?: string | null,
+    sessionShareConfig?: SessionShareConfig,
   ): Promise<SessionShareState>;
   disableSessionShare(sessionId: number): Promise<SessionShareState>;
   getHarShare(sessionId: number): Promise<HarShareState>;

@@ -283,7 +283,22 @@ export interface ActiveSession {
   session_id: number | null;
 }
 
+export interface SessionShareSummary {
+  session_id: number;
+  persistent: boolean;
+}
+
+export interface SessionSharesPayload {
+  shares: SessionShareSummary[];
+}
+
+export interface SessionShareConfig {
+  redactionScript: string | null;
+  persistent: boolean;
+}
+
 export interface SessionShareState {
+  persistent: boolean;
   redaction_script?: string | null;
   session_id: number;
   enabled: boolean;

@@ -62,6 +62,8 @@ async function flush(): Promise<void> {
     batch.has("config")
   ) {
     await sessionsStore.syncFromBackend();
+  } else if (batch.has("session_share")) {
+    await sessionsStore.refreshShares();
   }
   if (batch.has("proxy") || batch.has("config")) {
     await proxyStore.refresh();

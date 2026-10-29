@@ -9,6 +9,7 @@ import type {
   SessionFilter,
   SessionShareState,
 } from "../api/types";
+import { sessionsStore } from "../stores/sessions";
 import { appStore, reportError } from "../stores/app";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { emptySessionFilter } from "../stores/logs";
@@ -22,6 +23,7 @@ const pageShare = ref<SessionShareState | null>(null);
 const harShare = ref<HarShareState | null>(null);
 const pageLinks = ref<string[]>([]);
 const harLinks = ref<string[]>([]);
+const pagePersistent = ref(false);
 const pageRedaction = ref<string | null>(null);
 const harRedaction = ref<string | null>(null);
 const harScope = ref<HarShareScope>("all");
@@ -57,6 +59,8 @@ async function load(): Promise<void> {
     ]);
     if (sequence !== loadSequence) return;
     pageShare.value = nextPageShare;
+    sessionsStore.updateShare(nextPageShare);
+    if (nextPageShare.enabled) pagePersistent.value = nextPageShare.persistent;
     if (nextPageShare.enabled) pageRedaction.value = nextPageShare.redaction_script ?? null;
     if (nextHarShare.enabled) harRedaction.value = nextHarShare.redaction_script ?? null;
     harShare.value = nextHarShare;
@@ -81,14 +85,41 @@ async function setRedaction(kind: "page" | "har", value: string | null): Promise
   }
   busy.value = true;
   try {
-    if (kind === "page")
-      pageShare.value = await backend.setSessionShareRedaction!(props.sessionId, value);
-    else harShare.value = await backend.setHarShareRedaction!(props.sessionId, value);
+    if (kind === "page") {
+      pageShare.value = await backend.enableSessionShare(props.sessionId, {
+        redactionScript: value,
+        persistent: pagePersistent.value,
+      });
+      sessionsStore.updateShare(pageShare.value);
+    } else harShare.value = await backend.setHarShareRedaction!(props.sessionId, value);
     target.value = value;
   } catch (error) {
     reportError(error, "保存脱敏脚本绑定失败");
   } finally {
     busy.value = false;
+  }
+}
+
+async function setPagePersistent(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const persistent = input.checked;
+  if (!pageShare.value?.enabled) {
+    pagePersistent.value = persistent;
+    return;
+  }
+  pageMutating.value = true;
+  try {
+    pageShare.value = await backend.enableSessionShare(props.sessionId, {
+      redactionScript: pageRedaction.value,
+      persistent,
+    });
+    sessionsStore.updateShare(pageShare.value);
+    pagePersistent.value = pageShare.value.persistent;
+  } catch (error) {
+    input.checked = pagePersistent.value;
+    reportError(error, "保存分享持久化设置失败");
+  } finally {
+    pageMutating.value = false;
   }
 }
 
@@ -98,10 +129,15 @@ async function togglePageShare(): Promise<void> {
   try {
     if (pageShare.value.enabled) {
       pageShare.value = await backend.disableSessionShare(props.sessionId);
+      sessionsStore.updateShare(pageShare.value);
       pageLinks.value = [];
       appStore.toast("链接分享已关闭", "success");
     } else {
-      await backend.enableSessionShare(props.sessionId, pageRedaction.value);
+      pageShare.value = await backend.enableSessionShare(props.sessionId, {
+        redactionScript: pageRedaction.value,
+        persistent: pagePersistent.value,
+      });
+      sessionsStore.updateShare(pageShare.value);
       await load();
       appStore.toast("链接分享已开启", "success");
     }
@@ -218,7 +254,13 @@ onBeforeUnmount(() => {
       <header class="card-heading">
         <div>
           <h3 id="page-share-title">链接分享</h3>
-          <p>通过浏览器只读查看此 Session；应用退出或关闭开关后链接失效。</p>
+          <p>
+            只读查看此 Session；{{
+              pagePersistent
+                ? "重启后保留原链接，关闭分享后失效。"
+                : "应用退出或关闭分享后链接失效。"
+            }}
+          </p>
         </div>
         <button
           class="switch"
@@ -232,8 +274,17 @@ onBeforeUnmount(() => {
         />
       </header>
 
+      <label v-if="typeof backend.enableSessionShare === 'function'" class="persistence-option">
+        <input
+          type="checkbox"
+          :checked="pagePersistent"
+          :disabled="loading || pageMutating || !pageShare"
+          @change="setPagePersistent"
+        />
+        重启后保留
+      </label>
       <RedactionSelect
-        v-if="backend.setSessionShareRedaction && backend.listRedactionScripts"
+        v-if="typeof backend.enableSessionShare === 'function' && backend.listRedactionScripts"
         :model-value="pageRedaction"
         :disabled="loading || pageMutating"
         @update:model-value="setRedaction('page', $event)"
@@ -378,6 +429,14 @@ onBeforeUnmount(() => {
 .switch:disabled {
   cursor: default;
   opacity: 0.5;
+}
+.persistence-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 .share-links {
   display: flex;

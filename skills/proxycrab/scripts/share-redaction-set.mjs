@@ -13,7 +13,11 @@ run(async () => {
   const name = optionalString(args, "name");
   const clear = optionalString(args, "clear");
   if ((name === undefined) === (clear === undefined) || (clear !== undefined && clear !== "true")) throw new Error("provide exactly one of --name or --clear true");
-  const result = await apiRequest(args, `/api/${kind === "page" ? "session-shares" : "session-har-shares"}/${id}/redaction`, { method: "PUT", body: { redaction_script: name ?? null } });
+  const current = kind === "page" ? await apiRequest(args, `/api/session-shares/${id}`) : null;
+  if (current && !current.enabled) throw new Error("share is not enabled");
+  const result = kind === "page"
+    ? await apiRequest(args, "/api/session-shares", { method: "POST", body: { session_id: id, session_share_config: { redaction_script: name ?? null, persistent: current.persistent ?? false } } })
+    : await apiRequest(args, `/api/${kind === "page" ? "session-shares" : "session-har-shares"}/${id}/redaction`, { method: "PUT", body: { redaction_script: name ?? null } });
   // Share tokens are credentials; binding changes never print them.
   const { token: _token, ...state } = result;
   printJson(state);

@@ -66,3 +66,47 @@ test.each([0, -1, 1.5, NaN, UI_BODY_MAX_SIZE + 1])(
     expect(invoke).not.toHaveBeenCalled();
   },
 );
+
+test("desktop Session sharing groups redaction and persistence into config", async () => {
+  const state = { session_id: 7, enabled: true, persistent: true, token: "same-token" };
+  vi.mocked(invoke).mockResolvedValue(state);
+  const backend = createTauriBackend();
+  expect(
+    await backend.enableSessionShare(7, { redactionScript: "mask", persistent: true }),
+  ).toEqual(state);
+  expect(invoke).toHaveBeenLastCalledWith(
+    "enable_session_share",
+    {
+      sessionId: 7,
+      sessionShareConfig: { redaction_script: "mask", persistent: true },
+    },
+    undefined,
+  );
+  expect(await backend.enableSessionShare(7, { redactionScript: null, persistent: false })).toEqual(
+    state,
+  );
+  expect(invoke).toHaveBeenLastCalledWith(
+    "enable_session_share",
+    {
+      sessionId: 7,
+      sessionShareConfig: { redaction_script: null, persistent: false },
+    },
+    undefined,
+  );
+  await backend.enableSessionShare(7);
+  expect(invoke).toHaveBeenLastCalledWith(
+    "enable_session_share",
+    {
+      sessionId: 7,
+      sessionShareConfig: undefined,
+    },
+    undefined,
+  );
+});
+
+test("desktop batch share summaries use their dedicated read IPC", async () => {
+  const payload = { shares: [{ session_id: 3, persistent: true }] };
+  vi.mocked(invoke).mockResolvedValue(payload);
+  expect(await createTauriBackend().listSessionShares!()).toEqual(payload);
+  expect(invoke).toHaveBeenLastCalledWith("list_session_shares", undefined, undefined);
+});

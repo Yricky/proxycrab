@@ -90,12 +90,20 @@ The Tauri command surface also reports the management HTTP service's `running`, 
 ## Session sharing links
 
 The desktop and CLI management UIs open a managed application window from “导出和分享” in a
-Session's context menu. Sharing is a process-local toggle: enabling it creates one 256-bit
-`pcrab_share_…` token scoped to that Session,
-and reopening the dialog reuses the same token until sharing is disabled. The cleartext token and
-its SHA-256 digest remain only in process memory. Disabling sharing immediately invalidates the
-link, and restarting ProxyCrab resets sharing to disabled. An archived Session is unavailable to
-the share page; restoring it in the same process preserves its share state.
+Session's context menu. Sharing creates one 256-bit `pcrab_share_…` token scoped to that Session.
+It is temporary by default. Select “重启后保留” to save its token and redaction binding in
+`<workspace>/session-shares.json`; desktop and CLI restore it enabled with the same token on restart.
+Switching this option preserves the current token. Temporary shares stay in memory and expire on
+exit. Disabling either kind immediately revokes the link and removes any durable entry; enabling it
+again generates a new token. Archived Sessions are unavailable until restored, and permanent
+Session deletion removes their share records. Persistent files contain plaintext credentials (mode
+0600 on Unix). Invalid files report startup errors rather than being silently replaced. The service
+must be running to use a link; an IP or port change still requires updating its address.
+
+Shared Session names carry a small link icon, with a tooltip indicating temporary or persistent
+sharing. The desktop and CLI read enabled, non-archived summaries through one batch call
+(`GET /api/session-shares`, desktop `list_session_shares`), without fetching share tokens. Icons
+refresh after share changes and Session archive/restore operations. HAR-only sharing has no icon.
 
 The `/session?token=…` page renders only the main traffic content. It follows new/finished captures
 and owner column changes, starts with the Session's current filter, and keeps every viewer's later
@@ -132,7 +140,7 @@ download and leaves the partial file invalid.
 
 HAR files are not redacted and can contain Authorization headers, Cookie/Set-Cookie values, and
 complete request and response bodies. The link and downloaded file must be treated as sensitive.
-Like the page share, disabling, process exit, or Session archival makes the HAR link unavailable.
+HAR shares remain temporary: disabling, process exit, or Session archival makes the HAR link unavailable.
 
 ## CLI browser UI
 

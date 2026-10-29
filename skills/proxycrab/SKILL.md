@@ -75,6 +75,8 @@ surface has no `/api/agents.md` endpoint and needs no management API key or loca
 | Goal | Start here |
 | --- | --- |
 | Read active Agent instructions | `scripts/agents-get.mjs` |
+| List enabled Session shares without tokens | `scripts/session-share-list.mjs` |
+| Enable or configure sharing, including restart persistence | `POST /api/session-shares` with optional `session_share_config`; see `references/http-api.md` |
 | Read a supplied Session sharing link | [Session sharing workflow](#read-a-session-sharing-link), then `references/http-api.md#session-share-read-api` |
 | Find existing traffic | `scripts/session-list.mjs`, then `scripts/log-query.mjs` |
 | Intercept WebSocket messages | Request interceptor `req:on_ws_message`; see `references/lua-api.md`. Verify provenance and disposition with `websocket-messages.mjs` |
@@ -163,8 +165,9 @@ JS
 ```
 
 Sharing does not expose replay, writes, Session switching, global traffic, or management instructions.
-Process exit or disabling sharing invalidates the link. For management operations use a separately
-authorized management identity and the ordinary management workflow.
+Disabling sharing invalidates the link. Temporary shares also expire on process exit; persistent
+shares restore the same token and redaction binding after restart. For management operations use a
+separately authorized management identity and the ordinary management workflow.
 
 ## Standard capture-debugging workflow
 
@@ -362,8 +365,10 @@ The owner can manage bindings in settings and Session sharing; HAR policies run 
 
 Use `scripts/redaction-upsert.mjs --name NAME --file SCRIPT.lua` to create/update an authorized
 redaction script. Use `scripts/share-redaction-set.mjs --session ID --kind page|har --name NAME`
-(or `--clear true` only when explicitly requested) to change an enabled share's binding. Binding
-changes do not print the share token. Listing and creating scripts are allowed by default, replacing
+(or `--clear true` only when explicitly requested) to change an enabled share's binding. For page
+shares the helper reads the current persistence mode and updates both settings through
+`POST /api/session-shares`; HAR shares retain their binding endpoint. Binding changes do not print
+the share token. Listing and creating scripts are allowed by default, replacing
 or deleting one needs owner approval, and reading one script's source is denied by default; the
 upsert script creates first and treats a conflict as an update instead of reading the script. Never
 change permissions automatically. See the HTTP and Lua references for

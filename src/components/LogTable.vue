@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from "vue";
 import { useBackend } from "../api";
 import type { LogsStore } from "../stores/logs";
+import { sessionsStore } from "../stores/sessions";
 import { proxyStore } from "../stores/proxy";
 import { appStore, reportError } from "../stores/app";
 import { openContextMenu, openMenuAt, confirmDialog, type MenuItem } from "../stores/dialog";
@@ -308,6 +309,7 @@ async function copyFocusedShareLink(id: number): Promise<void> {
       if (!confirmed) return;
       share = await backend.enableSessionShare(sessionId);
     }
+    sessionsStore.updateShare(share);
     const link = share.token
       ? buildSessionShareLinks(addresses, status.port, share.token)[0]
       : undefined;
