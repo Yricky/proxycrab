@@ -54,3 +54,22 @@ test("creation capability controls root and directory actions", async () => {
     expect(html.includes('aria-label="在 folder 中新增文件"')).toBe(canCreate);
   }
 });
+test("entry icons follow the displayed file name (script lists omit extensions in the path)", async () => {
+  const html = await renderToString(
+    createSSRApp({
+      render: () =>
+        h(FileTree, {
+          entries: [
+            { path: "interceptors/auth-inject", label: "auth-inject.lua", data: null },
+            { path: "fixtures/order-created", label: "order-created.json", data: null },
+          ],
+        }),
+    }),
+  );
+  const rows = html.split("file-tree-row");
+  const luaRow = rows.find((row) => row.includes("auth-inject.lua")) ?? "";
+  const jsonRow = rows.find((row) => row.includes("order-created.json")) ?? "";
+  const pathOf = (row: string) => row.match(/<path d="([^"]+)"/)?.[1] ?? "";
+  expect(pathOf(luaRow)).not.toBe("");
+  expect(pathOf(luaRow)).not.toBe(pathOf(jsonRow));
+});

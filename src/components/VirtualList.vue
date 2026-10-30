@@ -1,9 +1,9 @@
-<script setup lang="ts">
+<script setup lang="ts" generic="T">
 import { computed, ref, type Directive } from "vue";
 
 const props = withDefaults(
   defineProps<{
-    items: unknown[];
+    items: T[];
     itemHeight: number;
     /** Extra rows rendered above/below the viewport. */
     buffer?: number;
@@ -12,6 +12,7 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{ scroll: [event: Event] }>();
+defineSlots<{ default(props: { item: T; index: number }): unknown }>();
 
 /** Local v-resize-observer directive to track viewport size. */
 const vResizeObserver: Directive<HTMLElement, (rect: DOMRectReadOnly) => void> = {
@@ -68,6 +69,15 @@ defineExpose({
   scrollToTop() {
     scroller.value?.scrollTo({ top: 0 });
   },
+  /** Keep an off-screen row (e.g. an inline create row) visible. */
+  scrollToIndex(index: number) {
+    const top = index * props.itemHeight;
+    const viewport = viewportHeight.value;
+    const current = scroller.value?.scrollTop ?? 0;
+    if (top < current) scroller.value?.scrollTo({ top });
+    else if (top + props.itemHeight > current + viewport)
+      scroller.value?.scrollTo({ top: top + props.itemHeight - viewport });
+  },
 });
 </script>
 
@@ -80,12 +90,7 @@ defineExpose({
   >
     <div class="vl-spacer" :style="{ height: totalHeight + 'px' }">
       <div class="vl-window" :style="{ transform: `translateY(${offsetY}px)` }">
-        <slot
-          v-for="entry in visibleItems"
-          :key="entry.index"
-          :item="entry.item"
-          :index="entry.index"
-        />
+        <slot v-for="entry in visibleItems" :item="entry.item" :index="entry.index" />
       </div>
     </div>
   </div>

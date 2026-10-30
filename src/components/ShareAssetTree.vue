@@ -4,12 +4,14 @@ import {
   Io5Checkmark,
   Io5ChevronDown,
   Io5ChevronForward,
-  Io5DocumentOutline,
   Io5FolderOutline,
 } from "vue-icons-plus/io5";
 import type { AssetMetadata } from "../api/types";
 import { fileTreeRows } from "../utils/file-tree";
+import { fileKind } from "../utils/file-kind";
 import { formatBytes } from "../utils/format";
+import { FILE_KIND_ICONS } from "./fileIcons";
+import VirtualList from "./VirtualList.vue";
 
 const props = defineProps<{ assets: AssetMetadata[]; rules: string[]; disabled?: boolean }>();
 const emit = defineEmits<{ rules: [rules: string[]] }>();
@@ -63,55 +65,62 @@ function toggleCollapse(path: string): void {
 </script>
 
 <template>
-  <div class="asset-tree">
-    <div
-      v-for="row in visible"
-      :key="row.path"
-      class="tree-row"
-      :class="[row.checked, { static: disabled }]"
-      :style="{ paddingLeft: 4 + row.depth * 14 + 'px' }"
-      role="checkbox"
-      :aria-checked="row.checked === 'partial' ? 'mixed' : row.checked !== 'off'"
-      :aria-disabled="row.checked === 'covered' || disabled"
-      :title="
-        row.coveredBy
-          ? `已由 ${row.coveredBy} 覆盖`
-          : row.entry
-            ? `${row.path} · ${formatBytes(row.entry.data.size)}`
-            : `${row.path}/ 包含其下全部资源`
-      "
-      tabindex="0"
-      @click="toggle(row.path, !!row.entry)"
-      @keydown.enter.prevent="toggle(row.path, !!row.entry)"
-      @keydown.space.prevent="toggle(row.path, !!row.entry)"
-    >
-      <button
-        v-if="!row.entry"
-        type="button"
-        class="tree-chevron"
-        :aria-expanded="!collapsed.has(row.path)"
-        :aria-label="collapsed.has(row.path) ? '展开' : '收起'"
-        @click.stop="toggleCollapse(row.path)"
-        @keydown.enter.stop.prevent="toggleCollapse(row.path)"
+  <VirtualList class="asset-tree" :items="visible" :item-height="24">
+    <template #default="{ item: row }">
+      <div
+        class="tree-row"
+        :class="[row.checked, { static: disabled }]"
+        :style="{ paddingLeft: 4 + row.depth * 14 + 'px' }"
+        role="checkbox"
+        :aria-checked="row.checked === 'partial' ? 'mixed' : row.checked !== 'off'"
+        :aria-disabled="row.checked === 'covered' || disabled"
+        :title="
+          row.coveredBy
+            ? `已由 ${row.coveredBy} 覆盖`
+            : row.entry
+              ? `${row.path} · ${formatBytes(row.entry.data.size)}`
+              : `${row.path}/ 包含其下全部资源`
+        "
+        tabindex="0"
+        @click="toggle(row.path, !!row.entry)"
+        @keydown.enter.prevent="toggle(row.path, !!row.entry)"
+        @keydown.space.prevent="toggle(row.path, !!row.entry)"
       >
-        <component :is="collapsed.has(row.path) ? Io5ChevronForward : Io5ChevronDown" :size="11" />
-      </button>
-      <span v-else class="tree-chevron" />
-      <span class="tree-check" :class="row.checked">
-        <Io5Checkmark v-if="row.checked === 'on'" :size="10" />
-        <span v-else-if="row.checked === 'partial'" class="dash" />
-      </span>
-      <component :is="row.entry ? Io5DocumentOutline : Io5FolderOutline" :size="13" class="tree-icon" />
-      <span class="tree-name">{{ row.label }}</span>
-      <span v-if="row.entry" class="tree-size">{{ formatBytes(row.entry.data.size) }}</span>
-    </div>
-  </div>
+        <button
+          v-if="!row.entry"
+          type="button"
+          class="tree-chevron"
+          :aria-expanded="!collapsed.has(row.path)"
+          :aria-label="collapsed.has(row.path) ? '展开' : '收起'"
+          @click.stop="toggleCollapse(row.path)"
+          @keydown.enter.stop.prevent="toggleCollapse(row.path)"
+        >
+          <component
+            :is="collapsed.has(row.path) ? Io5ChevronForward : Io5ChevronDown"
+            :size="11"
+          />
+        </button>
+        <span v-else class="tree-chevron" />
+        <span class="tree-check" :class="row.checked">
+          <Io5Checkmark v-if="row.checked === 'on'" :size="10" />
+          <span v-else-if="row.checked === 'partial'" class="dash" />
+        </span>
+        <component
+          :is="row.entry ? FILE_KIND_ICONS[fileKind(row.path)] : Io5FolderOutline"
+          :size="13"
+          class="tree-icon"
+        />
+        <span class="tree-name">{{ row.label }}</span>
+        <span v-if="row.entry" class="tree-size">{{ formatBytes(row.entry.data.size) }}</span>
+      </div>
+    </template>
+  </VirtualList>
 </template>
 
 <style scoped>
 .asset-tree {
-  display: flex;
-  flex-direction: column;
+  max-height: 240px;
+  border-radius: var(--radius-sm);
 }
 .tree-row {
   display: flex;

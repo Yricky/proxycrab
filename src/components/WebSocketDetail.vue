@@ -769,7 +769,7 @@ onBeforeUnmount(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 3px 8px;
+  padding: 0px 8px;
   border-bottom: 1px solid var(--border);
 }
 .source-link {

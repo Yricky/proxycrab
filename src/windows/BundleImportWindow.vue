@@ -34,7 +34,9 @@ const MODES = [
   { value: "rename", label: "另存", title: "另存新名称：脚本另存为新名字，保留工作区现有文件" },
 ] as const;
 
-const importable = computed(() => props.preview.intents.filter((intent) => intent.type === "session"));
+const importable = computed(() =>
+  props.preview.intents.filter((intent) => intent.type === "session"),
+);
 const conflicts = computed(() => result.value?.files.filter((f) => f.status === "conflict") ?? []);
 const counts = computed(() => ({
   same: result.value?.files.filter((f) => f.status === "same").length ?? 0,
@@ -97,7 +99,8 @@ function modesFor(file: BundleFileStatus): (typeof MODES)[number][] {
 }
 
 function chooseAll(action: "keep" | "overwrite"): void {
-  for (const file of conflicts.value) if (choices.value[file.path]) choices.value[file.path].action = action;
+  for (const file of conflicts.value)
+    if (choices.value[file.path]) choices.value[file.path].action = action;
 }
 
 function close(): void {
@@ -177,7 +180,10 @@ function openSession(sessionId: number): void {
                 :key="mode.value"
                 type="button"
                 class="mode-btn"
-                :class="[`m-${mode.value}`, { active: choices[fileStatus.path]?.action === mode.value }]"
+                :class="[
+                  `m-${mode.value}`,
+                  { active: choices[fileStatus.path]?.action === mode.value },
+                ]"
                 :title="mode.title"
                 :aria-pressed="choices[fileStatus.path]?.action === mode.value"
                 :disabled="busy"

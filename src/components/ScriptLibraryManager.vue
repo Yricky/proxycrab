@@ -405,7 +405,6 @@ onBeforeUnmount(() => {
 <template>
   <div ref="root" class="slm-root">
     <aside class="slm-sidebar">
-      <div class="slm-sidebar-title">{{ config.sidebarTitle }}</div>
       <div class="slm-create">
         <input
           v-model="filter"
@@ -545,12 +544,6 @@ onBeforeUnmount(() => {
   border-right: 1px solid var(--border);
   padding: 8px 0 0 0;
   background: var(--bg-panel);
-}
-
-.slm-sidebar-title {
-  padding: 0 12px 8px;
-  font-size: 11px;
-  color: var(--text-secondary);
 }
 
 .slm-external {

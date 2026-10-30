@@ -241,9 +241,7 @@ onBeforeUnmount(() => {
         <h3>链接分享</h3>
         <p>
           只读查看此 Session；{{
-            pagePersistent
-              ? "重启后保留原链接，关闭分享后失效。"
-              : "应用退出或关闭分享后链接失效。"
+            pagePersistent ? "重启后保留原链接，关闭分享后失效。" : "应用退出或关闭分享后链接失效。"
           }}
         </p>
       </div>
@@ -427,11 +425,9 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 .tree-panel {
-  max-height: 240px;
   margin: 2px 0 4px;
   padding-top: 2px;
   border-top: 1px solid var(--border);
-  overflow: auto;
 }
 .tree-note {
   margin: 6px 0;

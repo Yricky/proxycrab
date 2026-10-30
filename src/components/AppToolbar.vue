@@ -244,7 +244,7 @@ onBeforeUnmount(() => {
           :aria-expanded="activeMenu === 'scripts'"
           @click="toggleMenu('scripts')"
         >
-          脚本
+          资产
           <Io5ChevronDown :size="12" />
         </button>
         <div v-if="activeMenu === 'scripts'" class="tb-menu">
@@ -270,13 +270,7 @@ onBeforeUnmount(() => {
             <Io5CodeSlash :size="14" />
             <span>过滤脚本</span>
           </button>
-          <button
-            v-if="backend.listAssets"
-            class="tb-menu-item"
-            @click="runMenuAction(openAssetManager)"
-          >
-            <Io5DocumentText :size="14" /><span>工作区资源</span>
-          </button>
+
           <button
             v-if="backend.listRedactionScripts"
             class="tb-menu-item"
@@ -287,6 +281,10 @@ onBeforeUnmount(() => {
           <button class="tb-menu-item" @click="runMenuAction(openRoutingManager)">
             <Io5RadioButtonOn :size="14" />
             <span>分流规则</span>
+          </button>
+          <div class="tb-menu-divider" />
+          <button class="tb-menu-item" @click="runMenuAction(openAssetManager)">
+            <Io5DocumentText :size="14" /><span>工作区资源</span>
           </button>
         </div>
       </div>

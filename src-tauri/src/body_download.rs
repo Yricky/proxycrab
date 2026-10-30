@@ -55,6 +55,30 @@ pub(crate) async fn fetch_body(
     load_body(&source, max_size).await
 }
 
+/// 工作区资源预览：读取原始字节，供资源详情页按类型展示。
+#[tauri::command]
+pub(crate) async fn read_asset(
+    state: State<'_, BackendState>,
+    id: String,
+    max_size: Option<u64>,
+) -> Result<LoadedBody, ManagerError> {
+    let max_size = max_size.unwrap_or(4 * 1024 * 1024);
+    let asset = state.manager().asset(id).await?;
+    if asset.metadata.size > max_size {
+        return Err(ManagerError::bad_request("资源超过预览大小限制"));
+    }
+    let bytes = tokio::fs::read(asset.path()).await.map_err(|error| {
+        ManagerError::new(
+            ErrorCode::AssetStoreFailed,
+            format!("failed to read asset: {error}"),
+        )
+    })?;
+    Ok(LoadedBody {
+        bytes,
+        content_type: asset.metadata.content_type,
+    })
+}
+
 #[tauri::command]
 pub(crate) async fn fetch_websocket_message_body(
     state: State<'_, BackendState>,

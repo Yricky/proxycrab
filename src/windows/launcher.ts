@@ -373,4 +373,3 @@ export async function openBundleImport(file: File): Promise<void> {
     height: 460,
   });
 }
-

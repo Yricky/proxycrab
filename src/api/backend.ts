@@ -180,6 +180,8 @@ export interface Backend {
   getLog(sessionId: number | null, id: number): Promise<LogDetail>;
   replay?(sessionId: number, request: ReplayRequestPayload): Promise<ReplayResult>;
   listAssets(): Promise<AssetMetadata[]>;
+  /** 读取资源原始字节用于详情预览；后端未暴露时资源详情只展示元数据。 */
+  readAsset?(id: string): Promise<Uint8Array<ArrayBuffer>>;
   uploadAsset?(id: string, file: Blob): Promise<AssetMetadata>;
   getInterceptorContent(
     sessionId: number | null,

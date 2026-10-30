@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useBackend } from "../api";
 import type { AssetMetadata } from "../api/types";
 import { reportError } from "../stores/app";
+import AssetPreview from "../components/AssetPreview.vue";
 import AssetTreePicker from "../components/AssetTreePicker.vue";
 const backend = useBackend();
 const assets = ref<AssetMetadata[]>([]);
@@ -28,12 +29,6 @@ onMounted(refresh);
 </script>
 <template>
   <div class="asset-manager">
-    <div class="asset-manager-toolbar">
-      <span>{{ assets.length }} 个资源</span
-      ><button class="btn compact" :disabled="loading" @click="refresh">
-        {{ loading ? "加载中…" : "刷新" }}
-      </button>
-    </div>
     <div class="asset-manager-content">
       <AssetTreePicker
         v-model:selected="selected"
@@ -41,17 +36,8 @@ onMounted(refresh);
         class="asset-manager-tree"
         @uploaded="uploaded"
       />
-      <dl v-if="current" class="asset-manager-detail">
-        <dt>路径</dt>
-        <dd>{{ current.id }}</dd>
-        <dt>类型</dt>
-        <dd>{{ current.content_type }}</dd>
-        <dt>大小</dt>
-        <dd>{{ current.size.toLocaleString() }} B</dd>
-        <dt>SHA-256</dt>
-        <dd class="mono">{{ current.sha256 }}</dd>
-      </dl>
-      <div v-else class="empty-hint asset-manager-detail">选择资源查看信息</div>
+      <AssetPreview v-if="current" class="asset-manager-preview" :asset="current" />
+      <div v-else class="empty-hint asset-manager-empty">选择资源查看信息</div>
     </div>
   </div>
 </template>
@@ -66,7 +52,8 @@ onMounted(refresh);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  min-height: 42px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--border);
   font-size: 12px;
 }
@@ -80,20 +67,14 @@ onMounted(refresh);
   flex: none;
   border-right: 1px solid var(--border);
 }
-.asset-manager-detail {
+.asset-manager-preview {
   flex: 1;
   min-width: 0;
-  margin: 0;
-  padding: 12px;
-  overflow: auto;
-  font-size: 12px;
+  min-height: 0;
+  display: flex;
 }
-dt {
-  color: var(--text-secondary);
-  margin-bottom: 4px;
-}
-dd {
-  margin: 0 0 14px;
-  overflow-wrap: anywhere;
+.asset-manager-empty {
+  flex: 1;
+  padding: 14px;
 }
 </style>

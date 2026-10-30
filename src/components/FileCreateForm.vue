@@ -1,53 +1,90 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { Io5Checkmark, Io5Close } from "vue-icons-plus/io5";
 defineProps<{ directory: string; busy?: boolean; error?: string; confirmText?: string }>();
 const name = defineModel<string>({ required: true });
 const emit = defineEmits<{ submit: []; cancel: [] }>();
 const input = ref<HTMLInputElement | null>(null);
+
 onMounted(() => {
   input.value?.focus();
   input.value?.select();
 });
 </script>
+
 <template>
   <form
     class="file-create"
     @submit.prevent="emit('submit')"
     @keydown.esc.stop="!busy && emit('cancel')"
   >
-    <div class="text-faint file-create-directory">{{ directory || "根目录" }}/</div>
+    <span v-if="directory" class="file-create-directory mono" :title="directory"
+      >{{ directory }}/</span
+    >
     <input
       ref="input"
       v-model="name"
-      class="input"
+      class="input file-create-input"
       aria-label="新文件名或相对路径"
+      :aria-invalid="!!error"
       :disabled="busy"
+      :class="{ invalid: !!error }"
+      :title="error || (directory ? `在 ${directory} 中新建` : '在根目录中新建')"
       placeholder="文件名或子目录/文件名"
     />
-    <div v-if="error" class="text-danger">{{ error }}</div>
-    <div class="file-create-actions">
-      <button type="submit" class="btn compact primary" :disabled="busy">
-        {{ busy ? "处理中…" : confirmText || "创建" }}
-      </button>
-      <button type="button" class="btn compact" :disabled="busy" @click="emit('cancel')">
-        取消
-      </button>
-    </div>
+    <button
+      type="submit"
+      class="btn icon file-create-action"
+      :disabled="busy"
+      :title="busy ? '处理中…' : confirmText || '创建'"
+      :aria-label="confirmText || '创建'"
+    >
+      <Io5Checkmark :size="14" />
+    </button>
+    <button
+      type="button"
+      class="btn icon file-create-action"
+      :disabled="busy"
+      title="取消"
+      aria-label="取消"
+      @click="emit('cancel')"
+    >
+      <Io5Close :size="14" />
+    </button>
   </form>
 </template>
+
 <style scoped>
 .file-create {
-  padding: 6px 8px;
+  flex: 1;
+  min-width: 0;
+  height: 26px;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
 }
 .file-create-directory {
-  overflow-wrap: anywhere;
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.file-create-actions {
-  display: flex;
-  gap: 6px;
+.file-create-input {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+.file-create-input.invalid {
+  border-color: var(--danger);
+}
+.file-create-action {
+  flex: none;
+  height: 20px;
+  padding: 0 2px;
 }
 </style>

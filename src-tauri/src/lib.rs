@@ -1219,6 +1219,7 @@ pub fn run() {
             get_log,
             get_websocket_messages,
             body_download::fetch_websocket_message_body,
+            body_download::read_asset,
             replay,
             list_assets,
             upload_asset,

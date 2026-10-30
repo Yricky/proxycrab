@@ -206,6 +206,10 @@ export function createTauriBackend(): Backend {
     replay: (sessionId: number, request: ReplayRequestPayload) =>
       call<ReplayResult>("replay", { sessionId, request }),
     listAssets: () => call<AssetMetadata[]>("list_assets"),
+    readAsset: async (id: string) => {
+      const result = await call<{ bytes: number[] }>("read_asset", { id });
+      return new Uint8Array(result.bytes);
+    },
     uploadAsset: async (id, file) =>
       call<AssetMetadata>("upload_asset", await file.arrayBuffer(), {
         headers: {

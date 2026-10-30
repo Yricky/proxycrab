@@ -240,6 +240,19 @@ export function createHttpBackend(
     replay: (sessionId: number, request: ReplayRequestPayload) =>
       call<ReplayResult>(`/api/replay?session=${sessionId}`, json("POST", request)),
     listAssets: () => call<AssetMetadata[]>("/api/assets"),
+    readAsset: async (id: string) => {
+      const path = `/api/assets/${id.split("/").map(encodeURIComponent).join("/")}?format=raw`;
+      const response = await fetch(new URL(path, baseUrl), {
+        headers: { Authorization: authorization(token) },
+      });
+      if (!response.ok) {
+        throw new BackendError({
+          code: `http_${response.status}`,
+          message: `读取资源失败（HTTP ${response.status}）`,
+        });
+      }
+      return new Uint8Array(await response.arrayBuffer());
+    },
     uploadAsset: (id, file) =>
       call<AssetMetadata>(`/api/assets/${id.split("/").map(encodeURIComponent).join("/")}`, {
         method: "POST",
