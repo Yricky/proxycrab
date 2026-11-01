@@ -8,6 +8,7 @@ import { appStore, reportError } from "../stores/app";
 import { openContextMenu, openMenuAt, confirmDialog, type MenuItem } from "../stores/dialog";
 import { openColumnManager, openLogDetail } from "../windows/launcher";
 import LogDetailWindow from "../windows/LogDetailWindow.vue";
+import CellContentPopup from "./CellContentPopup.vue";
 import type { Column, HttpApiChange, LogViewRow, Script } from "../api/types";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { scriptLabel, scriptLabelFor, scriptTitle } from "../utils/script-label";
@@ -66,6 +67,11 @@ const hoveredRow = ref<number | null>(null);
 const hoverHit = ref<HitTarget | null>(null);
 const unseenIds = ref<Set<number>>(new Set());
 const following = ref(true);
+const cellPopup = ref<{ text: string; x: number; y: number } | null>(null);
+watch(
+  () => logsStore.sessionId,
+  () => (cellPopup.value = null),
+);
 
 /**
  * Local width overrides (stable column key → px) for live resize. 有 Session 写入接口时
@@ -256,13 +262,29 @@ async function copyCell(value: string): Promise<void> {
   }
 }
 
-function showCellMenu(event: MouseEvent, value: string | null, rowId: number): void {
+function showCellMenu(
+  event: MouseEvent,
+  value: string | null,
+  rowId: number,
+  anchor?: { x: number; y: number },
+): void {
   const items: MenuItem[] = [];
   if (value !== null) {
     items.push({
       label: "复制",
       icon: Io5Copy,
       action: () => void copyCell(value),
+    });
+    items.push({
+      label: "展示完整内容",
+      icon: Io5OpenOutline,
+      action: () => {
+        cellPopup.value = {
+          text: value,
+          x: anchor?.x ?? event.clientX,
+          y: anchor?.y ?? event.clientY,
+        };
+      },
     });
   }
   items.push({
@@ -1523,7 +1545,13 @@ function onCanvasContextMenu(event: MouseEvent): void {
   }
   const row = logsStore.row(rowId);
   const value = hit.cellIndex === -1 ? String(row.id) : displayCellValue(row, hit.cellIndex);
-  showCellMenu(event, value, rowId);
+  const rect = canvas.value!.getBoundingClientRect();
+  let x = hit.cellIndex === -1 ? 0 : ID_COLUMN_WIDTH;
+  for (let index = 0; index < hit.cellIndex; index += 1) x += columnWidth(index);
+  showCellMenu(event, value, rowId, {
+    x: rect.left + x - scrollLeft.value,
+    y: rect.top + HEADER_HEIGHT + hit.rowIndex * ROW_HEIGHT - scrollTop.value,
+  });
 }
 
 function normalizeWheelDelta(value: number, mode: number, pageSize: number): number {
@@ -1619,6 +1647,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="wrap" class="lt-wrap">
+    <CellContentPopup v-if="cellPopup" v-bind="cellPopup" @close="cellPopup = null" />
     <div ref="tableWrap" class="lt-table">
       <canvas
         ref="canvas"

@@ -18,6 +18,7 @@ import { formatBytes } from "../utils/format";
 import { bodyFilename } from "../utils/body-filename";
 import { inspectGrpc, inspectProtobuf } from "../utils/protobuf";
 import MonacoEditor from "./MonacoEditor.vue";
+import SseBodyViewer from "./SseBodyViewer.vue";
 
 const props = defineProps<{
   label: string;
@@ -37,6 +38,7 @@ const downloading = ref(false);
 const error = ref<string | null>(null);
 const reportedStoredSize = ref<number | null>(null);
 const pretty = ref(true);
+const aggregated = ref(false);
 const copied = ref<string | null>(null);
 const structured = ref("");
 const objectUrl = ref<string | null>(null);
@@ -83,6 +85,7 @@ const mediaType = computed(() => {
 
 const previewKind = computed(() => {
   const media = mediaType.value;
+  if (media === "text/event-stream") return "sse";
   if (media.startsWith("image/")) return "image";
   if (media.startsWith("audio/")) return "audio";
   if (media.startsWith("video/")) return "video";
@@ -235,22 +238,30 @@ async function download(): Promise<void> {
   }
 }
 
-watch(
-  () => [
+const bodyIdentity = computed(() =>
+  JSON.stringify([
     props.target.kind,
     props.target.id,
     props.target.kind === "interceptor" ? props.target.executionId : undefined,
     props.target.kind !== "breakpoint" ? props.target.sessionId : undefined,
     props.side,
-    props.body.type,
-    storedSize.value,
-    embeddedIdentity.value,
     headerIdentity.value,
     props.revision,
-  ],
-  () => {
+  ]),
+);
+
+watch(
+  () => [bodyIdentity.value, props.body.type, storedSize.value, embeddedIdentity.value],
+  ([identity], previous) => {
     ++loadVersion;
-    loaded.value = null;
+    if (
+      previewKind.value !== "sse" ||
+      identity !== previous?.[0] ||
+      props.body.type === "empty" ||
+      storedSize.value > DEFAULT_BODY_MAX_SIZE
+    ) {
+      loaded.value = null;
+    }
     reportedStoredSize.value = null;
     error.value = null;
     revokeObjectUrl();
@@ -281,7 +292,16 @@ onBeforeUnmount(() => {
       </span>
       <span class="body-actions">
         <button
-          v-if="body.type !== 'empty' && backend.downloadBody"
+          v-if="previewKind === 'sse'"
+          class="tool-btn"
+          :class="{ on: aggregated }"
+          :aria-pressed="aggregated"
+          @click="aggregated = !aggregated"
+        >
+          聚合查看
+        </button>
+        <button
+          v-else-if="body.type !== 'empty' && backend.downloadBody"
           class="btn icon"
           :disabled="downloading"
           :title="downloading ? '正在下载 Body…' : '下载 Body'"
@@ -302,7 +322,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="body.type === 'empty'" class="body-state">无 Body</div>
-    <div v-else-if="loading" class="body-state">加载中…</div>
+    <div v-else-if="loading && !(loaded && previewKind === 'sse')" class="body-state">加载中…</div>
     <div v-else-if="overDefaultLimit" class="body-state body-limit">
       <Io5Warning :size="18" />
       <span>Body 超过自动加载限制</span>
@@ -316,6 +336,11 @@ onBeforeUnmount(() => {
       <span>{{ error }}</span>
       <button class="btn" @click="load()">重试</button>
     </div>
+    <SseBodyViewer
+      v-else-if="loaded && previewKind === 'sse'"
+      :text="decodedText"
+      :aggregated="aggregated"
+    />
     <div v-else-if="loaded && previewKind === 'image'" class="media-preview">
       <img :src="objectUrl ?? ''" alt="Body 图片预览" />
     </div>
