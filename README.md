@@ -273,3 +273,11 @@ Linux AppImage 的 WebKit 开发方式及其他实现细节见[运行与开发�
 推送以 `build/v` 开头的分支时，全部构建成功后自动发布正式 Release。例如，`build/v1.2.0` 对应标签和标题 `v1.2.0`。再次推送同一分支会更新该 Release 的附件，并将标签移至本次构建的提交。手动运行工作流不发布 Release。
 
 Release 附件直接提供 Linux AppImage、macOS DMG、Windows EXE / MSI 安装包，以及四个平台的 CLI 压缩包。
+
+## 支持作者
+
+ProcyCrab采用 MIT 协议开源，完全免费使用。如果觉得这款软件对你有用，可以通过[以下渠道](docs/support.md)支持一下作者
+
+## 友情链接
+
+[Linux.do](https://www.linux.do)
