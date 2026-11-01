@@ -1,310 +1,267 @@
 # ProxyCrab
 
-ProxyCrab is a macOS-first HTTP/HTTPS MITM capture application. The same Vue management UI runs in the Tauri desktop application and from the headless CLI's HTTP server through target-specific backends.
+支持 Agent 协作的 HTTP/HTTPS 抓包与调试工具。
 
-## Rust workspace
+通过 Lua 定制请求与响应，检查 WebSocket 双向消息，把 Session 分享给同事或 Agent。支持桌面应用，也支持通过 CLI 运行并在浏览器中管理。
 
-- `crates/proxy-crab-mitm`: proxy lifecycle, CA/TLS, sessions, SQLite captures, request/response bodies, Lua scripts, diagnostic failures, and the in-memory system-log ring.
-- `crates/proxy-crab-mgr`: the object-safe `ProxyCrabManager` trait, its MITM adapter, typed DTOs, stable errors, the local management HTTP server, and a route-level permission contract.
-- `src-tauri`: Tauri initialization, application lifecycle, trusted host commands, and workspace-pointer ownership; ordinary proxy commands call the same management trait as HTTP handlers.
-- `cli-app`: headless proxy runner, embedded browser UI, per-run UI authentication, and CLI-specific allow/deny permission management.
+![ProxyCrab 主界面：Session、业务自定义列与请求详情](docs/images/overview.png)
 
-Neither reusable crate depends on Tauri.
+> 本页截图来自实际运行的 CLI 浏览器管理界面，使用独立演示工作区和本机生成的示例流量。
 
-## Linux development against the packaged WebKit
+## 核心能力
 
-Linux releases ship only as AppImage, which embeds its own WebKitGTK runtime. To develop against
-exactly that runtime instead of the system WebKit:
+### 与 Agent 一起调试真实流量
 
-```bash
-scripts/dev-appimage-webkit.sh import path/to/proxy-crab-t_amd64.AppImage   # one-time import
-scripts/dev-appimage-webkit.sh                                             # build + run
+ProxyCrab 提供管理 HTTP API 和配套 Skill，让 Agent 直接读取抓包数据、配置调试规则，并将操作结果同步到界面。
+
+你可以让 Agent：
+
+- 找出失败请求，结合请求和响应内容分析原因。
+- 等待下一条符合条件的请求，检查问题是否再次出现。
+- 提取业务字段，创建自定义列与过滤条件。
+- 编写 Lua 拦截器，配置接口 Mock 或调整请求。
+- 读取 Session 分享链接，根据指定流量协助排查。
+
+例如：
+
+> 检查这个 Session 中登录失败的请求，将响应里的业务错误码添加为一列，并说明失败原因。
+
+工作区支持 AGENTS.md 行为预设，可选择只读取现有数据，或允许 Agent 调整调试配置。管理 API 提供按操作配置的权限，桌面端还支持人工审批。
+
+Agent 能力由外部 Agent 配合 ProxyCrab Skill 提供。
+
+### 用 Lua 控制请求与响应
+
+为每个 Session 组织独立的请求、响应拦截器链，按顺序执行、启停和调整脚本。
+
+- **修改流量**：调整 URL、请求方法、请求头、响应状态码和 Body。
+- **构造 Mock**：跳过上游请求，使用文本或工作区资源返回响应。
+- **测试网络行为**：限制请求与响应 Body 的传输速度，设置上游请求和响应流空闲超时。
+- **断点调试**：暂停请求，在当前状态上执行临时 Lua，再继续处理。
+- **追溯执行过程**：查看历史执行源码、修改记录和执行入口快照。
+
+例如，在响应拦截器中修改 JSON：
+
+```lua
+local data = resp.body:as_json()
+if data then
+    data.message = "Hello from ProxyCrab"
+    resp.body:replace_with_string(json.encode(data))
+end
 ```
 
-The script unpacks the AppImage into `.webkit-runtime/`, replaces its payload with the local debug
-build, and launches it through the original `AppRun`. The window still loads the vite dev server
-with hot reload, while GTK/WebKit and the helper processes are the exact binaries that ship.
+脚本后续发生变化，也可以通过抓包记录查看当时实际执行的版本。
 
-## Runtime defaults
+![Lua 调试：暂停结算响应并执行临时脚本](docs/images/lua-debugging.jpg)
 
-- MITM proxy: `0.0.0.0:8089`, stopped when the app launches.
-- Management API: `0.0.0.0:18089`, started with the app. Remote management calls still require Bearer authentication.
-- Certificate management opens on “1.证书配置”; “2. 代理连接” provides a temporary Clash subscription in both desktop and CLI management UIs. Select a non-loopback local IPv4 and enable the subscription; the fixed link is `http://<selected IPv4>:<api-port>/clash.yaml` and has no download token. Copy/scan it or import it into Clash. The complete YAML lives at `<workspace>/clash/config.yaml`, must contain `{{server}}` and `{{port}}`, and can be edited in the lower half of the tab; saves are validated, downloads substitute the selected IP and current proxy port. The default config forwards all matched traffic to ProxyCrab. This does not start the proxy or enable the OS system proxy. Disabling stops serving the subscription only; restarting resets the switch and IP selection but keeps the config file and the same URL for the same IP.
-- CA download: `http://<selected local IPv4>:18089/ca.crt`, available without configuring or starting the proxy. The certificate and Clash tabs share the same IP selector.
-- System log buffer: the newest 10,000 entries in memory.
-- Captured request/response bodies stream directly to disk without an application-level size limit; at most 256 client connections are accepted.
-- Body toolbars offer complete decoded downloads in desktop, CLI browser, and Session share views, including interceptor snapshots and supported breakpoint views. Downloads preserve original bytes and ignore preview formatting and the 16 MiB/1 GiB preview limits. Desktop saves stream to disk; browser saves use browser-managed Blobs.
-- Blocking capture/bypass queries and management Lua evaluations: at most eight concurrently; excess work waits without occupying Tokio worker threads.
+详见 [Lua API](docs/lua-api.md)。
 
-The Tauri application data directory contains `config.json`, which points at the workspace. When the pointer is absent or invalid, `app_data_dir/workspace` is used and persisted. Settings > 通用 displays the current path and, on desktop, a 切换工作区 button. It opens a native directory picker, validates the selection, and immediately restarts the application with the new workspace's configuration. Unsaved UI edits are discarded; the proxy starts stopped, as on a cold launch. Canceling or selecting the current directory does nothing.
+### 分享调试现场，复用调试配置
 
-A new workspace directory must be empty, ignoring dot-prefixed entries. A nonempty directory must contain valid `workspace_schema.json` and `app_config.json` files with a supported schema version. Invalid, unwritable, or occupied workspaces are rejected with a toast before the saved pointer changes. Existing workspace data stays in place; switching never copies data from the previous workspace.
+为 Session 创建只读链接，让接收者直接通过浏览器查看流量，无需安装 ProxyCrab。
 
-Desktop ProxyCrab Skill parent paths are stored separately in application data as
-`skill-paths.json` and do not follow workspace switches. On first use only, an existing
-`~/.agents/skills/proxycrab` directory causes `~/.agents/skills` to be adopted automatically;
-otherwise the UI warns that no Skill path is configured. Every application launch, path save, and
-manual sync completely replaces the `proxycrab` child under each configured parent with the bundled
-copy. Removing a path can either leave that child in place or delete it. Corrupt path configuration
-is preserved and reported until the user explicitly saves a replacement.
+分享页面支持：
 
-The management API listens on every IPv4 interface and explicitly authenticates each `/api/*`
-request as either `LocalLoopback` or `Bearer`. `LocalLoopback` requires a loopback TCP peer, a local
-Host, and no Origin or a local Origin. Exactly one `Authorization: Bearer <key>` header always selects
-the Bearer identity, including on loopback. Every API key and the local no-key identity have independent
-per-route permissions. The desktop target supports `allow`, `approval`, and `deny`; approval waits
-for a desktop decision for up to 30 seconds. The CLI target exposes only `allow` and `deny`, and
-evaluates any persisted `approval` value as `deny`. API keys and permissions are managed under
-Settings > 管理接口 through target-private operations, not the public agent API. Direct Tauri
-commands remain trusted and bypass HTTP authentication.
+- 持续查看新请求和请求完成状态。
+- 独立筛选、排序和查看详情。
+- 通过链接直接定位指定请求。
+- 查看 WebSocket 消息、历史拦截结果和快照。
+- 下载 Body、导出 HAR。
 
-Host mutations such as switching the workspace, replacing global configuration
-(including the proxy port), regenerating the CA, and managing bundled Skill paths are not management
-HTTP resources. They are available only through trusted Tauri commands or explicit local CLI options
-and subcommands. Workspace selection is not exposed through HTTP; the API retains read-only config
-and CA resources.
+链接可以临时使用，也可以设置为重启后保留；关闭分享后立即失效。可为分享链接配置读取时脱敏策略，在支持的读取范围内隐藏或替换敏感字段，同时保留原始抓包数据。
 
-Permission state is stored in the active workspace's `http_api_permissions.json`; a corrupt file
-stops only the management HTTP service rather than widening access. Full API keys are displayed once
-at creation and are never persisted. Bundled ProxyCrab Skill scripts accept a key only through the
-`PROXYCRAB_API_KEY` environment variable.
+需要复用调试配置时，还可以开放 **Session 配置下载**，打包相关拦截器、过滤器、自定义列和选定资源。接收者拖入 ZIP，选择要导入的 Session，并处理文件冲突。
 
-Each workspace root has a `workspace_schema.json` version label. All persisted-data upgrades are
-registered in the centralized migration module and run before workspace stores are opened.
-Workspace schema v2 enables SQLite WAL for Session capture databases so management readers can
-recover and interoperate with the established workspace format. Each opened capture or bypass
-store reuses one configured SQLite connection across its clones and serializes access to it.
-Active Sessions live under `sessions/`; archived Sessions move intact to `sessions_archived/` and
-can only be permanently deleted from there. Effective active-Session or selected-routing changes
-rotate all downstream connections, tunnels/upgrades, and upstream pools while keeping the proxy
-listener running; identical updates do not rotate connections.
+配置包不包含抓包历史，脚本使用的资源需要由分享者选择。
 
-Workspace-scoped Agent behavior presets are owned by the management layer and stored under
-`agents/`. The desktop AI menu edits and activates them, while `GET /api/agents.md` returns the
-active Markdown as raw `text/plain`. The bundled ProxyCrab Skill reads this endpoint before making
-other management calls. A supplied log filter can be kept stateless with
-`persist_filter: false`.
+详见 [Session 配置分享与导入](docs/session-config-bundles.md)。
 
-The Tauri command surface also reports the management HTTP service's `running`, `host`, `port`, and startup error state through `get_http_service_status`.
+## 更多调试方式
 
-## Session sharing links
+### WebSocket 双向消息调试
 
-The desktop and CLI management UIs open a managed application window from “链接分享” in a
-Session's context menu. Sharing creates one 256-bit `pcrab_share_…` token scoped to that Session.
-It is temporary by default. Select “重启后保留” to save its token and redaction binding in
-`<workspace>/session-shares.json`; desktop and CLI restore it enabled with the same token on restart.
-Switching this option preserves the current token. Temporary shares stay in memory and expire on
-exit. Disabling either kind immediately revokes the link and removes any durable entry; enabling it
-again generates a new token. Archived Sessions are unavailable until restored, and permanent
-Session deletion removes their share records. Persistent files contain plaintext credentials (mode
-0600 on Unix). Invalid files report startup errors rather than being silently replaced. The service
-must be running to use a link; an IP or port change still requires updating its address.
+在双向时间轴中检查客户端与服务端消息，查看文本或二进制内容，并追踪连接状态。
 
-Shared Session names carry a small link icon, with a tooltip indicating temporary or persistent
-sharing. The desktop and CLI read enabled, non-archived summaries through one batch call
-(`GET /api/session-shares`, desktop `list_session_shares`), without fetching share tokens. Icons
-refresh after share changes and Session archive/restore operations.
+通过 Lua 消息回调，可以：
 
-Share redaction is resolved by the backend, not copied by the frontend. For a new owner-created
-share, omitting `session_share_config.redaction_script` inherits the current local no-API-key binding.
-Explicit `null` selects that same inheritance; `""` explicitly disables share-level redaction; a
-nonempty name selects a library script. On updates, an omitted redaction field preserves the current
-policy; use explicit null to switch back to local inheritance. A supplied config updates persistence
-without rotating the token; an omitted config preserves an existing owner share.
+- 丢弃指定消息。
+- 向客户端或服务端发送消息。
+- 组合丢弃与发送，实现消息替换。
+- 读取已处理的历史消息。
+- 查看生成来源、触发关系以及发送或丢弃结果。
 
-API keys have stricter rules. A Key bound to a nonempty script must omit the share redaction field
-and the share follows that Key's binding dynamically, including on updates. An unconfigured Key
-(null/missing binding) also cannot supply the field; new shares inherit local. Only a Key whose own
-binding is explicitly `""` may supply the field, including null, empty, or a script name. Violations
-return HTTP 403 `share_redaction_forbidden` before modifying share state. Owner Tauri IPC, local
-management requests and the trusted CLI UI may select policies normally. Ordinary route permission
-checks still apply. Existing null Key bindings are not treated as explicit opt-out.
+例如，在请求拦截器中注册回调，拦截客户端的 `ping` 并直接回复 `pong`：
 
-Inherited policies resolve their identity on each share request, so changing local or Key bindings
-updates share reads without rotating links. A missing/deleted Key or failed identity lookup fails
-closed (`redaction_failed`); it never falls back to original data. Status reports the configured
-`redaction_script` and optional `redaction_identity` (a stable Key ID, never an API Key credential).
-The frontend shows inheritance separately from explicit no redaction and never reads local defaults.
-The startup `--redaction-script` policy still overrides all these settings.
+```lua
+req:on_ws_message(function(ws)
+    local message = ws.message
+    if message.direction == "request"
+        and message.type == "text"
+        and message.body == "ping" then
+        ws:drop()
+        ws:send("response", "pong", "text")
+    end
+end)
+```
 
-Updates use `POST /api/session-shares` exclusively. The old
-`PUT /api/session-shares/{id}/redaction` route and desktop `set_session_share_redaction` command
-have been removed; persisted permissions drop that obsolete action.
+当前支持通过 HTTP/1.1 Upgrade 建立的 WebSocket 连接。
 
-Persistent share files use version 2 and retain policy references. Version 1 files remain readable:
-old null share bindings migrate to explicit `""` to preserve their original unredacted behavior;
-named script bindings and tokens are preserved. New inherited shares retain null policy references
-across restart and resolve the current binding when read.
+![WebSocket 调试：双向消息时间轴与 Lua 生成消息的来源](docs/images/websocket.png)
 
-The `/session?token=…` page renders only the main traffic content. It follows new/finished captures
-and owner column changes, starts with the Session's current filter, and keeps every viewer's later
-filter stateless. An optional `id` query parameter focuses the matching record: the list scrolls to
-that row and opens its inline detail panel. Sorting, copying, log details, complete bodies, historical interceptor results,
-and script snapshots remain readable. The interceptor pipeline shows the shared Session's current
-request/response chain, including labels, order, enabled and valid state, and follows owner changes.
-It reuses the main UI component: missing Backend methods hide add/edit/remove/toggle/drag and
-breakpoint operations; HAR export remains available through the existing read/save methods.
-Toolbar/sidebar management, column editing, interceptor writes and other write surfaces are absent. Its token is accepted only by the
-dedicated Session-scoped `/share-api/*` routes as exactly one `token` query parameter and is never an
-Agent API key. These routes ignore `Authorization` and return `Cache-Control: no-store`; the share UI
-uses a no-referrer policy. Agents can also read a supplied Session link directly through these
-routes without a management API key; the [Skill sharing workflow](skills/proxycrab/SKILL.md#read-a-session-sharing-link)
-and [share API reference](skills/proxycrab/references/http-api.md#session-share-read-api) describe
-authentication, capture queries, bodies, WebSocket messages, and interceptor snapshots.
+### 把业务字段放进抓包列表
 
-One frontend build produces `index.html` for the application and `session.html` for this HTTP page
-from source files under `src/`. Tauri and CLI reuse the same `dist` output, and the application entry
-selects its Landing from the runtime host. The desktop HTTP server reads the Session page through
-Tauri's embedded asset resolver instead of embedding another copy of the frontend bundle.
+除了方法、URL、状态码等内置列，还可以通过 Lua 从请求和响应中提取业务字段，创建自定义列与过滤条件。
 
-The UI lists one complete URL for every non-loopback local IPv4 address; when none exists, it falls
-back to `127.0.0.1`. Each row can be opened or copied directly. These links use plain HTTP by default,
-so the token and captured data must be shared only on a trusted network or protected by a TLS
-reverse proxy.
+例如，将响应中的业务错误码显示为一列：
 
-## HAR export
+```lua
+local data = entry.resp and entry.resp.body:as_json()
+return data and data.code or nil
+```
 
-The export button beside the sweep action opens a floating window. Its Export HAR button freezes
-all matching list IDs and their displayed order, then reads details and bodies through existing
-Backend methods (`getLog`, `fetchBody`). No HAR export or sharing HTTP endpoint exists. The shared
-Session page uses the existing scoped read APIs and exports their policy-filtered data.
+适合检查“HTTP 状态码为 200，但业务处理失败”等情况，也可以用于展示订单号、请求标识或业务状态。
 
-Entries are generated one at a time. Failed and unfinished ordinary HTTP records are retained;
-missing responses have status 0 and `_proxyCrab` carries outcome/error metadata. WebSocket connection
-rows and synthetic TLS CONNECT records are skipped; HTTP upgrade handshakes remain. Body read
-failures (including decode and size errors) become text explaining the failure and `bodyErrors`
-metadata, with warnings in the export window. Unavailable details produce a failed placeholder
-entry. Empty selections produce valid HAR. Body bytes are read separately rather than reusing JSON
-previews, preserving formatting; binary content uses Base64 (`encoding` for responses, `_encoding`
-for request postData). Detailed timings/header sizes are unknown (-1).
+每个 Session 保存自己的列配置和过滤条件。
 
-`saveFile({filename})` returns `FileWriter | null`; null means the desktop picker was cancelled.
-The Writer offers async `append(bytes)`, `markAsFinish()`, and `markAsError()`. Desktop chunks use
-binary IPC (at most 256 KiB each) and a same-directory temporary file; finish publishes the file,
-error discards it. Failed writes cannot be committed. Browser writers buffer Blob parts and start
-a download only on finish; this acknowledges download initiation, not completion on disk. Abort
-never starts a download. No new management or share HTTP route is needed for writing.
+![业务自定义列：按错误码筛选 HTTP 200 的结算失败请求](docs/images/custom-columns.png)
 
-Progress includes processed/exported/skipped records and warning counts. The window retains the
-latest 1000 log lines; cancel/close abandons an unfinished export. Each Body still uses the existing
-read interface (explicit 1 GiB stored-size ceiling); a single entry is buffered, and the browser
-fallback buffers the final file. Export does not provide an atomic snapshot of changing captures
-or pin one redaction revision across separate reads. Original content is never used as a fallback
-for policy-denied reads. Exported files may contain sensitive data from the authorized read view.
+### 桌面操作与远程浏览器管理
 
-Sweep now asks for confirmation before creating a new active Session, archiving the current one,
-and disconnecting active traffic.
+在本机使用桌面应用，或在远程调试机上启动 CLI，通过浏览器管理代理。
 
-## CLI browser UI
+两种运行方式共享代理核心和主要调试界面。CLI 内嵌浏览器管理页面，不需要另外部署前端服务。
 
-Browser secure-context compatibility: request windows use page-local incremental IDs and work on
-remote HTTP origins. JWT decoding is local and works on HTTP, but signature verification requires
-`crypto.subtle` (HTTPS or a trusted localhost context). Copy buttons fall back to `execCommand`
-when the asynchronous Clipboard API is unavailable; editor context-menu paste may still depend on
-browser support, while keyboard paste uses the normal browser editing path. Downloads use
-Blob/object URLs and ordinary workers power Monaco; neither requires HTTPS by itself. Monaco
-also falls back from `randomUUID` to `getRandomValues`; its WebGPU renderer is disabled by default.
+| 运行方式 | 当前构建目标 |
+| --- | --- |
+| 桌面应用 | macOS ARM64、Linux x64（AppImage） |
+| CLI | Linux x64 / ARM64、macOS ARM64、Windows x64 |
 
-The web backend uses the current page hostname (without its port) as its address, rather than
-requesting container interface addresses. There is no `/ui-api/local-ips` endpoint. Desktop Tauri
-continues to enumerate local IPv4 interfaces.
+部分宿主能力有所区别：桌面端提供人工审批和 Skill 路径管理；CLI 提供允许/拒绝权限配置，并通过本地命令安装 Skill。
 
-Build the CLI frontend before compiling the binary so Cargo can embed the generated assets:
+### 其他能力
+
+| 功能 | 用途 |
+| --- | --- |
+| 请求编辑与重放 | 修改并重新发送请求，经过所选 Session 的拦截器链 |
+| CA 下载与 Clash 订阅 | 通过证书下载、订阅链接和二维码配置设备接入 |
+| Session 归档与恢复 | 按问题或调试阶段保存、整理抓包记录 |
+| Lua 分流规则 | 决定流量进入当前活跃 Session，或直接转发 |
+| Body 查看与下载 | 查看文本、图片及 Protobuf/gRPC 数据结构，下载完整解码内容 |
+| HAR 导出 | 导出当前筛选结果中的 HTTP 请求记录 |
+| 工作区资源 | 为 Mock、Body 替换和请求重放管理可复用文件 |
+| 调试小工具 | Base64 编解码、JWT 解码与验签、二维码、文本比对 |
+
+## 快速开始
+
+### 桌面应用
+
+1. 启动 ProxyCrab，创建一个 Session 并将其设为活跃。
+2. 打开“连接”中的“证书配置”，下载 CA；需要抓取 HTTPS 时，在被调试设备上安装并信任它。
+3. 将设备或应用的 HTTP/HTTPS 代理指向 ProxyCrab 所在机器，默认代理端口为 `8089`。
+4. 在 ProxyCrab 中启动代理。
+5. 发起请求，在 Session 中查看捕获结果。
+
+使用 Clash 接入时，可以在“代理连接”页面选择本机 IP，开启并导入订阅。
+
+桌面应用启动时代理默认停止。没有活跃 Session 时，流量直接转发；选择分流脚本后，由脚本决定是否捕获。
+
+### CLI 与浏览器管理
+
+```bash
+proxycrab-cli run --workspace /path/to/workspace
+```
+
+CLI 启动后运行代理，并输出浏览器管理地址和 Access Token。打开地址，输入 Token，即可进入管理界面。
+
+默认端口：
+
+| 服务 | 端口 |
+| --- | --- |
+| HTTP/HTTPS 代理 | `8089` |
+| 管理界面与 HTTP API | `18089` |
+
+可通过启动参数覆盖监听配置：
+
+```bash
+proxycrab-cli run \
+  --workspace /path/to/workspace \
+  --proxy-port 8089 \
+  --api-port 18089
+```
+
+远程访问可使用 SSH 端口转发，或通过配置了认证和 TLS 的反向代理访问。默认 HTTP 连接不加密，应在可信网络中使用。
+
+### 配置 Agent Skill
+
+桌面端打开 **AI → 管理 Skill**，配置 Agent 使用的 Skill 父目录并同步。
+
+CLI 用户可以运行：
+
+```bash
+proxycrab-cli install-skill --parent ~/.agents/skills
+```
+
+随后让支持该 Skill 的 Agent 读取 ProxyCrab 工作区，或提供 Session 分享链接进行排查。
+
+详见 [ProxyCrab Skill](skills/proxycrab/SKILL.md)。
+
+## 使用说明
+
+- HTTPS 解密需要被调试客户端信任 ProxyCrab CA；使用证书固定的客户端可能无法直接捕获。
+- 读取时脱敏需要配置脚本，仅作用于支持的数据读取范围；原始抓包与转发内容保持不变。
+- HTTP Body 默认流式处理；Lua 调用 Body 读取方法时，需要等待完整内容，不适合直接读取无限流。
+- HAR 导出保留 HTTP 记录，不包含 WebSocket 消息历史。
+- Session 分享需要服务保持运行，并且接收者能够访问分享地址。
+
+## 文档
+
+- [管理 API、权限与 Session 分享](docs/backend-api.md)
+- [Lua API 与示例](docs/lua-api.md)
+- [Session 配置分享与导入](docs/session-config-bundles.md)
+- [Agent Skill 与操作流程](skills/proxycrab/SKILL.md)
+- [Agent 排查实践](skills/proxycrab/references/best-practices.md)
+- [运行与开发细节](docs/runtime-notes.md)
+
+## 开发
+
+项目使用 Rust、Tauri 和 Vue。桌面应用与 CLI 复用代理核心、管理接口和前端代码。
+
+| 目录 | 内容 |
+| --- | --- |
+| `crates/proxy-crab-mitm` | 代理、TLS、抓包存储与 Lua 执行 |
+| `crates/proxy-crab-mgr` | 管理接口、权限契约与分享服务 |
+| `src-tauri` | 桌面应用集成 |
+| `cli-app` | CLI 与内嵌浏览器管理服务 |
+| `src` | Vue 管理界面与 Session 分享页面 |
+| `skills/proxycrab` | Agent Skill、脚本与参考文档 |
+
+安装前端依赖：
+
+```bash
+pnpm install
+```
+
+启动桌面开发环境：
+
+```bash
+pnpm tauri dev
+```
+
+构建 CLI 时，先生成需要嵌入的前端资源：
 
 ```bash
 pnpm build
-cargo build -p proxycrab-cli
+cargo build --release -p proxycrab-cli
 ```
 
-Run the CLI with a workspace:
-
-```bash
-target/debug/proxycrab-cli run --workspace /path/to/workspace
-```
-
-To enforce read-time redaction for every supported identity, including UIKey and Session
-shares, supply a Lua file:
-
-```bash
-target/debug/proxycrab-cli run --workspace /path/to/workspace --redaction-script /path/to/mask.lua
-```
-
-The file is read and compiled once before services start; read/compile errors abort startup.
-Changes require a restart. This in-memory policy overrides existing bindings and disables the five
-redaction-library management endpoints with HTTP 403 `redaction_management_disabled`
-(`脱敏接口管理功能已禁用`). The frontend remains unchanged and shows the API error.
-Only the existing redaction-supported data is transformed; capture and forwarding are unchanged.
-See [the redaction API contract](docs/backend-api.md#redaction-library-and-bindings) for scope.
-
-By default, startup generates a 256-bit, per-run `pcrab_ui_…` Access Token. To choose the UIKey,
-pass `--ui-key 'your-custom-key'`, with or without `run`:
-
-```bash
-proxycrab-cli run --workspace /path/to/workspace --ui-key 'your-custom-key'
-```
-
-The key must be nonempty visible ASCII with no whitespace or control characters; no prefix is
-required. There is no environment-variable or persisted-config option. Startup prints the browser
-URL and actual `Access token`, whether supplied or generated. Enter it on the landing page.
-Custom UIKeys remain subject to `--redaction-script` when supplied. The cleartext token is not persisted; the process
-keeps only its SHA-256 digest. It authorizes the browser UI's internal `/ui-api/*` operations and
-trusted calls to the shared `/api/*` management resources for that process lifetime.
-
-For access from another machine, the safer setup is an SSH local port forward or authenticated TLS.
-The browser can then open `http://127.0.0.1:18089` on the client. Direct access uses one of the
-server's reachable IP addresses. Remote `/api/*` requests require the Bearer token, and
-the token travels in cleartext over plain HTTP, so direct exposure should be limited to a trusted
-network or placed behind authenticated TLS.
-
-The CLI browser backend deliberately has no ProxyCrab Skill path-management capability or HTTP route.
-This remains true even if the CLI frontend bundle is hosted outside the local binary. Users who
-want to install the bundled Skill must explicitly run the local
-`proxycrab-cli install-skill` command; a browser page cannot trigger it.
-
-## Development
-
-`pnpm build` creates one two-entry frontend bundle in `dist`. Both Tauri and CLI consume this same
-directory. It contains distinct application and Session-share HTML files backed by shared chunks;
-the application entry loads the Tauri or CLI Landing according to its runtime host.
-
-Rust dependencies share `sha2 0.10.9` with Tauri's code generator and use AWS-LC for both
-Rustls and rcgen. Keep `hyper-util` features limited to the client/runtime components used by
-the proxy, and use ZIP's `deflate-flate2-zlib-rs` feature to avoid compiling the unused
-system-proxy and Zopfli implementations.
+检查与测试：
 
 ```bash
 cargo check --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+pnpm test:unit
 pnpm build
 ```
 
-See [backend API](docs/backend-api.md) and [Lua API](docs/lua-api.md).
-
-### Script library paths
-
-All script managers share a compact file tree with collapsible directories. Create a script
-with a relative name such as `business/errors`; ProxyCrab creates the parent directories and
-saves `business/errors.lua` inside that library's directory. Existing root-level scripts remain
-compatible. Bindings retain the full relative name. Empty folders, renaming and drag-and-drop
-moves are outside this UI's scope. See the [script path API contract](skills/proxycrab/references/http-api.md#script-relative-paths).
-
-Script libraries and the replay workspace-asset picker share `src/components/FileTree.vue`.
-Callers provide relative-path entries (`path`, optional `label`/`title`, and business `data`),
-a controlled selection, and optional suffix/action slots. The component derives directories,
-sorts directories first, handles folding, and reveals selected paths; it does not call APIs or
-change business state before the caller accepts selection. Script path validation remains separate.
-
-### Workspace resource manager and file creation
-
-Open **工作区资源** from the script menu when the current backend provides `listAssets`.
-The manager shows the shared file tree and selected-resource metadata. Upload actions appear only
-when `uploadAsset` is available; both HTTP and Tauri backends implement it. Tauri sends raw binary
-IPC directly to the existing asset store, without requiring the management HTTP service.
-
-Each directory has a `+` action; a dashed `+` row creates at the root. Script managers now use
-their top input for name/path filtering. Script creation uses the selected directory and the
-library's default template. Resource creation opens the shared single-file picker, then an editable
-name form before upload. Invalid names are reported without automatic renaming, and existing
-resources are never overwritten. The replay asset picker supports the same upload flow and selects
-the uploaded resource. Empty directory management, moving and renaming remain unsupported.
+Linux AppImage 的 WebKit 开发方式及其他实现细节见[运行与开发细节](docs/runtime-notes.md)。
