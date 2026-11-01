@@ -88,6 +88,7 @@ export function createTauriBackend(): Backend {
         sync: () => call("sync_proxycrab_skills"),
       },
       switchWorkspace: () => call("switch_workspace"),
+      openDevtools: () => call("open_devtools"),
       replaceConfig: (config: AppConfig) => call("replace_config", { config }),
       regenerateCertificate: () => call("regenerate_certificate"),
     },

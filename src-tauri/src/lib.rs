@@ -39,10 +39,7 @@ use proxy_crab_mitm::{
         TemporaryExecutionResult,
     },
 };
-use tauri::{
-    Emitter, Manager, RunEvent, State,
-    menu::{Menu, MenuItem, Submenu},
-};
+use tauri::{Emitter, Manager, RunEvent, State};
 use tauri_plugin_dialog::DialogExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -1022,32 +1019,9 @@ fn logging_invoke_handler(
     }
 }
 
-const DEVTOOLS_MENU_ID: &str = "open-devtools";
-
-/// 注册全局菜单中的「打开开发者工具」项。
-/// 非 macOS 平台应用默认没有菜单栏，自建一个极简菜单；macOS 保留系统默认菜单
-/// （应用名菜单 / 编辑 / 视图 等），仅追加一个「工具」子菜单，避免破坏系统惯例。
-fn setup_global_menu(app: &tauri::App) -> tauri::Result<()> {
-    let devtools = MenuItem::with_id(
-        app,
-        DEVTOOLS_MENU_ID,
-        "打开开发者工具",
-        true,
-        Some("CmdOrCtrl+Alt+I"),
-    )?;
-    let tools = Submenu::with_items(app, "工具", true, &[&devtools])?;
-    #[cfg(target_os = "macos")]
-    {
-        // macOS 默认菜单由 Tauri 在 build 阶段生成，此处直接追加子菜单
-        if let Some(menu) = app.menu() {
-            menu.append(&tools)?;
-            return Ok(());
-        }
-        // 兜底：默认菜单不存在时回退为自建菜单
-    }
-    let menu = Menu::with_items(app, &[&tools])?;
-    app.set_menu(menu)?;
-    Ok(())
+#[tauri::command]
+fn open_devtools(window: tauri::WebviewWindow) {
+    window.open_devtools();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1072,7 +1046,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            setup_global_menu(app)?;
             let app_data_dir = app.path().app_data_dir()?;
             let workspace = WorkspaceSelection::open(app_data_dir.clone())?;
             let log_buffer = Arc::new(LogBuffer::default());
@@ -1183,14 +1156,8 @@ pub fn run() {
             });
             Ok(())
         })
-        .on_menu_event(|app, event| {
-            if event.id() == DEVTOOLS_MENU_ID {
-                if let Some(window) = app.get_webview_window("main") {
-                    window.open_devtools();
-                }
-            }
-        })
         .invoke_handler(logging_invoke_handler(tauri::generate_handler![
+            open_devtools,
             get_workspace,
             switch_workspace,
             get_config,

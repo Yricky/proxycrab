@@ -78,6 +78,7 @@ export interface SkillManager {
 export interface HostOperations {
   readonly skillManager: SkillManager;
   switchWorkspace?(): Promise<void>;
+  openDevtools?(): Promise<void>;
   replaceConfig(config: AppConfig): Promise<AppConfig>;
   regenerateCertificate(): Promise<CertificateResponse>;
 }

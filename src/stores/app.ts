@@ -1,6 +1,7 @@
 import { reactive, watch } from "vue";
 
 export type ThemeMode = "light" | "dark" | "system";
+export type LogDetailTab = "request" | "response" | "modifications";
 
 export interface ToastItem {
   id: number;
@@ -24,6 +25,7 @@ function applyTheme(mode: ThemeMode): void {
 
 export const appStore = reactive({
   theme: initialTheme() as ThemeMode,
+  logDetailTab: "request" as LogDetailTab,
   toasts: [] as ToastItem[],
 
   setTheme(mode: ThemeMode) {

@@ -392,6 +392,12 @@
       "prompt": "Import this ZIP accepting only session-123. If resources conflict, show me the options before proceeding.",
       "expected_output": "Submits file and explicit accepted_intent_ids, retains import_id for conflict resolution, presents same/conflicting files, obtains explicit keep/overwrite or script rename decisions with fingerprints. Handles the independent write permissions for POST /api/imports and POST /api/imports/{id}/resolve, both default approval. Does not import unaccepted intents or activate sessions. Explains whole-batch rollback on failure.",
       "files": []
+    },
+    {
+      "id": 67,
+      "prompt": "Create ProxyCrab request and response interceptors that replace x-proxycrab-skill-eval with two values, first and second, and delete x-proxycrab-skill-eval-remove using headers:set. Preserve the existing chains and verify both on a new capture. Explain what happens if an array element is a number or an invalid header string.",
+      "expected_output": "Uses headers:set(name, {\"first\", \"second\"}) on req.headers and resp.headers, and headers:set(name, {}) to delete the header. Preserves both existing interceptor chains when attaching. Explains dense string arrays, case-insensitive replacement, ordered values, and validation of every element before any mutation; numbers and invalid header values raise an error without partial changes. Verifies historical source and final headers plus header_set followed by header_append for two values and header_remove for the empty array on a new capture.",
+      "files": ["fixtures/test-header-arrays.lua"]
     }
   ]
 }

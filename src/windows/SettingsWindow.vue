@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { Io5Add, Io5Globe, Io5Settings, Io5Trash, Io5Warning } from "vue-icons-plus/io5";
+import {
+  Io5Add,
+  Io5CodeSlash,
+  Io5Globe,
+  Io5Settings,
+  Io5Trash,
+  Io5Warning,
+} from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import type {
   ApiActionView,
@@ -20,7 +27,7 @@ import { windowsStore } from "../stores/windows";
 import { formatDateTime } from "../utils/format";
 import { DIMENSION_OPTIONS, type PermissionGroupDimension } from "../utils/permission-meta";
 
-type SettingsPage = "general" | "management";
+type SettingsPage = "general" | "management" | "development";
 const WINDOW_ID = "settings";
 const backend = useBackend();
 // 审批能力由后端是否提供审批接口表达：没有审批接口时只能配置 allow / deny。
@@ -185,6 +192,14 @@ async function switchWorkspace(): Promise<void> {
   }
 }
 
+async function openDevtools(): Promise<void> {
+  try {
+    await backend.host?.openDevtools?.();
+  } catch (error) {
+    reportError(error, "打开开发者工具失败");
+  }
+}
+
 async function savePermissions(): Promise<void> {
   if (!selectedIdentityId.value || !permissionDirty.value || savingPermissions.value) return;
   savingPermissions.value = true;
@@ -281,6 +296,14 @@ onBeforeUnmount(() => {
         <Io5Globe :size="15" />
         管理接口
       </button>
+      <button
+        v-if="backend.host?.openDevtools"
+        :class="{ active: page === 'development' }"
+        @click="selectPage('development')"
+      >
+        <Io5CodeSlash :size="15" />
+        开发
+      </button>
     </aside>
 
     <main class="settings-content">
@@ -310,7 +333,7 @@ onBeforeUnmount(() => {
         </section>
       </template>
 
-      <template v-else>
+      <template v-else-if="page === 'management'">
         <header class="page-header management-header">
           <div>
             <h2>管理接口</h2>
@@ -433,6 +456,17 @@ onBeforeUnmount(() => {
             />
           </section>
         </template>
+      </template>
+      <template v-else-if="page === 'development' && backend.host?.openDevtools">
+        <header class="page-header">
+          <div>
+            <h2>开发</h2>
+            <p>调试应用界面</p>
+          </div>
+        </header>
+        <section class="settings-section">
+          <button class="btn" @click="openDevtools">打开开发者工具</button>
+        </section>
       </template>
     </main>
 

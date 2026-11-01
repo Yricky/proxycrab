@@ -1376,17 +1376,40 @@ impl UserData for MutableHeaders {
                 .push(Modification::HeaderAppend { name, value });
             Ok(())
         });
-        methods.add_method("set", |_, this, (name, value): (String, String)| {
+        methods.add_method("set", |_, this, (name, value): (String, Value)| {
             this.state.ensure_writable()?;
-            validate_header_input(&name, &value)?;
+            let values = header_set_values(value)?;
+            validate_header_input(&name, "")?;
+            for value in &values {
+                validate_header_input(&name, value)?;
+            }
             let mut headers = this
                 .state
                 .headers
                 .lock()
                 .expect("Lua header state lock poisoned");
-            remove_header(&mut headers, &name);
-            headers.insert(name.to_lowercase(), vec![value.clone()]);
-            this.journal.push(Modification::HeaderSet { name, value });
+            let previous = remove_header(&mut headers, &name).unwrap_or_default();
+            if values.is_empty() {
+                this.journal.push(Modification::HeaderRemove {
+                    name,
+                    values: previous,
+                });
+            } else {
+                for (index, value) in values.iter().enumerate() {
+                    this.journal.push(if index == 0 {
+                        Modification::HeaderSet {
+                            name: name.clone(),
+                            value: value.clone(),
+                        }
+                    } else {
+                        Modification::HeaderAppend {
+                            name: name.clone(),
+                            value: value.clone(),
+                        }
+                    });
+                }
+                headers.insert(name.to_lowercase(), values);
+            }
             Ok(())
         });
         methods.add_method("remove", |_, this, name: String| {
@@ -1607,6 +1630,36 @@ fn remove_content_encoding(state: &SharedInterceptorState, journal: &Modificatio
             name: "content-encoding".into(),
             values,
         });
+    }
+}
+
+fn header_set_values(value: Value) -> mlua::Result<Vec<String>> {
+    match value {
+        Value::String(value) => Ok(vec![value.to_str()?.to_string()]),
+        Value::Table(table) => {
+            let len = table.raw_len();
+            for pair in table.clone().pairs::<Value, Value>() {
+                let (key, value) = pair?;
+                if !matches!(key, Value::Integer(index) if index >= 1 && index as usize <= len)
+                    || !matches!(value, Value::String(_))
+                {
+                    return Err(LuaError::runtime(
+                        "headers:set expects a string or an array of strings",
+                    ));
+                }
+            }
+            (1..=len)
+                .map(|index| {
+                    table
+                        .raw_get::<mlua::LuaString>(index)?
+                        .to_str()
+                        .map(|value| value.to_string())
+                })
+                .collect()
+        }
+        _ => Err(LuaError::runtime(
+            "headers:set expects a string or an array of strings",
+        )),
     }
 }
 
@@ -2013,6 +2066,121 @@ mod tests {
                 && snapshot.headers["x-test"] == vec!["old"]
                 && snapshot.body == crate::model::BodySourceType::Original
         ));
+    }
+
+    fn execute_header_script(source: &str) -> [super::ScriptEffects; 2] {
+        let mut request = entry().request;
+        request
+            .headers
+            .insert("x-test".into(), vec!["old".into(), "older".into()]);
+        let response = ResponseData {
+            status: 200,
+            version: "HTTP/1.1".into(),
+            headers: request.headers.clone(),
+        };
+        [
+            execute_request(&format!("local h = req.headers; {source}"), &request).unwrap(),
+            execute_response(&format!("local h = resp.headers; {source}"), &response).unwrap(),
+        ]
+    }
+
+    #[test]
+    fn headers_set_accepts_strings_arrays_and_empty_arrays() {
+        use crate::model::Modification;
+
+        for effects in execute_header_script(
+            r#"
+            h:set("X-TEST", {"first", "second", "second"})
+            local values = h:get_all("x-test")
+            assert(#values == 3 and values[1] == "first"
+                and values[2] == "second" and values[3] == "second")
+            assert(h:get("X-Test") == "first")
+            h:set("x-test", {})
+            assert(h:get("X-Test") == nil and #h:get_all("x-test") == 0)
+            h:set("x-missing", {})
+            h:set("x-test", {"final", "value"})
+            h:set("x-single", "")
+        "#,
+        ) {
+            assert_eq!(effects.headers["x-test"], ["final", "value"]);
+            assert_eq!(effects.headers["x-single"], [""]);
+            assert!(!effects.headers.contains_key("x-missing"));
+            assert_eq!(
+                &effects.modifications[1..],
+                &[
+                    Modification::HeaderSet {
+                        name: "X-TEST".into(),
+                        value: "first".into()
+                    },
+                    Modification::HeaderAppend {
+                        name: "X-TEST".into(),
+                        value: "second".into()
+                    },
+                    Modification::HeaderAppend {
+                        name: "X-TEST".into(),
+                        value: "second".into()
+                    },
+                    Modification::HeaderRemove {
+                        name: "x-test".into(),
+                        values: vec!["first".into(), "second".into(), "second".into()]
+                    },
+                    Modification::HeaderRemove {
+                        name: "x-missing".into(),
+                        values: vec![]
+                    },
+                    Modification::HeaderSet {
+                        name: "x-test".into(),
+                        value: "final".into()
+                    },
+                    Modification::HeaderAppend {
+                        name: "x-test".into(),
+                        value: "value".into()
+                    },
+                    Modification::HeaderSet {
+                        name: "x-single".into(),
+                        value: "".into()
+                    },
+                ]
+            );
+        }
+        for effects in execute_header_script(include_str!(
+            "../../../skills/proxycrab/evals/fixtures/test-header-arrays.lua"
+        )) {
+            assert_eq!(
+                effects.headers["x-proxycrab-skill-eval"],
+                ["first", "second"]
+            );
+            assert!(
+                !effects
+                    .headers
+                    .contains_key("x-proxycrab-skill-eval-remove")
+            );
+        }
+    }
+
+    #[test]
+    fn headers_set_rejects_invalid_values_without_partial_mutations() {
+        for effects in execute_header_script(
+            r#"
+            local invalid = {
+                42, false, {"new", 42}, {"new", false}, {"new", {}},
+                {"new", "bad\r\nvalue"}, {"new", "bad\0value"}, {"new", "\255"},
+                {[1] = "new", [3] = "gap"}, {[0] = "zero"}, {name = "value"},
+                {"new", extra = "value"},
+            }
+            for _, value in ipairs(invalid) do
+                assert(not pcall(function() h:set("X-Test", value) end))
+                local values = h:get_all("x-test")
+                assert(#values == 2 and values[1] == "old" and values[2] == "older")
+            end
+            assert(not pcall(function() h:set("x-test", nil) end))
+            assert(not pcall(function() h:set("bad name", {}) end))
+        "#,
+        ) {
+            assert_eq!(effects.headers["x-test"], ["old", "older"]);
+            assert_eq!(effects.headers.len(), 1);
+            assert!(effects.modifications.is_empty());
+        }
     }
 
     #[tokio::test]

@@ -10,7 +10,7 @@ import type {
   LogDetail,
 } from "../api/types";
 import { BackendError } from "../api/backend-error";
-import { appStore, reportError } from "../stores/app";
+import { appStore, reportError, type LogDetailTab } from "../stores/app";
 import { proxyStore } from "../stores/proxy";
 import { isInactiveInProgress } from "../utils/capture-outcome";
 import MonacoEditor from "../components/MonacoEditor.vue";
@@ -265,8 +265,7 @@ onBeforeUnmount(() => {
 
 // ---------- tabs ----------
 
-type TabKey = "request" | "response" | "modifications";
-const activeTab = ref<TabKey>("request");
+const activeTab = ref<LogDetailTab>(appStore.logDetailTab);
 
 const interceptorCount = computed(
   () =>
@@ -275,19 +274,31 @@ const interceptorCount = computed(
 );
 
 const tabs = computed(() => [
-  { key: "request" as TabKey, label: "请求" },
+  { key: "request" as LogDetailTab, label: "请求" },
   {
-    key: "response" as TabKey,
+    key: "response" as LogDetailTab,
     label: "响应",
     disabled: !detail.value?.response,
   },
   {
-    key: "modifications" as TabKey,
+    key: "modifications" as LogDetailTab,
     label: "拦截器",
     count: interceptorCount.value,
     disabled: interceptorCount.value === 0,
   },
 ]);
+
+function selectTab(tab: LogDetailTab): void {
+  activeTab.value = tab;
+  appStore.logDetailTab = tab;
+}
+
+watch(tabs, (nextTabs) => {
+  if (!detail.value || breakpoint.value) return;
+  if (nextTabs.find((tab) => tab.key === activeTab.value)?.disabled) {
+    activeTab.value = "request";
+  }
+});
 
 const bodyTarget = computed<BodyTarget>(() => {
   if (breakpoint.value && props.breakpointId !== undefined) {
@@ -642,7 +653,7 @@ function headerCount(headers: HeaderItem[]): string {
           class="tab-btn"
           :class="{ active: activeTab === tab.key }"
           :disabled="tab.disabled"
-          @click="activeTab = tab.key"
+          @click="selectTab(tab.key)"
         >
           {{ tab.label }}
           <span v-if="tab.count" class="tab-count">{{ tab.count }}</span>

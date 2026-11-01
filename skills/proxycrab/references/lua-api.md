@@ -265,14 +265,23 @@ Mutable request/response headers additionally provide:
 ```lua
 headers:append("x-name", "another-value")
 headers:set("x-name", "only-value")
+headers:set("x-name", {"first", "second"})
+headers:set("x-name", {}) -- delete all values for this name
 headers:remove("x-name")
 ```
 
 - `append` preserves existing values and adds one value.
-- `set` removes every existing case-insensitive match and stores one value.
+- `set` replaces existing values for the case-insensitive name with a string or a dense Lua array
+  of strings. Array order and duplicate values are preserved; an empty array deletes the header.
+  An empty string stores one empty value. Both request and response headers support this form.
+- Array elements must be valid UTF-8 strings with valid HTTP header-value syntax; numbers are not
+  coerced. Invalid names/values, sparse arrays, and tables with extra keys raise an error before
+  changing headers or recording modifications.
 - `remove` succeeds even when the header is absent.
 - Names and values must be valid HTTP header syntax.
 - Every mutation is recorded in the capture's interceptor history.
+- A nonempty `set` records `header_set` for the first value and `header_append` for remaining
+  values. An empty-array `set` records `header_remove` with the removed values.
 
 ## Request interceptors
 

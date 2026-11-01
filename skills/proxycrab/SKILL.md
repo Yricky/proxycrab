@@ -266,6 +266,10 @@ each script's `--help` output for supported options.
 Read `references/lua-api.md` before creating Lua. Write source to a local `.lua` file so quoting and
 newlines remain exact.
 
+For multiple values of one header, use `req.headers:set(name, {"first", "second"})` or the same
+method on `resp.headers`. This replaces existing values; `{}` deletes the header. Every array
+element must be a valid string. See the Lua reference for validation and modification history.
+
 Create or update a filter and test it against a known capture:
 
 ```bash

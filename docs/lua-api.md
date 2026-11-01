@@ -160,6 +160,27 @@ local all = entry.req.headers:all()                 -- name -> string array
 local tag = entry.req:get_tag("trace")             -- string or nil
 ```
 
+Mutable `req.headers` and `resp.headers` also provide `append`, `set`, and `remove`:
+
+```lua
+req.headers:set("x-name", "only-value")
+req.headers:set("x-name", {"first", "second"})
+resp.headers:set("set-cookie", {"session=abc; Path=/", "theme=dark; Path=/"})
+resp.headers:set("x-obsolete", {}) -- delete all values for this name
+```
+
+`set` replaces all existing values for the case-insensitive name. It accepts a string or a dense
+Lua array of strings, preserving array order and duplicate values; an empty array deletes the
+header. Every element must be a valid UTF-8 string with valid HTTP header-value syntax; numbers
+are not converted to strings. Invalid names, values, sparse arrays, and tables with extra keys
+raise an error before changing headers or recording modifications. An empty string remains one
+empty header value. `append` adds one value without replacing existing values, and `remove`
+deletes all values for the name, succeeding even when absent.
+
+Modification history records a nonempty `set` as `header_set` for the first value followed by
+`header_append` for each remaining value. An empty-array `set` records `header_remove` with the
+removed values.
+
 Persisted request and response bodies provide only `as_string()` and `as_json()`:
 
 ```lua
