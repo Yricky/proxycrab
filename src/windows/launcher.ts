@@ -20,6 +20,7 @@ import TextDiffWindow from "./TextDiffWindow.vue";
 import CertManagerWindow from "./CertManagerWindow.vue";
 import SystemLogsWindow from "./SystemLogsWindow.vue";
 import SettingsWindow from "./SettingsWindow.vue";
+import AboutWindow from "./AboutWindow.vue";
 import ReadonlyViewerWindow from "./ReadonlyViewerWindow.vue";
 import SkillManagerWindow from "./SkillManagerWindow.vue";
 import RoutingManagerWindow from "./RoutingManagerWindow.vue";
@@ -306,6 +307,15 @@ export function openSettings(): void {
     component: SettingsWindow,
     width: 900,
     height: 640,
+  });
+}
+
+export function openAbout(): void {
+  windowsStore.open("about", {
+    title: "关于 ProxyCrab",
+    component: AboutWindow,
+    width: 900,
+    height: 620,
   });
 }
 

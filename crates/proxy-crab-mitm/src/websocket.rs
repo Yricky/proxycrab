@@ -570,6 +570,9 @@ where
                 return Ok(());
             }
             tokio::select! {result=writer.write_all(&buffer[..count])=>result?,_=cancellation.cancelled()=>return Err(cancelled())};
+            // HTTPS MITM can wrap the socket in a BufStream; flush small frames before
+            // waiting for more input so data and heartbeat replies reach the peer promptly.
+            tokio::select! {result=writer.flush()=>result?,_=cancellation.cancelled()=>return Err(cancelled())};
             if let Some(mut d) = decoder.take() {
                 // At most one bounded input chunk per direction is in flight. Forwarding
                 // precedes capture; disk writes and decompression do not block the IO worker.
@@ -818,6 +821,97 @@ mod tests {
             index.read(&path, 0, 1, Some(3)).unwrap().1.unwrap(),
             b"later"
         );
+    }
+
+    #[tokio::test]
+    async fn buffered_forwarding_delivers_small_data_and_control_frames_without_waiting_for_eof() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CaptureStore::open(1, dir.path()).unwrap();
+        let request = crate::model::RequestData {
+            method: "GET".into(),
+            uri: "wss://example.test/".into(),
+            version: "WebSocket/13".into(),
+            headers: Default::default(),
+            tags: Default::default(),
+        };
+        let id = store.begin("test", &request, "websocket").unwrap();
+        let (mut client, downstream) = tokio::io::duplex(1024);
+        let (upstream, mut server) = tokio::io::duplex(1024);
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let task = tokio::spawn(forward(
+            tokio::io::BufStream::new(downstream),
+            tokio::io::BufStream::new(upstream),
+            store,
+            id,
+            "",
+            cancellation.clone(),
+            None,
+        ));
+
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            for opcode in [130, 137, 138] {
+                let request = frame(opcode, b"small", true);
+                client.write_all(&request).await.unwrap();
+                let mut received = vec![0; request.len()];
+                server.read_exact(&mut received).await.unwrap();
+                assert_eq!(received, request);
+
+                let response = frame(opcode, b"small", false);
+                server.write_all(&response).await.unwrap();
+                let mut received = vec![0; response.len()];
+                client.read_exact(&mut received).await.unwrap();
+                assert_eq!(received, response);
+            }
+        })
+        .await
+        .expect("small WebSocket frames must reach both peers before either connection closes");
+
+        cancellation.cancel();
+        assert_eq!(
+            task.await.unwrap().unwrap_err().kind(),
+            std::io::ErrorKind::Interrupted
+        );
+    }
+
+    #[tokio::test]
+    async fn buffered_forwarding_can_cancel_a_blocked_flush() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CaptureStore::open(1, dir.path()).unwrap();
+        let request = crate::model::RequestData {
+            method: "GET".into(),
+            uri: "wss://example.test/".into(),
+            version: "WebSocket/13".into(),
+            headers: Default::default(),
+            tags: Default::default(),
+        };
+        let id = store.begin("test", &request, "websocket").unwrap();
+        let (mut client, downstream) = tokio::io::duplex(1024);
+        let (upstream, mut server) = tokio::io::duplex(1);
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let task = tokio::spawn(forward(
+            downstream,
+            tokio::io::BufStream::new(upstream),
+            store,
+            id,
+            "",
+            cancellation.clone(),
+            None,
+        ));
+
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            client.write_all(&frame(137, b"ping", true)).await.unwrap();
+            let mut first_byte = [0];
+            server.read_exact(&mut first_byte).await.unwrap();
+            assert_eq!(first_byte, [137]);
+            // Leave the one-byte transport full so flush cannot finish without cancellation.
+            cancellation.cancel();
+            assert_eq!(
+                task.await.unwrap().unwrap_err().kind(),
+                std::io::ErrorKind::Interrupted
+            );
+        })
+        .await
+        .expect("cancelling a WebSocket connection must interrupt a blocked flush");
     }
 
     #[tokio::test]

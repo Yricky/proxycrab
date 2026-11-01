@@ -6,7 +6,9 @@ import { approvalsStore } from "../stores/approvals";
 import { skillStore } from "../stores/skill";
 import { useBackend } from "../api";
 import AppTooltip from "./AppTooltip.vue";
+import ProxyCrabMark from "./ProxyCrabMark.vue";
 import {
+  openAbout,
   openBase64,
   openAssetManager,
   openAgentsPresets,
@@ -37,6 +39,7 @@ import {
   Io5Desktop,
   Io5DocumentText,
   Io5Download,
+  Io5InformationCircle,
   Io5List,
   Io5Moon,
   Io5Newspaper,
@@ -45,7 +48,6 @@ import {
   Io5Settings,
   Io5ShieldCheckmark,
   Io5Stop,
-  Io5Flash,
   Io5Sunny,
   Io5Warning,
   Io5GitCompare,
@@ -134,7 +136,7 @@ onBeforeUnmount(() => {
   <header class="toolbar">
     <div class="tb-group">
       <span class="tb-brand">
-        <Io5Flash :size="15" class="brand-icon" />
+        <ProxyCrabMark />
         ProxyCrab
       </span>
     </div>
@@ -346,6 +348,10 @@ onBeforeUnmount(() => {
             <Io5Settings :size="14" />
             <span>设置</span>
           </button>
+          <button class="tb-menu-item" @click="runMenuAction(openAbout)">
+            <Io5InformationCircle :size="14" />
+            <span>关于</span>
+          </button>
           <div class="tb-menu-divider" />
           <button class="tb-menu-item" @click="setTheme('light')">
             <Io5Sunny :size="14" />
@@ -390,9 +396,6 @@ onBeforeUnmount(() => {
   gap: 6px;
   font-weight: 700;
   font-size: 14px;
-}
-.brand-icon {
-  color: var(--accent);
 }
 .tb-proxy {
   gap: 8px;

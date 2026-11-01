@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>关于 ProxyCrab</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+      }
+      body {
+        background: #0e0f12;
+        font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      }
+      #app {
+        height: 100%;
+        display: grid;
+        place-items: center;
+      }
+      .preview-window {
+        width: min(900px, 94vw);
+        height: min(620px, 90vh);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border: 1px solid #3a3d45;
+        border-radius: 12px;
+        background: #232428;
+        box-shadow: 0 28px 80px rgba(0, 0, 0, 0.6);
+      }
+      .preview-titlebar {
+        flex: none;
+        height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 12px;
+        color: #a8adb5;
+        font-size: 12px;
+        font-weight: 600;
+        background: #232428;
+        border-bottom: 1px solid #36383e;
+      }
+      .preview-body {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/about-preview.ts"></script>
+  </body>
+</html>

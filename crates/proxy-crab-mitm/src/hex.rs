@@ -1,6 +1,4 @@
 //! 摘要的小写十六进制编码。
-//!
-//! sha2 0.11 的摘要类型（hybrid-array）不再实现 `LowerHex`，无法直接 `format!("{:x}")`。
 
 /// 把字节序列编码为小写十六进制字符串。
 pub(crate) fn hex_lower(bytes: &[u8]) -> String {

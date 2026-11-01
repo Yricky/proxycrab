@@ -267,6 +267,11 @@ want to install the bundled Skill must explicitly run the local
 directory. It contains distinct application and Session-share HTML files backed by shared chunks;
 the application entry loads the Tauri or CLI Landing according to its runtime host.
 
+Rust dependencies share `sha2 0.10.9` with Tauri's code generator and use AWS-LC for both
+Rustls and rcgen. Keep `hyper-util` features limited to the client/runtime components used by
+the proxy, and use ZIP's `deflate-flate2-zlib-rs` feature to avoid compiling the unused
+system-proxy and Zopfli implementations.
+
 ```bash
 cargo check --workspace
 cargo test --workspace
