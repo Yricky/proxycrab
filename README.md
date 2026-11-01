@@ -133,7 +133,7 @@ return data and data.code or nil
 
 | 运行方式 | 当前构建目标 |
 | --- | --- |
-| 桌面应用 | macOS ARM64、Linux x64（AppImage） |
+| 桌面应用 | macOS ARM64（DMG）、Linux x64（AppImage）、Windows x64（EXE / MSI） |
 | CLI | Linux x64 / ARM64、macOS ARM64、Windows x64 |
 
 部分宿主能力有所区别：桌面端提供人工审批和 Skill 路径管理；CLI 提供允许/拒绝权限配置，并通过本地命令安装 Skill。
@@ -265,3 +265,11 @@ pnpm build
 ```
 
 Linux AppImage 的 WebKit 开发方式及其他实现细节见[运行与开发细节](docs/runtime-notes.md)。
+
+### CI 构建与 Release
+
+推送 `build/*` 分支或手动运行 `Build Artifacts` 工作流，会构建上表中的全部 Desktop 和 CLI 目标，并上传 CI 产物。
+
+推送以 `build/v` 开头的分支时，全部构建成功后自动发布正式 Release。例如，`build/v1.2.0` 对应标签和标题 `v1.2.0`。再次推送同一分支会更新该 Release 的附件，并将标签移至本次构建的提交。手动运行工作流不发布 Release。
+
+Release 附件直接提供 Linux AppImage、macOS DMG、Windows EXE / MSI 安装包，以及四个平台的 CLI 压缩包。
