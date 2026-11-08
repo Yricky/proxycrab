@@ -1,3 +1,5 @@
+import { t } from "../i18n";
+
 interface Cursor {
   bytes: Uint8Array;
   offset: number;
@@ -12,12 +14,12 @@ interface ProtoField {
 function readVarint(cursor: Cursor): bigint {
   let value = 0n;
   for (let shift = 0n; shift < 70n; shift += 7n) {
-    if (cursor.offset >= cursor.bytes.length) throw new Error("截断的 varint");
+    if (cursor.offset >= cursor.bytes.length) throw new Error(t("截断的 varint"));
     const byte = cursor.bytes[cursor.offset++];
     value |= BigInt(byte & 0x7f) << shift;
     if ((byte & 0x80) === 0) return value;
   }
-  throw new Error("varint 超过 10 字节");
+  throw new Error(t("varint 超过 10 字节"));
 }
 
 function hex(bytes: Uint8Array): string {
@@ -41,16 +43,16 @@ function parseMessage(cursor: Cursor, depth = 0, endGroup?: number): ProtoField[
     const tag = readVarint(cursor);
     const field = Number(tag >> 3n);
     const wire = Number(tag & 7n);
-    if (field === 0) throw new Error("字段号不能为 0");
+    if (field === 0) throw new Error(t("字段号不能为 0"));
     if (wire === 4) {
-      if (endGroup !== field) throw new Error("不匹配的 end-group");
+      if (endGroup !== field) throw new Error(t("不匹配的 end-group"));
       return fields;
     }
     let value: unknown;
     if (wire === 0) {
       value = readVarint(cursor).toString();
     } else if (wire === 1) {
-      if (cursor.offset + 8 > cursor.bytes.length) throw new Error("截断的 fixed64");
+      if (cursor.offset + 8 > cursor.bytes.length) throw new Error(t("截断的 fixed64"));
       value = new DataView(cursor.bytes.buffer, cursor.bytes.byteOffset + cursor.offset, 8)
         .getBigUint64(0, true)
         .toString();
@@ -58,7 +60,7 @@ function parseMessage(cursor: Cursor, depth = 0, endGroup?: number): ProtoField[
     } else if (wire === 2) {
       const length = Number(readVarint(cursor));
       if (!Number.isSafeInteger(length) || cursor.offset + length > cursor.bytes.length) {
-        throw new Error("截断的 length-delimited 字段");
+        throw new Error(t("截断的 length-delimited 字段"));
       }
       const bytes = cursor.bytes.subarray(cursor.offset, cursor.offset + length);
       cursor.offset += length;
@@ -80,7 +82,7 @@ function parseMessage(cursor: Cursor, depth = 0, endGroup?: number): ProtoField[
     } else if (wire === 3) {
       value = { group: parseMessage(cursor, depth + 1, field) };
     } else if (wire === 5) {
-      if (cursor.offset + 4 > cursor.bytes.length) throw new Error("截断的 fixed32");
+      if (cursor.offset + 4 > cursor.bytes.length) throw new Error(t("截断的 fixed32"));
       value = new DataView(
         cursor.bytes.buffer,
         cursor.bytes.byteOffset + cursor.offset,
@@ -88,11 +90,11 @@ function parseMessage(cursor: Cursor, depth = 0, endGroup?: number): ProtoField[
       ).getUint32(0, true);
       cursor.offset += 4;
     } else {
-      throw new Error(`不支持的 wire type ${wire}`);
+      throw new Error(t("不支持的 wire type {wire}", { wire }));
     }
     fields.push({ field, wire, value });
   }
-  if (endGroup !== undefined) throw new Error("缺少 end-group");
+  if (endGroup !== undefined) throw new Error(t("缺少 end-group"));
   return fields;
 }
 
@@ -164,7 +166,7 @@ export function inspectProtobuf(bytes: Uint8Array): string {
     const cursor: Cursor = { bytes, offset: 0 };
     return format(parseMessage(cursor));
   } catch (error) {
-    return `Protobuf 解析失败：${String(error)}\n\n${hex(bytes)}`;
+    return t("Protobuf 解析失败：{error}", { error: `${String(error)}\n\n${hex(bytes)}` });
   }
 }
 
@@ -185,11 +187,11 @@ export async function inspectGrpc(bytes: Uint8Array, encoding: string): Promise<
   const frames: unknown[] = [];
   let offset = 0;
   while (offset < bytes.length) {
-    if (offset + 5 > bytes.length) throw new Error("截断的 gRPC frame header");
+    if (offset + 5 > bytes.length) throw new Error(t("截断的 gRPC frame header"));
     const compressed = bytes[offset] !== 0;
     const length = new DataView(bytes.buffer, bytes.byteOffset + offset + 1, 4).getUint32(0);
     offset += 5;
-    if (offset + length > bytes.length) throw new Error("截断的 gRPC frame body");
+    if (offset + length > bytes.length) throw new Error(t("截断的 gRPC frame body"));
     const raw = bytes.subarray(offset, offset + length);
     offset += length;
     const decoded = compressed ? await decompressFrame(raw, encoding) : raw;

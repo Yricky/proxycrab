@@ -24,6 +24,7 @@ import { reportError } from "../stores/app";
 import { cloneSessionFilter, emptySessionFilter } from "../stores/logs";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { scriptLabel, scriptLabelFor, scriptTitle } from "../utils/script-label";
+import { t } from "../i18n";
 import {
   closeColumnGroups,
   columnGroupsState,
@@ -83,20 +84,23 @@ const selectedColumn = computed(() =>
 );
 const targetLabel = computed(() => {
   const option = draft.value.option;
-  if (!option) return "未选择";
+  if (!option) return t("未选择");
   if (option.kind === "script")
-    return `过滤脚本 · ${scriptLabelFor(filterScripts.value, option.script_name)}`;
+    return t("过滤脚本 · {name}", { name: scriptLabelFor(filterScripts.value, option.script_name) });
   if (option.column.kind === "script") {
-    return `自定义列 · ${scriptLabelFor(columnScripts.value, option.column.script_name)}`;
+    return t("自定义列 · {name}", { name: scriptLabelFor(columnScripts.value, option.column.script_name) });
   }
-  return `列 · ${BUILTIN_COLUMNS.find((item) => item.kind === option.column.kind)?.label ?? option.column.kind}`;
+  return t("列 · {name}", {
+      name:
+        BUILTIN_COLUMNS.find((item) => item.kind === option.column.kind)?.label ?? option.column.kind,
+    });
 });
 const placeholder = computed(() =>
   draft.value.option?.kind === "script"
-    ? "输入脚本参数，回车应用"
+    ? t("输入脚本参数，回车应用")
     : draft.value.option?.regex
-      ? "输入正则表达式，回车应用"
-      : "输入包含文本，回车应用",
+      ? t("输入正则表达式，回车应用")
+      : t("输入包含文本，回车应用"),
 );
 const activeGroupCache = computed(() => {
   const sessionId = props.sessionId;
@@ -168,7 +172,7 @@ async function refreshScripts(): Promise<void> {
     columnScripts.value = columns;
     filterScripts.value = filters;
   } catch (error) {
-    reportError(error, "加载过滤选项失败");
+    reportError(error, t("加载过滤选项失败"));
   }
 }
 
@@ -369,16 +373,16 @@ onBeforeUnmount(() => {
 
       <div v-if="menuOpen" class="fb-menu">
         <button class="fb-option" :class="{ selected: !draft.option }" @click="selectNone">
-          <span>未选择</span>
+          <span>{{ t("未选择") }}</span>
           <Io5Checkmark v-if="!draft.option" :size="13" />
         </button>
 
         <div class="fb-section">
           <div class="fb-section-heading">
-            <span>列</span>
+            <span>{{ t("列") }}</span>
             <label class="fb-regex" @click.stop>
               <input type="checkbox" :checked="columnRegex" @change="setRegex" />
-              <span>正则表达式</span>
+              <span>{{ t("正则表达式") }}</span>
             </label>
           </div>
           <button
@@ -419,8 +423,8 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="fb-section">
-          <div class="fb-section-heading"><span>过滤脚本</span></div>
-          <div v-if="filterScripts.length === 0" class="fb-empty">暂无过滤脚本</div>
+          <div class="fb-section-heading"><span>{{ t("过滤脚本") }}</span></div>
+          <div v-if="filterScripts.length === 0" class="fb-empty">{{ t("暂无过滤脚本") }}</div>
           <button
             v-for="script in filterScripts"
             :key="`filter:${script.name}`"
@@ -450,7 +454,7 @@ onBeforeUnmount(() => {
         :class="{ active: groupOpen }"
         :aria-expanded="groupOpen"
         :disabled="sessionId === null"
-        title="按当前列分组"
+        :title="t('按当前列分组')"
         @click="toggleGroupPopup"
       >
         <Io5Layers :size="14" />
@@ -476,12 +480,12 @@ onBeforeUnmount(() => {
         v-else-if="dirty && draft.option && !applying"
         :size="15"
         class="fb-enter-hint"
-        title="按回车应用"
+        :title="t('按回车应用')"
       />
       <div
         v-else-if="applying && dirty && draft.option"
         class="fb-loading"
-        aria-label="正在应用过滤"
+        :aria-label="t('正在应用过滤')"
       >
         <span class="fb-spinner" />
       </div>
@@ -495,7 +499,7 @@ onBeforeUnmount(() => {
           invalid: regexError,
         }"
         :disabled="!draft.option || applying"
-        :placeholder="draft.option ? placeholder : '请先选择过滤列或脚本'"
+        :placeholder="draft.option ? placeholder : t('请先选择过滤列或脚本')"
         spellcheck="false"
         @keyup.enter="apply"
         @keyup.esc="clearInput"
@@ -503,7 +507,7 @@ onBeforeUnmount(() => {
       <button
         v-if="draft.input && draft.option"
         class="btn icon fb-clear"
-        title="清空输入，按回车应用"
+        :title="t('清空输入，按回车应用')"
         @click="clearInput"
       >
         <Io5Close :size="13" />
@@ -513,7 +517,7 @@ onBeforeUnmount(() => {
     <span
       v-if="!syncing"
       class="fb-local"
-      title="过滤条件只在本地生效，不写入会话配置；分享链接与下次打开不受影响"
+      :title="t('过滤条件只在本地生效，不写入会话配置；分享链接与下次打开不受影响')"
     >
       <Io5CloudOfflineOutline :size="14" />
     </span>

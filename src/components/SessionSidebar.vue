@@ -4,6 +4,7 @@ import type { LogsStore } from "../stores/logs";
 import { sessionsStore } from "../stores/sessions";
 import { routingStore } from "../stores/routing";
 import { scriptLabelFor } from "../utils/script-label";
+import { t } from "../i18n";
 import { proxyStore } from "../stores/proxy";
 import { confirmDialog, openContextMenu } from "../stores/dialog";
 import { formatActivityCount } from "../utils/format";
@@ -128,7 +129,7 @@ async function createSession(): Promise<void> {
   creating.value = false;
   if (!session) return;
   logs.view(session.id);
-  appStore.toast("会话已创建", "success");
+  appStore.toast(t("会话已创建"), "success");
 }
 
 function startEdit(session: SessionMetadata, anchor: HTMLElement | null): void {
@@ -150,25 +151,30 @@ async function submitEdit(): Promise<void> {
   const updated = await sessionsStore.update(editingId.value, name, editDesc.value.trim() || null);
   if (updated) {
     closeEdit();
-    appStore.toast("会话信息已更新", "success");
+    appStore.toast(t("会话信息已更新"), "success");
   }
 }
 
 async function archiveSession(id: number, name: string): Promise<void> {
   const ok = await confirmDialog({
-    title: "归档会话",
-    message: `确定归档会话「${name}」吗？抓包记录会完整保留，可在已归档 Session 中恢复。`,
-    confirmText: "归档",
+    title: t("归档会话"),
+    message: t("确定归档会话「{name}」吗？抓包记录会完整保留，可在已归档 Session 中恢复。", {
+      name,
+    }),
+    confirmText: t("归档"),
   });
   if (ok && (await sessionsStore.archive(id))) {
-    appStore.toast(`「${name}」已归档`, "success");
+    appStore.toast(t("「{name}」已归档", { name }), "success");
   }
 }
 
 async function toggleActive(session: SessionMetadata): Promise<void> {
   const active = sessionsStore.activeSessionId === session.id;
   if (await sessionsStore.replaceActive(active ? null : session.id)) {
-    appStore.toast(active ? "已取消活跃会话" : `「${session.name}」已设为活跃会话`, "success");
+    appStore.toast(
+      active ? t("已取消活跃会话") : t("「{name}」已设为活跃会话", { name: session.name }),
+      "success",
+    );
   }
 }
 
@@ -176,20 +182,21 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
   // currentTarget 仅在事件分发期间有效，需在打开菜单前捕获
   const anchor = event.currentTarget as HTMLElement;
   openContextMenu(event, [
-    { label: "查看", icon: Io5Eye, action: () => logs.view(session.id) },
+    { label: t("查看"), icon: Io5Eye, action: () => logs.view(session.id) },
     {
-      label: "链接分享",
+      label: t("链接分享"),
       icon: Io5Link,
       action: () => openSessionExportShare(session.id, session.name),
     },
-    { label: "编辑会话", icon: Io5Create, action: () => startEdit(session, anchor) },
+    { label: t("编辑会话"), icon: Io5Create, action: () => startEdit(session, anchor) },
     {
-      label: sessionsStore.activeSessionId === session.id ? "取消活跃" : "设为活跃",
+      label: sessionsStore.activeSessionId === session.id ? t("取消活跃") : t("设为活跃"),
       icon: Io5RadioButtonOn,
       action: () => void toggleActive(session),
     },
     {
-      label: sessionsStore.activeSessionId === session.id ? "归档（请先取消活跃）" : "归档",
+      label:
+        sessionsStore.activeSessionId === session.id ? t("归档（请先取消活跃）") : t("归档"),
       icon: Io5Archive,
       dividerBefore: true,
       disabled: sessionsStore.activeSessionId === session.id,
@@ -217,7 +224,7 @@ watch(sidebarWidth, updatePopupPos);
     <div
       class="sb-resize"
       :class="{ dragging }"
-      title="拖动调整侧边栏宽度"
+      :title="t('拖动调整侧边栏宽度')"
       @pointerdown="onResizePointerDown"
       @pointermove="onResizePointerMove"
       @pointerup="endResize"
@@ -225,19 +232,19 @@ watch(sidebarWidth, updatePopupPos);
     ></div>
     <div class="sb-top">
       <div class="sb-header">
-        <span class="sb-title">会话</span>
+        <span class="sb-title">{{ t("会话") }}</span>
         <div class="sb-header-actions">
           <button
             class="btn icon"
             :title="
               proxyStore.activeBypassCount > 0
-                ? `透明转发记录（${proxyStore.activeBypassCount} 条活跃）`
-                : '透明转发记录'
+                ? t('透明转发记录（{n} 条活跃）', proxyStore.activeBypassCount)
+                : t('透明转发记录')
             "
             :aria-label="
               proxyStore.activeBypassCount > 0
-                ? `透明转发记录，${proxyStore.activeBypassCount} 条活跃`
-                : '透明转发记录'
+                ? t('透明转发记录，{n} 条活跃', proxyStore.activeBypassCount)
+                : t('透明转发记录')
             "
             @click="openBypass"
           >
@@ -246,7 +253,7 @@ watch(sidebarWidth, updatePopupPos);
             </span>
             <IoArrowForwardCircle v-else :size="15" />
           </button>
-          <button class="btn icon" title="新建会话" :disabled="creating" @click="createSession">
+          <button class="btn icon" :title="t('新建会话')" :disabled="creating" @click="createSession">
             <Io5Add :size="16" />
           </button>
         </div>
@@ -254,7 +261,7 @@ watch(sidebarWidth, updatePopupPos);
       <button
         class="sb-routing"
         :class="{ empty: !routingStore.selectedName }"
-        title="打开分流规则管理器"
+        :title="t('打开分流规则管理器')"
         @click="openRoutingManager"
       >
         <Io5RadioButtonOn :size="13" />
@@ -265,7 +272,7 @@ watch(sidebarWidth, updatePopupPos);
         >
           {{ scriptLabelFor(routingStore.scripts, routingStore.selectedName) }}
         </span>
-        <span v-else>未设置分流规则</span>
+        <span v-else>{{ t("未设置分流规则") }}</span>
       </button>
     </div>
 
@@ -282,12 +289,12 @@ watch(sidebarWidth, updatePopupPos);
         @dblclick="onItemDblclick($event, session)"
       />
       <div v-if="!sessionsStore.loading && sessionsStore.sessions.length === 0" class="empty-hint">
-        暂无会话，点击右上角 + 新建
+        {{ t("暂无会话，点击右上角 + 新建") }}
       </div>
     </div>
     <button class="sb-archived" @click="openArchivedSessions">
       <Io5Archive :size="14" />
-      <span>已归档 Session</span>
+      <span>{{ t("已归档 Session") }}</span>
     </button>
 
     <Teleport to="body">
@@ -304,7 +311,7 @@ watch(sidebarWidth, updatePopupPos);
         <input
           v-model="editName"
           class="input"
-          placeholder="会话名称"
+:placeholder="t('会话名称')"
           autofocus
           @keyup.enter="submitEdit"
           @keyup.esc="closeEdit"
@@ -312,12 +319,12 @@ watch(sidebarWidth, updatePopupPos);
         <input
           v-model="editDesc"
           class="input"
-          placeholder="描述（可选）"
+:placeholder="t('描述（可选）')"
           @keyup.enter="submitEdit"
           @keyup.esc="closeEdit"
         />
         <div class="sb-edit-actions">
-          <button class="btn primary" :disabled="!editName.trim()" @click="submitEdit">保存</button>
+          <button class="btn primary" :disabled="!editName.trim()" @click="submitEdit">{{ t("保存") }}</button>
         </div>
       </div>
     </Teleport>

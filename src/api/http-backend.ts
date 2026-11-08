@@ -1,4 +1,5 @@
 import type { Backend } from "./backend";
+import { t } from "../i18n";
 import { BackendError } from "./backend-error";
 import { downloadBodyFromBase, fetchBodyFromBase, fetchWebSocketBodyFromBase } from "./body";
 import { saveFileInWebview } from "./save-file";
@@ -97,7 +98,7 @@ async function request<T>(
     throw new BackendError(
       envelope?.error ?? {
         code: `http_${response.status}`,
-        message: response.status === 401 ? "Access Token 无效" : `HTTP ${response.status}`,
+        message: response.status === 401 ? t("Access Token 无效") : `HTTP ${response.status}`,
       },
     );
   }
@@ -248,7 +249,7 @@ export function createHttpBackend(
       if (!response.ok) {
         throw new BackendError({
           code: `http_${response.status}`,
-          message: `读取资源失败（HTTP ${response.status}）`,
+          message: t("读取资源失败（HTTP {status}）", { status: response.status }),
         });
       }
       return new Uint8Array(await response.arrayBuffer());

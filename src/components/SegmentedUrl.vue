@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { UrlSegment } from "../utils/url-segments";
+import { t } from "../i18n";
 
 const props = defineProps<{
   segments: UrlSegment[];
@@ -48,7 +49,7 @@ onBeforeUnmount(() => observer?.disconnect());
       :class="{ floating: !expanded }"
       @click="expanded = !expanded"
     >
-      {{ expanded ? "收起" : "更多" }}
+      {{ expanded ? t("收起") : t("更多") }}
     </button>
   </div>
 </template>

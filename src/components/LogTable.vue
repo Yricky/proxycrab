@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from "vue";
 import { useBackend } from "../api";
+import { t } from "../i18n";
 import type { LogsStore } from "../stores/logs";
 import { sessionsStore } from "../stores/sessions";
 import { proxyStore } from "../stores/proxy";
@@ -257,9 +258,9 @@ function startPanelDrag(event: PointerEvent): void {
 async function copyCell(value: string): Promise<void> {
   try {
     await writeClipboardText(value);
-    appStore.toast("单元格内容已复制", "success");
+    appStore.toast(t("单元格内容已复制"), "success");
   } catch (error) {
-    reportError(error, "复制单元格失败");
+    reportError(error, t("复制单元格失败"));
   }
 }
 
@@ -272,12 +273,12 @@ function showCellMenu(
   const items: MenuItem[] = [];
   if (value !== null) {
     items.push({
-      label: "复制",
+      label: t("复制"),
       icon: Io5Copy,
       action: () => void copyCell(value),
     });
     items.push({
-      label: "展示完整内容",
+      label: t("展示完整内容"),
       icon: FiMaximize,
       action: () => {
         cellPopup.value = {
@@ -289,7 +290,7 @@ function showCellMenu(
     });
   }
   items.push({
-    label: "复制聚焦到此行的分享链接",
+    label: t("复制聚焦到此行的分享链接"),
     icon: Io5Link,
     action: () => void copyFocusedShareLink(rowId),
   });
@@ -304,9 +305,9 @@ async function copyFocusedShareLink(id: number): Promise<void> {
     url.searchParams.set("id", String(id));
     try {
       await writeClipboardText(url.toString());
-      appStore.toast("分享链接已复制", "success");
+      appStore.toast(t("分享链接已复制"), "success");
     } catch (error) {
-      reportError(error, "复制分享链接失败");
+      reportError(error, t("复制分享链接失败"));
     }
     return;
   }
@@ -319,15 +320,15 @@ async function copyFocusedShareLink(id: number): Promise<void> {
       backend.listLocalIps?.() ?? [],
     ]);
     if (!status.running) {
-      appStore.toast("HTTP 服务未运行，无法生成分享链接", "error");
+      appStore.toast(t("HTTP 服务未运行，无法生成分享链接"), "error");
       return;
     }
     let share = current;
     if (!share.enabled || !share.token) {
       const confirmed = await confirmDialog({
-        title: "开启 Session 分享",
-        message: "开启后，任何获得链接的人都可以只读查看此会话的抓包内容。",
-        confirmText: "开启并复制",
+        title: t("开启 Session 分享"),
+        message: t("开启后，任何获得链接的人都可以只读查看此会话的抓包内容。"),
+        confirmText: t("开启并复制"),
       });
       if (!confirmed) return;
       share = await backend.enableSessionShare(sessionId);
@@ -337,15 +338,15 @@ async function copyFocusedShareLink(id: number): Promise<void> {
       ? buildSessionShareLinks(addresses, status.port, share.token)[0]
       : undefined;
     if (!link) {
-      appStore.toast("暂无可用的本机地址，无法生成分享链接", "error");
+      appStore.toast(t("暂无可用的本机地址，无法生成分享链接"), "error");
       return;
     }
     const url = new URL(link);
     url.searchParams.set("id", String(id));
     await writeClipboardText(url.toString());
-    appStore.toast("分享链接已复制", "success");
+    appStore.toast(t("分享链接已复制"), "success");
   } catch (error) {
-    reportError(error, "复制分享链接失败");
+    reportError(error, t("复制分享链接失败"));
   }
 }
 
@@ -402,7 +403,7 @@ async function refreshColumnScripts(): Promise<void> {
   try {
     columnScripts.value = await backend.listColumnScripts();
   } catch (error) {
-    reportError(error, "加载列脚本失败");
+    reportError(error, t("加载列脚本失败"));
   }
 }
 
@@ -461,21 +462,21 @@ async function showColumnMenu(index: number, x: number, y: number): Promise<void
     ...(column?.kind === "script"
       ? [
           {
-            label: "编辑脚本",
+            label: t("编辑脚本"),
             icon: Io5Create,
             action: () => openColumnManager(column.script_name, logsStore.sessionId),
           },
         ]
       : []),
     {
-      label: "移除列",
+      label: t("移除列"),
       icon: Io5Trash,
       danger: true,
       dividerBefore: column?.kind === "script",
       action: () => {
         void updateColumns(
           (viewColumns) => viewColumns.filter((_, itemIndex) => itemIndex !== index),
-          "移除列失败",
+          t("移除列失败"),
         );
       },
     },
@@ -492,7 +493,7 @@ async function showColumnMenu(index: number, x: number, y: number): Promise<void
           const next = [...viewColumns];
           next[index] = choice.create(current.width);
           return next;
-        }, "更新列失败");
+        }, t("更新列失败"));
       },
     })),
   ];
@@ -511,7 +512,7 @@ async function showAddColumnMenu(x: number, y: number): Promise<void> {
       action: () => {
         void updateColumns(
           (viewColumns) => [...viewColumns, choice.create(choice.defaultWidth)],
-          "添加列失败",
+          t("添加列失败"),
         );
       },
     })),
@@ -560,7 +561,7 @@ async function persistWidth(payloadIndex: number, width: number): Promise<void> 
     next[payloadIndex] = { ...current, width };
     await replaceView(sessionId, { columns: next });
   } catch (error) {
-    reportError(error, "保存列宽失败");
+    reportError(error, t("保存列宽失败"));
   }
 }
 
@@ -1004,7 +1005,7 @@ function drawHeader(ctx: CanvasRenderingContext2D, colors: Palette): void {
   if (!readonly) {
     drawHeaderCell(
       ADD_COLUMN_WIDTH,
-      "添加列",
+      t("添加列"),
       hoverHit.value?.type === "header-add",
       "add",
       false,
@@ -1162,10 +1163,10 @@ function drawRows(ctx: CanvasRenderingContext2D, colors: Palette): void {
   if (!logsStore.loading && rowIds.value.length === 0) {
     const message =
       logsStore.sessionId === null
-        ? "请选择或创建一个会话"
+        ? t("请选择或创建一个会话")
         : logsStore.filterActive
-          ? "没有匹配过滤条件的记录"
-          : "暂无抓包记录";
+          ? t("没有匹配过滤条件的记录")
+          : t("暂无抓包记录");
     ctx.fillStyle = colors.textFaint;
     ctx.font = `13px ${colors.uiFont}`;
     ctx.textAlign = "center";
@@ -1663,7 +1664,7 @@ onBeforeUnmount(() => {
         @contextmenu="onCanvasContextMenu"
         @wheel="onWheel"
       />
-      <div v-if="logsStore.loading" class="lt-loading" role="status" aria-label="正在加载日志">
+      <div v-if="logsStore.loading" class="lt-loading" role="status" :aria-label="t('正在加载日志')">
         <svg
           v-if="logsStore.loadProgress !== null"
           class="lt-progress"
@@ -1688,17 +1689,17 @@ onBeforeUnmount(() => {
         <div
           class="lt-splitter"
           :class="{ dragging: panelDragging }"
-          title="拖动调整详情面板高度"
+          :title="t('拖动调整详情面板高度')"
           @pointerdown="startPanelDrag"
         />
         <header class="lt-panel-bar">
           <span class="lt-panel-title mono">#{{ panelLogId }}</span>
-          <span class="lt-panel-label">详情</span>
+          <span class="lt-panel-label">{{ t("详情") }}</span>
           <span class="lt-panel-spacer" />
-          <button class="btn icon" title="在窗口中打开" @click="openPanelInWindow">
+          <button class="btn icon" :title="t('在窗口中打开')" @click="openPanelInWindow">
             <Io5OpenOutline :size="14" />
           </button>
-          <button class="btn icon" title="关闭" @click="closePanel">
+          <button class="btn icon" :title="t('关闭')" @click="closePanel">
             <Io5Close :size="14" />
           </button>
         </header>

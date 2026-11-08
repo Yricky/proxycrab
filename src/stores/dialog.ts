@@ -1,4 +1,5 @@
 import { reactive } from "vue";
+import { t } from "../i18n";
 
 export interface ConfirmOptions {
   title: string;
@@ -33,7 +34,7 @@ export const confirmState = reactive<ConfirmState>({
   visible: false,
   title: "",
   message: "",
-  confirmText: "确定",
+  confirmText: t("确定"),
   danger: false,
   secondaryText: null,
   resolve: null,
@@ -52,7 +53,7 @@ function openConfirm(options: ConfirmOptions | ChoiceOptions): Promise<ChoiceRes
     confirmState.visible = true;
     confirmState.title = options.title;
     confirmState.message = options.message;
-    confirmState.confirmText = options.confirmText ?? "确定";
+    confirmState.confirmText = options.confirmText ?? t("确定");
     confirmState.danger = options.danger ?? false;
     confirmState.secondaryText = "secondaryText" in options ? options.secondaryText : null;
     confirmState.resolve = resolve;

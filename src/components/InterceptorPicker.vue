@@ -5,6 +5,7 @@ import { useBackend } from "../api";
 import type { InterceptorKind, InterceptorLibraryItem } from "../api/types";
 import { reportError } from "../stores/app";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
+import { t } from "../i18n";
 
 const props = defineProps<{
   visible: boolean;
@@ -45,7 +46,7 @@ async function load(): Promise<void> {
   try {
     items.value = (await backend.listInterceptors(props.kind)).items;
   } catch (error) {
-    reportError(error, "加载拦截器脚本失败");
+    reportError(error, t("加载拦截器脚本失败"));
   } finally {
     loading.value = false;
   }
@@ -78,20 +79,20 @@ watch(
     <div v-if="visible" class="picker-mask" @mousedown.self="emit('close')" @keydown="onKeydown">
       <div class="interceptor-picker" :style="pickerStyle">
         <div class="picker-head">
-          <span>{{ kind === "request" ? "添加请求拦截器" : "添加响应拦截器" }}</span>
-          <button class="btn icon" title="关闭" @click="emit('close')">
+          <span>{{ kind === "request" ? t("添加请求拦截器") : t("添加响应拦截器") }}</span>
+          <button class="btn icon" :title="t('关闭')" @click="emit('close')">
             <Io5Close :size="13" />
           </button>
         </div>
         <label class="picker-search">
           <Io5Search :size="14" />
-          <input ref="input" v-model="query" placeholder="搜索全局脚本" spellcheck="false" />
+          <input ref="input" v-model="query" :placeholder="t('搜索全局脚本')" spellcheck="false" />
         </label>
         <div class="picker-list">
-          <div v-if="atCapacity" class="picker-state">本侧已达到 12 个拦截器上限</div>
-          <div v-else-if="loading" class="picker-state">加载中…</div>
+          <div v-if="atCapacity" class="picker-state">{{ t("本侧已达到 12 个拦截器上限") }}</div>
+          <div v-else-if="loading" class="picker-state">{{ t("加载中…") }}</div>
           <div v-else-if="available.length === 0" class="picker-state">
-            {{ query ? "没有匹配的可用脚本" : "没有可添加的脚本" }}
+            {{ query ? t("没有匹配的可用脚本") : t("没有可添加的脚本") }}
           </div>
           <button
             v-for="item in available"
@@ -101,7 +102,7 @@ watch(
             @click="choose(item.name)"
           >
             <span class="mono" :title="scriptTitle(item)">{{ scriptLabel(item) }}</span>
-            <span class="text-faint">{{ item.usage_count }} 个会话使用</span>
+            <span class="text-faint">{{ t("{n} 个会话使用", item.usage_count) }}</span>
           </button>
         </div>
       </div>

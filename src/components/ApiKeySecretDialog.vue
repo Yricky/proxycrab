@@ -5,6 +5,7 @@ import { useBackend } from "../api";
 import type { CreatedApiKey, PermissionIdentitySummary } from "../api/types";
 import { appStore, reportError } from "../stores/app";
 import { copyText as writeClipboardText } from "../utils/clipboard";
+import { t } from "../i18n";
 
 const props = defineProps<{ identities: PermissionIdentitySummary[] }>();
 const emit = defineEmits<{ close: [createdId?: string] }>();
@@ -17,10 +18,10 @@ const acknowledged = ref(false);
 
 const validationError = computed(() => {
   const value = name.value.trim();
-  if (!value) return "请输入名称";
-  if (Array.from(value).length > 64) return "名称不能超过 64 个字符";
+  if (!value) return t("请输入名称");
+  if (Array.from(value).length > 64) return t("名称不能超过 64 个字符");
   if (props.identities.some((identity) => identity.kind === "api_key" && identity.name === value)) {
-    return "名称已存在";
+    return t("名称已存在");
   }
   return null;
 });
@@ -34,7 +35,7 @@ async function create(): Promise<void> {
   try {
     created.value = await backend.createHttpApiKey(name.value.trim());
   } catch (error) {
-    reportError(error, "创建 API Key 失败");
+    reportError(error, t("创建 API Key 失败"));
   } finally {
     creating.value = false;
   }
@@ -44,9 +45,9 @@ async function copy(): Promise<void> {
   if (!created.value) return;
   try {
     await writeClipboardText(created.value.api_key);
-    appStore.toast("API Key 已复制", "success");
+    appStore.toast(t("API Key 已复制"), "success");
   } catch (error) {
-    reportError(error, "复制 API Key 失败");
+    reportError(error, t("复制 API Key 失败"));
   }
 }
 
@@ -64,30 +65,30 @@ function close(): void {
           <header>
             <Io5Key :size="18" />
             <div>
-              <strong id="key-title">新建 API Key</strong>
-              <span>新密钥将使用默认的最小权限模板</span>
+              <strong id="key-title">{{ t("新建 API Key") }}</strong>
+              <span>{{ t("新密钥将使用默认的最小权限模板") }}</span>
             </div>
           </header>
           <label class="key-field">
-            <span>名称</span>
+            <span>{{ t("名称") }}</span>
             <input
               ref="nameInput"
               v-model="name"
               class="input"
               autofocus
-              placeholder="例如：本地脚本"
+              :placeholder="t('例如：本地脚本')"
               @keyup.enter="create"
             />
           </label>
           <span v-if="name && validationError" class="validation-error">{{ validationError }}</span>
           <footer>
-            <button class="btn" :disabled="creating" @click="close">取消</button>
+            <button class="btn" :disabled="creating" @click="close">{{ t("取消") }}</button>
             <button
               class="btn primary"
               :disabled="Boolean(validationError) || creating"
               @click="create"
             >
-              {{ creating ? "创建中…" : "创建" }}
+              {{ creating ? t("创建中…") : t("创建") }}
             </button>
           </footer>
         </template>
@@ -96,27 +97,27 @@ function close(): void {
           <header>
             <Io5Checkmark :size="18" class="created-icon" />
             <div>
-              <strong id="key-title">API Key 已创建</strong>
+              <strong id="key-title">{{ t("API Key 已创建") }}</strong>
               <span>{{ created.identity.name }}</span>
             </div>
           </header>
           <div class="secret-warning">
             <Io5Warning :size="17" />
-            <span>这是唯一一次显示完整密钥。关闭后无法再次查看或恢复。</span>
+            <span>{{ t("这是唯一一次显示完整密钥。关闭后无法再次查看或恢复。") }}</span>
           </div>
           <div class="secret-row">
             <code>{{ created.api_key }}</code>
             <button class="btn" @click="copy">
               <Io5Copy :size="14" />
-              复制
+              {{ t("复制") }}
             </button>
           </div>
           <label class="acknowledge">
             <input v-model="acknowledged" type="checkbox" />
-            <span>我已保存此 API Key</span>
+            <span>{{ t("我已保存此 API Key") }}</span>
           </label>
           <footer>
-            <button class="btn primary" :disabled="!acknowledged" @click="close">完成</button>
+            <button class="btn primary" :disabled="!acknowledged" @click="close">{{ t("完成") }}</button>
           </footer>
         </template>
       </div>

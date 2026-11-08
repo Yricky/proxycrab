@@ -2,6 +2,7 @@ import type { Unsubscribe } from "../api/backend";
 import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { HttpApiChange, HttpApiResource } from "../api/types";
 import { reportError } from "./app";
+import { t } from "../i18n";
 import { proxyStore } from "./proxy";
 import { sessionsStore } from "./sessions";
 import { routingStore } from "./routing";
@@ -92,7 +93,7 @@ export async function startHttpApiSync(): Promise<void> {
   try {
     unlisten = await backend.subscribeChanges(enqueue);
   } catch (error) {
-    reportError(error, "启动 HTTP API 界面同步失败");
+    reportError(error, t("启动 HTTP API 界面同步失败"));
   }
 }
 

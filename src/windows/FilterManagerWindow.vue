@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useBackend } from "../api";
 import { scriptTitle } from "../utils/script-label";
+import { t } from "../i18n";
 import ScriptLibraryManager, {
   type ScriptLibraryConfig,
 } from "../components/ScriptLibraryManager.vue";
@@ -11,16 +12,18 @@ const backend = useBackend();
 
 const config: ScriptLibraryConfig = {
   windowId: "filter-manager",
-  sidebarTitle: "过滤脚本",
+  sidebarTitle: t("过滤脚本"),
   createPlaceholder: "新过滤脚本名",
-  emptyListHint: "暂无过滤脚本",
-  editorEmptyHint: "新建一个过滤脚本后即可开始编辑",
-  statusbar: "entry 为当前记录 · 字符串参数通过 ... 传入 · 必须返回布尔值",
+  emptyListHint: t("暂无过滤脚本"),
+  editorEmptyHint: t("新建一个过滤脚本后即可开始编辑"),
+  statusbar: t("entry 为当前记录 · 字符串参数通过 ... 传入 · 必须返回布尔值"),
   defaultSource: DEFAULT_SOURCE,
   resources: ["filter_scripts"],
   changeEvent: "filter-scripts-changed",
   deleteMessage: (script) =>
-    `确定删除过滤脚本「${scriptTitle(script)}」吗？引用它的会话会清除过滤。该操作不可撤销。`,
+    t("确定删除过滤脚本「{name}」吗？引用它的会话会清除过滤。该操作不可撤销。", {
+      name: scriptTitle(script),
+    }),
   debug: {
     mode: "log-id-input",
     run: async ({ name, logId, input }) => {

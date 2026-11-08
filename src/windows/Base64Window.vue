@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { t } from "../i18n";
 import { Io5ArrowDown, Io5ArrowUp, Io5Trash } from "vue-icons-plus/io5";
 
 type Mode = "standard" | "urlsafe";
@@ -42,7 +43,7 @@ function decode(): void {
   try {
     raw.value = decodeText(encoded.value, mode.value === "urlsafe");
   } catch {
-    decodeError.value = "解码失败：输入不是合法的 Base64 内容";
+    decodeError.value = t("解码失败：输入不是合法的 Base64 内容");
   }
 }
 
@@ -56,21 +57,21 @@ function clearAll(): void {
 <template>
   <div class="b64-root">
     <div class="b64-field">
-      <div class="b64-label text-secondary">原始值</div>
+      <div class="b64-label text-secondary">{{ t("原始值") }}</div>
       <textarea
         v-model="raw"
         class="input b64-text mono"
-        placeholder="输入要编码的文本"
+        :placeholder="t('输入要编码的文本')"
         spellcheck="false"
       />
     </div>
 
     <div class="b64-buttons">
-      <button class="btn primary" @click="encode"><Io5ArrowDown :size="14" /> 编码</button>
-      <button class="btn" @click="decode"><Io5ArrowUp :size="14" /> 解码</button>
-      <button class="btn" @click="clearAll"><Io5Trash :size="14" /> 清空</button>
+      <button class="btn primary" @click="encode"><Io5ArrowDown :size="14" /> {{ t("编码") }}</button>
+      <button class="btn" @click="decode"><Io5ArrowUp :size="14" /> {{ t("解码") }}</button>
+      <button class="btn" @click="clearAll"><Io5Trash :size="14" /> {{ t("清空") }}</button>
       <span class="b64-spacer" />
-      <span class="text-secondary">编码模式</span>
+      <span class="text-secondary">{{ t("编码模式") }}</span>
       <select v-model="mode" class="select">
         <option value="standard">Standard</option>
         <option value="urlsafe">URL-safe</option>
@@ -78,11 +79,11 @@ function clearAll(): void {
     </div>
 
     <div class="b64-field">
-      <div class="b64-label text-secondary">编码值</div>
+      <div class="b64-label text-secondary">{{ t("编码值") }}</div>
       <textarea
         v-model="encoded"
         class="input b64-text mono"
-        placeholder="Base64 结果"
+        :placeholder="t('Base64 结果')"
         spellcheck="false"
       />
       <div v-if="decodeError" class="b64-error text-danger">{{ decodeError }}</div>

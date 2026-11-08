@@ -1,4 +1,5 @@
 import type { Backend } from "../api/backend";
+import { t } from "../i18n";
 import { UI_BODY_MAX_SIZE } from "../api/body";
 import type { FileWriter } from "../api/save-file";
 import type { BodyPayload, HeaderItem, LogDetail } from "../api/types";
@@ -82,7 +83,7 @@ async function readBody(
     return { size: body.bytes.length, storedSize: payload.size, mimeType, text, encoding };
   } catch (error) {
     signal.throwIfAborted();
-    const message = `Body 读取失败（${side}）：${errorMessage(error)}`;
+    const message = t("Body 读取失败（{side}）：{error}", { side, error: errorMessage(error) });
     log("warning", `#${detail.id} ${message}`);
     const text = `[ProxyCrab HAR export] ${message}`;
     return {
@@ -219,7 +220,10 @@ export async function appendHar(
     } catch (error) {
       signal.throwIfAborted();
       // Record unavailable captures rather than silently dropping a selected row.
-      report("warning", `#${id} 详情读取失败：${errorMessage(error)}，已保留失败占位记录`);
+      report(
+        "warning",
+        t("#{id} 详情读取失败：{error}，已保留失败占位记录", { id, error: errorMessage(error) }),
+      );
       detail = {
         id,
         session_id: sessionId,
@@ -249,12 +253,19 @@ export async function appendHar(
       (detail.request.method.toUpperCase() === "CONNECT" && detail.stage === "tls_mitm")
     ) {
       progress.skipped++;
-      report("info", `#${id} 跳过 WebSocket 连接或合成 TLS CONNECT 记录`);
+      report("info", t("#{id} 跳过 WebSocket 连接或合成 TLS CONNECT 记录", { id }));
     } else {
       const entry = await buildHarEntry(backend, detail, signal, report);
       await append((progress.exported ? "," : "") + JSON.stringify(entry));
       progress.exported++;
-      report("info", `#${id} 已写入 ${detail.request.method} ${detail.response?.status ?? 0}`);
+      report(
+        "info",
+        t("#{id} 已写入 {method} {status}", {
+          id,
+          method: detail.request.method,
+          status: detail.response?.status ?? 0,
+        }),
+      );
     }
     progress.processed++;
     onProgress({ ...progress });

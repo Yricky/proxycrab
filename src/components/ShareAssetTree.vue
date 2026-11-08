@@ -10,6 +10,7 @@ import type { AssetMetadata } from "../api/types";
 import { fileTreeRows } from "../utils/file-tree";
 import { fileKind } from "../utils/file-kind";
 import { formatBytes } from "../utils/format";
+import { t } from "../i18n";
 import { FILE_KIND_ICONS } from "./fileIcons";
 import VirtualList from "./VirtualList.vue";
 
@@ -76,10 +77,10 @@ function toggleCollapse(path: string): void {
         :aria-disabled="row.checked === 'covered' || disabled"
         :title="
           row.coveredBy
-            ? `已由 ${row.coveredBy} 覆盖`
+            ? t('已由 {name} 覆盖', { name: row.coveredBy })
             : row.entry
               ? `${row.path} · ${formatBytes(row.entry.data.size)}`
-              : `${row.path}/ 包含其下全部资源`
+              : t('{path}/ 包含其下全部资源', { path: row.path })
         "
         tabindex="0"
         @click="toggle(row.path, !!row.entry)"
@@ -91,7 +92,7 @@ function toggleCollapse(path: string): void {
           type="button"
           class="tree-chevron"
           :aria-expanded="!collapsed.has(row.path)"
-          :aria-label="collapsed.has(row.path) ? '展开' : '收起'"
+          :aria-label="collapsed.has(row.path) ? t('展开') : t('收起')"
           @click.stop="toggleCollapse(row.path)"
           @keydown.enter.stop.prevent="toggleCollapse(row.path)"
         >

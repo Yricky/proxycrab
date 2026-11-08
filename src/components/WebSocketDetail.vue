@@ -17,6 +17,7 @@ import type {
 } from "../api/types";
 import type { BodySide, LoadedBody } from "../api/body";
 import { appStore, reportError } from "../stores/app";
+import { t } from "../i18n";
 import { openReadonlyViewer } from "../windows/launcher";
 import { copyText } from "../utils/clipboard";
 import { formatHex } from "../utils/hex-viewer";
@@ -92,12 +93,12 @@ const live = computed(
 );
 const state = computed(() =>
   info.value?.closed_at != null
-    ? "已关闭"
+    ? t("已关闭")
     : live.value
-      ? "连接中"
+      ? t("连接中")
       : props.detail.outcome === "in_progress"
-        ? "采集已停止"
-        : "已结束",
+        ? t("采集已停止")
+        : t("已结束"),
 );
 const origin = computed(() => info.value?.opened_at ?? props.detail.created_at);
 const end = computed(() => {
@@ -281,12 +282,12 @@ function clickCanvas(event: MouseEvent) {
 function hoverCanvas(event: MouseEvent) {
   const side = hitPill(event);
   if (side) {
-    hoverTitle.value = `${side === "request" ? "C→S" : "S→C"} ${unseen.value[side].size} 条新消息，点击查看最新`;
+    hoverTitle.value = `${side === "request" ? "C→S" : "S→C"} ${t("{n} 条新消息，点击查看最新", unseen.value[side].size)}`;
     return;
   }
   const hit = hitMessage(event);
   hoverTitle.value = hit
-    ? `${hit.side === "request" ? "C→S" : "S→C"} #${hit.message.id} ${hit.message.type} · ${hit.message.size} B · ${hit.message.producer ? "拦截器发送" : "原始消息"} · ${messageStatusLabel(hit.message)} · ${timeLabel(hit.message.started_at - origin.value)} → ${timeLabel(hit.message.completed_at - origin.value)}`
+    ? `${hit.side === "request" ? "C→S" : "S→C"} #${hit.message.id} ${hit.message.type} · ${hit.message.size} B · ${hit.message.producer ? t("拦截器发送") : t("原始消息")} · ${messageStatusLabel(hit.message)} · ${timeLabel(hit.message.started_at - origin.value)} → ${timeLabel(hit.message.completed_at - origin.value)}`
     : "";
 }
 async function wheelCanvas(event: WheelEvent) {
@@ -471,12 +472,12 @@ async function openSource(interceptor: WebSocketInterceptor) {
     );
     openReadonlyViewer(
       `script-snapshot-${session_id}-${id}-${interceptor.execution_id}`,
-      `${interceptor.name} — WS 来源脚本`,
+      t("{name} — WS 来源脚本", { name: interceptor.name }),
       content,
       "lua",
     );
   } catch (error) {
-    reportError(error, "加载 WS 来源脚本失败");
+    reportError(error, t("加载 WS 来源脚本失败"));
   }
 }
 async function copy() {
@@ -487,9 +488,9 @@ async function copy() {
         ? formatHex(body.value.bytes)
         : new TextDecoder().decode(body.value.bytes),
     );
-    appStore.toast("消息已复制", "success");
+    appStore.toast(t("消息已复制"), "success");
   } catch (error) {
-    reportError(error, "复制消息失败");
+    reportError(error, t("复制消息失败"));
   }
 }
 async function download() {
@@ -501,7 +502,7 @@ async function download() {
       new Uint8Array(body.value.bytes),
     );
   } catch (error) {
-    reportError(error, "下载消息失败");
+    reportError(error, t("下载消息失败"));
   }
 }
 function redactionChanged() {
@@ -556,17 +557,17 @@ onBeforeUnmount(() => {
     <div class="ws-toolbar ws-connection-toolbar">
       <div class="connection-info">
         <strong>WebSocket</strong><span :class="{ live }">{{ state }}</span>
-        <span>子协议：{{ info?.subprotocol || "无" }}</span
-        ><span>扩展：{{ info?.extensions || "无" }}</span>
+        <span>{{ t("子协议：{value}", { value: info?.subprotocol || t("无") }) }}</span
+        ><span>{{ t("扩展：{value}", { value: info?.extensions || t("无") }) }}</span>
         <span v-if="info?.closed_at != null"
           >关闭：{{ new Date(info.closed_at).toLocaleString() }} · {{ info.close_code ?? "—" }}
           {{ info.close_reason }}</span
         >
       </div>
-      <span v-if="refreshing">加载中…</span>
+      <span v-if="refreshing">{{ t("加载中…") }}</span>
     </div>
     <div v-if="info?.interceptors?.length && backend.getInterceptorContent" class="ws-toolbar">
-      <span>连接脚本快照</span>
+      <span>{{ t("连接脚本快照") }}</span>
       <button
         v-for="interceptor in info.interceptors"
         :key="interceptor.execution_id"
@@ -576,18 +577,18 @@ onBeforeUnmount(() => {
         {{ interceptor.name }} #{{ interceptor.execution_id }}
       </button>
     </div>
-    <div class="ws-toolbar ws-legend" aria-label="消息颜色图例">
-      <span class="original">原始消息</span><span class="generated">拦截器发送</span>
-      <span class="dropped">灰框：已丢弃</span><span class="failed">红框：未发送／失败</span>
+    <div class="ws-toolbar ws-legend" :aria-label="t('消息颜色图例')">
+      <span class="original">{{ t("原始消息") }}</span><span class="generated">{{ t("拦截器发送") }}</span>
+      <span class="dropped">{{ t("灰框：已丢弃") }}</span><span class="failed">{{ t("红框：未发送／失败") }}</span>
     </div>
     <div v-if="listError" class="ws-error">{{ listError }}</div>
     <div class="waterfall">
       <div class="lane-labels">
-        <div class="time-label">时间</div>
+        <div class="time-label">{{ t("时间") }}</div>
         <div v-for="side in sides" :key="side" class="lane-label">
           <span>{{ side === "request" ? "C→S" : "S→C" }}</span>
-          <small :aria-label="`${side === 'request' ? 'C→S' : 'S→C'} 消息数量`"
-            >{{ messages[side].length }} 条</small
+          <small :aria-label="`${side === 'request' ? 'C→S' : 'S→C'} ${t('消息数量')}`"
+            >{{ t("{n} 条", messages[side].length) }}</small
           >
         </div>
       </div>
@@ -595,7 +596,7 @@ onBeforeUnmount(() => {
         ref="viewport"
         class="timeline-scroll"
         tabindex="0"
-        aria-label="WebSocket 消息时间轴"
+        :aria-label="t('WebSocket 消息时间轴')"
         @scroll="onScroll"
       >
         <div class="timeline" :style="{ width: `${width + 20}px` }">
@@ -610,7 +611,9 @@ onBeforeUnmount(() => {
             :title="hoverTitle"
             tabindex="0"
             role="img"
-            aria-label="双向消息瀑布图；Command 或 Ctrl 加滚轮缩放；上下键选择方向，左右键切换消息"
+            :aria-label="
+              t('双向消息瀑布图；Command 或 Ctrl 加滚轮缩放；上下键选择方向，左右键切换消息')
+            "
             @click="clickCanvas"
             @mousemove="hoverCanvas"
             @mouseleave="hoverTitle = ''"
@@ -627,9 +630,9 @@ onBeforeUnmount(() => {
         >
         <button
           class="btn icon"
-          aria-label="上一条消息"
+          :aria-label="t('上一条消息')"
           :disabled="!neighbors?.previous"
-          title="当前方向的上一条消息（包含重叠消息）"
+          :title="t('当前方向的上一条消息（包含重叠消息）')"
           @click="navigateMessage(neighbors?.previous)"
         >
           <Io5ChevronBack :size="13" />
@@ -637,9 +640,9 @@ onBeforeUnmount(() => {
         <span>{{ (neighbors?.index ?? -1) + 1 }} / {{ messages[selected.side].length }}</span>
         <button
           class="btn icon"
-          aria-label="下一条消息"
+          :aria-label="t('下一条消息')"
           :disabled="!neighbors?.next"
-          title="当前方向的下一条消息（包含重叠消息）"
+          :title="t('当前方向的下一条消息（包含重叠消息）')"
           @click="navigateMessage(neighbors?.next)"
         >
           <Io5ChevronForward :size="13" />
@@ -650,15 +653,15 @@ onBeforeUnmount(() => {
           >{{ timeLabel(selected.message.started_at - origin) }} →
           {{ timeLabel(selected.message.completed_at - origin) }}</span
         >
-        <span>耗时 {{ selected.message.completed_at - selected.message.started_at }} ms</span>
+        <span>{{ t("耗时 {n} ms", selected.message.completed_at - selected.message.started_at) }}</span>
                 <strong>{{ messageStatusLabel(selected.message) }}</strong>
-        <span>{{ selected.message.producer ? "拦截器发送" : "原始消息" }}</span>
+        <span>{{ selected.message.producer ? t("拦截器发送") : t("原始消息") }}</span>
         <span v-if="selected.message.sequence != null"
-          >处理序号 {{ selected.message.sequence }}</span
+          >{{ t("处理序号 {n}", selected.message.sequence) }}</span
         >
         <template v-for="relation in ['root', 'parent'] as const" :key="relation">
           <template v-if="selected.message[relation]">
-            <span>{{ relation === "root" ? "源头" : "直接触发" }}</span>
+            <span>{{ relation === "root" ? t("源头") : t("直接触发") }}</span>
             <button
               v-if="backend.getWebSocketMessages"
               class="btn source-link"
@@ -670,7 +673,7 @@ onBeforeUnmount(() => {
           </template>
         </template>
         <template v-if="selected.message.producer">
-          <span>发送者</span>
+          <span>{{ t("发送者") }}</span>
           <button
             v-if="backend.getInterceptorContent"
             class="btn source-link"
@@ -679,12 +682,11 @@ onBeforeUnmount(() => {
             {{ selected.message.producer.name }} #{{ selected.message.producer.execution_id }}
           </button>
           <span
-            >调用 #{{ selected.message.producer.invocation_id }} · 第
-            {{ selected.message.producer.send_index }} 次发送</span
+            >{{ t("调用 #{id} · 第 {n} 次发送", { id: selected.message.producer.invocation_id, n: selected.message.producer.send_index }) }}</span
           >
         </template>
         <template v-if="selected.message.dropped_by">
-          <span>丢弃者</span>
+          <span>{{ t("丢弃者") }}</span>
           <button
             v-if="backend.getInterceptorContent"
             class="btn source-link"
@@ -692,15 +694,15 @@ onBeforeUnmount(() => {
           >
             {{ selected.message.dropped_by.name }} #{{ selected.message.dropped_by.execution_id }}
           </button>
-          <span>调用 #{{ selected.message.dropped_by.invocation_id }}</span>
+          <span>{{ t("调用 #{id}", { id: selected.message.dropped_by.invocation_id }) }}</span>
         </template>
         <button
           v-if="selected.message.type === 'text'"
           class="btn icon"
           :class="{ on: formatted }"
           :aria-pressed="formatted"
-          title="格式化 JSON"
-          aria-label="格式化 JSON"
+          :title="t('格式化 JSON')"
+          :aria-label="t('格式化 JSON')"
           @click="formatted = !formatted"
         >
           <Io5CodeSlash :size="13" />
@@ -708,8 +710,8 @@ onBeforeUnmount(() => {
         <button
           class="btn icon"
           :disabled="!body"
-          :title="selected.message.type === 'binary' ? '复制 Hex' : '复制消息'"
-          aria-label="复制消息"
+          :title="selected.message.type === 'binary' ? t('复制 Hex') : t('复制消息')"
+          :aria-label="t('复制消息')"
           @click="copy"
         >
           <Io5Copy :size="13" />
@@ -717,8 +719,8 @@ onBeforeUnmount(() => {
         <button
           class="btn icon"
           :disabled="!body"
-          title="下载消息"
-          aria-label="下载消息"
+          :title="t('下载消息')"
+          :aria-label="t('下载消息')"
           @click="download"
         >
           <Io5DownloadOutline :size="13" />
@@ -730,7 +732,7 @@ onBeforeUnmount(() => {
         :key="failure.invocation_id"
         class="ws-toolbar ws-error"
       >
-        <span>回调失败</span>
+        <span>{{ t("回调失败") }}</span>
         <button
           v-if="backend.getInterceptorContent"
           class="btn source-link"
@@ -738,12 +740,12 @@ onBeforeUnmount(() => {
         >
           {{ failure.name }} #{{ failure.execution_id }}
         </button>
-        <span>调用 #{{ failure.invocation_id }}：{{ failure.error }}</span>
+        <span>{{ t("调用 #{id}：{error}", { id: failure.invocation_id, error: failure.error }) }}</span>
       </div>
-      <div v-if="bodyLoading" class="empty-hint">加载消息正文…</div>
+      <div v-if="bodyLoading" class="empty-hint">{{ t("加载消息正文…") }}</div>
       <div v-else-if="bodyError" class="ws-error">{{ bodyError }}</div>
       <div v-else-if="!selected.message.content_available" class="empty-hint">
-        正文不可用：{{ selected.message.omitted_reason || "未保留" }}
+        {{ t("正文不可用：{reason}") }}{{ selected.message.omitted_reason || t("未保留") }}
       </div>
       <HexViewer
         v-else-if="body && selected.message.type === 'binary'"
@@ -756,7 +758,7 @@ onBeforeUnmount(() => {
       />
       <template v-else-if="body">
         <div v-if="truncated" class="preview-note">
-          仅预览前 64 KiB；复制和下载包含完整消息（{{ body.bytes.length }} B）。
+          {{ t("仅预览前 64 KiB；复制和下载包含完整消息（{n} B）。", { n: body.bytes.length }) }}
         </div>
         <div class="message-editor">
           <MonacoEditor :model-value="preview.text" :language="preview.language" readonly />
@@ -766,8 +768,8 @@ onBeforeUnmount(() => {
     <div v-else class="empty-hint">
       {{
         messages.request.length + messages.response.length
-          ? "选择时间轴上的消息查看内容"
-          : "暂无完整消息"
+          ? t("选择时间轴上的消息查看内容")
+          : t("暂无完整消息")
       }}
     </div>
   </section>

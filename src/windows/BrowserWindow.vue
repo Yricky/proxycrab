@@ -8,6 +8,7 @@ import {
   Io5Refresh,
 } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
+import { t } from "../i18n";
 
 const props = defineProps<{ url: string }>();
 const backend = useBackend();
@@ -71,13 +72,13 @@ function onAddressKeydown(event: KeyboardEvent): void {
 <template>
   <div class="browser-root">
     <div class="browser-toolbar">
-      <button class="nav-btn" :disabled="!canGoBack" title="后退" @click="goBack">
+      <button class="nav-btn" :disabled="!canGoBack" :title="t('后退')" @click="goBack">
         <Io5ArrowBack :size="14" />
       </button>
-      <button class="nav-btn" :disabled="!canGoForward" title="前进" @click="goForward">
+      <button class="nav-btn" :disabled="!canGoForward" :title="t('前进')" @click="goForward">
         <Io5ArrowForward :size="14" />
       </button>
-      <button class="nav-btn" title="刷新" @click="refresh">
+      <button class="nav-btn" :title="t('刷新')" @click="refresh">
         <Io5Refresh :size="14" />
       </button>
       <div class="address-bar">
@@ -87,11 +88,11 @@ function onAddressKeydown(event: KeyboardEvent): void {
           class="address-input mono"
           type="text"
           spellcheck="false"
-          placeholder="输入网址，回车访问"
+          :placeholder="t('输入网址，回车访问')"
           @keydown="onAddressKeydown"
         />
       </div>
-      <button class="nav-btn" title="在系统浏览器中打开" @click="openExternal">
+      <button class="nav-btn" :title="t('在系统浏览器中打开')" @click="openExternal">
         <Io5OpenOutline :size="14" />
       </button>
     </div>

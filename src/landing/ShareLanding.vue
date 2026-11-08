@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import AppReadonly from "../AppReadonly.vue";
 import { createShareBackend, SHARE_INVALID_EVENT, verifyShareAccess } from "../api/share-backend";
 import { installBackend } from "../api/runtime-backend";
+import { t } from "../i18n";
 import type { ManagerError } from "../api/types";
 
 const ready = ref(false);
@@ -11,7 +12,7 @@ const focusLogId = ref<number | undefined>(undefined);
 
 function invalidate(event: Event): void {
   const detail = (event as CustomEvent<ManagerError>).detail;
-  error.value = detail?.message || "分享链接已失效";
+  error.value = detail?.message || t("分享链接已失效");
   ready.value = false;
 }
 
@@ -20,7 +21,7 @@ onMounted(async () => {
   const params = new URLSearchParams(window.location.search);
   const token = params.get("token")?.trim() ?? "";
   if (!token) {
-    error.value = "分享链接缺少 token";
+    error.value = t("分享链接缺少 token");
     return;
   }
   const idParam = Number(params.get("id"));
@@ -43,7 +44,7 @@ onBeforeUnmount(() => window.removeEventListener(SHARE_INVALID_EVENT, invalidate
   <main v-else class="share-state">
     <div class="share-card">
       <div class="brand">ProxyCrab</div>
-      <h1>{{ error ? "无法查看 Session" : "正在加载 Session…" }}</h1>
+      <h1>{{ error ? t("无法查看 Session") : t("正在加载 Session…") }}</h1>
       <p v-if="error">{{ error }}</p>
     </div>
   </main>

@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { openBundleImport } from "./windows/launcher";
 import { reportError } from "./stores/app";
+import { t } from "./i18n";
 import AppToolbar from "./components/AppToolbar.vue";
 import SessionSidebar from "./components/SessionSidebar.vue";
 import FilterBar from "./components/FilterBar.vue";
@@ -115,7 +116,7 @@ async function fileDrop(event: DragEvent): Promise<void> {
     try {
       await openBundleImport(file);
     } catch (e) {
-      reportError(e, "打开分享包失败");
+      reportError(e, t("打开分享包失败"));
     }
   }
 }
@@ -151,7 +152,7 @@ function onOpenSession(event: Event): void {
     </div>
 
     <div v-if="draggingFiles" class="drop-overlay">
-      <span class="drop-hint">松开以导入分享包</span>
+      <span class="drop-hint">{{ t("松开以导入分享包") }}</span>
     </div>
 
     <FloatingWindow v-for="win in windowsStore.windows" :key="win.id" :win="win" />

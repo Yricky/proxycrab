@@ -1,4 +1,5 @@
 import { reactive } from "vue";
+import { t } from "../i18n";
 import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { SkillManagerState, SkillSaveResult } from "../api/types";
 
@@ -16,9 +17,9 @@ export const skillStore = reactive({
   get warningTitle(): string | undefined {
     const state = this.state;
     if (!state) return undefined;
-    if (!state.configured) return "Skill 未配置";
-    if (state.config_error) return "Skill 路径配置读取失败";
-    if (state.paths.some((path) => path.error)) return "Skill 同步失败";
+    if (!state.configured) return t("Skill 未配置");
+    if (state.config_error) return t("Skill 路径配置读取失败");
+    if (state.paths.some((path) => path.error)) return t("Skill 同步失败");
     return undefined;
   },
 
@@ -49,7 +50,7 @@ export const skillStore = reactive({
 
   async save(paths: string[], deleteRemoved: boolean): Promise<SkillSaveResult> {
     const manager = backend.host?.skillManager;
-    if (!manager) throw new Error("当前运行目标不支持管理 Skill");
+    if (!manager) throw new Error(t("当前运行目标不支持管理 Skill"));
     this.loading = true;
     try {
       const result = await manager.savePaths(paths, deleteRemoved);

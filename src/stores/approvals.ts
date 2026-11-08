@@ -3,6 +3,7 @@ import type { Unsubscribe } from "../api/backend";
 import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { PendingApproval, ResolveApprovalRequest } from "../api/types";
 import { reportError } from "./app";
+import { t } from "../i18n";
 
 let unlisten: Unsubscribe | undefined;
 let refreshTimer: number | undefined;
@@ -21,7 +22,7 @@ export const approvalsStore = reactive({
       this.items = await list();
       this.count = this.items.length;
     } catch (error) {
-      reportError(error, "获取接口审批列表失败");
+      reportError(error, t("获取接口审批列表失败"));
     } finally {
       this.loading = false;
     }
@@ -44,7 +45,7 @@ export const approvalsStore = reactive({
       });
       await this.refresh();
     } catch (error) {
-      reportError(error, "启动接口审批同步失败");
+      reportError(error, t("启动接口审批同步失败"));
     }
   },
 
@@ -69,7 +70,7 @@ export const approvalsStore = reactive({
       await this.refresh();
     } catch (error) {
       await this.refresh();
-      reportError(error, "处理接口审批失败");
+      reportError(error, t("处理接口审批失败"));
     } finally {
       this.resolving.delete(id);
     }

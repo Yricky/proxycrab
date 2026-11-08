@@ -8,6 +8,7 @@ import {
   Io5OpenOutline,
 } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
+import { t } from "../i18n";
 import type { BundleFileStatus, BundleImportResult, BundleResolution } from "../api/types";
 import { sessionsStore } from "../stores/sessions";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
@@ -29,9 +30,21 @@ const busy = ref(false);
 const error = ref("");
 
 const MODES = [
-  { value: "keep", label: "复用本地", title: "复用本地：保留工作区现有文件，不写入分享包中的版本" },
-  { value: "overwrite", label: "覆盖本地", title: "覆盖本地：用分享包中的文件替换工作区现有文件" },
-  { value: "rename", label: "另存", title: "另存新名称：脚本另存为新名字，保留工作区现有文件" },
+  {
+    value: "keep",
+    label: t("复用本地"),
+    title: t("复用本地：保留工作区现有文件，不写入分享包中的版本"),
+  },
+  {
+    value: "overwrite",
+    label: t("覆盖本地"),
+    title: t("覆盖本地：用分享包中的文件替换工作区现有文件"),
+  },
+  {
+    value: "rename",
+    label: t("另存"),
+    title: t("另存新名称：脚本另存为新名字，保留工作区现有文件"),
+  },
 ] as const;
 
 const importable = computed(() =>
@@ -53,10 +66,10 @@ const canSubmit = computed(() => {
 const footerHint = computed(() => {
   if (!result.value)
     return importable.value.length
-      ? `已选 ${selected.value.length}/${importable.value.length}`
-      : "没有可导入的项";
-  if (result.value.import_id) return "确认后整批导入，失败时回滚";
-  return "导入完成";
+      ? t("已选 {selected}/{total}", { selected: selected.value.length, total: importable.value.length })
+      : t("没有可导入的项");
+  if (result.value.import_id) return t("确认后整批导入，失败时回滚");
+  return t("导入完成");
 });
 
 async function submit(): Promise<void> {
@@ -120,14 +133,19 @@ function openSession(sessionId: number): void {
       <div class="bundle-file-text">
         <strong :title="file.name">{{ file.name }}</strong>
         <span
-          >{{ formatBytes(file.size) }} · {{ preview.intents.length }} 个意图 ·
-          {{ importable.length }} 个可导入</span
+          >{{
+            t("{size} · {intents} 个意图 · {importable} 个可导入", {
+              size: formatBytes(file.size),
+              intents: preview.intents.length,
+              importable: importable.length,
+            })
+          }}</span
         >
       </div>
     </header>
 
     <template v-if="!result">
-      <h3 class="section-title intent-heading">选择要导入的内容</h3>
+      <h3 class="section-title intent-heading">{{ t("选择要导入的内容") }}</h3>
       <label
         v-for="intent in preview.intents"
         :key="intent.id"
@@ -145,11 +163,11 @@ function openSession(sessionId: number): void {
           <span class="intent-title">
             <strong>{{ intent.name }}</strong>
             <span class="badge">{{ intent.type === "session" ? "Session" : intent.type }}</span>
-            <span v-if="intent.type !== 'session'" class="badge muted">当前版本不支持</span>
+            <span v-if="intent.type !== 'session'" class="badge muted">{{ t("当前版本不支持") }}</span>
           </span>
           <span class="intent-meta mono">{{ intent.id }}</span>
           <span v-if="intent.assets.length" class="intent-meta">
-            随附资源 <span class="mono">{{ intent.assets.join("、") }}</span>
+            {{ t("随附资源") }} <span class="mono">{{ intent.assets.join("、") }}</span>
           </span>
         </span>
       </label>
@@ -158,23 +176,28 @@ function openSession(sessionId: number): void {
     <template v-else-if="result.import_id">
       <div class="conflict-summary">
         <span
-          >相同 <strong>{{ counts.same }}</strong> · 新增 <strong>{{ counts.added }}</strong> · 冲突
-          <strong class="text-danger">{{ conflicts.length }}</strong></span
+          >{{
+            t("相同 {same} · 新增 {added} · 冲突 {conflict}", {
+              same: counts.same,
+              added: counts.added,
+              conflict: conflicts.length,
+            })
+          }}</span
         >
         <span class="conflict-bulk">
-          <button class="btn" :disabled="busy" @click="chooseAll('keep')">全部复用</button>
-          <button class="btn" :disabled="busy" @click="chooseAll('overwrite')">全部覆盖</button>
+          <button class="btn" :disabled="busy" @click="chooseAll('keep')">{{ t("全部复用") }}</button>
+          <button class="btn" :disabled="busy" @click="chooseAll('overwrite')">{{ t("全部覆盖") }}</button>
         </span>
       </div>
       <div class="conflict-table">
         <div class="conflict-head">
-          <span>冲突文件</span>
-          <span>处理方式</span>
+          <span>{{ t("冲突文件") }}</span>
+          <span>{{ t("处理方式") }}</span>
         </div>
         <template v-for="fileStatus in conflicts" :key="fileStatus.path">
           <div class="conflict-row">
             <span class="conflict-path mono">{{ fileStatus.path }}</span>
-            <div class="mode-group" role="group" :aria-label="`${fileStatus.path} 的处理方式`">
+            <div class="mode-group" role="group" :aria-label="t('{path} 的处理方式', { path: fileStatus.path })">
               <button
                 v-for="mode in modesFor(fileStatus)"
                 :key="mode.value"
@@ -197,9 +220,9 @@ function openSession(sessionId: number): void {
             <input
               v-model="choices[fileStatus.path]!.name"
               class="input"
-              placeholder="新脚本名称（不含 .lua）"
+:placeholder="t('新脚本名称（不含 .lua）')"
               :disabled="busy"
-              :aria-label="`${fileStatus.path} 的新名称`"
+              :aria-label="t('{path} 的新名称', { path: fileStatus.path })"
             />
           </div>
         </template>
@@ -209,17 +232,17 @@ function openSession(sessionId: number): void {
     <template v-else>
       <div class="import-done">
         <Io5CheckmarkCircleOutline :size="17" />
-        <strong>已导入 {{ result.sessions.length }} 个 Session</strong>
+        <strong>{{ t("已导入 {n} 个 Session", result.sessions.length) }}</strong>
       </div>
       <div v-for="session in result.sessions" :key="session.id" class="session-row">
         <Io5LayersOutline :size="15" class="intent-icon" />
         <span class="session-name">{{ session.name }}</span>
         <span class="session-id mono">#{{ session.id }}</span>
         <button class="btn" @click="openSession(session.id)">
-          <Io5OpenOutline :size="13" />打开
+          <Io5OpenOutline :size="13" />{{ t("打开") }}
         </button>
       </div>
-      <p class="empty-hint import-note">配置、脚本与随附资源已写入工作区。</p>
+      <p class="empty-hint import-note">{{ t("配置、脚本与随附资源已写入工作区。") }}</p>
     </template>
 
     <p v-if="error" class="error">
@@ -229,18 +252,18 @@ function openSession(sessionId: number): void {
     <footer class="bundle-footer">
       <span class="footer-hint">{{ footerHint }}</span>
       <template v-if="!result">
-        <button class="btn" :disabled="busy" @click="close">取消</button>
+        <button class="btn" :disabled="busy" @click="close">{{ t("取消") }}</button>
         <button class="btn primary" :disabled="!canSubmit" @click="submit">
-          {{ busy ? "正在导入…" : "导入所选" }}
+          {{ busy ? t("正在导入…") : t("导入所选") }}
         </button>
       </template>
       <template v-else-if="result.import_id">
-        <button class="btn" :disabled="busy" @click="back">返回</button>
+        <button class="btn" :disabled="busy" @click="back">{{ t("返回") }}</button>
         <button class="btn primary" :disabled="!canSubmit" @click="submit">
-          {{ busy ? "正在导入…" : "解决冲突并导入" }}
+          {{ busy ? t("正在导入…") : t("解决冲突并导入") }}
         </button>
       </template>
-      <button v-else class="btn primary" @click="close">完成</button>
+      <button v-else class="btn primary" @click="close">{{ t("完成") }}</button>
     </footer>
   </main>
 </template>

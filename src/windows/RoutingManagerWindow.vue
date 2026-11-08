@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useBackend } from "../api";
 import { scriptTitle } from "../utils/script-label";
+import { t } from "../i18n";
 import ScriptLibraryManager, {
   type ScriptLibraryConfig,
 } from "../components/ScriptLibraryManager.vue";
@@ -11,13 +12,14 @@ const backend = useBackend();
 
 const config: ScriptLibraryConfig = {
   windowId: "routing-manager",
-  sidebarTitle: "分流规则",
+  sidebarTitle: t("分流规则"),
   createPlaceholder: "新规则名称",
-  emptyListHint: "暂无分流规则",
-  editorEmptyHint: "选择或创建一个分流规则",
+  emptyListHint: t("暂无分流规则"),
+  editorEmptyHint: t("选择或创建一个分流规则"),
   defaultSource: DEFAULT_SOURCE,
   resources: ["routing_scripts", "routing_selection"],
-  deleteMessage: (script) => `确定删除「${scriptTitle(script)}」吗？名称创建后不可恢复。`,
+  deleteMessage: (script) =>
+    t("确定删除「{name}」吗？名称创建后不可恢复。", { name: scriptTitle(script) }),
   selection: {
     get: () => backend.getRoutingSelection().then((selection) => selection.name),
     set: (name) => backend.replaceRoutingSelection({ name }).then((selection) => selection.name),

@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { Io5Add, Io5CheckmarkCircle, Io5Refresh, Io5Save, Io5Trash } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
+import { t } from "../i18n";
 import type { AgentsPreset, AgentsPresetState } from "../api/types";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import { appStore, reportError } from "../stores/app";
@@ -62,7 +63,7 @@ async function refresh(): Promise<void> {
   try {
     applyState(await backend.getAgentsPresets(), selectedId.value);
   } catch (error) {
-    reportError(error, "加载 AGENTS.md 预设失败");
+    reportError(error, t("加载 AGENTS.md 预设失败"));
   } finally {
     loading.value = false;
   }
@@ -79,7 +80,7 @@ async function checkExternalChanges(): Promise<void> {
       applyState(next, selectedId.value);
     }
   } catch (error) {
-    reportError(error, "检查 AGENTS.md 外部修改失败");
+    reportError(error, t("检查 AGENTS.md 外部修改失败"));
   }
 }
 
@@ -93,9 +94,11 @@ async function reloadExternal(): Promise<void> {
 async function confirmDiscard(): Promise<boolean> {
   if (!dirty.value) return true;
   return confirmDialog({
-    title: "放弃未保存更改",
-    message: `预设「${selectedPreset.value?.name ?? ""}」包含未保存的更改，确定放弃吗？`,
-    confirmText: "放弃",
+    title: t("放弃未保存更改"),
+    message: t("预设「{name}」包含未保存的更改，确定放弃吗？", {
+      name: selectedPreset.value?.name ?? "",
+    }),
+    confirmText: t("放弃"),
     danger: true,
   });
 }
@@ -111,7 +114,7 @@ async function save(showToast = true): Promise<boolean> {
   const name = draftName.value.trim();
   if (!id || saving.value) return false;
   if (!name) {
-    reportError("名称不能为空");
+    reportError(t("名称不能为空"));
     return false;
   }
   saving.value = true;
@@ -123,10 +126,10 @@ async function save(showToast = true): Promise<boolean> {
       }),
       id,
     );
-    if (showToast) appStore.toast("AGENTS.md 预设已保存", "success");
+    if (showToast) appStore.toast(t("AGENTS.md 预设已保存"), "success");
     return true;
   } catch (error) {
-    reportError(error, "保存 AGENTS.md 预设失败");
+    reportError(error, t("保存 AGENTS.md 预设失败"));
     return false;
   } finally {
     saving.value = false;
@@ -136,7 +139,7 @@ async function save(showToast = true): Promise<boolean> {
 async function createPreset(): Promise<void> {
   const name = newPresetName.value.trim();
   if (!name) {
-    reportError("名称不能为空");
+    reportError(t("名称不能为空"));
     return;
   }
   if (!(await confirmDiscard())) return;
@@ -146,7 +149,7 @@ async function createPreset(): Promise<void> {
     newPresetName.value = "";
     applyState(next, created?.id);
   } catch (error) {
-    reportError(error, "新建 AGENTS.md 预设失败");
+    reportError(error, t("新建 AGENTS.md 预设失败"));
   }
 }
 
@@ -156,20 +159,22 @@ async function activateSelected(): Promise<void> {
   if (dirty.value && !(await save(false))) return;
   try {
     applyState(await backend.activateAgentsPreset(id), id);
-    appStore.toast("已激活该 AGENTS.md 预设", "success");
+    appStore.toast(t("已激活该 AGENTS.md 预设"), "success");
   } catch (error) {
-    reportError(error, "激活 AGENTS.md 预设失败");
+    reportError(error, t("激活 AGENTS.md 预设失败"));
   }
 }
 
 async function removePreset(preset: AgentsPreset): Promise<void> {
   const ok = await confirmDialog({
-    title: "删除 AGENTS.md 预设",
+    title: t("删除 AGENTS.md 预设"),
     message:
       preset.id === state.value.active_id
-        ? `「${preset.name}」当前已激活。删除后将自动激活下一份预设，确定继续吗？`
-        : `确定删除预设「${preset.name}」吗？该操作不可撤销。`,
-    confirmText: "删除",
+        ? t("「{name}」当前已激活。删除后将自动激活下一份预设，确定继续吗？", {
+            name: preset.name,
+          })
+        : t("确定删除预设「{name}」吗？该操作不可撤销。", { name: preset.name }),
+    confirmText: t("删除"),
     danger: true,
   });
   if (!ok) return;
@@ -177,23 +182,23 @@ async function removePreset(preset: AgentsPreset): Promise<void> {
     const preferred = preset.id === selectedId.value ? null : selectedId.value;
     applyState(await backend.deleteAgentsPreset(preset.id), preferred);
   } catch (error) {
-    reportError(error, "删除 AGENTS.md 预设失败");
+    reportError(error, t("删除 AGENTS.md 预设失败"));
   }
 }
 
 async function reimportDefaults(): Promise<void> {
   if (!(await confirmDiscard())) return;
   const ok = await confirmDialog({
-    title: "重新导入默认预设",
-    message: "将覆盖同名默认预设的内容，其他预设和当前激活项保持不变。确定继续吗？",
-    confirmText: "重新导入",
+    title: t("重新导入默认预设"),
+    message: t("将覆盖同名默认预设的内容，其他预设和当前激活项保持不变。确定继续吗？"),
+    confirmText: t("重新导入"),
   });
   if (!ok) return;
   try {
     applyState(await backend.reimportDefaultAgentsPresets(), selectedId.value);
-    appStore.toast("默认预设已重新导入", "success");
+    appStore.toast(t("默认预设已重新导入"), "success");
   } catch (error) {
-    reportError(error, "重新导入默认预设失败");
+    reportError(error, t("重新导入默认预设失败"));
   }
 }
 
@@ -229,15 +234,15 @@ onBeforeUnmount(() => {
         <input
           v-model="newPresetName"
           class="input"
-          placeholder="新预设名称"
+:placeholder="t('新预设名称')"
           @keyup.enter="createPreset"
         />
-        <button class="btn icon primary" title="新建预设" @click="createPreset">
+        <button class="btn icon primary" :title="t('新建预设')" @click="createPreset">
           <Io5Add :size="15" />
         </button>
       </div>
       <div class="ap-list">
-        <div v-if="loading" class="empty-hint ap-empty">正在加载…</div>
+        <div v-if="loading" class="empty-hint ap-empty">{{ t("正在加载…") }}</div>
         <div
           v-for="preset in state.presets"
           :key="preset.id"
@@ -249,12 +254,12 @@ onBeforeUnmount(() => {
           @keydown.enter="selectPreset(preset)"
         >
           <span class="ap-row-state">
-            <Io5CheckmarkCircle v-if="state.active_id === preset.id" :size="14" title="当前激活" />
+            <Io5CheckmarkCircle v-if="state.active_id === preset.id" :size="14" :title="t('当前激活')" />
           </span>
           <span class="ap-row-name" :title="preset.name">{{ preset.name }}</span>
           <button
             class="btn icon danger ap-delete"
-            title="删除预设"
+            :title="t('删除预设')"
             :disabled="state.presets.length <= 1"
             @click.stop="removePreset(preset)"
           >
@@ -264,27 +269,27 @@ onBeforeUnmount(() => {
       </div>
       <div class="ap-sidebar-footer" @click="reimportDefaults">
         <Io5Refresh :size="13" />
-        重新导入默认预设
+        {{ t("重新导入默认预设") }}
       </div>
     </aside>
 
     <section class="ap-editor-pane">
       <div v-if="externalChanged" class="ap-external">
-        <span>预设已在 workspace 中被外部修改，未保存内容仍保留在编辑器中。</span>
-        <button class="btn compact" @click="reloadExternal">重新加载</button>
+        <span>{{ t("预设已在 workspace 中被外部修改，未保存内容仍保留在编辑器中。") }}</span>
+        <button class="btn compact" @click="reloadExternal">{{ t("重新加载") }}</button>
       </div>
       <template v-if="selectedPreset">
         <div class="ap-toolbar">
-          <input v-model="draftName" class="input ap-name" aria-label="预设名称" maxlength="128" />
-          <span v-if="selectedIsActive" class="ap-active-label">当前激活</span>
-          <span v-if="dirty" class="ap-dirty">未保存</span>
+          <input v-model="draftName" class="input ap-name" :aria-label="t('预设名称')" maxlength="128" />
+          <span v-if="selectedIsActive" class="ap-active-label">{{ t("当前激活") }}</span>
+          <span v-if="dirty" class="ap-dirty">{{ t("未保存") }}</span>
           <span class="ap-spacer" />
           <button v-if="!selectedIsActive" class="btn" :disabled="saving" @click="activateSelected">
-            激活
+            {{ t("激活") }}
           </button>
           <button class="btn primary" :disabled="saving || !dirty" @click="save()">
             <Io5Save :size="14" />
-            {{ saving ? "保存中…" : "保存" }}
+            {{ saving ? t("保存中…") : t("保存") }}
           </button>
         </div>
         <MonacoEditor
@@ -295,12 +300,12 @@ onBeforeUnmount(() => {
           @update:model-value="draftContent = $event"
         />
         <div class="ap-statusbar">
-          <span>当前激活内容通过 <code>GET /api/agents.md</code> 提供给 Agent</span>
+          <span>{{ t("当前激活内容通过") }} <code>GET /api/agents.md</code> {{ t("提供给 Agent") }}</span>
           <span class="mono">{{ selectedPreset.id }}.md</span>
         </div>
       </template>
       <div v-else class="ap-editor-empty">
-        <span class="empty-hint">暂无可编辑预设</span>
+        <span class="empty-hint">{{ t("暂无可编辑预设") }}</span>
       </div>
     </section>
   </div>

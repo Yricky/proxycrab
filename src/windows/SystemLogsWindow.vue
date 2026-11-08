@@ -8,20 +8,21 @@ import { reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 import { formatDateTime } from "../utils/format";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
+import { t } from "../i18n";
 
 const backend = useBackend();
 
-const LEVELS = ["全部", "ERROR", "WARN", "INFO", "DEBUG"] as const;
+const LEVELS = ["all", "ERROR", "WARN", "INFO", "DEBUG"] as const;
 const MAX_ENTRIES = 5000;
 
 const entries = ref<SystemLogEntry[]>([]);
-const levelFilter = ref<(typeof LEVELS)[number]>("全部");
+const levelFilter = ref<(typeof LEVELS)[number]>("all");
 const autoRefresh = ref(true);
 
 let timer: number | undefined;
 
 const filteredEntries = computed(() =>
-  levelFilter.value === "全部"
+  levelFilter.value === "all"
     ? entries.value
     : entries.value.filter((e) => e.level === levelFilter.value),
 );
@@ -42,15 +43,15 @@ async function fetchLogs(): Promise<void> {
     );
     appendEntries(batch);
   } catch (error) {
-    reportError(error, "获取系统日志失败");
+    reportError(error, t("获取系统日志失败"));
   }
 }
 
 async function clearLogs(): Promise<void> {
   const ok = await confirmDialog({
-    title: "清空系统日志",
-    message: "确定清空所有系统日志吗？该操作不可撤销。",
-    confirmText: "清空",
+    title: t("清空系统日志"),
+    message: t("确定清空所有系统日志吗？该操作不可撤销。"),
+    confirmText: t("清空"),
     danger: true,
   });
   if (!ok) return;
@@ -58,7 +59,7 @@ async function clearLogs(): Promise<void> {
     await backend.clearSystemLogs();
     entries.value = [];
   } catch (error) {
-    reportError(error, "清空系统日志失败");
+    reportError(error, t("清空系统日志失败"));
   }
 }
 
@@ -100,28 +101,30 @@ onUnmounted(() => {
 <template>
   <div class="sl-root">
     <div class="sl-toolbar">
-      <select v-model="levelFilter" class="select" title="按级别过滤">
-        <option v-for="lv in LEVELS" :key="lv" :value="lv">{{ lv }}</option>
+      <select v-model="levelFilter" class="select" :title="t('按级别过滤')">
+        <option v-for="lv in LEVELS" :key="lv" :value="lv">{{
+          lv === "all" ? t("全部") : lv
+        }}</option>
       </select>
       <label class="sl-auto">
         <button
           class="switch"
           :class="{ on: autoRefresh }"
-          title="自动刷新"
+          :title="t('自动刷新')"
           @click="autoRefresh = !autoRefresh"
         />
-        <span class="text-secondary">自动刷新</span>
+        <span class="text-secondary">{{ t("自动刷新") }}</span>
       </label>
       <span class="sl-spacer" />
-      <button class="btn icon" title="刷新" @click="fetchLogs">
+      <button class="btn icon" :title="t('刷新')" @click="fetchLogs">
         <Io5Refresh :size="14" />
       </button>
-      <button class="btn icon sl-danger" title="清空日志" @click="clearLogs">
+      <button class="btn icon sl-danger" :title="t('清空日志')" @click="clearLogs">
         <Io5Trash :size="14" />
       </button>
     </div>
 
-    <div v-if="!filteredEntries.length" class="empty-hint">暂无日志</div>
+    <div v-if="!filteredEntries.length" class="empty-hint">{{ t("暂无日志") }}</div>
     <VirtualList v-else :items="filteredEntries" :item-height="24">
       <template #default="{ item }">
         <div class="sl-row mono">

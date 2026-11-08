@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useBackend } from "../api";
 import type { BodyTarget } from "../api/body";
+import { t } from "../i18n";
 import type {
   BodyPayload,
   HeaderItem,
@@ -137,11 +138,11 @@ const urlSegments = computed(() => (request.value ? buildUrlSegments(request.val
 
 <template>
   <div class="snapshot-window">
-    <div v-if="loading" class="state-hint">加载中…</div>
+    <div v-if="loading" class="state-hint">{{ t("加载中…") }}</div>
     <div v-else-if="loadError" class="state-hint state-error">
-      <p>加载失败：{{ loadError }}</p>
+      <p>{{ t("加载失败：{error}", { error: loadError }) }}</p>
     </div>
-    <div v-else-if="!state" class="state-hint">该执行记录没有完整快照</div>
+    <div v-else-if="!state" class="state-hint">{{ t("该执行记录没有完整快照") }}</div>
     <template v-else>
       <header class="summary">
         <div class="summary-line">
@@ -153,13 +154,13 @@ const urlSegments = computed(() => (request.value ? buildUrlSegments(request.val
           </span>
           <span class="meta-item mono">{{ state.version }}</span>
           <span v-if="assetId" class="meta-item asset-meta" :title="assetId">
-            <span class="meta-label">Body 资产</span>{{ assetId }}
+            <span class="meta-label">{{ t("Body 资产") }}</span>{{ assetId }}
           </span>
           <span class="summary-spacer" />
           <button
             v-if="request && backend.replay"
             class="btn icon"
-            title="重放此快照请求"
+            :title="t('重放此快照请求')"
             @click="replaySnapshot"
           >
             <BsFillSendFill :size="14" />
@@ -183,22 +184,22 @@ const urlSegments = computed(() => (request.value ? buildUrlSegments(request.val
                 </tr>
               </tbody>
             </table>
-            <div v-else class="empty-hint">无 Headers</div>
+            <div v-else class="empty-hint">{{ t("无 Headers") }}</div>
           </div>
         </section>
 
         <div
           class="splitter"
-          title="拖动调整区域大小"
+          :title="t('拖动调整区域大小')"
           @pointerdown="startSplit"
           @pointermove="moveSplit"
         />
 
-        <div v-if="bodyPending" class="card body-card state-hint">Body 尚未捕获完成</div>
+        <div v-if="bodyPending" class="card body-card state-hint">{{ t("Body 尚未捕获完成") }}</div>
         <BodyViewer
           v-else
           class="body-panel"
-          label="快照 Body"
+          :label="t('快照 Body')"
           :revision="loadVersion"
           :body="snapshotBody"
           :headers="headers"

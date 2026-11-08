@@ -5,6 +5,7 @@ import { appStore, type ThemeMode } from "../stores/app";
 import { approvalsStore } from "../stores/approvals";
 import { skillStore } from "../stores/skill";
 import { useBackend } from "../api";
+import { t } from "../i18n";
 import AppTooltip from "./AppTooltip.vue";
 import ProxyCrabMark from "./ProxyCrabMark.vue";
 import {
@@ -65,7 +66,7 @@ const aiTooltipTitle = computed(() => {
   return skillStore.warningTitle;
 });
 const aiTooltipDetail = computed(() =>
-  skillStore.warning ? "请打开 Skill 管理查看并处理" : undefined,
+  skillStore.warning ? t("请打开 Skill 管理查看并处理") : undefined,
 );
 
 const toolbarMenus = ref<HTMLElement | null>(null);
@@ -149,7 +150,7 @@ onBeforeUnmount(() => {
           <button
             class="proxy-ip-trigger"
             :aria-expanded="ipMenuOpen"
-            :title="'查看本机 IP'"
+            :title="t('查看本机 IP')"
             @click="toggleIpMenu"
           >
             <span class="mono">{{ proxyStore.displayIp }}</span>
@@ -169,7 +170,7 @@ onBeforeUnmount(() => {
             maxlength="5"
             spellcheck="false"
             autocomplete="off"
-            :title="'监听端口（1-65535）'"
+            :title="t('监听端口（1-65535）')"
             @input="onPortInput"
             @keydown.enter="onToggle"
           />
@@ -179,7 +180,7 @@ onBeforeUnmount(() => {
             class="proxy-toggle-btn"
             :class="proxyStore.running ? 'running' : proxyStore.canToggle ? 'ready' : 'off'"
             :disabled="!proxyStore.canToggle"
-            :title="proxyStore.running ? '停止代理' : '启动代理'"
+            :title="proxyStore.running ? t('停止代理') : t('启动代理')"
             @click="onToggle"
           >
             <Io5Stop v-if="proxyStore.running" :size="14" />
@@ -187,9 +188,9 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <button class="cert-entry-btn" title="证书管理" @click="openCertManager">
+      <button class="cert-entry-btn" :title="t('证书管理')" @click="openCertManager">
         <GrConnect :size="13" />
-        <span>连接</span>
+        <span>{{ t("连接") }}</span>
       </button>
     </div>
 
@@ -199,8 +200,8 @@ onBeforeUnmount(() => {
       <button
         v-if="approvalsStore.count > 0"
         class="approval-trigger"
-        :title="`${approvalsStore.count} 个管理接口请求待审批`"
-        aria-label="打开管理接口审批"
+        :title="t('{n} 个管理接口请求待审批', approvalsStore.count)"
+        :aria-label="t('打开管理接口审批')"
         @click="openApprovals"
       >
         <IoHandRight :size="16" class="approval-hand" />
@@ -225,7 +226,7 @@ onBeforeUnmount(() => {
         <div v-if="activeMenu === 'ai'" class="tb-menu">
           <button class="tb-menu-item" @click="runMenuAction(openAgentsPresets)">
             <Io5DocumentText :size="14" />
-            <span>AGENTS.md 预设</span>
+            <span>{{ t("AGENTS.md 预设") }}</span>
           </button>
           <button
             v-if="backend.host?.skillManager"
@@ -233,7 +234,7 @@ onBeforeUnmount(() => {
             @click="runMenuAction(openSkillManager)"
           >
             <Io5Download :size="14" />
-            <span>管理 Skill</span>
+            <span>{{ t("管理 Skill") }}</span>
           </button>
         </div>
       </div>
@@ -245,31 +246,31 @@ onBeforeUnmount(() => {
           :aria-expanded="activeMenu === 'scripts'"
           @click="toggleMenu('scripts')"
         >
-          资产
+          {{ t("资产") }}
           <Io5ChevronDown :size="12" />
         </button>
         <div v-if="activeMenu === 'scripts'" class="tb-menu">
           <button class="tb-menu-item" @click="runMenuAction(openRequestInterceptorManager)">
             <Io5ArrowDown :size="14" />
-            <span>请求拦截器</span>
+            <span>{{ t("请求拦截器") }}</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openResponseInterceptorManager)">
             <Io5ArrowUp :size="14" />
-            <span>响应拦截器</span>
+            <span>{{ t("响应拦截器") }}</span>
           </button>
           <button
             class="tb-menu-item"
             @click="runMenuAction(() => openColumnManager(undefined, props.sessionId))"
           >
             <Io5List :size="14" />
-            <span>自定义列</span>
+            <span>{{ t("自定义列") }}</span>
           </button>
           <button
             class="tb-menu-item"
             @click="runMenuAction(() => openFilterManager(props.sessionId))"
           >
             <Io5CodeSlash :size="14" />
-            <span>过滤脚本</span>
+            <span>{{ t("过滤脚本") }}</span>
           </button>
 
           <button
@@ -277,15 +278,15 @@ onBeforeUnmount(() => {
             class="tb-menu-item"
             @click="runMenuAction(openRedactionManager)"
           >
-            <LiaStarOfLifeSolid :size="15" /><span>脱敏脚本</span>
+            <LiaStarOfLifeSolid :size="15" /><span>{{ t("脱敏脚本") }}</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openRoutingManager)">
             <Io5RadioButtonOn :size="14" />
-            <span>分流规则</span>
+            <span>{{ t("分流规则") }}</span>
           </button>
           <div class="tb-menu-divider" />
           <button class="tb-menu-item" @click="runMenuAction(openAssetManager)">
-            <Io5DocumentText :size="14" /><span>工作区资源</span>
+            <Io5DocumentText :size="14" /><span>{{ t("工作区资源") }}</span>
           </button>
         </div>
       </div>
@@ -297,17 +298,17 @@ onBeforeUnmount(() => {
           :aria-expanded="activeMenu === 'tools'"
           @click="toggleMenu('tools')"
         >
-          小工具
+          {{ t("小工具") }}
           <Io5ChevronDown :size="12" />
         </button>
         <div v-if="activeMenu === 'tools'" class="tb-menu">
           <button class="tb-menu-item" @click="runMenuAction(openBase64)">
             <BsAlphabetUppercase :size="14" />
-            <span>Base64 编解码</span>
+            <span>{{ t("Base64 编解码") }}</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openJwt)">
             <Io5ShieldCheckmark :size="14" />
-            <span>JWT 解码 / 验签</span>
+            <span>{{ t("JWT 解码 / 验签") }}</span>
           </button>
           <button
             v-if="backend.replay"
@@ -315,15 +316,15 @@ onBeforeUnmount(() => {
             @click="runMenuAction(() => openReplay())"
           >
             <BsFillSendFill :size="14" />
-            <span>发送请求</span>
+            <span>{{ t("发送请求") }}</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openQrCode)">
             <Io5QrCode :size="14" />
-            <span>二维码生成</span>
+            <span>{{ t("二维码生成") }}</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openTextDiff)">
             <Io5GitCompare :size="14" />
-            <span>文本比对</span>
+            <span>{{ t("文本比对") }}</span>
           </button>
         </div>
       </div>
@@ -335,36 +336,36 @@ onBeforeUnmount(() => {
           :aria-expanded="activeMenu === 'system'"
           @click="toggleMenu('system')"
         >
-          系统
+          {{ t("系统") }}
           <Io5ChevronDown :size="12" />
         </button>
         <div v-if="activeMenu === 'system'" class="tb-menu tb-menu-system">
           <button class="tb-menu-item" @click="runMenuAction(openSystemLogs)">
             <Io5Newspaper :size="14" />
-            <span>系统日志</span>
+            <span>{{ t("系统日志") }}</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openSettings)">
             <Io5Settings :size="14" />
-            <span>设置</span>
+            <span>{{ t("设置") }}</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openAbout)">
             <Io5InformationCircle :size="14" />
-            <span>关于</span>
+            <span>{{ t("关于") }}</span>
           </button>
           <div class="tb-menu-divider" />
           <button class="tb-menu-item" @click="setTheme('light')">
             <Io5Sunny :size="14" />
-            <span>浅色</span>
+            <span>{{ t("浅色") }}</span>
             <Io5Checkmark v-if="appStore.theme === 'light'" :size="14" class="tb-menu-check" />
           </button>
           <button class="tb-menu-item" @click="setTheme('dark')">
             <Io5Moon :size="14" />
-            <span>深色</span>
+            <span>{{ t("深色") }}</span>
             <Io5Checkmark v-if="appStore.theme === 'dark'" :size="14" class="tb-menu-check" />
           </button>
           <button class="tb-menu-item" @click="setTheme('system')">
             <Io5Desktop :size="14" />
-            <span>跟随系统</span>
+            <span>{{ t("跟随系统") }}</span>
             <Io5Checkmark v-if="appStore.theme === 'system'" :size="14" class="tb-menu-check" />
           </button>
         </div>

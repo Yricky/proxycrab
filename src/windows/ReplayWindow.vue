@@ -3,6 +3,7 @@ import { reportError } from "../stores/app";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Io5ChevronDown, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
+import { t } from "../i18n";
 import type { AssetMetadata } from "../api/types";
 import { proxyStore } from "../stores/proxy";
 import { sessionsStore } from "../stores/sessions";
@@ -68,7 +69,7 @@ if (props.prefill) {
 
 const methodOptions = REPLAY_METHODS.map((value) => ({ value, label: value }));
 const methodDisplay = computed(() =>
-  methodChoice.value === CUSTOM_METHOD ? customMethod.value || "自定义…" : undefined,
+  methodChoice.value === CUSTOM_METHOD ? customMethod.value || t("自定义…") : undefined,
 );
 const method = computed(() =>
   methodChoice.value === CUSTOM_METHOD
@@ -142,7 +143,7 @@ async function onAssetUploaded(asset: AssetMetadata): Promise<void> {
   try {
     assets.value = await backend.listAssets();
   } catch (error) {
-    reportError(error, "资源已上传，刷新列表失败");
+    reportError(error, t("资源已上传，刷新列表失败"));
   }
 }
 function selectBodyMode(mode: BodyMode): void {
@@ -181,8 +182,8 @@ const bodyWarnings = computed<HeaderWarning[]>(() =>
     ? [
         {
           key: bodylessMethod.value,
-          hint: `${bodylessMethod.value} 请求不应携带请求体`,
-          action: "清空 body",
+          hint: t("{method} 请求不应携带请求体", { method: bodylessMethod.value }),
+          action: t("清空 body"),
           fix: () => {
             bodyMode.value = "none";
           },
@@ -199,22 +200,22 @@ const headerWarnings = computed<HeaderWarning[]>(() => {
   if (lengthIssue.value === "missing")
     warnings.push({
       key: "Content-Length",
-      hint: "存在 body 但未声明长度",
-      action: "自动补上",
+      hint: t("存在 body 但未声明长度"),
+      action: t("自动补上"),
       fix: fixContentLength,
     });
   else if (lengthIssue.value === "mismatch")
     warnings.push({
       key: "Content-Length",
-      hint: "声明值与实际 body 大小不符",
-      action: `修正为 ${knownBodySize.value}`,
+      hint: t("声明值与实际 body 大小不符"),
+      action: t("修正为 {size}", { size: knownBodySize.value }),
       fix: fixContentLength,
     });
   if (missingContentType.value)
     warnings.push({
       key: "Content-Type",
-      hint: "存在 body 但未声明类型",
-      action: "按内容补齐",
+      hint: t("存在 body 但未声明类型"),
+      action: t("按内容补齐"),
       fix: fixContentType,
     });
   return warnings;
@@ -304,16 +305,16 @@ const sendDisabled = computed(
 );
 const sendTitle = computed(() =>
   executing.value
-    ? "发送中…"
+    ? t("发送中…")
     : !proxyStore.running
-      ? "代理未启动，无法发送"
+      ? t("代理未启动，无法发送")
       : !canCompose.value
-        ? "请填写合法的请求方法与 URL"
+        ? t("请填写合法的请求方法与 URL")
         : sessionsStore.sessions.length === 0
-          ? "没有可用的会话"
+          ? t("没有可用的会话")
           : !selectedSession.value
-            ? "请选择会话"
-            : `发送到 ${selectedSession.value.name}`,
+            ? t("请选择会话")
+            : t("发送到 {name}", { name: selectedSession.value.name }),
 );
 
 async function execute(): Promise<void> {
@@ -347,16 +348,20 @@ async function execute(): Promise<void> {
 }
 
 const bodyModeLabels: Record<BodyMode, string> = {
-  none: "无",
-  text: "文本",
-  body_ref: "引用日志",
-  asset: "资源",
+  none: t("无"),
+  text: t("文本"),
+  body_ref: t("引用日志"),
+  asset: t("资源"),
 };
 const bodyModes: BodyMode[] = ["none", "text", "body_ref", "asset"];
 const bodyExtra = computed(() => {
   if (bodyMode.value === "asset" && assetId.value) return assetId.value;
   if (bodyMode.value === "body_ref" && bodyRefSession.value !== null && bodyRefLog.value !== null)
-    return `#${bodyRefSession.value}/#${bodyRefLog.value} ${bodyRefSide.value === "request" ? "请求" : "响应"} body`;
+    return t("#{session}/#{log} {side} body", {
+      session: bodyRefSession.value,
+      log: bodyRefLog.value,
+      side: bodyRefSide.value === "request" ? t("请求") : t("响应"),
+    });
   if (bodyMode.value === "text" && knownBodySize.value !== null) return `${knownBodySize.value} B`;
   return null;
 });
@@ -380,7 +385,7 @@ const bodyExtra = computed(() => {
           >
             #{{ record.logId }}
           </button>
-          <span v-else class="record-chip failed" :title="recordTitle(record)">失败</span>
+          <span v-else class="record-chip failed" :title="recordTitle(record)">{{ t("失败") }}</span>
         </template>
       </div>
       <div class="send-group" @keydown.esc="closePicker">
@@ -389,15 +394,15 @@ const bodyExtra = computed(() => {
           :model-value="methodChoice"
           :options="methodOptions"
           :display-value="methodDisplay"
-          aria-label="请求方法"
+          :aria-label="t('请求方法')"
           @update:model-value="methodChoice = $event"
         >
           <template #footer="{ close }">
             <input
               v-model="customMethod"
               class="input method-custom-input mono"
-              placeholder="自定义 Method"
-              aria-label="自定义请求方法"
+              :placeholder="t('自定义 Method')"
+              :aria-label="t('自定义请求方法')"
               spellcheck="false"
               @focus="methodChoice = CUSTOM_METHOD"
               @input="methodChoice = CUSTOM_METHOD"
@@ -411,17 +416,17 @@ const bodyExtra = computed(() => {
             class="session-trigger"
             :class="{ open: pickerOpen }"
             :disabled="sessionsStore.sessions.length === 0"
-            :title="selectedSession ? `发送到 ${selectedSession.name}` : '选择会话'"
+            :title="selectedSession ? t('发送到 {name}', { name: selectedSession.name }) : t('选择会话')"
             :aria-expanded="pickerOpen"
-            aria-label="选择会话"
+            :aria-label="t('选择会话')"
             @click="togglePicker"
           >
             <span class="session-label" :class="{ placeholder: !selectedSession }">{{
-              selectedSession?.name ?? "选择会话"
+              selectedSession?.name ?? t("选择会话")
             }}</span>
             <Io5ChevronDown :size="13" />
           </button>
-          <div v-if="pickerOpen" class="session-picker" role="menu" aria-label="选择会话">
+          <div v-if="pickerOpen" class="session-picker" role="menu" :aria-label="t('选择会话')">
             <SessionListItem
               v-for="session in sessionsStore.sessions"
               :key="session.id"
@@ -444,7 +449,7 @@ const bodyExtra = computed(() => {
           :class="{ sending: executing }"
           :disabled="sendDisabled"
           :title="sendTitle"
-          aria-label="发送请求"
+          :aria-label="t('发送请求')"
           :aria-busy="executing"
           @click="execute"
         >
@@ -456,7 +461,7 @@ const bodyExtra = computed(() => {
     <div class="tab-page">
       <section class="card headers-card">
         <div class="card-title">
-          请求头
+          {{ t("请求头") }}
           <div
             v-if="headerWarnings.length > 0"
             ref="warnWrap"
@@ -466,8 +471,8 @@ const bodyExtra = computed(() => {
             <button
               class="warn-trigger"
               :class="{ active: warnOpen }"
-              :title="`请求头有 ${headerWarnings.length} 项待补齐`"
-              aria-label="请求头警告"
+              :title="t('请求头有 {n} 项待补齐', headerWarnings.length)"
+              :aria-label="t('请求头警告')"
               :aria-expanded="warnOpen"
               @click="warnOpen = !warnOpen"
             >
@@ -494,7 +499,7 @@ const bodyExtra = computed(() => {
 
       <section class="card body-card">
         <div class="card-title">
-          请求体
+          {{ t("请求体") }}
           <div
             v-if="bodyWarnings.length > 0"
             ref="bodyWarnWrap"
@@ -504,8 +509,8 @@ const bodyExtra = computed(() => {
             <button
               class="warn-trigger"
               :class="{ active: bodyWarnOpen }"
-              :title="`请求体有 ${bodyWarnings.length} 项待处理`"
-              aria-label="请求体警告"
+              :title="t('请求体有 {n} 项待处理', bodyWarnings.length)"
+              :aria-label="t('请求体警告')"
               :aria-expanded="bodyWarnOpen"
               @click="bodyWarnOpen = !bodyWarnOpen"
             >
@@ -562,16 +567,16 @@ const bodyExtra = computed(() => {
             <CustomSelect
               :model-value="bodyRefSide"
               :options="[
-                { value: 'request', label: '请求 body' },
-                { value: 'response', label: '响应 body' },
+                { value: 'request', label: t('请求 body') },
+                { value: 'response', label: t('响应 body') },
               ]"
-              aria-label="Body 方向"
+              :aria-label="t('Body 方向')"
               @update:model-value="bodyRefSide = $event as 'request' | 'response'"
             />
           </div>
           <template v-else-if="bodyMode === 'asset'">
             <div v-if="assetsError" class="empty-hint text-danger">
-              资源加载失败：{{ assetsError }}
+              {{ t("资源加载失败：{error}") }}{{ assetsError }}
             </div>
             <AssetTreePicker
               v-else
@@ -581,7 +586,7 @@ const bodyExtra = computed(() => {
               class="body-assets"
             />
           </template>
-          <div v-else class="empty-hint">无 Body</div>
+          <div v-else class="empty-hint">{{ t("无 Body") }}</div>
         </div>
       </section>
     </div>

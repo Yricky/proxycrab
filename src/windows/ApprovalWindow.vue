@@ -4,15 +4,16 @@ import { Io5Checkmark, Io5Close } from "vue-icons-plus/io5";
 import type { PendingApproval } from "../api/types";
 import CustomSelect, { type CustomSelectOption } from "../components/CustomSelect.vue";
 import { approvalsStore } from "../stores/approvals";
+import { t } from "../i18n";
 import { formatBytes } from "../utils/format";
 
 const now = ref(Date.now());
 const durations = reactive(new Map<number, number | null>());
 const durationOptions: CustomSelectOption[] = [
-  { value: "once", label: "仅本次" },
-  { value: "300", label: "5 分钟" },
-  { value: "1800", label: "30 分钟" },
-  { value: "3600", label: "1 小时" },
+  { value: "once", label: t("仅本次") },
+  { value: "300", label: t("5 分钟") },
+  { value: "1800", label: t("30 分钟") },
+  { value: "3600", label: t("1 小时") },
 ];
 let clock: number | undefined;
 
@@ -31,7 +32,7 @@ function setDuration(id: number, value: string): void {
 }
 
 function remainingLabel(item: PendingApproval): string {
-  return `${Math.max(0, Math.ceil((item.deadline_at - now.value) / 1000))} 秒`;
+  return t("{n} 秒", Math.max(0, Math.ceil((item.deadline_at - now.value) / 1000)));
 }
 
 function requestTarget(item: PendingApproval): string {
@@ -40,7 +41,7 @@ function requestTarget(item: PendingApproval): string {
 
 function identityLabel(item: PendingApproval): string {
   return item.identity.kind === "local"
-    ? "本机无 API Key"
+    ? t("本机无 API Key")
     : `${item.identity.name} · ${item.identity.prefix ?? ""}`;
 }
 
@@ -74,8 +75,8 @@ onBeforeUnmount(() => {
   <div class="approval-root">
     <div v-if="items.length === 0" class="approval-empty">
       <Io5Checkmark :size="24" />
-      <strong>没有待审批请求</strong>
-      <span>需要确认的管理接口调用会显示在这里</span>
+      <strong>{{ t("没有待审批请求") }}</strong>
+      <span>{{ t("需要确认的管理接口调用会显示在这里") }}</span>
     </div>
 
     <div v-else class="approval-list">
@@ -105,7 +106,7 @@ onBeforeUnmount(() => {
             :model-value="String(durationFor(item.id) ?? 'once')"
             :options="durationOptions"
             :disabled="approvalsStore.resolving.has(item.id)"
-            aria-label="决定有效期"
+            :aria-label="t('决定有效期')"
             @update:model-value="setDuration(item.id, $event)"
           />
           <button
@@ -114,7 +115,7 @@ onBeforeUnmount(() => {
             @click="resolve(item, 'deny')"
           >
             <Io5Close :size="14" />
-            拒绝
+            {{ t("拒绝") }}
           </button>
           <button
             class="btn primary"
@@ -122,7 +123,7 @@ onBeforeUnmount(() => {
             @click="resolve(item, 'allow')"
           >
             <Io5Checkmark :size="14" />
-            {{ approvalsStore.resolving.has(item.id) ? "处理中…" : "允许" }}
+            {{ approvalsStore.resolving.has(item.id) ? t("处理中…") : t("允许") }}
           </button>
         </div>
       </article>

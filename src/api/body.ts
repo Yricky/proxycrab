@@ -1,4 +1,5 @@
 import type { ManagerError } from "./types";
+import { t } from "../i18n";
 import { saveBlobInWebview } from "./save-file";
 
 export const DEFAULT_BODY_MAX_SIZE = 16 * 1024 * 1024;
@@ -43,7 +44,7 @@ export async function fetchBodyFromBase(
   if (!Number.isSafeInteger(maxSize) || maxSize <= 0 || maxSize > UI_BODY_MAX_SIZE) {
     throw new BodyFetchError({
       code: "bad_request",
-      message: "无效的 Body 大小限制",
+      message: t("无效的 Body 大小限制"),
     });
   }
   const response = await requestBody(
@@ -116,7 +117,7 @@ async function requestBody(
   if (!response.ok) {
     let error: ManagerError = {
       code: `http_${response.status}`,
-      message: `Body 请求失败（HTTP ${response.status}）`,
+      message: t("Body 请求失败（HTTP {status}）", { status: response.status }),
     };
     try {
       const payload = (await response.json()) as { error?: ManagerError };
@@ -155,7 +156,7 @@ export async function fetchWebSocketBodyFromBase(
     throw new BodyFetchError(
       result?.error ?? {
         code: `http_${response.status}`,
-        message: `消息读取失败 (${response.status})`,
+        message: t("消息读取失败 ({status})", { status: response.status }),
       },
     );
   }

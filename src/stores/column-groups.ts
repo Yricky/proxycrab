@@ -9,6 +9,7 @@ import {
   type ColumnGroupSort,
 } from "../utils/column-groups";
 import { reportError } from "./app";
+import { t } from "../i18n";
 import { proxyStore } from "./proxy";
 
 const ID_PAGE_SIZE = 10_000;
@@ -323,7 +324,7 @@ async function synchronize(
     if (includeOlder) await discoverOlder(backend, cache, runId);
     await refreshInProgress(backend, cache, runId);
   } catch (error) {
-    if (isActive(cache, runId)) reportError(error, "计算列分组失败");
+    if (isActive(cache, runId)) reportError(error, t("计算列分组失败"));
   } finally {
     clearScheduledLoading(cache.key);
     if (isActive(cache, runId)) {

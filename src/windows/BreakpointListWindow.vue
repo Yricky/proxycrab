@@ -4,6 +4,7 @@ import { useBackend } from "../api";
 import type { InterceptorKind } from "../api/types";
 import { appStore, reportError } from "../stores/app";
 import { breakpointsStore } from "../stores/breakpoints";
+import { t } from "../i18n";
 import { openBreakpointDetail } from "./launcher";
 
 const props = defineProps<{
@@ -27,11 +28,11 @@ const items = computed(() =>
 );
 
 function phaseLabel(phase: InterceptorKind): string {
-  return phase === "request" ? "请求" : "响应";
+  return phase === "request" ? t("请求") : t("响应");
 }
 
 function remainingLabel(milliseconds: number): string {
-  return `${Math.max(0, Math.ceil(milliseconds / 1000))} 秒`;
+  return t("{n} 秒", Math.max(0, Math.ceil(milliseconds / 1000)));
 }
 
 function removeReleased(ids: Set<number>): void {
@@ -44,9 +45,9 @@ async function releaseBreakpoint(id: number): Promise<void> {
   try {
     await backend.releaseBreakpoint(id);
     removeReleased(new Set([id]));
-    appStore.toast("断点已放行", "success");
+    appStore.toast(t("断点已放行"), "success");
   } catch (error) {
-    reportError(error, "放行断点失败");
+    reportError(error, t("放行断点失败"));
   } finally {
     releasingIds.delete(id);
     void breakpointsStore.refresh();
@@ -67,9 +68,13 @@ async function releaseAll(): Promise<void> {
     removeReleased(released);
     const failed = snapshot.length - released.size;
     if (failed === 0) {
-      appStore.toast(`已放行 ${released.size} 个断点`, "success");
+      appStore.toast(t("已放行 {n} 个断点", released.size), "success");
     } else {
-      appStore.toast(`已放行 ${released.size} 个断点，${failed} 个放行失败`, "error", 5000);
+      appStore.toast(
+        t("已放行 {n} 个断点，{m} 个放行失败", { n: released.size, m: failed }),
+        "error",
+        5000,
+      );
     }
   } finally {
     releasingAll.value = false;
@@ -85,20 +90,20 @@ onMounted(() => void breakpointsStore.refresh());
     <header class="list-head">
       <div>
         <strong class="mono" :title="interceptorName">{{ displayName ?? interceptorName }}</strong>
-        <span>{{ phaseLabel(phase) }}拦截器</span>
+        <span>{{ t("{phase}拦截器", { phase: phaseLabel(phase) }) }}</span>
       </div>
       <div class="list-actions">
-        <span class="count">{{ items.length }} 个断点</span>
+        <span class="count">{{ t("{n} 个断点", items.length) }}</span>
         <button
           class="btn release-all"
           :disabled="items.length === 0 || releasingAll || releasingIds.size > 0"
           @click="releaseAll"
         >
-          {{ releasingAll ? "放行中…" : "放行全部" }}
+          {{ releasingAll ? t("放行中…") : t("放行全部") }}
         </button>
       </div>
     </header>
-    <div v-if="items.length === 0" class="empty">当前没有等待中的断点</div>
+    <div v-if="items.length === 0" class="empty">{{ t("当前没有等待中的断点") }}</div>
     <div v-else class="rows">
       <div
         v-for="item in items"
@@ -121,7 +126,7 @@ onMounted(() => void breakpointsStore.refresh());
           @keydown.stop
           @click.stop="releaseBreakpoint(item.id)"
         >
-          {{ releasingIds.has(item.id) ? "放行中…" : "放行" }}
+          {{ releasingIds.has(item.id) ? t("放行中…") : t("放行") }}
         </button>
       </div>
     </div>

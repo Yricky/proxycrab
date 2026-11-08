@@ -9,6 +9,7 @@ import {
   type FileTreeRow,
 } from "../utils/file-tree";
 import { FILE_KIND_ICONS } from "./fileIcons";
+import { t } from "../i18n";
 import VirtualList from "./VirtualList.vue";
 
 const props = defineProps<{
@@ -87,8 +88,8 @@ function iconKind(path: string, label: string): FileKind {
       v-if="canCreate"
       type="button"
       class="file-tree-root-add"
-      title="在根目录中新增文件"
-      aria-label="在根目录中新增文件"
+      :title="t('在根目录中新增文件')"
+      :aria-label="t('在根目录中新增文件')"
       :disabled="createDisabled"
       @click="emit('create', '')"
     >
@@ -141,8 +142,8 @@ function iconKind(path: string, label: string): FileKind {
             v-if="!item.row.entry && canCreate"
             type="button"
             class="btn icon file-tree-directory-add"
-            :title="`在 ${item.row.path} 中新增文件`"
-            :aria-label="`在 ${item.row.path} 中新增文件`"
+            :title="t('在 {path} 中新增文件', { path: item.row.path })"
+            :aria-label="t('在 {path} 中新增文件', { path: item.row.path })"
             :disabled="createDisabled"
             @click="
               collapsed.delete(item.row.path);

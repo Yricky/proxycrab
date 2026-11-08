@@ -10,6 +10,7 @@ import {
   Io5ArchiveOutline,
 } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
+import { t } from "../i18n";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
 import type { HttpApiChange, InterceptorKind, SessionInterceptorItem } from "../api/types";
 import { appStore, reportError } from "../stores/app";
@@ -75,7 +76,7 @@ async function downloadConfig(): Promise<void> {
   try {
     await configDownload.value();
   } catch (e) {
-    reportError(e, "下载 Session 配置失败");
+    reportError(e, t("下载 Session 配置失败"));
   } finally {
     downloadingConfig.value = false;
   }
@@ -89,9 +90,9 @@ async function sweepSession(): Promise<void> {
     const sessionId = logs.sessionId;
     if (
       !(await confirmDialog({
-        title: "清扫会话",
-        message: "将新建配置一致的活跃会话，当前会话转入已归档，并断开当前活跃连接。是否继续？",
-        confirmText: "确认清扫",
+        title: t("清扫会话"),
+        message: t("将新建配置一致的活跃会话，当前会话转入已归档，并断开当前活跃连接。是否继续？"),
+        confirmText: t("确认清扫"),
       }))
     )
       return;
@@ -99,7 +100,7 @@ async function sweepSession(): Promise<void> {
     const created = await sessionsStore.sweep(sessionId);
     if (created) {
       logs.view(created.id);
-      appStore.toast(`已新建会话「${created.name}」并归档原会话`, "success");
+      appStore.toast(t("已新建会话「{name}」并归档原会话", { name: created.name }), "success");
     }
   } finally {
     sweeping.value = false;
@@ -111,14 +112,16 @@ function entries(kind: InterceptorKind): SessionInterceptorItem[] {
 }
 
 function kindLabel(kind: InterceptorKind): string {
-  return kind === "request" ? "请求拦截器" : "响应拦截器";
+  return kind === "request" ? t("请求拦截器") : t("响应拦截器");
 }
 
 function statusLabel(item: SessionInterceptorItem): string {
   if (!item.valid)
-    return canCreateScript.value ? "脚本文件不存在 · 右键可重新创建" : "脚本文件不存在";
-  if (!canMutate.value) return item.enabled ? "已开启" : "已关闭";
-  return item.enabled ? "已开启 · 点击关闭" : "已关闭 · 点击开启";
+    return canCreateScript.value
+      ? t("脚本文件不存在 · 右键可重新创建")
+      : t("脚本文件不存在");
+  if (!canMutate.value) return item.enabled ? t("已开启") : t("已关闭");
+  return item.enabled ? t("已开启 · 点击关闭") : t("已关闭 · 点击开启");
 }
 
 function breakpointCount(kind: InterceptorKind, name: string): number {
@@ -168,7 +171,7 @@ async function recreate(kind: InterceptorKind, item: SessionInterceptorItem): Pr
       await interceptorsStore.refresh(logs.sessionId);
     if (canEditScript.value) openScriptEditor(kind, item.name);
   } catch (error) {
-    reportError(error, "重新创建拦截器失败");
+    reportError(error, t("重新创建拦截器失败"));
   }
 }
 
@@ -181,7 +184,7 @@ function nodeMenu(
   const items: MenuItem[] = [];
   if (canEditScript.value)
     items.push({
-      label: "编辑脚本",
+      label: t("编辑脚本"),
       icon: Io5Create,
       disabled: !item.valid,
       action: () => {
@@ -190,14 +193,14 @@ function nodeMenu(
     });
   if (!item.valid && canCreateScript.value)
     items.push({
-      label: "重新创建同名脚本",
+      label: t("重新创建同名脚本"),
       icon: Io5Refresh,
       dividerBefore: items.length > 0,
       action: () => void recreate(kind, item),
     });
   if (canMutate.value)
     items.push({
-      label: "从当前会话移除",
+      label: t("从当前会话移除"),
       icon: Io5Trash,
       danger: true,
       dividerBefore: items.length > 0,
@@ -281,25 +284,25 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="pipeline-shell">
-    <div v-if="logs.sessionId === null" class="pipeline-empty">请选择或创建会话</div>
+    <div v-if="logs.sessionId === null" class="pipeline-empty">{{ t("请选择或创建会话") }}</div>
     <div v-else class="pipeline-scroll">
       <div class="pipeline-track" :class="{ saving: interceptorsStore.saving }">
-        <AppTooltip title="原设备" detail="请求来源">
-          <span class="pipeline-endpoint" role="img" aria-label="原设备">
+        <AppTooltip :title="t('原设备')" :detail="t('请求来源')">
+          <span class="pipeline-endpoint" role="img" :aria-label="t('原设备')">
             <Io5PhonePortraitOutline :size="17" />
           </span>
         </AppTooltip>
 
         <AppTooltip
           v-if="canAdd"
-          title="添加请求拦截器"
-          detail="点击在此位置插入"
-          :status="requestItems.length >= 12 ? '已达到 12 个上限' : undefined"
+          :title="t('添加请求拦截器')"
+          :detail="t('点击在此位置插入')"
+          :status="requestItems.length >= 12 ? t('已达到 12 个上限') : undefined"
         >
           <button
             class="pipeline-arrow-action"
             :disabled="requestItems.length >= 12"
-            aria-label="在此添加请求拦截器"
+            :aria-label="t('在此添加请求拦截器')"
             @click="openPickerAtElement('request', 0, $event)"
           >
             <Io5ArrowForward class="pipeline-arrow" :size="13" />
@@ -346,14 +349,14 @@ onBeforeUnmount(() => {
             </AppTooltip>
             <AppTooltip
               v-if="canAdd"
-              title="添加请求拦截器"
-              detail="点击在此位置插入"
-              :status="requestItems.length >= 12 ? '已达到 12 个上限' : undefined"
+              :title="t('添加请求拦截器')"
+              :detail="t('点击在此位置插入')"
+              :status="requestItems.length >= 12 ? t('已达到 12 个上限') : undefined"
             >
               <button
                 class="pipeline-arrow-action"
                 :disabled="requestItems.length >= 12"
-                aria-label="在此添加请求拦截器"
+                :aria-label="t('在此添加请求拦截器')"
                 @click="openPickerAtElement('request', index + 1, $event)"
               >
                 <Io5ArrowForward class="pipeline-arrow" :size="13" />
@@ -363,22 +366,22 @@ onBeforeUnmount(() => {
           </template>
         </template>
 
-        <AppTooltip title="服务端" detail="请求实际发送目标">
-          <span class="pipeline-endpoint server" role="img" aria-label="服务端">
+        <AppTooltip :title="t('服务端')" :detail="t('请求实际发送目标')">
+          <span class="pipeline-endpoint server" role="img" :aria-label="t('服务端')">
             <Io5ServerOutline :size="17" />
           </span>
         </AppTooltip>
 
         <AppTooltip
           v-if="canAdd"
-          title="添加响应拦截器"
-          detail="点击在此位置插入"
-          :status="responseItems.length >= 12 ? '已达到 12 个上限' : undefined"
+          :title="t('添加响应拦截器')"
+          :detail="t('点击在此位置插入')"
+          :status="responseItems.length >= 12 ? t('已达到 12 个上限') : undefined"
         >
           <button
             class="pipeline-arrow-action"
             :disabled="responseItems.length >= 12"
-            aria-label="在此添加响应拦截器"
+            :aria-label="t('在此添加响应拦截器')"
             @click="openPickerAtElement('response', 0, $event)"
           >
             <Io5ArrowForward class="pipeline-arrow" :size="13" />
@@ -425,14 +428,14 @@ onBeforeUnmount(() => {
             </AppTooltip>
             <AppTooltip
               v-if="canAdd"
-              title="添加响应拦截器"
-              detail="点击在此位置插入"
-              :status="responseItems.length >= 12 ? '已达到 12 个上限' : undefined"
+              :title="t('添加响应拦截器')"
+              :detail="t('点击在此位置插入')"
+              :status="responseItems.length >= 12 ? t('已达到 12 个上限') : undefined"
             >
               <button
                 class="pipeline-arrow-action"
                 :disabled="responseItems.length >= 12"
-                aria-label="在此添加响应拦截器"
+                :aria-label="t('在此添加响应拦截器')"
                 @click="openPickerAtElement('response', index + 1, $event)"
               >
                 <Io5ArrowForward class="pipeline-arrow" :size="13" />
@@ -442,8 +445,8 @@ onBeforeUnmount(() => {
           </template>
         </template>
 
-        <AppTooltip title="原设备" detail="响应返回目标">
-          <span class="pipeline-endpoint" role="img" aria-label="响应返回原设备">
+        <AppTooltip :title="t('原设备')" :detail="t('响应返回目标')">
+          <span class="pipeline-endpoint" role="img" :aria-label="t('响应返回原设备')">
             <Io5PhonePortraitOutline :size="17" />
           </span>
         </AppTooltip>
@@ -452,14 +455,14 @@ onBeforeUnmount(() => {
 
     <AppTooltip
       v-if="backend.getLog && backend.fetchBody && backend.saveFile"
-      title="导出 HAR"
-      detail="导出当前列表的全部筛选结果"
+      :title="t('导出 HAR')"
+      :detail="t('导出当前列表的全部筛选结果')"
     >
       <button
         class="pipeline-sweep"
         type="button"
         :disabled="logs.loading || logs.sessionId === null"
-        aria-label="导出 HAR"
+        :aria-label="t('导出 HAR')"
         @click="openHarExport(logs)"
       >
         <RiFileDownloadFill :size="16" />
@@ -467,25 +470,25 @@ onBeforeUnmount(() => {
     </AppTooltip>
     <AppTooltip
       v-if="configDownload"
-      title="下载 Session 配置"
-      detail="下载配置、引用脚本和分享者选择的随附资源"
+      :title="t('下载 Session 配置')"
+      :detail="t('下载配置、引用脚本和分享者选择的随附资源')"
     >
       <button
         class="pipeline-sweep"
         type="button"
         :disabled="downloadingConfig"
-        aria-label="下载 Session 配置"
+        :aria-label="t('下载 Session 配置')"
         @click="downloadConfig"
       >
         <Io5ArchiveOutline :size="16" />
       </button>
     </AppTooltip>
-    <AppTooltip v-if="canSweep" title="清扫会话" detail="新建配置一致的活跃会话，原会话转入已归档">
+    <AppTooltip v-if="canSweep" :title="t('清扫会话')" :detail="t('新建配置一致的活跃会话，原会话转入已归档')">
       <button
         class="pipeline-sweep"
         type="button"
         :disabled="sweeping"
-        aria-label="清扫会话"
+        :aria-label="t('清扫会话')"
         @click="sweepSession"
       >
         <GiBroom :size="16" />

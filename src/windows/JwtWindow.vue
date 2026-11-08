@@ -11,6 +11,7 @@ import {
 } from "vue-icons-plus/io5";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import { appStore } from "../stores/app";
+import { t } from "../i18n";
 import { copyText as writeClipboardText } from "../utils/clipboard";
 import {
   JWT_ALGORITHMS,
@@ -101,12 +102,12 @@ function reencodeSegment(index: 0 | 1, text: string): boolean {
 }
 
 function onHeaderEdit(text: string): void {
-  headerEditError.value = reencodeSegment(0, text) ? "" : "JSON 语法错误，修改未回写";
+  headerEditError.value = reencodeSegment(0, text) ? "" : t("JSON 语法错误，修改未回写");
   if (!headerEditError.value) skipHeaderSync = true;
 }
 
 function onPayloadEdit(text: string): void {
-  payloadEditError.value = reencodeSegment(1, text) ? "" : "JSON 语法错误，修改未回写";
+  payloadEditError.value = reencodeSegment(1, text) ? "" : t("JSON 语法错误，修改未回写");
   if (!payloadEditError.value) skipPayloadSync = true;
 }
 
@@ -119,8 +120,8 @@ const editorOptions = {
 
 const tokenEditorOptions = {
   ...editorOptions,
-  ariaLabel: "JWT 令牌",
-  placeholder: "粘贴 JWT 令牌，自动解码…",
+  ariaLabel: t("JWT 令牌"),
+  placeholder: t("粘贴 JWT 令牌，自动解码…"),
   lineHeight: 17,
   padding: { top: 6, bottom: 6 },
   renderLineHighlight: "none",
@@ -157,9 +158,9 @@ const claimChips = computed<ClaimChip[]>(() => {
     const expired = exp < now;
     chips.push({
       key: "exp",
-      text: `${formatTime(exp)} · ${expired ? "已过期" : "未过期"}`,
+      text: `${formatTime(exp)} · ${expired ? t("已过期") : t("未过期")}`,
       cls: expired ? "jc-danger" : "jc-success",
-      title: "过期时间",
+      title: t("过期时间"),
     });
   }
   const nbf = record.nbf;
@@ -167,14 +168,14 @@ const claimChips = computed<ClaimChip[]>(() => {
     const pending = nbf > now;
     chips.push({
       key: "nbf",
-      text: `${formatTime(nbf)} · ${pending ? "未生效" : "已生效"}`,
+      text: `${formatTime(nbf)} · ${pending ? t("未生效") : t("已生效")}`,
       cls: pending ? "jc-warn" : "",
-      title: "生效时间",
+      title: t("生效时间"),
     });
   }
   const iat = record.iat;
   if (typeof iat === "number" && Number.isFinite(iat)) {
-    chips.push({ key: "iat", text: formatTime(iat), cls: "", title: "签发时间" });
+    chips.push({ key: "iat", text: formatTime(iat), cls: "", title: t("签发时间") });
   }
   return chips;
 });
@@ -199,7 +200,9 @@ const FORMULA_NAMES: Record<string, string> = {
 const isHmac = computed(() => alg.value.startsWith("HS"));
 const formulaName = computed(() => FORMULA_NAMES[alg.value] ?? (alg.value || "ALGORITHM"));
 const keyPlaceholder = computed(() =>
-  isHmac.value ? "HMAC 密钥文本（或 kty=oct 的 JWK JSON）" : "粘贴 PEM 公钥或 JWK JSON",
+  isHmac.value
+    ? t("HMAC 密钥文本（或 kty=oct 的 JWK JSON）")
+    : t("粘贴 PEM 公钥或 JWK JSON"),
 );
 
 const outcome = ref<VerifyOutcome | null>(null);
@@ -287,7 +290,7 @@ async function copy(key: string, value: string): Promise<void> {
     if (copiedTimer !== undefined) window.clearTimeout(copiedTimer);
     copiedTimer = window.setTimeout(() => (copiedKey.value = null), 1200);
   } catch {
-    appStore.toast("复制失败", "error");
+    appStore.toast(t("复制失败"), "error");
   }
 }
 </script>
@@ -303,14 +306,14 @@ async function copy(key: string, value: string): Promise<void> {
             <i class="dot dh" />Header<i class="dot dp" />Payload<i class="dot ds" />Signature
           </span>
           <span class="jwt-spacer" />
-          <button class="btn icon" title="载入示例令牌" @click="loadSample">
+          <button class="btn icon" :title="t('载入示例令牌')" @click="loadSample">
             <Io5Sparkles :size="13" />
           </button>
-          <button class="btn icon" title="复制令牌" @click="copy('token', token)">
+          <button class="btn icon" :title="t('复制令牌')" @click="copy('token', token)">
             <Io5Checkmark v-if="copiedKey === 'token'" :size="13" class="text-success" />
             <Io5Copy v-else :size="13" />
           </button>
-          <button class="btn icon" title="清空" @click="clearAll">
+          <button class="btn icon" :title="t('清空')" @click="clearAll">
             <Io5Trash :size="13" />
           </button>
         </div>
@@ -325,9 +328,9 @@ async function copy(key: string, value: string): Promise<void> {
         <div class="jwt-decoded-head">
           <span class="jwt-label">Decoded</span>
           <span class="jwt-spacer" />
-          <span v-if="algAuto" class="jwt-autohint" title="从 header 自动识别">自动</span>
+          <span v-if="algAuto" class="jwt-autohint" :title="t('从 header 自动识别')">{{ t("自动") }}</span>
           <select v-model="alg" class="select jwt-alg">
-            <option value="" disabled>算法</option>
+            <option value="" disabled>{{ t("算法") }}</option>
             <option v-for="a in JWT_ALGORITHMS" :key="a" :value="a">{{ a }}</option>
             <option value="none">none</option>
           </select>
@@ -340,7 +343,7 @@ async function copy(key: string, value: string): Promise<void> {
             <span class="jwt-spacer" />
             <button
               class="btn icon"
-              title="复制解码后的 Header"
+              :title="t('复制解码后的 Header')"
               @click="copy('header', headerView)"
             >
               <Io5Checkmark v-if="copiedKey === 'header'" :size="12" class="text-success" />
@@ -355,7 +358,7 @@ async function copy(key: string, value: string): Promise<void> {
               @update:model-value="onHeaderEdit"
             />
           </div>
-          <div v-else class="jwt-empty text-faint">粘贴令牌后自动解码</div>
+          <div v-else class="jwt-empty text-faint">{{ t("粘贴令牌后自动解码") }}</div>
           <div v-if="headerEditError" class="jwt-edit-error text-warning">
             {{ headerEditError }}
           </div>
@@ -379,7 +382,7 @@ async function copy(key: string, value: string): Promise<void> {
             <span class="jwt-spacer" />
             <button
               class="btn icon"
-              title="复制解码后的 Payload"
+              :title="t('复制解码后的 Payload')"
               @click="copy('payload', payloadView)"
             >
               <Io5Checkmark v-if="copiedKey === 'payload'" :size="12" class="text-success" />
@@ -394,7 +397,7 @@ async function copy(key: string, value: string): Promise<void> {
               @update:model-value="onPayloadEdit"
             />
           </div>
-          <div v-else class="jwt-empty text-faint">粘贴令牌后自动解码</div>
+          <div v-else class="jwt-empty text-faint">{{ t("粘贴令牌后自动解码") }}</div>
           <div v-if="payloadEditError" class="jwt-edit-error text-warning">
             {{ payloadEditError }}
           </div>
@@ -414,12 +417,12 @@ async function copy(key: string, value: string): Promise<void> {
                 "
                 :size="15"
               />
-              <span class="jwt-result-text">{{ resultText || "输入密钥后自动验证签名" }}</span>
+              <span class="jwt-result-text">{{ resultText || t("输入密钥后自动验证签名") }}</span>
             </div>
             <span class="jwt-spacer" />
             <button
               class="btn icon"
-              title="复制签名原文"
+              :title="t('复制签名原文')"
               @click="copy('signature', decoded.signatureRaw)"
             >
               <Io5Checkmark v-if="copiedKey === 'signature'" :size="12" class="text-success" />
@@ -429,7 +432,7 @@ async function copy(key: string, value: string): Promise<void> {
 
           <div v-if="decoded.ok && decoded.unsecured" class="jwt-unsecured text-warning">
             <Io5Warning :size="13" />
-            <span>该令牌未签名（alg=none 或无签名段）</span>
+            <span>{{ t("该令牌未签名（alg=none 或无签名段）") }}</span>
           </div>
           <template v-else>
             <div class="jwt-formula mono">

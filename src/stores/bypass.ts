@@ -2,6 +2,7 @@ import { reactive } from "vue";
 import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { BypassEntry } from "../api/types";
 import { reportError } from "./app";
+import { t } from "../i18n";
 
 const PAGE_SIZE = 200;
 
@@ -21,7 +22,7 @@ export const bypassStore = reactive({
         [...this.selectedIds].filter((id) => this.rows.some((row) => row.id === id)),
       );
     } catch (error) {
-      reportError(error, "获取透明转发记录失败");
+      reportError(error, t("获取透明转发记录失败"));
     } finally {
       this.loading = false;
     }
@@ -51,7 +52,7 @@ export const bypassStore = reactive({
         [...this.selectedIds].filter((id) => this.rows.some((row) => row.id === id)),
       );
     } catch (error) {
-      reportError(error, "刷新透明转发记录失败");
+      reportError(error, t("刷新透明转发记录失败"));
     } finally {
       this.loading = false;
     }
@@ -68,7 +69,7 @@ export const bypassStore = reactive({
       this.rows.push(...page.rows);
       this.hasMore = page.has_more;
     } catch (error) {
-      reportError(error, "加载更多透明转发记录失败");
+      reportError(error, t("加载更多透明转发记录失败"));
     } finally {
       this.loading = false;
     }
@@ -90,7 +91,7 @@ export const bypassStore = reactive({
       await this.refresh();
       return true;
     } catch (error) {
-      reportError(error, "删除透明转发记录失败");
+      reportError(error, t("删除透明转发记录失败"));
       return false;
     }
   },
@@ -104,7 +105,7 @@ export const bypassStore = reactive({
       await this.refresh();
       return true;
     } catch (error) {
-      reportError(error, "删除透明转发记录失败");
+      reportError(error, t("删除透明转发记录失败"));
       return false;
     }
   },
@@ -116,7 +117,7 @@ export const bypassStore = reactive({
       await this.refresh();
       return result.deleted;
     } catch (error) {
-      reportError(error, "清空透明转发记录失败");
+      reportError(error, t("清空透明转发记录失败"));
       return 0;
     }
   },

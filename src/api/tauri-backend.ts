@@ -1,4 +1,5 @@
 import { createFileWriter } from "./save-file";
+import { t } from "../i18n";
 import { invoke } from "@tauri-apps/api/core";
 import type { InvokeArgs, InvokeOptions } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -94,7 +95,7 @@ export function createTauriBackend(): Backend {
     },
     fetchBody: async (target, side, maxSize = DEFAULT_BODY_MAX_SIZE) => {
       if (!Number.isSafeInteger(maxSize) || maxSize <= 0 || maxSize > UI_BODY_MAX_SIZE) {
-        throw new BodyFetchError({ code: "bad_request", message: "无效的 Body 大小限制" });
+        throw new BodyFetchError({ code: "bad_request", message: t("无效的 Body 大小限制") });
       }
       try {
         const result = await invoke<{ bytes: number[]; contentType: string }>("fetch_body", {

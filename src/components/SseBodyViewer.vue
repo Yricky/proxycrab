@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { splitSseBlocks } from "../utils/sse";
+import { t } from "../i18n";
 import MonacoEditor from "./MonacoEditor.vue";
 
 const props = defineProps<{ text: string; aggregated: boolean }>();
@@ -15,7 +16,7 @@ const blocks = computed(() => (props.aggregated ? [] : splitSseBlocks(props.text
     <section v-for="(block, index) in blocks" :key="index" class="sse-block">
       <div class="sse-block-head">
         <span>#{{ index + 1 }}</span>
-        <span v-if="!block.complete">未结束</span>
+        <span v-if="!block.complete">{{ t("未结束") }}</span>
       </div>
       <pre>{{ block.raw }}</pre>
     </section>

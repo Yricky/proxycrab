@@ -9,6 +9,7 @@ import type {
 } from "../api/types";
 import { LruKeys } from "../utils/lru";
 import { reportError } from "./app";
+import { t } from "../i18n";
 import { proxyStore } from "./proxy";
 import { sessionsStore } from "./sessions";
 import { HTTP_API_CHANGE_EVENT } from "./http-api-sync";
@@ -508,7 +509,7 @@ export function createLogsStore() {
         await this.loadAllIds(sessionId, targetGeneration, view.filter);
       } catch (error) {
         if (logsStore.sessionId === sessionId && generation === targetGeneration) {
-          reportError(error, "加载会话记录失败");
+          reportError(error, t("加载会话记录失败"));
         }
       } finally {
         if (logsStore.sessionId === sessionId && generation === targetGeneration) {
@@ -531,7 +532,7 @@ export function createLogsStore() {
         return logsStore.sessionId === sessionId && generation === targetGeneration;
       } catch (error) {
         if (logsStore.sessionId === sessionId && generation === targetGeneration) {
-          reportError(error, "过滤失败");
+          reportError(error, t("过滤失败"));
         }
         return false;
       } finally {
@@ -562,7 +563,7 @@ export function createLogsStore() {
         } catch (error) {
           if (logsStore.sessionId === sessionId && generation === targetGeneration) {
             this.syncAppliedFilter(previous);
-            reportError(error, "保存过滤条件失败");
+            reportError(error, t("保存过滤条件失败"));
           }
           return false;
         }
@@ -584,7 +585,7 @@ export function createLogsStore() {
           this.setViewportIds([...viewportIds]);
         }
       } catch (error) {
-        reportError(error, "同步 Session 视图失败");
+        reportError(error, t("同步 Session 视图失败"));
       }
     },
 
@@ -682,7 +683,7 @@ export function createLogsStore() {
         this.setViewportIds([...viewportIds]);
         await this.hydrateFor(sessionId, generation, proxyStore.activeNetlogIds(sessionId), true);
       } catch (error) {
-        reportError(error, "刷新日志列失败");
+        reportError(error, t("刷新日志列失败"));
       }
     },
 

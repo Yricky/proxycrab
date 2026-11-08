@@ -2,6 +2,7 @@
 import { nextTick, onMounted, ref, watch } from "vue";
 import { Io5ReorderTwo } from "vue-icons-plus/io5";
 import { normalizeKvRows, type KvRow } from "../utils/replay";
+import { t } from "../i18n";
 
 const rows = defineModel<KvRow[]>({ required: true });
 
@@ -95,7 +96,7 @@ function onHandlePointerDown(index: number, event: PointerEvent): void {
           <span
             v-if="draggable(index)"
             class="drag-handle text-faint"
-            title="拖动排序"
+            :title="t('拖动排序')"
             @pointerdown="onHandlePointerDown(index, $event)"
           >
             <Io5ReorderTwo :size="13" />

@@ -1,4 +1,5 @@
 import type { Backend } from "./backend";
+import { t } from "../i18n";
 import type { SaveFileRequest } from "./types";
 
 export interface FileWriter {
@@ -19,7 +20,7 @@ export function createFileWriter(operations: FileWriter): FileWriter {
   return {
     append: (data) =>
       enqueue(async () => {
-        if (state !== "open") throw new Error("文件已关闭或写入失败");
+        if (state !== "open") throw new Error(t("文件已关闭或写入失败"));
         try {
           await operations.append(data);
         } catch (error) {
@@ -30,7 +31,7 @@ export function createFileWriter(operations: FileWriter): FileWriter {
     markAsFinish: () =>
       enqueue(async () => {
         if (state === "finished") return;
-        if (state !== "open") throw new Error("文件写入失败，无法提交");
+        if (state !== "open") throw new Error(t("文件写入失败，无法提交"));
         try {
           await operations.markAsFinish();
           state = "finished";

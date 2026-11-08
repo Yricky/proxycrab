@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { Io5Checkmark, Io5Close } from "vue-icons-plus/io5";
+import { t } from "../i18n";
 defineProps<{ directory: string; busy?: boolean; error?: string; confirmText?: string }>();
 const name = defineModel<string>({ required: true });
 const emit = defineEmits<{ submit: []; cancel: [] }>();
@@ -25,19 +26,19 @@ onMounted(() => {
       ref="input"
       v-model="name"
       class="input file-create-input"
-      aria-label="新文件名或相对路径"
+      :aria-label="t('新文件名或相对路径')"
       :aria-invalid="!!error"
       :disabled="busy"
       :class="{ invalid: !!error }"
-      :title="error || (directory ? `在 ${directory} 中新建` : '在根目录中新建')"
-      placeholder="文件名或子目录/文件名"
+      :title="error || (directory ? t('在 {dir} 中新建', { dir: directory }) : t('在根目录中新建'))"
+      :placeholder="t('文件名或子目录/文件名')"
     />
     <button
       type="submit"
       class="btn icon file-create-action"
       :disabled="busy"
-      :title="busy ? '处理中…' : confirmText || '创建'"
-      :aria-label="confirmText || '创建'"
+      :title="busy ? t('处理中…') : confirmText || t('创建')"
+      :aria-label="confirmText || t('创建')"
     >
       <Io5Checkmark :size="14" />
     </button>
@@ -45,8 +46,8 @@ onMounted(() => {
       type="button"
       class="btn icon file-create-action"
       :disabled="busy"
-      title="取消"
-      aria-label="取消"
+      :title="t('取消')"
+      :aria-label="t('取消')"
       @click="emit('cancel')"
     >
       <Io5Close :size="14" />

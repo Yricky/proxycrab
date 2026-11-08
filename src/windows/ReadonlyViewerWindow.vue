@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import CustomSelect, { type CustomSelectOption } from "../components/CustomSelect.vue";
+import { t } from "../i18n";
 
 const props = withDefaults(
   defineProps<{
@@ -73,26 +74,26 @@ const lineCount = computed(() =>
     />
     <footer class="viewer-statusbar">
       <span class="status-item mono">{{ sizeLabel }}</span>
-      <span class="status-item">{{ lineCount }} 行</span>
+      <span class="status-item">{{ t("{n} 行", lineCount) }}</span>
       <span class="status-spacer" />
       <template v-if="formattable">
-        <button class="tool-btn" :class="{ on: pretty }" @click="pretty = true">格式化</button>
-        <button class="tool-btn" :class="{ on: !pretty }" @click="pretty = false">原文</button>
+        <button class="tool-btn" :class="{ on: pretty }" @click="pretty = true">{{ t("格式化") }}</button>
+        <button class="tool-btn" :class="{ on: !pretty }" @click="pretty = false">{{ t("原文") }}</button>
       </template>
       <button
         class="status-toggle"
         :class="{ active: wordWrap }"
-        title="切换自动换行"
+        :title="t('切换自动换行')"
         @click="wordWrap = !wordWrap"
       >
-        自动换行
+        {{ t("自动换行") }}
       </button>
       <CustomSelect
         v-model="language"
         class="status-language"
         :options="languageOptions"
         placement="up"
-        aria-label="高亮格式"
+        :aria-label="t('高亮格式')"
       />
     </footer>
   </div>

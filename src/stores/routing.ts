@@ -2,6 +2,7 @@ import { reactive } from "vue";
 import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { Script } from "../api/types";
 import { reportError } from "./app";
+import { t } from "../i18n";
 
 export const routingStore = reactive({
   scripts: [] as Script[],
@@ -18,7 +19,7 @@ export const routingStore = reactive({
       this.scripts = scripts;
       this.selectedName = selection.name;
     } catch (error) {
-      reportError(error, "获取分流规则失败");
+      reportError(error, t("获取分流规则失败"));
     } finally {
       this.loading = false;
     }
@@ -30,7 +31,7 @@ export const routingStore = reactive({
       this.selectedName = selection.name;
       return true;
     } catch (error) {
-      reportError(error, "切换分流规则失败");
+      reportError(error, t("切换分流规则失败"));
       return false;
     }
   },

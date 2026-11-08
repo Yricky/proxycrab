@@ -3,6 +3,7 @@ import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { SessionMetadata, SessionShareState, SessionShareSummary } from "../api/types";
 import { sweepCreateRequest } from "../utils/session-sweep";
 import { reportError } from "./app";
+import { t } from "../i18n";
 
 let shareRevision = 0;
 let shareReadSequence = 0;
@@ -33,7 +34,7 @@ export const sessionsStore = reactive({
       }
       this.shares = next;
     } catch (error) {
-      if (sequence === shareReadSequence) reportError(error, "读取会话分享状态失败");
+      if (sequence === shareReadSequence) reportError(error, t("读取会话分享状态失败"));
     }
   },
 
@@ -58,7 +59,7 @@ export const sessionsStore = reactive({
       this.archivedSessions = archivedSessions;
       this.activeSessionId = sessionList.active_session_id;
     } catch (error) {
-      reportError(error, "获取会话列表失败");
+      reportError(error, t("获取会话列表失败"));
     }
   },
 
@@ -74,7 +75,7 @@ export const sessionsStore = reactive({
       this.archivedSessions = archivedSessions;
       this.activeSessionId = sessionList.active_session_id;
     } catch (error) {
-      reportError(error, "初始化会话失败");
+      reportError(error, t("初始化会话失败"));
     } finally {
       this.loading = false;
     }
@@ -91,7 +92,7 @@ export const sessionsStore = reactive({
       this.archivedSessions = archivedSessions;
       this.activeSessionId = sessionList.active_session_id;
     } catch (error) {
-      reportError(error, "同步会话状态失败");
+      reportError(error, t("同步会话状态失败"));
     }
   },
 
@@ -103,7 +104,7 @@ export const sessionsStore = reactive({
       await this.refresh();
       return session;
     } catch (error) {
-      reportError(error, "创建会话失败");
+      reportError(error, t("创建会话失败"));
       return null;
     }
   },
@@ -117,7 +118,7 @@ export const sessionsStore = reactive({
       await this.refresh();
       return true;
     } catch (error) {
-      reportError(error, "更新会话失败");
+      reportError(error, t("更新会话失败"));
       return false;
     }
   },
@@ -128,7 +129,7 @@ export const sessionsStore = reactive({
       await this.refresh();
       return true;
     } catch (error) {
-      reportError(error, "归档会话失败");
+      reportError(error, t("归档会话失败"));
       return false;
     }
   },
@@ -139,7 +140,7 @@ export const sessionsStore = reactive({
       await this.refresh();
       return true;
     } catch (error) {
-      reportError(error, "取消归档失败");
+      reportError(error, t("取消归档失败"));
       return false;
     }
   },
@@ -150,7 +151,7 @@ export const sessionsStore = reactive({
       await this.refresh();
       return true;
     } catch (error) {
-      reportError(error, "删除已归档会话失败");
+      reportError(error, t("删除已归档会话失败"));
       return false;
     }
   },
@@ -175,13 +176,13 @@ export const sessionsStore = reactive({
       try {
         await backend.archiveSession(id);
       } catch (error) {
-        reportError(error, "新会话已启用，但原会话归档失败，请在侧边栏手动归档");
+        reportError(error, t("新会话已启用，但原会话归档失败，请在侧边栏手动归档"));
         return null;
       }
       await this.refresh();
       return created;
     } catch (error) {
-      reportError(error, "清扫会话失败");
+      reportError(error, t("清扫会话失败"));
       await this.refresh();
       return null;
     }
@@ -193,7 +194,7 @@ export const sessionsStore = reactive({
       this.activeSessionId = active.session_id;
       return true;
     } catch (error) {
-      reportError(error, "切换活跃会话失败");
+      reportError(error, t("切换活跃会话失败"));
       return false;
     }
   },

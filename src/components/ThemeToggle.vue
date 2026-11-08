@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { appStore, type ThemeMode } from "../stores/app";
 import { Io5Desktop, Io5Moon, Io5Sunny } from "vue-icons-plus/io5";
 
@@ -16,7 +17,7 @@ const modes: { value: ThemeMode; label: string; icon: unknown }[] = [
       :key="mode.value"
       class="tt-btn"
       :class="{ active: appStore.theme === mode.value }"
-      :title="mode.label"
+      :title="t(mode.label)"
       @click="appStore.setTheme(mode.value)"
     >
       <component :is="mode.icon" :size="14" />

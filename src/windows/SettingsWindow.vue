@@ -20,6 +20,7 @@ import ApiKeySecretDialog from "../components/ApiKeySecretDialog.vue";
 import CustomSelect, { type CustomSelectOption } from "../components/CustomSelect.vue";
 import RedactionSelect from "../components/RedactionSelect.vue";
 import PermissionEditor from "../components/PermissionEditor.vue";
+import { i18n, setLocale, t, type AppLocale } from "../i18n";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
@@ -35,6 +36,11 @@ const permissionModes: PermissionMode[] = backend.listHttpApprovals
   ? ["allow", "approval", "deny"]
   : ["allow", "deny"];
 const page = ref<SettingsPage>("general");
+
+const currentLocale = computed({
+  get: () => i18n.global.locale.value,
+  set: (locale: AppLocale) => setLocale(locale),
+});
 
 const currentPath = ref("");
 const switchingWorkspace = ref(false);
@@ -62,9 +68,11 @@ const selectedIdentity = computed(() =>
 const identityOptions = computed<CustomSelectOption[]>(() =>
   identities.value.map((identity) => ({
     value: identity.id,
-    label: identity.kind === "local" ? "本机无 API Key" : identity.name,
+    label: identity.kind === "local" ? t("本机无 API Key") : identity.name,
     description:
-      identity.kind === "api_key" && identity.prefix ? `前缀 ${identity.prefix}` : undefined,
+      identity.kind === "api_key" && identity.prefix
+        ? t("前缀 {prefix}", { prefix: identity.prefix })
+        : undefined,
   })),
 );
 const managementDisabled = computed(() => permissionConfigError.value !== null);
@@ -78,7 +86,7 @@ async function refreshWorkspace(): Promise<void> {
     const workspace = await backend.getWorkspace();
     currentPath.value = workspace.current_path;
   } catch (error) {
-    reportError(error, "获取工作区信息失败");
+    reportError(error, t("获取工作区信息失败"));
   }
 }
 
@@ -86,7 +94,7 @@ async function refreshManagement(preferredId?: string): Promise<void> {
   try {
     serviceStatus.value = await backend.getHttpServiceStatus();
   } catch (error) {
-    reportError(error, "获取 HTTP 管理接口状态失败");
+    reportError(error, t("获取 HTTP 管理接口状态失败"));
     return;
   }
   try {
@@ -122,9 +130,9 @@ async function setRedaction(value: string | null): Promise<void> {
   try {
     const result = await backend.setHttpIdentityRedaction(selectedIdentityId.value, value);
     redactionScript.value = result.redaction_script ?? null;
-    appStore.toast("脱敏脚本绑定已保存", "success");
+    appStore.toast(t("脱敏脚本绑定已保存"), "success");
   } catch (error) {
-    reportError(error, "保存脱敏脚本绑定失败");
+    reportError(error, t("保存脱敏脚本绑定失败"));
   } finally {
     savingRedaction.value = false;
   }
@@ -145,7 +153,7 @@ async function loadIdentity(id: string): Promise<void> {
     permissions.value = next;
     loadedPermissions.value = { ...next };
   } catch (error) {
-    reportError(error, "加载身份权限失败");
+    reportError(error, t("加载身份权限失败"));
   } finally {
     loadingPermissions.value = false;
   }
@@ -154,9 +162,9 @@ async function loadIdentity(id: string): Promise<void> {
 async function confirmDiscardPermissions(): Promise<boolean> {
   if (!permissionDirty.value) return true;
   return confirmDialog({
-    title: "放弃权限修改？",
-    message: "当前身份的权限尚未保存，继续将丢弃这些修改。",
-    confirmText: "放弃修改",
+    title: t("放弃权限修改？"),
+    message: t("当前身份的权限尚未保存，继续将丢弃这些修改。"),
+    confirmText: t("放弃修改"),
     danger: true,
   });
 }
@@ -186,7 +194,7 @@ async function switchWorkspace(): Promise<void> {
   try {
     await backend.host.switchWorkspace();
   } catch (error) {
-    reportError(error, "切换工作区失败");
+    reportError(error, t("切换工作区失败"));
   } finally {
     switchingWorkspace.value = false;
   }
@@ -196,7 +204,7 @@ async function openDevtools(): Promise<void> {
   try {
     await backend.host?.openDevtools?.();
   } catch (error) {
-    reportError(error, "打开开发者工具失败");
+    reportError(error, t("打开开发者工具失败"));
   }
 }
 
@@ -214,9 +222,9 @@ async function savePermissions(): Promise<void> {
     ) as Record<string, PermissionMode>;
     permissions.value = next;
     loadedPermissions.value = { ...next };
-    appStore.toast("权限已保存", "success");
+    appStore.toast(t("权限已保存"), "success");
   } catch (error) {
-    reportError(error, "保存权限失败");
+    reportError(error, t("保存权限失败"));
   } finally {
     savingPermissions.value = false;
   }
@@ -238,18 +246,20 @@ async function deleteSelectedKey(): Promise<void> {
   if (!identity || identity.kind !== "api_key") return;
   if (!(await confirmDiscardPermissions())) return;
   const ok = await confirmDialog({
-    title: "删除 API Key",
-    message: `删除“${identity.name}”后，使用该密钥的新请求将立即无法鉴权。此操作不可恢复。`,
-    confirmText: "删除",
+    title: t("删除 API Key"),
+    message: t("删除“{name}”后，使用该密钥的新请求将立即无法鉴权。此操作不可恢复。", {
+      name: identity.name,
+    }),
+    confirmText: t("删除"),
     danger: true,
   });
   if (!ok) return;
   try {
     await backend.deleteHttpApiKey(identity.id);
-    appStore.toast("API Key 已删除", "success");
+    appStore.toast(t("API Key 已删除"), "success");
     await refreshManagement("local");
   } catch (error) {
-    reportError(error, "删除 API Key 失败");
+    reportError(error, t("删除 API Key 失败"));
   }
 }
 
@@ -290,11 +300,11 @@ onBeforeUnmount(() => {
     <aside class="settings-sidebar">
       <button :class="{ active: page === 'general' }" @click="selectPage('general')">
         <Io5Settings :size="15" />
-        通用
+        {{ t("通用") }}
       </button>
       <button :class="{ active: page === 'management' }" @click="selectPage('management')">
         <Io5Globe :size="15" />
-        管理接口
+        {{ t("管理接口") }}
       </button>
       <button
         v-if="backend.host?.openDevtools"
@@ -302,7 +312,7 @@ onBeforeUnmount(() => {
         @click="selectPage('development')"
       >
         <Io5Build :size="15" />
-        开发
+        {{ t("开发") }}
       </button>
     </aside>
 
@@ -310,14 +320,14 @@ onBeforeUnmount(() => {
       <template v-if="page === 'general'">
         <header class="page-header">
           <div>
-            <h2>通用</h2>
-            <p>查看和切换工作区</p>
+            <h2>{{ t("通用") }}</h2>
+            <p>{{ t("查看和切换工作区") }}</p>
           </div>
         </header>
         <section class="settings-section">
-          <h3>工作区</h3>
+          <h3>{{ t("工作区") }}</h3>
           <label class="settings-field">
-            <span>当前工作区</span>
+            <span>{{ t("当前工作区") }}</span>
             <div class="field-row">
               <code>{{ currentPath || "—" }}</code>
               <button
@@ -326,8 +336,20 @@ onBeforeUnmount(() => {
                 :disabled="switchingWorkspace"
                 @click="switchWorkspace"
               >
-                切换工作区
+                {{ t("切换工作区") }}
               </button>
+            </div>
+          </label>
+        </section>
+        <section class="settings-section">
+          <h3>{{ t("语言") }}</h3>
+          <label class="settings-field">
+            <span>{{ t("界面语言") }}</span>
+            <div class="field-row">
+              <select v-model="currentLocale" class="select">
+                <option value="zh-CN">简体中文</option>
+                <option value="en-US">English</option>
+              </select>
             </div>
           </label>
         </section>
@@ -336,13 +358,17 @@ onBeforeUnmount(() => {
       <template v-else-if="page === 'management'">
         <header class="page-header management-header">
           <div>
-            <h2>管理接口</h2>
-            <p>配置本机调用和每个 API Key 可访问的接口</p>
+            <h2>{{ t("管理接口") }}</h2>
+            <p>{{ t("配置本机调用和每个 API Key 可访问的接口") }}</p>
           </div>
           <div class="service-state" :class="{ failed: serviceStatus?.error }">
             <span class="status-dot" />
             <span>{{
-              serviceStatus?.running ? "运行中" : serviceStatus?.error ? "启动失败" : "未运行"
+              serviceStatus?.running
+                ? t("运行中")
+                : serviceStatus?.error
+                  ? t("启动失败")
+                  : t("未运行")
             }}</span>
             <code>{{ serviceUrl }}</code>
           </div>
@@ -351,22 +377,21 @@ onBeforeUnmount(() => {
         <div v-if="serviceStatus?.error" class="service-error">
           <Io5Warning :size="17" />
           <div>
-            <strong>管理接口未启动</strong>
+            <strong>{{ t("管理接口未启动") }}</strong>
             <span>{{ serviceStatus.error }}</span>
             <small v-if="!permissionConfigError"
-              >权限仍可配置，服务将在问题修复并重启应用后使用新设置。</small
+              >{{ t("权限仍可配置，服务将在问题修复并重启应用后使用新设置。") }}</small
             >
           </div>
         </div>
         <div v-if="permissionConfigError" class="service-error permission-error">
           <Io5Warning :size="17" />
           <div>
-            <strong>权限配置不可用</strong>
+            <strong>{{ t("权限配置不可用") }}</strong>
             <span>{{ permissionConfigError }}</span>
-            <small
-              >请修复工作区中的 http_api_permissions.json 后重启应用。ProxyCrab
-              不会自动覆盖损坏的配置。</small
-            >
+            <small>{{
+              t("请修复工作区中的 http_api_permissions.json 后重启应用。ProxyCrab 不会自动覆盖损坏的配置。")
+            }}</small>
           </div>
         </div>
 
@@ -377,14 +402,14 @@ onBeforeUnmount(() => {
                 class="identity-select"
                 :model-value="selectedIdentityId"
                 :options="identityOptions"
-                placeholder="选择身份"
-                aria-label="权限身份"
+                :placeholder="t('选择身份')"
+                :aria-label="t('权限身份')"
                 :disabled="loadingPermissions"
                 @update:model-value="selectIdentity"
               />
               <button class="btn" @click="openCreate">
                 <Io5Add :size="14" />
-                新建
+                {{ t("新建") }}
               </button>
             </div>
             <RedactionSelect
@@ -398,32 +423,32 @@ onBeforeUnmount(() => {
               @update:model-value="setRedaction"
             />
             <div v-if="selectedIdentity?.kind === 'api_key'" class="identity-detail">
-              <span>创建于 {{ formatDateTime(selectedIdentity.created_at ?? 0) }}</span>
-              <span
-                >最近使用
+              <span>{{ t("创建于 {time}") }}{{ formatDateTime(selectedIdentity.created_at ?? 0) }}</span>
+              <span>
+                {{ t("最近使用") }}
                 {{
                   selectedIdentity.last_used_at
                     ? formatDateTime(selectedIdentity.last_used_at)
-                    : "从未"
+                    : t("从未")
                 }}</span
               >
-              <span class="mono">前缀 {{ selectedIdentity.prefix }}</span>
+              <span class="mono">{{ t("前缀 {prefix}", { prefix: selectedIdentity.prefix }) }}</span>
               <button class="btn danger compact" @click="deleteSelectedKey">
                 <Io5Trash :size="13" />
-                删除
+                {{ t("删除") }}
               </button>
             </div>
-            <p v-else class="identity-hint">未携带 Authorization 的本机请求使用此身份。</p>
+            <p v-else class="identity-hint">{{ t("未携带 Authorization 的本机请求使用此身份。") }}</p>
           </section>
 
           <section class="permission-section">
             <div class="permission-heading">
               <div>
-                <h3>接口权限</h3>
-                <span v-if="permissionDirty" class="dirty-label">有未保存修改</span>
+                <h3>{{ t("接口权限") }}</h3>
+                <span v-if="permissionDirty" class="dirty-label">{{ t("有未保存修改") }}</span>
               </div>
               <div class="permission-heading-actions">
-                <div class="dimension-switch" role="group" aria-label="权限分组维度">
+                <div class="dimension-switch" role="group" :aria-label="t('权限分组维度')">
                   <button
                     v-for="option in DIMENSION_OPTIONS"
                     :key="option.value"
@@ -441,11 +466,11 @@ onBeforeUnmount(() => {
                   :disabled="!permissionDirty || savingPermissions || loadingPermissions"
                   @click="savePermissions"
                 >
-                  {{ savingPermissions ? "保存中…" : "保存" }}
+                  {{ savingPermissions ? t("保存中…") : t("保存") }}
                 </button>
               </div>
             </div>
-            <div v-if="loadingPermissions" class="permission-loading">加载权限…</div>
+            <div v-if="loadingPermissions" class="permission-loading">{{ t("加载权限…") }}</div>
             <PermissionEditor
               v-else-if="selectedIdentityId"
               v-model="permissions"
@@ -460,12 +485,12 @@ onBeforeUnmount(() => {
       <template v-else-if="page === 'development' && backend.host?.openDevtools">
         <header class="page-header">
           <div>
-            <h2>开发</h2>
-            <p>调试应用界面</p>
+            <h2>{{ t("开发") }}</h2>
+            <p>{{ t("调试应用界面") }}</p>
           </div>
         </header>
         <section class="settings-section">
-          <button class="btn" @click="openDevtools">打开开发者工具</button>
+          <button class="btn" @click="openDevtools">{{ t("打开开发者工具") }}</button>
         </section>
       </template>
     </main>

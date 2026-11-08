@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Io5Checkmark, Io5Copy, Io5DownloadOutline, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
+import { t } from "../i18n";
 import {
   BodyFetchError,
   DEFAULT_BODY_MAX_SIZE,
@@ -177,7 +178,7 @@ async function preparePreview(value: LoadedBody): Promise<void> {
     try {
       structured.value = await inspectGrpc(value.bytes, header("grpc-encoding").toLowerCase());
     } catch (cause) {
-      structured.value = `gRPC 解析失败：${String(cause)}`;
+      structured.value = t("gRPC 解析失败：{error}", { error: String(cause) });
     }
   }
 }
@@ -209,9 +210,11 @@ async function load(maxSize = DEFAULT_BODY_MAX_SIZE): Promise<void> {
 async function confirmFullLoad(): Promise<void> {
   if (!effectiveStoredSize.value || !canRequestFull.value) return;
   const accepted = await confirmDialog({
-    title: "加载完整 Body",
-    message: `Body 实际体积为 ${formatBytes(effectiveStoredSize.value)}，加载会占用较多内存，是否继续？`,
-    confirmText: "继续加载",
+    title: t("加载完整 Body"),
+    message: t("Body 实际体积为 {size}，加载会占用较多内存，是否继续？", {
+      size: formatBytes(effectiveStoredSize.value),
+    }),
+    confirmText: t("继续加载"),
   });
   if (accepted) await load(effectiveStoredSize.value);
 }
@@ -223,7 +226,7 @@ async function copy(key: string, value: string): Promise<void> {
     if (copiedTimer !== undefined) window.clearTimeout(copiedTimer);
     copiedTimer = window.setTimeout(() => (copied.value = null), 1200);
   } catch {
-    appStore.toast("复制失败", "error");
+    appStore.toast(t("复制失败"), "error");
   }
 }
 
@@ -238,7 +241,7 @@ async function download(): Promise<void> {
     );
   } catch (cause) {
     appStore.toast(
-      `Body 下载失败：${cause instanceof Error ? cause.message : String(cause)}`,
+      t("Body 下载失败：{message}", { message: cause instanceof Error ? cause.message : String(cause) }),
       "error",
     );
   } finally {
@@ -296,7 +299,7 @@ onBeforeUnmount(() => {
     <div class="body-head">
       <span>{{ label }}</span>
       <span v-if="body.type !== 'empty' && sizeKnown" class="size-note">
-        实际体积 {{ formatBytes(effectiveStoredSize) }}
+        {{ t("实际体积 {size}", { size: formatBytes(effectiveStoredSize) }) }}
       </span>
       <span class="body-actions">
         <button
@@ -306,22 +309,22 @@ onBeforeUnmount(() => {
           :aria-pressed="aggregated"
           @click="aggregated = !aggregated"
         >
-          聚合查看
+          {{ t("聚合查看") }}
         </button>
         <button
           v-else-if="body.type !== 'empty' && backend.downloadBody"
           class="btn icon"
           :disabled="downloading"
-          :title="downloading ? '正在下载 Body…' : '下载 Body'"
-          :aria-label="downloading ? '正在下载 Body' : '下载 Body'"
+          :title="downloading ? t('正在下载 Body…') : t('下载 Body')"
+          :aria-label="downloading ? t('正在下载 Body') : t('下载 Body')"
           @click="download"
         >
           <Io5DownloadOutline :size="13" />
         </button>
         <template v-if="loaded && previewKind === 'text'">
-          <button class="tool-btn" :class="{ on: pretty }" @click="pretty = true">格式化</button>
-          <button class="tool-btn" :class="{ on: !pretty }" @click="pretty = false">原文</button>
-          <button class="btn icon" title="复制 Body" @click="copy('body', editorValue)">
+          <button class="tool-btn" :class="{ on: pretty }" @click="pretty = true">{{ t("格式化") }}</button>
+          <button class="tool-btn" :class="{ on: !pretty }" @click="pretty = false">{{ t("原文") }}</button>
+          <button class="btn icon" :title="t('复制 Body')" @click="copy('body', editorValue)">
             <Io5Checkmark v-if="copied === 'body'" :size="13" class="text-success" />
             <Io5Copy v-else :size="13" />
           </button>
@@ -329,20 +332,20 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <div v-if="body.type === 'empty'" class="body-state">无 Body</div>
-    <div v-else-if="loading && !(loaded && previewKind === 'sse')" class="body-state">加载中…</div>
+    <div v-if="body.type === 'empty'" class="body-state">{{ t("无 Body") }}</div>
+    <div v-else-if="loading && !(loaded && previewKind === 'sse')" class="body-state">{{ t("加载中…") }}</div>
     <div v-else-if="overDefaultLimit" class="body-state body-limit">
       <Io5Warning :size="18" />
-      <span>Body 超过自动加载限制</span>
+      <span>{{ t("Body 超过自动加载限制") }}</span>
       <button v-if="canRequestFull" class="btn primary" @click="confirmFullLoad">
-        加载完整 Body（{{ formatBytes(effectiveStoredSize) }}）
+        {{ t("加载完整 Body（{size}）", { size: formatBytes(effectiveStoredSize) }) }}
       </button>
-      <span v-else>Body 实际体积超过 1 GiB，无法在此加载</span>
+      <span v-else>{{ t("Body 实际体积超过 1 GiB，无法在此加载") }}</span>
     </div>
     <div v-else-if="error" class="body-state body-limit">
       <Io5Warning :size="18" />
       <span>{{ error }}</span>
-      <button class="btn" @click="load()">重试</button>
+      <button class="btn" @click="load()">{{ t("重试") }}</button>
     </div>
     <SseBodyViewer
       v-else-if="loaded && previewKind === 'sse'"
@@ -350,7 +353,7 @@ onBeforeUnmount(() => {
       :aggregated="aggregated"
     />
     <div v-else-if="loaded && previewKind === 'image'" class="media-preview">
-      <img :src="objectUrl ?? ''" alt="Body 图片预览" />
+      <img :src="objectUrl ?? ''" :alt="t('Body 图片预览')" />
     </div>
     <div v-else-if="loaded && previewKind === 'audio'" class="media-preview">
       <audio :src="objectUrl ?? ''" controls />

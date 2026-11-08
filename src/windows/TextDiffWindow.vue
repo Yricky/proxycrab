@@ -2,16 +2,17 @@
 import { computed, nextTick, onBeforeUnmount, ref } from "vue";
 import { Io5Checkmark, Io5EllipsisHorizontal } from "vue-icons-plus/io5";
 import CustomSelect from "../components/CustomSelect.vue";
+import { t } from "../i18n";
 import MonacoDiffEditor from "../components/MonacoDiffEditor.vue";
 import MonacoEditor from "../components/MonacoEditor.vue";
 
 type TabKey = "text1" | "text2" | "side" | "inline";
 
 const tabs: { key: TabKey; label: string }[] = [
-  { key: "text1", label: "文本1" },
-  { key: "text2", label: "文本2" },
-  { key: "side", label: "左右视图" },
-  { key: "inline", label: "内联比对" },
+  { key: "text1", label: t("文本1") },
+  { key: "text2", label: t("文本2") },
+  { key: "side", label: t("左右视图") },
+  { key: "inline", label: t("内联比对") },
 ];
 
 const activeTab = ref<TabKey>("text1");
@@ -25,7 +26,7 @@ const text2 = ref("");
 const language = ref("plaintext");
 
 const languageOptions = [
-  { value: "plaintext", label: "纯文本" },
+  { value: "plaintext", label: t("纯文本") },
   { value: "json", label: "JSON" },
   { value: "javascript", label: "JavaScript" },
   { value: "typescript", label: "TypeScript" },
@@ -121,13 +122,13 @@ onBeforeUnmount(closeMenu);
         v-model="language"
         class="lang-select"
         :options="languageOptions"
-        aria-label="语言"
+        :aria-label="t('语言')"
       />
       <div ref="menuRoot" class="menu-wrap">
         <button
           class="menu-trigger"
           :class="{ active: menuOpen }"
-          aria-label="比对选项"
+          :aria-label="t('比对选项')"
           @click="toggleMenu"
         >
           <Io5EllipsisHorizontal :size="14" />
@@ -136,15 +137,15 @@ onBeforeUnmount(closeMenu);
           <button
             class="menu-item"
             :disabled="!isJson"
-            title="仅 JSON 语言时可用"
+            :title="t('仅 JSON 语言时可用')"
             @click="toggleFormatJson"
           >
             <Io5Checkmark :size="14" :class="{ invisible: !formatJson }" />
-            <span>JSON 格式化</span>
+            <span>{{ t("JSON 格式化") }}</span>
           </button>
           <button class="menu-item" @click="toggleIgnoreWhitespace">
             <Io5Checkmark :size="14" :class="{ invisible: !ignoreWhitespace }" />
-            <span>忽略空白</span>
+            <span>{{ t("忽略空白") }}</span>
           </button>
         </div>
       </div>

@@ -11,6 +11,7 @@ import {
 import { appStore, reportError } from "../stores/app";
 import { choiceDialog } from "../stores/dialog";
 import { skillStore } from "../stores/skill";
+import { t } from "../i18n";
 
 const draftPaths = ref<string[]>([]);
 const newPath = ref("");
@@ -56,10 +57,12 @@ async function save(): Promise<void> {
   let deleteRemoved = false;
   if (removedPaths.value.length > 0) {
     const choice = await choiceDialog({
-      title: "保存 Skill 路径",
-      message: `已移除 ${removedPaths.value.length} 个路径。是否同时删除这些路径中的 ProxyCrab Skill？`,
-      secondaryText: "仅停止管理",
-      confirmText: "停止管理并删除",
+      title: t("保存 Skill 路径"),
+      message: t("已移除 {n} 个路径。是否同时删除这些路径中的 ProxyCrab Skill？", {
+        n: removedPaths.value.length,
+      }),
+      secondaryText: t("仅停止管理"),
+      confirmText: t("停止管理并删除"),
       danger: true,
     });
     if (choice === "cancel") return;
@@ -72,14 +75,14 @@ async function save(): Promise<void> {
       const details = result.removal_errors
         .map((error) => `${error.parent_path}: ${error.message}`)
         .join("；");
-      appStore.toast(`路径已保存，但部分 Skill 删除失败：${details}`, "error", 6000);
+      appStore.toast(t("路径已保存，但部分 Skill 删除失败：{details}", { details }), "error", 6000);
     } else if (result.state.paths.some((path) => path.error)) {
-      appStore.toast("路径已保存，但部分 Skill 同步失败", "error", 5000);
+      appStore.toast(t("路径已保存，但部分 Skill 同步失败"), "error", 5000);
     } else {
-      appStore.toast("Skill 路径已保存并同步", "success");
+      appStore.toast(t("Skill 路径已保存并同步"), "success");
     }
   } catch (error) {
-    reportError(error, "保存 Skill 路径失败");
+    reportError(error, t("保存 Skill 路径失败"));
   }
 }
 
@@ -88,12 +91,12 @@ async function syncAll(): Promise<void> {
   try {
     await skillStore.sync();
     if (skillStore.state?.paths.some((path) => path.error)) {
-      appStore.toast("部分 Skill 同步失败", "error", 5000);
+      appStore.toast(t("部分 Skill 同步失败"), "error", 5000);
     } else {
-      appStore.toast("所有 Skill 已同步", "success");
+      appStore.toast(t("所有 Skill 已同步"), "success");
     }
   } catch (error) {
-    reportError(error, "同步 Skill 失败");
+    reportError(error, t("同步 Skill 失败"));
   }
 }
 
@@ -102,7 +105,7 @@ onMounted(async () => {
     await skillStore.refresh();
     resetDraft();
   } catch (error) {
-    reportError(error, "读取 Skill 路径失败");
+    reportError(error, t("读取 Skill 路径失败"));
   }
 });
 </script>
@@ -112,13 +115,17 @@ onMounted(async () => {
     <div class="sm-notice">
       <Io5AlertCircleOutline :size="18" />
       <span>
-        内置 ProxyCrab Skill 将会安装到下列目录中的
-        <span class="mono">proxycrab</span> 子目录。
+        {{ t("内置 ProxyCrab Skill 将会安装到下列目录中的") }}
+        <span class="mono">proxycrab</span> {{ t("子目录。") }}
       </span>
     </div>
 
     <div v-if="skillStore.state?.config_error" class="sm-config-error">
-      路径配置读取失败：{{ skillStore.state.config_error }}。保存后将重建配置文件。
+      {{
+        t("路径配置读取失败：{error}。保存后将重建配置文件。", {
+          error: skillStore.state.config_error,
+        })
+      }}
     </div>
 
     <div class="sm-add-row">
@@ -126,43 +133,43 @@ onMounted(async () => {
       <input
         v-model="newPath"
         class="input mono sm-input"
-        placeholder="添加父目录，例如 ~/.agents/skills"
+:placeholder="t('添加父目录，例如 ~/.agents/skills')"
         spellcheck="false"
         @keyup.enter="addPath"
       />
       <button class="btn" :disabled="!newPath.trim()" @click="addPath">
         <Io5Add :size="15" />
-        添加
+        {{ t("添加") }}
       </button>
     </div>
 
     <div class="sm-list">
-      <div v-if="draftPaths.length === 0" class="sm-empty text-faint">暂无受管理路径</div>
+      <div v-if="draftPaths.length === 0" class="sm-empty text-faint">{{ t("暂无受管理路径") }}</div>
       <div v-for="(path, index) in draftPaths" :key="path" class="sm-item">
         <div class="sm-path-wrap">
           <div class="mono sm-path" :title="path">{{ path }}</div>
           <div v-if="pathError(path)" class="sm-status error" :title="pathError(path)">
-            同步失败：{{ pathError(path) }}
+            {{ t("同步失败：{error}") }}{{ pathError(path) }}
           </div>
-          <div v-else-if="isUnsynced(path)" class="sm-status">未同步</div>
+          <div v-else-if="isUnsynced(path)" class="sm-status">{{ t("未同步") }}</div>
         </div>
-        <button class="btn sm-remove danger" title="移除路径" @click="removePath(index)">
+        <button class="btn sm-remove danger" :title="t('移除路径')" @click="removePath(index)">
           <Io5TrashOutline :size="15" />
         </button>
       </div>
     </div>
 
     <div class="sm-actions">
-      <span v-if="needsSave" class="text-secondary">路径配置尚未保存</span>
-      <span v-else class="text-faint">在点击本行的按钮前，应用不会写入任何更改</span>
+      <span v-if="needsSave" class="text-secondary">{{ t("路径配置尚未保存") }}</span>
+      <span v-else class="text-faint">{{ t("在点击本行的按钮前，应用不会写入任何更改") }}</span>
       <div class="sm-action-buttons">
         <button class="btn" :disabled="needsSave || skillStore.loading" @click="syncAll">
           <Io5Refresh :size="14" />
-          {{ skillStore.loading && !dirty ? "同步中…" : "同步全部" }}
+          {{ skillStore.loading && !dirty ? t("同步中…") : t("同步全部") }}
         </button>
         <button class="btn primary" :disabled="!needsSave || skillStore.loading" @click="save">
           <Io5SaveOutline :size="14" />
-          {{ skillStore.loading ? "保存中…" : "保存" }}
+          {{ skillStore.loading ? t("保存中…") : t("保存") }}
         </button>
       </div>
     </div>

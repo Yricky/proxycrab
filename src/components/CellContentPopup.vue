@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { clamp } from "../utils/log-canvas";
+import { t } from "../i18n";
 
 const props = defineProps<{ text: string; x: number; y: number }>();
 const emit = defineEmits<{ close: [] }>();
@@ -43,7 +44,7 @@ onBeforeUnmount(() => window.removeEventListener("resize", resize));
         class="cell-popup input mono"
         :style="position"
         :value="text"
-        aria-label="单元格完整内容"
+        :aria-label="t('单元格完整内容')"
         readonly
         spellcheck="false"
       />

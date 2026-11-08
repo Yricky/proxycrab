@@ -5,6 +5,7 @@ import type { Script } from "../api/types";
 import { scriptLabel } from "../utils/script-label";
 import { reportError } from "../stores/app";
 import CustomSelect from "./CustomSelect.vue";
+import { t } from "../i18n";
 const props = defineProps<{
   modelValue: string | null;
   disabled?: boolean;
@@ -16,18 +17,18 @@ const backend = useBackend();
 const scripts = ref<Script[]>([]);
 const INHERIT = "\0inherit";
 const options = computed(() => [
-  { value: INHERIT, label: props.inheritLabel ?? "未配置" },
-  { value: "", label: "不脱敏" },
+  { value: INHERIT, label: props.inheritLabel ?? t("未配置") },
+  { value: "", label: t("不脱敏") },
   ...scripts.value.map((script) => ({ value: script.name, label: scriptLabel(script) })),
   ...(props.modelValue && !scripts.value.some((s) => s.name === props.modelValue)
-    ? [{ value: props.modelValue, label: `${props.modelValue}（脚本缺失）` }]
+    ? [{ value: props.modelValue, label: t("{name}（脚本缺失）", { name: props.modelValue }) }]
     : []),
 ]);
 async function load(): Promise<void> {
   try {
     scripts.value = (await backend.listRedactionScripts?.()) ?? [];
   } catch (error) {
-    reportError(error, "加载脱敏脚本失败");
+    reportError(error, t("加载脱敏脚本失败"));
   }
 }
 onMounted(() => {
@@ -38,7 +39,7 @@ onBeforeUnmount(() => window.removeEventListener("redaction-scripts-changed", lo
 </script>
 <template>
   <label class="redaction-select"
-    ><span>脱敏脚本</span
+    ><span>{{ t("脱敏脚本") }}</span
     ><CustomSelect
       :model-value="modelValue === null ? INHERIT : modelValue"
       :display-value="modelValue === null ? inheritedValueLabel : undefined"

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Io5Checkmark, Io5ChevronDown } from "vue-icons-plus/io5";
+import { t } from "../i18n";
 
 export interface CustomSelectOption {
   value: string;
@@ -118,7 +119,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
       class="select-trigger"
       role="combobox"
       aria-haspopup="listbox"
-      :aria-label="ariaLabel"
+      :aria-label="t(ariaLabel)"
       :aria-expanded="open"
       :disabled="disabled"
       @click="open ? closeList() : openList()"
@@ -126,7 +127,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
     >
       <span class="select-copy">
         <span :class="{ placeholder: !selected && displayValue === undefined }">{{
-          displayValue ?? selected?.label ?? placeholder
+          displayValue ?? selected?.label ?? t(placeholder)
         }}</span>
         <small v-if="selected?.description">{{ selected.description }}</small>
       </span>
@@ -137,7 +138,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
       class="select-menu"
       :class="{ 'menu-up': placement === 'up' }"
       role="listbox"
-      :aria-label="ariaLabel"
+      :aria-label="t(ariaLabel)"
     >
       <button
         v-for="(option, index) in options"

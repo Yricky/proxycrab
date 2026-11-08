@@ -8,6 +8,7 @@ import { copyText } from "../utils/clipboard";
 import { fileLanguage } from "../utils/file-kind";
 import { formatBytes } from "../utils/format";
 import MonacoEditor from "./MonacoEditor.vue";
+import { t } from "../i18n";
 
 const props = defineProps<{ asset: AssetMetadata }>();
 const backend = useBackend();
@@ -148,7 +149,7 @@ async function copy(): Promise<void> {
     if (copyTimer !== undefined) window.clearTimeout(copyTimer);
     copyTimer = window.setTimeout(() => (copied.value = false), 1200);
   } catch {
-    appStore.toast("复制失败", "error");
+    appStore.toast(t("复制失败"), "error");
   }
 }
 
@@ -162,7 +163,7 @@ async function download(): Promise<void> {
     await writer.append(data);
     await writer.markAsFinish();
   } catch (cause) {
-    appStore.toast(`下载失败：${cause instanceof Error ? cause.message : String(cause)}`, "error");
+    appStore.toast(t("下载失败：{message}", { message: cause instanceof Error ? cause.message : String(cause) }), "error");
   } finally {
     downloading.value = false;
   }
@@ -188,8 +189,8 @@ onBeforeUnmount(() => {
       <span class="asset-name mono" :title="asset.id">{{ asset.id }}</span>
       <span
         class="asset-meta"
-        :title="`${mediaType || '未知类型'} · ${formatBytes(asset.size)} · SHA-256 ${asset.sha256}`"
-        >{{ mediaType || "未知类型" }} · {{ formatBytes(asset.size) }} ·
+        :title="`${mediaType || t('未知类型')} · ${formatBytes(asset.size)} · SHA-256 ${asset.sha256}`"
+        >{{ mediaType || t("未知类型") }} · {{ formatBytes(asset.size) }} ·
         <span class="mono">{{ asset.sha256.slice(0, 8) }}</span></span
       >
       <span class="asset-actions">
@@ -198,15 +199,15 @@ onBeforeUnmount(() => {
           class="btn icon"
           type="button"
           :disabled="downloading"
-          :title="downloading ? '正在下载…' : '下载资源'"
-          :aria-label="downloading ? '正在下载…' : '下载资源'"
+          :title="downloading ? t('正在下载…') : t('下载资源')"
+          :aria-label="downloading ? t('正在下载…') : t('下载资源')"
           @click="download"
         >
           <Io5DownloadOutline :size="13" />
         </button>
         <template v-if="kind === 'text' && bytes && prettyCapable">
           <button class="btn tool-btn" :class="{ on: pretty }" type="button" @click="pretty = true">
-            格式化
+            {{ t("格式化") }}
           </button>
           <button
             class="btn tool-btn"
@@ -214,15 +215,15 @@ onBeforeUnmount(() => {
             type="button"
             @click="pretty = false"
           >
-            原文
+            {{ t("原文") }}
           </button>
         </template>
         <template v-if="kind === 'text' && bytes">
           <button
             class="btn icon"
             type="button"
-            :title="copied ? '已复制' : '复制内容'"
-            :aria-label="copied ? '已复制' : '复制内容'"
+            :title="copied ? t('已复制') : t('复制内容')"
+            :aria-label="copied ? t('已复制') : t('复制内容')"
             @click="copy"
           >
             <Io5Checkmark v-if="copied" :size="13" class="text-success" />
@@ -233,20 +234,24 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="asset-body">
-      <p v-if="!readable" class="asset-state">当前后端不提供资源内容，仅显示元数据。</p>
+      <p v-if="!readable" class="asset-state">{{ t("当前后端不提供资源内容，仅显示元数据。") }}</p>
       <p v-else-if="kind === 'unsupported'" class="asset-state">
-        该 mimetype（{{ mediaType || "未知" }}）不支持预览。
+        {{ t("该 mimetype（{type}）不支持预览。", { type: mediaType || t("未知") }) }}
       </p>
       <p v-else-if="tooBig" class="asset-state">
-        体积 {{ formatBytes(asset.size) }} 超过预览上限
-        {{ formatBytes(HARD_LIMIT) }}，请下载后查看。
+        {{
+          t("体积 {size} 超过预览上限 {limit}，请下载后查看。", {
+            size: formatBytes(asset.size),
+            limit: formatBytes(HARD_LIMIT),
+          })
+        }}
       </p>
       <div v-else-if="needsConfirm" class="asset-state asset-limit">
         <Io5Warning :size="16" />
-        <span>体积 {{ formatBytes(asset.size) }} 超过自动加载限制</span>
-        <button class="btn primary" type="button" @click="load(true)">仍然加载</button>
+        <span>{{ t("体积 {size} 超过自动加载限制", { size: formatBytes(asset.size) }) }}</span>
+        <button class="btn primary" type="button" @click="load(true)">{{ t("仍然加载") }}</button>
       </div>
-      <p v-else-if="loading" class="asset-state">加载中…</p>
+      <p v-else-if="loading" class="asset-state">{{ t("加载中…") }}</p>
       <p v-else-if="error" class="asset-state asset-error">
         <Io5Warning :size="14" /><span>{{ error }}</span>
       </p>
@@ -258,7 +263,7 @@ onBeforeUnmount(() => {
       <div v-else-if="kind === 'text' && bytes" class="asset-editor">
         <MonacoEditor :model-value="editorValue" :language="language" readonly />
       </div>
-      <p v-else class="asset-state">暂无内容。</p>
+      <p v-else class="asset-state">{{ t("暂无内容。") }}</p>
     </div>
   </section>
 </template>

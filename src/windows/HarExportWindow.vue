@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref } from "vue";
 import { useBackend } from "../api";
+import { t } from "../i18n";
 import type { FileWriter } from "../api/save-file";
 import type { LogsStore } from "../stores/logs";
 import { appendHar, errorMessage, type ExportLog, type ExportProgress } from "../utils/har-export";
@@ -8,7 +9,7 @@ import { appendHar, errorMessage, type ExportLog, type ExportProgress } from "..
 const props = defineProps<{ logs: LogsStore }>();
 const backend = useBackend();
 const running = ref(false);
-const status = ref("等待导出");
+const status = ref(t("等待导出"));
 const progress = ref<ExportProgress>({
   processed: 0,
   total: 0,
@@ -42,17 +43,20 @@ async function start() {
   running.value = true;
   messages.value = [];
   progress.value = { processed: 0, total: ids.length, exported: 0, skipped: 0, warnings: 0 };
-  status.value = "选择保存位置";
-  log("info", `Session ${sessionId}，固定当前列表 ${ids.length} 条记录及排序`);
+  status.value = t("选择保存位置");
+  log(
+    "info",
+    t("Session {id}，固定当前列表 {n} 条记录及排序", { id: sessionId, n: ids.length }),
+  );
   try {
     writer = await backend.saveFile({ filename: `proxycrab-session-${sessionId}.har` });
     if (!writer) {
-      status.value = "已取消保存";
+      status.value = t("已取消保存");
       log("info", status.value);
       return;
     }
     signal.throwIfAborted();
-    status.value = "正在导出";
+    status.value = t("正在导出");
     await appendHar(
       backend,
       writer,
@@ -65,19 +69,23 @@ async function start() {
       log,
     );
     signal.throwIfAborted();
-    status.value = "正在保存文件";
+    status.value = t("正在保存文件");
     await writer.markAsFinish();
-    status.value = "导出完成";
+    status.value = t("导出完成");
     log(
       "info",
-      `导出完成：${progress.value.exported} 条，跳过 ${progress.value.skipped} 条，警告 ${progress.value.warnings} 次`,
+      t("导出完成：{exported} 条，跳过 {skipped} 条，警告 {warnings} 次", {
+        exported: progress.value.exported,
+        skipped: progress.value.skipped,
+        warnings: progress.value.warnings,
+      }),
     );
   } catch (error) {
-    status.value = signal.aborted ? "已取消导出" : "导出失败";
+    status.value = signal.aborted ? t("已取消导出") : t("导出失败");
     log(signal.aborted ? "info" : "error", `${status.value}：${errorMessage(error)}`);
     await writer
       ?.markAsError()
-      .catch((cleanupError) => log("error", `清理失败：${errorMessage(cleanupError)}`));
+      .catch((cleanupError) => log("error", t("清理失败：{error}", { error: errorMessage(cleanupError) })));
   } finally {
     writer = null;
     running.value = false;
@@ -86,8 +94,8 @@ async function start() {
 }
 function cancel() {
   controller?.abort();
-  if (running.value) status.value = "正在取消导出";
-  void writer?.markAsError().catch((error) => log("error", `清理失败：${errorMessage(error)}`));
+  if (running.value) status.value = t("正在取消导出");
+  void writer?.markAsError().catch((error) => log("error", t("清理失败：{error}", { error: errorMessage(error) })));
 }
 onBeforeUnmount(() => {
   disposed = true;
@@ -98,41 +106,48 @@ onBeforeUnmount(() => {
 <template>
   <main class="export-root">
     <div class="export-toolbar">
-      <span>当前列表 · {{ logs.sortedIds.length }} 条</span>
+      <span>{{ t("当前列表 · {n} 条", logs.sortedIds.length) }}</span>
       <span class="export-actions">
-        <button v-if="running" class="btn" @click="cancel">取消导出</button>
+        <button v-if="running" class="btn" @click="cancel">{{ t("取消导出") }}</button>
         <button
           class="btn primary"
           :disabled="running || logs.loading || logs.sessionId === null"
           @click="start"
         >
-          导出 HAR
+          {{ t("导出 HAR") }}
         </button>
       </span>
     </div>
-    <p class="export-hint">按启动时的筛选结果和顺序导出。Body 读取失败将写入失败说明并继续。</p>
+    <p class="export-hint">{{ t("按启动时的筛选结果和顺序导出。Body 读取失败将写入失败说明并继续。") }}</p>
     <div class="export-status" aria-live="polite">
       <strong>{{ status }}</strong>
       <span
-        >{{ progress.processed }}/{{ progress.total }} · 已写入 {{ progress.exported }} · 跳过
-        {{ progress.skipped }} · 警告 {{ progress.warnings }}</span
+        >{{
+          t("{processed}/{total} · 已写入 {exported} · 跳过 {skipped} · 警告 {warnings}", {
+            processed: progress.processed,
+            total: progress.total,
+            exported: progress.exported,
+            skipped: progress.skipped,
+            warnings: progress.warnings,
+          })
+        }}</span
       >
     </div>
     <progress
       :value="progress.processed"
       :max="progress.total || 1"
-      :aria-label="`导出进度 ${percent}%`"
+      :aria-label="t('导出进度 {percent}%', { percent })"
     />
-    <div ref="logElement" class="export-log mono" role="log" aria-label="导出日志">
+    <div ref="logElement" class="export-log mono" role="log" :aria-label="t('导出日志')">
       <div v-if="!messages.length" class="export-hint">
-        点击「导出 HAR」开始，进度和日志将在这里显示。
+        {{ t("点击「导出 HAR」开始，进度和日志将在这里显示。") }}
       </div>
       <div v-for="item in messages" :key="item.id" class="log-row" :class="item.level">
         <time>{{ item.time }}</time
         ><span>{{ item.message }}</span>
       </div>
     </div>
-    <div class="export-hint">日志保留最近 1000 条；关闭窗口会取消未完成的导出。</div>
+    <div class="export-hint">{{ t("日志保留最近 1000 条；关闭窗口会取消未完成的导出。") }}</div>
   </main>
 </template>
 

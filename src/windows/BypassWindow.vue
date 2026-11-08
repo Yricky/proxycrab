@@ -10,6 +10,7 @@ import { proxyStore } from "../stores/proxy";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { isStaleByProxyRun } from "../utils/capture-outcome";
 import { formatDateTime } from "../utils/format";
+import { t } from "../i18n";
 
 let timer: number | undefined;
 
@@ -30,16 +31,20 @@ const selectedDeletableCount = computed(
 );
 
 function outcomeLabel(entry: BypassEntry): string {
-  if (isStale(entry)) return "已失效";
-  return entry.outcome === "in_progress" ? "转发中" : entry.outcome === "success" ? "完成" : "失败";
+  if (isStale(entry)) return t("已失效");
+  return entry.outcome === "in_progress"
+    ? t("转发中")
+    : entry.outcome === "success"
+      ? t("完成")
+      : t("失败");
 }
 
 function reasonLabel(reason: string): string {
   const labels: Record<string, string> = {
-    no_active_session: "没有活跃会话",
-    script_bypass: "分流规则旁路",
-    routing_script_error: "规则执行失败",
-    session_pin_failed: "Session 不可用",
+    no_active_session: t("没有活跃会话"),
+    script_bypass: t("分流规则旁路"),
+    routing_script_error: t("规则执行失败"),
+    session_pin_failed: t("Session 不可用"),
   };
   return labels[reason] ?? reason;
 }
@@ -54,26 +59,26 @@ function bytes(value: number | null): string {
 async function removeSelected(): Promise<void> {
   if (!selectedDeletableCount.value) return;
   const ok = await confirmDialog({
-    title: "删除透明转发记录",
-    message: `确定删除选中的 ${selectedDeletableCount.value} 条记录吗？`,
-    confirmText: "删除",
+    title: t("删除透明转发记录"),
+    message: t("确定删除选中的 {n} 条记录吗？", { n: selectedDeletableCount.value }),
+    confirmText: t("删除"),
     danger: true,
   });
   if (ok && (await bypassStore.removeSelected())) {
-    appStore.toast("记录已删除", "success");
+    appStore.toast(t("记录已删除"), "success");
   }
 }
 
 async function clearTerminal(): Promise<void> {
   const ok = await confirmDialog({
-    title: "清空透明转发记录",
-    message: "确定清空全部已完成、失败和已失效的记录吗？当前正在转发的记录会保留。",
-    confirmText: "清空",
+    title: t("清空透明转发记录"),
+    message: t("确定清空全部已完成、失败和已失效的记录吗？当前正在转发的记录会保留。"),
+    confirmText: t("清空"),
     danger: true,
   });
   if (!ok) return;
   const deleted = await bypassStore.clearTerminal();
-  appStore.toast(`已清空 ${deleted} 条记录`, "success");
+  appStore.toast(t("已清空 {n} 条记录", { n: deleted }), "success");
 }
 
 function onHttpApiChange(event: Event): void {
@@ -105,31 +110,31 @@ onBeforeUnmount(() => {
 <template>
   <div class="bp-root">
     <div class="bp-toolbar">
-      <span class="text-secondary">透明转发的网络请求不会被任何session捕获</span>
-      <span class="text-faint">{{ bypassStore.rows.length }} 条已加载</span>
+      <span class="text-secondary">{{ t("透明转发的网络请求不会被任何session捕获") }}</span>
+      <span class="text-faint">{{ t("{n} 条已加载", bypassStore.rows.length) }}</span>
       <span class="bp-spacer" />
-      <button class="btn icon" title="刷新" @click="bypassStore.refresh">
+      <button class="btn icon" :title="t('刷新')" @click="bypassStore.refresh">
         <Io5Refresh :size="14" />
       </button>
       <button class="btn" v-if="selectedDeletableCount > 0" @click="removeSelected">
-        删除选中
+        {{ t("删除选中") }}
       </button>
-      <button class="btn danger" @click="clearTerminal"><Io5Trash :size="14" />清空</button>
+      <button class="btn danger" @click="clearTerminal"><Io5Trash :size="14" />{{ t("清空") }}</button>
     </div>
 
     <div class="bp-header bp-grid">
       <span />
-      <span>时间</span>
+      <span>{{ t("时间") }}</span>
       <span>Method</span>
       <span>URI / Authority</span>
       <span>Source</span>
-      <span>原因</span>
-      <span>状态</span>
-      <span>响应</span>
-      <span>上 / 下行</span>
+      <span>{{ t("原因") }}</span>
+      <span>{{ t("状态") }}</span>
+      <span>{{ t("响应") }}</span>
+      <span>{{ t("上 / 下行") }}</span>
     </div>
     <div v-if="!bypassStore.rows.length && !bypassStore.loading" class="empty-hint">
-      暂无透明转发记录
+      {{ t("暂无透明转发记录") }}
     </div>
     <VirtualList v-else :items="bypassStore.rows" :item-height="30">
       <template #default="{ item }">
@@ -169,7 +174,7 @@ onBeforeUnmount(() => {
       :disabled="bypassStore.loading"
       @click="bypassStore.loadMore"
     >
-      加载更多
+      {{ t("加载更多") }}
     </button>
   </div>
 </template>

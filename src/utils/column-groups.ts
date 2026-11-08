@@ -1,4 +1,5 @@
 import type { FilterColumn } from "../api/types";
+import { t } from "../i18n";
 
 export type ColumnGroupSort = "count" | "value";
 
@@ -101,7 +102,7 @@ export function filterAndSortGroups(
       key: "empty",
       kind: "empty",
       value: "",
-      label: "（空值）",
+      label: t("（空值）"),
       count: emptyCount,
       exactPattern: "^$",
     });
@@ -111,7 +112,7 @@ export function filterAndSortGroups(
       key: "error",
       kind: "error",
       value: "",
-      label: "（计算失败）",
+      label: t("（计算失败）"),
       count: errorCount,
       exactPattern: null,
     });
@@ -221,13 +222,13 @@ export function buildGroupRows(
   const rows: ColumnGroupRow[] = [];
   const specialVisible = (label: string): boolean =>
     needle.length === 0 || label.toLocaleLowerCase().includes(needle);
-  if (emptyCount > 0 && specialVisible("（空值）")) {
+  if (emptyCount > 0 && specialVisible(t("（空值）"))) {
     rows.push({
       key: "empty",
       kind: "empty",
       depth: 0,
-      label: "（空值）",
-      tooltip: "（空值）",
+      label: t("（空值）"),
+      tooltip: t("（空值）"),
       count: emptyCount,
       pattern: "^$",
       hasChildren: false,
@@ -235,13 +236,13 @@ export function buildGroupRows(
       ancestors: [],
     });
   }
-  if (errorCount > 0 && specialVisible("（计算失败）")) {
+  if (errorCount > 0 && specialVisible(t("（计算失败）"))) {
     rows.push({
       key: "error",
       kind: "error",
       depth: 0,
-      label: "（计算失败）",
-      tooltip: "（计算失败）",
+      label: t("（计算失败）"),
+      tooltip: t("（计算失败）"),
       count: errorCount,
       pattern: null,
       hasChildren: false,

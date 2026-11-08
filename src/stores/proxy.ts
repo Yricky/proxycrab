@@ -2,6 +2,7 @@ import { reactive } from "vue";
 import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { AppConfig, ProxyStatus } from "../api/types";
 import { reportError } from "./app";
+import { t } from "../i18n";
 
 // Stores are module singletons; they use their own backend handle so that
 // synchronization logic can live outside component setup. Components still go
@@ -126,7 +127,7 @@ export const proxyStore = reactive({
       // Show the real listening address while running; editing is disabled.
       this.applyStatus(status);
     } catch (error) {
-      reportError(error, "获取代理状态失败");
+      reportError(error, t("获取代理状态失败"));
     }
     // Keep the (stopped) toolbar port in sync with AppConfig, unless the user
     // is mid-edit (portText already diverged from the persisted value).
@@ -154,7 +155,7 @@ export const proxyStore = reactive({
         this.portText = String(config.proxy_port);
       }
     } catch (error) {
-      reportError(error, "获取代理配置失败");
+      reportError(error, t("获取代理配置失败"));
     }
     // 分享页复用代理状态做日志轮询，但没有 listLocalIps 接口，不查询本机 IP。
     if (backend.listLocalIps) await this.refreshLocalIps();
@@ -166,7 +167,7 @@ export const proxyStore = reactive({
     try {
       this.localIps = await listLocalIps();
     } catch (error) {
-      reportError(error, "获取本机 IP 列表失败");
+      reportError(error, t("获取本机 IP 列表失败"));
     }
   },
 
@@ -195,7 +196,7 @@ export const proxyStore = reactive({
       this.persistedPort = port;
       return true;
     } catch (error) {
-      reportError(error, "保存代理端口失败");
+      reportError(error, t("保存代理端口失败"));
       return false;
     }
   },
@@ -219,7 +220,7 @@ export const proxyStore = reactive({
       }
     } catch (error) {
       directStatusVersion += 1;
-      reportError(error, this.running ? "停止代理失败" : "启动代理失败");
+      reportError(error, this.running ? t("停止代理失败") : t("启动代理失败"));
       await this.refresh();
     } finally {
       this.busy = false;

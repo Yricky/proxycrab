@@ -35,6 +35,7 @@ import InterceptorSnapshotWindow from "./InterceptorSnapshotWindow.vue";
 import ReplayWindow from "./ReplayWindow.vue";
 import type { ReplayDraft } from "../utils/replay";
 import { getBackend } from "../api/runtime-backend";
+import { t } from "../i18n";
 
 /** 内置浏览器窗口：同一 URL 复用已有窗口。 */
 export function openBrowser(url: string): void {
@@ -59,7 +60,7 @@ export function openReplay(prefill?: ReplayDraft): void {
   // 后端没有 replay 接口时，任何入口都不应打开发送请求窗口。
   if (!getBackend().replay) return;
   windowsStore.open(`replay-${++replayWindowId}`, {
-    title: "发送请求",
+    title: t("发送请求"),
     component: ReplayWindow,
     props: { prefill },
     width: 920,
@@ -69,7 +70,7 @@ export function openReplay(prefill?: ReplayDraft): void {
 
 export function openLogDetail(sessionId: number, logId: number): void {
   windowsStore.open(`detail-${sessionId}-${logId}`, {
-    title: `#${logId} 详情`,
+    title: t("#{id} 详情", { id: logId }),
     component: LogDetailWindow,
     props: { sessionId, logId },
     width: 860,
@@ -84,7 +85,7 @@ export function openBreakpointList(
   displayName = interceptorName,
 ): void {
   windowsStore.open(`breakpoints-${sessionId}-${phase}-${interceptorName}`, {
-    title: `${displayName} — 断点列表`,
+    title: t("{name} — 断点列表", { name: displayName }),
     component: BreakpointListWindow,
     props: { sessionId, phase, interceptorName, displayName },
     width: 680,
@@ -94,7 +95,7 @@ export function openBreakpointList(
 
 export function openBreakpointDetail(breakpointId: number, captureId: number): void {
   windowsStore.open(`breakpoint-${breakpointId}`, {
-    title: `#${captureId} — 断点详情`,
+    title: t("#{id} — 断点详情", { id: captureId }),
     component: LogDetailWindow,
     props: { breakpointId },
     width: 900,
@@ -103,7 +104,7 @@ export function openBreakpointDetail(breakpointId: number, captureId: number): v
 }
 
 export function openScriptEditor(kind: InterceptorKind, name: string): void {
-  const kindLabel = kind === "request" ? "请求拦截器" : "响应拦截器";
+  const kindLabel = kind === "request" ? t("请求拦截器") : t("响应拦截器");
   windowsStore.open(`interceptor-manager-${kind}`, {
     title: kindLabel,
     component: InterceptorManagerWindow,
@@ -141,7 +142,7 @@ export function openInterceptorSnapshot(
   execution: InterceptorExecution,
 ): void {
   windowsStore.open(`interceptor-snapshot-${sessionId}-${logId}-${execution.execution_id}`, {
-    title: `${scriptTitle(execution)} — 进入拦截器前的快照`,
+    title: t("{name} — 进入拦截器前的快照", { name: scriptTitle(execution) }),
     component: InterceptorSnapshotWindow,
     props: { sessionId, logId, execution },
     width: 820,
@@ -150,12 +151,12 @@ export function openInterceptorSnapshot(
 }
 
 export function openModificationValue(id: string, label: string, value: string): void {
-  openReadonlyViewer(`mod-value-${id}`, `${label} — 完整内容`, value);
+  openReadonlyViewer(`mod-value-${id}`, t("{name} — 完整内容", { name: label }), value);
 }
 
 export function openRequestInterceptorManager(): void {
   windowsStore.open("interceptor-manager-request", {
-    title: "请求拦截器",
+    title: t("请求拦截器"),
     component: InterceptorManagerWindow,
     props: { kind: "request" },
     width: 980,
@@ -165,7 +166,7 @@ export function openRequestInterceptorManager(): void {
 
 export function openResponseInterceptorManager(): void {
   windowsStore.open("interceptor-manager-response", {
-    title: "响应拦截器",
+    title: t("响应拦截器"),
     component: InterceptorManagerWindow,
     props: { kind: "response" },
     width: 980,
@@ -175,7 +176,7 @@ export function openResponseInterceptorManager(): void {
 
 export function openColumnManager(initialName?: string, sessionId: number | null = null): void {
   windowsStore.open("column-manager", {
-    title: "自定义列管理器",
+    title: t("自定义列管理器"),
     component: ColumnManagerWindow,
     props: { initialName, sessionId },
     width: 960,
@@ -192,7 +193,7 @@ export function openColumnManager(initialName?: string, sessionId: number | null
 
 export function openFilterManager(sessionId: number | null = null): void {
   windowsStore.open("filter-manager", {
-    title: "过滤脚本管理器",
+    title: t("过滤脚本管理器"),
     component: FilterManagerWindow,
     props: { sessionId },
     width: 1000,
@@ -202,7 +203,7 @@ export function openFilterManager(sessionId: number | null = null): void {
 
 export function openRoutingManager(): void {
   windowsStore.open("routing-manager", {
-    title: "分流规则管理器",
+    title: t("分流规则管理器"),
     component: RoutingManagerWindow,
     width: 980,
     height: 600,
@@ -211,7 +212,7 @@ export function openRoutingManager(): void {
 
 export function openBypass(): void {
   windowsStore.open("bypass-records", {
-    title: "透明转发记录",
+    title: t("透明转发记录"),
     component: BypassWindow,
     width: 1100,
     height: 560,
@@ -220,7 +221,7 @@ export function openBypass(): void {
 
 export function openArchivedSessions(): void {
   windowsStore.open("archived-sessions", {
-    title: "已归档 Session",
+    title: t("已归档 Session"),
     component: ArchivedSessionsWindow,
     width: 720,
     height: 480,
@@ -229,7 +230,7 @@ export function openArchivedSessions(): void {
 
 export function openSessionExportShare(sessionId: number, sessionName: string): void {
   windowsStore.open(`session-export-share-${sessionId}`, {
-    title: `链接分享 — ${sessionName}`,
+    title: t("链接分享 — {name}", { name: sessionName }),
     component: SessionExportShareWindow,
     props: { sessionId },
     width: 700,
@@ -240,7 +241,7 @@ export function openSessionExportShare(sessionId: number, sessionName: string): 
 
 export function openBase64(): void {
   windowsStore.open("tool-base64", {
-    title: "Base64 编解码",
+    title: t("Base64 编解码"),
     component: Base64Window,
     width: 520,
     height: 460,
@@ -249,7 +250,7 @@ export function openBase64(): void {
 
 export function openJwt(): void {
   windowsStore.open("tool-jwt", {
-    title: "JWT 解码 / 验签",
+    title: t("JWT 解码 / 验签"),
     component: JwtWindow,
     width: 940,
     height: 640,
@@ -258,7 +259,7 @@ export function openJwt(): void {
 
 export function openQrCode(): void {
   windowsStore.open("tool-qrcode", {
-    title: "二维码生成",
+    title: t("二维码生成"),
     component: QrCodeWindow,
     width: 520,
     height: 560,
@@ -267,7 +268,7 @@ export function openQrCode(): void {
 
 export function openTextDiff(): void {
   windowsStore.open("tool-text-diff", {
-    title: "文本比对",
+    title: t("文本比对"),
     component: TextDiffWindow,
     width: 940,
     height: 640,
@@ -276,7 +277,7 @@ export function openTextDiff(): void {
 
 export function openCertManager(): void {
   windowsStore.open("cert-manager", {
-    title: "如何连接到ProxyCrab抓包",
+    title: t("如何连接到ProxyCrab抓包"),
     component: CertManagerWindow,
     width: 640,
     height: 600,
@@ -285,7 +286,7 @@ export function openCertManager(): void {
 
 export function openSystemLogs(): void {
   windowsStore.open("system-logs", {
-    title: "系统日志",
+    title: t("系统日志"),
     component: SystemLogsWindow,
     width: 720,
     height: 480,
@@ -294,7 +295,7 @@ export function openSystemLogs(): void {
 
 export function openApprovals(): void {
   windowsStore.open("http-approvals", {
-    title: "管理接口审批",
+    title: t("管理接口审批"),
     component: ApprovalWindow,
     width: 760,
     height: 520,
@@ -303,7 +304,7 @@ export function openApprovals(): void {
 
 export function openSettings(): void {
   windowsStore.open("settings", {
-    title: "设置",
+    title: t("设置"),
     component: SettingsWindow,
     width: 900,
     height: 640,
@@ -312,7 +313,7 @@ export function openSettings(): void {
 
 export function openAbout(): void {
   windowsStore.open("about", {
-    title: "关于 ProxyCrab",
+    title: t("关于 ProxyCrab"),
     component: AboutWindow,
     width: 900,
     height: 620,
@@ -321,7 +322,7 @@ export function openAbout(): void {
 
 export function openSkillManager(): void {
   windowsStore.open("skill-manager", {
-    title: "ProxyCrab Skill 管理",
+    title: t("ProxyCrab Skill 管理"),
     component: SkillManagerWindow,
     width: 680,
     height: 480,
@@ -330,7 +331,7 @@ export function openSkillManager(): void {
 
 export function openAgentsPresets(): void {
   windowsStore.open("agents-presets", {
-    title: "AGENTS.md 预设",
+    title: t("AGENTS.md 预设"),
     component: AgentsPresetsWindow,
     width: 980,
     height: 620,
@@ -339,7 +340,7 @@ export function openAgentsPresets(): void {
 
 export function openRedactionManager(): void {
   windowsStore.open("redaction-manager", {
-    title: "脱敏脚本管理器",
+    title: t("脱敏脚本管理器"),
     component: RedactionManagerWindow,
     width: 1000,
     height: 600,
@@ -351,7 +352,7 @@ export function openHarExport(logs: LogsStore): void {
   const backend = getBackend();
   if (!backend.getLog || !backend.fetchBody || !backend.saveFile) return;
   windowsStore.open("har-export", {
-    title: "导出 HAR",
+    title: t("导出 HAR"),
     component: HarExportWindow,
     props: { logs },
     width: 720,
@@ -362,7 +363,7 @@ export function openHarExport(logs: LogsStore): void {
 export function openAssetManager(): void {
   if (!getBackend().listAssets) return;
   windowsStore.open("asset-manager", {
-    title: "工作区资源",
+    title: t("工作区资源"),
     component: AssetManagerWindow,
     width: 760,
     height: 520,
@@ -372,11 +373,11 @@ export function openAssetManager(): void {
 let bundleWindowId = 0;
 export async function openBundleImport(file: File): Promise<void> {
   if (!getBackend().importBundle || !getBackend().resolveBundle) return;
-  if (file.size > MAX_BUNDLE_BYTES) throw new Error("分享包超过 128 MiB");
+  if (file.size > MAX_BUNDLE_BYTES) throw new Error(t("分享包超过 128 MiB"));
   const preview = parseBundle(new Uint8Array(await file.arrayBuffer()));
   const id = `bundle-import-${++bundleWindowId}`;
   windowsStore.open(id, {
-    title: "导入分享包",
+    title: t("导入分享包"),
     component: BundleImportWindow,
     props: { file, preview, windowId: id },
     width: 680,

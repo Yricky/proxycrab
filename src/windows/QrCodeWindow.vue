@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 import { onBeforeUnmount, ref, watch } from "vue";
 import { Io5Download, Io5Trash } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
+import { t } from "../i18n";
 import { base64ToBytes, saveBytesFile } from "../api/save-file";
 import { reportError } from "../stores/app";
 
@@ -43,7 +44,7 @@ async function generate(): Promise<void> {
   } catch {
     if (current !== generation) return;
     qrCodeDataUrl.value = "";
-    generateError.value = "生成失败：内容过长，请缩短文本或降低容错等级";
+    generateError.value = t("生成失败：内容过长，请缩短文本或降低容错等级");
   }
 }
 
@@ -62,7 +63,7 @@ async function download(): Promise<void> {
   try {
     await saveBytesFile(backend, "qrcode.png", base64ToBytes(base64));
   } catch (error) {
-    reportError(error, "保存二维码失败");
+    reportError(error, t("保存二维码失败"));
   }
 }
 
@@ -78,34 +79,34 @@ onBeforeUnmount(() => {
 <template>
   <div class="qr-root">
     <div class="qr-field">
-      <div class="qr-label text-secondary">内容</div>
+      <div class="qr-label text-secondary">{{ t("内容") }}</div>
       <textarea
         v-model="text"
         class="input qr-text mono"
-        placeholder="输入要生成二维码的文本或链接"
+        :placeholder="t('输入要生成二维码的文本或链接')"
         spellcheck="false"
       />
     </div>
 
     <div class="qr-buttons">
       <button class="btn" :disabled="!qrCodeDataUrl" @click="download">
-        <Io5Download :size="14" /> 下载 PNG
+        <Io5Download :size="14" /> {{ t("下载 PNG") }}
       </button>
-      <button class="btn" :disabled="!text" @click="clearAll"><Io5Trash :size="14" /> 清空</button>
+      <button class="btn" :disabled="!text" @click="clearAll"><Io5Trash :size="14" /> {{ t("清空") }}</button>
       <span class="qr-spacer" />
-      <span class="text-secondary">容错等级</span>
+      <span class="text-secondary">{{ t("容错等级") }}</span>
       <select v-model="level" class="select">
-        <option value="L">L（约 7%）</option>
-        <option value="M">M（约 15%）</option>
-        <option value="Q">Q（约 25%）</option>
-        <option value="H">H（约 30%）</option>
+        <option value="L">{{ t("L（约 7%）") }}</option>
+        <option value="M">{{ t("M（约 15%）") }}</option>
+        <option value="Q">{{ t("Q（约 25%）") }}</option>
+        <option value="H">{{ t("H（约 30%）") }}</option>
       </select>
     </div>
 
     <div class="qr-preview">
-      <img v-if="qrCodeDataUrl" :src="qrCodeDataUrl" alt="二维码" />
+      <img v-if="qrCodeDataUrl" :src="qrCodeDataUrl" :alt="t('二维码')" />
       <span v-else-if="generateError" class="text-danger">{{ generateError }}</span>
-      <span v-else class="text-faint">输入内容后自动生成二维码</span>
+      <span v-else class="text-faint">{{ t("输入内容后自动生成二维码") }}</span>
     </div>
   </div>
 </template>

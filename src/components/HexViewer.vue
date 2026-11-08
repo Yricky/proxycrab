@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { copyText } from "../utils/clipboard";
+import { t } from "../i18n";
 import {
   formatHex,
   formatAscii,
@@ -213,7 +214,7 @@ function paint(): void {
   }
   if (!props.bytes.length) {
     context.fillStyle = faint;
-    context.fillText("无二进制数据", metrics.hexStart, HEX_HEADER_HEIGHT + HEX_ROW_HEIGHT);
+    context.fillText(t("无二进制数据"), metrics.hexStart, HEX_HEADER_HEIGHT + HEX_ROW_HEIGHT);
   }
   context.restore();
 
@@ -287,7 +288,7 @@ function paint(): void {
         context.fillRect(menu.x + 4, top, menu.width - 8, 24);
       }
       context.fillStyle = text;
-      context.fillText(paneOptions[index].label, menu.x + 28, top + 12);
+      context.fillText(t(paneOptions[index].label), menu.x + 28, top + 12);
       if (rightPane.value === paneOptions[index].value) {
         context.strokeStyle = text;
         context.beginPath();
@@ -627,7 +628,9 @@ onBeforeUnmount(() => {
                 : 'text',
         }"
         tabindex="0"
-        aria-label="二进制 Hex 与 ASCII 视图，拖动选择字节，Command 或 Control 加 C 复制，加 A 全选，Enter 打开右侧栏菜单"
+        :aria-label="
+          t('二进制 Hex 与 ASCII 视图，拖动选择字节，Command 或 Control 加 C 复制，加 A 全选，Enter 打开右侧栏菜单')
+        "
         aria-haspopup="menu"
         :aria-expanded="menuOpen"
         @pointerdown="startSelection"

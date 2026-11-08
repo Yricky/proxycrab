@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { useBackend } from "../api";
+import { t } from "../i18n";
 import ScriptLibraryManager, {
   type ScriptLibraryConfig,
 } from "../components/ScriptLibraryManager.vue";
 const backend = useBackend();
 const config: ScriptLibraryConfig = {
   windowId: "redaction-manager",
-  sidebarTitle: "脱敏脚本",
+  sidebarTitle: t("脱敏脚本"),
   createPlaceholder: "新脱敏脚本名",
-  emptyListHint: "暂无脱敏脚本",
-  editorEmptyHint: "新建脚本后，在访问身份或分享设置中绑定",
-  statusbar: "context：unloaded / loaded / redacted · 读取原值，仅 loaded 部分的修改生效",
+  emptyListHint: t("暂无脱敏脚本"),
+  editorEmptyHint: t("新建脚本后，在访问身份或分享设置中绑定"),
+  statusbar: t("context：unloaded / loaded / redacted · 读取原值，仅 loaded 部分的修改生效"),
   defaultSource: `-- #display_name: 隐藏凭据
 if context.req.header == "loaded" and req.headers then
   req.headers:remove("authorization")
@@ -23,7 +24,9 @@ end
   resources: ["all"],
   changeEvent: "redaction-scripts-changed",
   deleteMessage: (script) =>
-    `删除脱敏脚本「${script.name}」？已有绑定会保留，相关读取将被拒绝，直到重新绑定或恢复脚本。`,
+    t("删除脱敏脚本「{name}」？已有绑定会保留，相关读取将被拒绝，直到重新绑定或恢复脚本。", {
+      name: script.name,
+    }),
   api: {
     list: () => backend.listRedactionScripts!(),
     get: (name) => backend.getRedactionScript!(name),

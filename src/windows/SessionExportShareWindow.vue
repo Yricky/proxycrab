@@ -4,6 +4,7 @@ import { Io5ChevronDown, Io5ChevronForward } from "vue-icons-plus/io5";
 import RedactionSelect from "../components/RedactionSelect.vue";
 import ShareAssetTree from "../components/ShareAssetTree.vue";
 import { useBackend } from "../api";
+import { t } from "../i18n";
 import type { AssetMetadata, HttpApiChange, SessionShareState } from "../api/types";
 import { sessionsStore } from "../stores/sessions";
 import { appStore, reportError } from "../stores/app";
@@ -52,7 +53,7 @@ async function load(): Promise<void> {
       ? buildSessionShareLinks(addresses, status.port, nextPageShare.token)
       : [];
   } catch (error) {
-    if (sequence === loadSequence) reportError(error, "读取分享状态失败");
+    if (sequence === loadSequence) reportError(error, t("读取分享状态失败"));
   } finally {
     if (sequence === loadSequence) loading.value = false;
   }
@@ -72,7 +73,7 @@ async function setRedaction(value: string | null): Promise<void> {
     sessionsStore.updateShare(pageShare.value);
     pageRedaction.value = value;
   } catch (error) {
-    reportError(error, "保存脱敏脚本绑定失败");
+    reportError(error, t("保存脱敏脚本绑定失败"));
   } finally {
     pageMutating.value = false;
   }
@@ -91,7 +92,7 @@ async function setPagePersistent(persistent: boolean): Promise<void> {
     sessionsStore.updateShare(pageShare.value);
     pagePersistent.value = pageShare.value.persistent;
   } catch (error) {
-    reportError(error, "保存分享持久化设置失败");
+    reportError(error, t("保存分享持久化设置失败"));
   } finally {
     pageMutating.value = false;
   }
@@ -105,7 +106,7 @@ async function togglePageShare(): Promise<void> {
       pageShare.value = await backend.disableSessionShare(props.sessionId);
       sessionsStore.updateShare(pageShare.value);
       pageLinks.value = [];
-      appStore.toast("链接分享已关闭", "success");
+      appStore.toast(t("链接分享已关闭"), "success");
     } else {
       pageShare.value = await backend.enableSessionShare(props.sessionId, {
         sessionConfigShare: configShare.value,
@@ -114,10 +115,13 @@ async function togglePageShare(): Promise<void> {
       });
       sessionsStore.updateShare(pageShare.value);
       await load();
-      appStore.toast("链接分享已开启", "success");
+      appStore.toast(t("链接分享已开启"), "success");
     }
   } catch (error) {
-    reportError(error, pageShare.value.enabled ? "关闭链接分享失败" : "开启链接分享失败");
+    reportError(
+      error,
+      pageShare.value.enabled ? t("关闭链接分享失败") : t("开启链接分享失败"),
+    );
   } finally {
     pageMutating.value = false;
   }
@@ -127,16 +131,16 @@ async function openLink(url: string): Promise<void> {
   try {
     await backend.openExternal(url);
   } catch (error) {
-    reportError(error, "打开分享链接失败");
+    reportError(error, t("打开分享链接失败"));
   }
 }
 
 async function copyLink(url: string): Promise<void> {
   try {
     await copyText(url);
-    appStore.toast("分享链接已复制", "success");
+    appStore.toast(t("分享链接已复制"), "success");
   } catch (error) {
-    reportError(error, "复制分享链接失败");
+    reportError(error, t("复制分享链接失败"));
   }
 }
 
@@ -156,7 +160,7 @@ async function saveConfigShare(value: { assets: string[] } | null): Promise<bool
     sessionsStore.updateShare(next);
     return true;
   } catch (e) {
-    reportError(e, "保存配置分享设置失败");
+    reportError(e, t("保存配置分享设置失败"));
     return false;
   } finally {
     pageMutating.value = false;
@@ -174,15 +178,16 @@ function setRules(rules: string[]): void {
 }
 
 const configHint = computed(() => {
-  if (!pageShare.value?.enabled) return "开启链接分享后可配置。";
-  if (configShare.value === null) return "开启后，分享包内附带此 Session 的配置与脚本。";
+  if (!pageShare.value?.enabled) return t("开启链接分享后可配置。");
+  if (configShare.value === null)
+    return t("开启后，分享包内附带此 Session 的配置与脚本。");
   return "";
 });
 
 const configSummary = computed(() => {
   const rules = configShare.value?.assets ?? [];
-  if (!rules.length) return "未随附资源";
-  if (assetsLoading.value) return `${rules.length} 条规则 · 正在读取资源…`;
+  if (!rules.length) return t("未随附资源");
+  if (assetsLoading.value) return t("{n} 条规则 · 正在读取资源…", rules.length);
   const matched = resourceMatches(
     rules,
     assets.value.map((asset) => asset.id),
@@ -190,7 +195,11 @@ const configSummary = computed(() => {
   const size = assets.value
     .filter((asset) => matched.includes(asset.id))
     .reduce((sum, asset) => sum + asset.size, 0);
-  return `${rules.length} 条规则 · 匹配 ${matched.length} 个资源 · ${formatBytes(size)}`;
+  return t("{n} 条规则 · 匹配 {m} 个资源 · {size}", {
+    n: rules.length,
+    m: matched.length,
+    size: formatBytes(size),
+  });
 });
 
 async function loadAssets(): Promise<void> {
@@ -238,10 +247,14 @@ onBeforeUnmount(() => {
   <main class="share-root">
     <header class="share-heading">
       <div>
-        <h3>链接分享</h3>
+        <h3>{{ t("链接分享") }}</h3>
         <p>
-          只读查看此 Session；{{
-            pagePersistent ? "重启后保留原链接，关闭分享后失效。" : "应用退出或关闭分享后链接失效。"
+          {{
+            t("只读查看此 Session；{hint}", {
+              hint: pagePersistent
+                ? t("重启后保留原链接，关闭分享后失效。")
+                : t("应用退出或关闭分享后链接失效。"),
+            })
           }}
         </p>
       </div>
@@ -251,23 +264,23 @@ onBeforeUnmount(() => {
         type="button"
         :disabled="loading || pageMutating || !pageShare"
         :aria-pressed="pageShare?.enabled ?? false"
-        :aria-label="pageShare?.enabled ? '关闭链接分享' : '开启链接分享'"
-        :title="pageShare?.enabled ? '关闭链接分享' : '开启链接分享'"
+        :aria-label="pageShare?.enabled ? t('关闭链接分享') : t('开启链接分享')"
+        :title="pageShare?.enabled ? t('关闭链接分享') : t('开启链接分享')"
         @click="togglePageShare"
       />
     </header>
 
     <div v-if="canShare" class="settings">
       <div class="setting-row">
-        <span>重启后保留</span>
+        <span>{{ t("重启后保留") }}</span>
         <span class="setting-spacer" />
         <button
           class="switch"
           :class="{ on: pagePersistent }"
           type="button"
           role="switch"
-          aria-label="重启后保留"
-          title="重启后保留"
+          :aria-label="t('重启后保留')"
+          :title="t('重启后保留')"
           :aria-checked="pagePersistent"
           :disabled="loading || pageMutating || !pageShare"
           @click="setPagePersistent(!pagePersistent)"
@@ -275,23 +288,25 @@ onBeforeUnmount(() => {
       </div>
       <RedactionSelect
         v-if="backend.listRedactionScripts"
-        inherit-label="跟随本机无 API Key"
-        :inherited-value-label="pageShare?.redaction_identity ? '跟随 API Key 脱敏配置' : undefined"
+:inherit-label="t('跟随本机无 API Key')"
+        :inherited-value-label="
+          pageShare?.redaction_identity ? t('跟随 API Key 脱敏配置') : undefined
+        "
         :model-value="pageRedaction"
         :disabled="loading || pageMutating"
         @update:model-value="setRedaction($event)"
       />
       <div v-if="canPickAssets" class="setting-block">
         <div class="setting-row">
-          <span>允许下载 Session 配置</span>
+          <span>{{ t("允许下载 Session 配置") }}</span>
           <span class="setting-spacer" />
           <button
             class="switch"
             :class="{ on: !!configShare }"
             type="button"
             role="switch"
-            aria-label="允许下载 Session 配置"
-            title="允许下载 Session 配置"
+            :aria-label="t('允许下载 Session 配置')"
+            :title="t('允许下载 Session 配置')"
             :aria-checked="!!configShare"
             :disabled="loading || pageMutating || !pageShare?.enabled"
             @click="toggleConfigShare"
@@ -309,9 +324,9 @@ onBeforeUnmount(() => {
             <span>{{ configSummary }}</span>
           </button>
           <div v-if="treeExpanded" class="tree-panel">
-            <p v-if="assetsLoading" class="tree-note">正在读取工作区资源…</p>
+            <p v-if="assetsLoading" class="tree-note">{{ t("正在读取工作区资源…") }}</p>
             <p v-else-if="assetsError" class="tree-note text-danger">{{ assetsError }}</p>
-            <p v-else-if="!assets.length" class="tree-note">工作区暂无资源。</p>
+            <p v-else-if="!assets.length" class="tree-note">{{ t("工作区暂无资源。") }}</p>
             <ShareAssetTree
               v-else
               :assets="assets"
@@ -324,7 +339,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="loading && !pageShare" class="share-empty">正在读取分享状态…</div>
+    <div v-if="loading && !pageShare" class="share-empty">{{ t("正在读取分享状态…") }}</div>
     <template v-else-if="pageShare?.enabled">
       <div v-if="pageLinks.length" class="share-links">
         <div
@@ -338,15 +353,15 @@ onBeforeUnmount(() => {
           @keydown.space.prevent="openLink(url)"
         >
           <span class="share-link mono">{{ url }}</span>
-          <button class="btn" type="button" @click.stop="copyLink(url)">复制</button>
+          <button class="btn" type="button" @click.stop="copyLink(url)">{{ t("复制") }}</button>
         </div>
       </div>
-      <div v-else class="share-empty">暂无可用的本机 IPv4 地址</div>
+      <div v-else class="share-empty">{{ t("暂无可用的本机 IPv4 地址") }}</div>
       <p v-if="!serviceRunning" class="share-warning">
-        管理 HTTP 服务未运行，以上地址当前无法访问。
+        {{ t("管理 HTTP 服务未运行，以上地址当前无法访问。") }}
       </p>
     </template>
-    <div v-else class="share-empty">开启后将在这里列出可打开和复制的分享地址。</div>
+    <div v-else class="share-empty">{{ t("开启后将在这里列出可打开和复制的分享地址。") }}</div>
   </main>
 </template>
 

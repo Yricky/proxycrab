@@ -1,3 +1,5 @@
+import { t } from "../i18n";
+
 /**
  * JWT 解码与验签工具，功能对齐 jwt.io 的 JWT Decoder：
  *  - 解码 header / payload（base64url → UTF-8 JSON）
@@ -131,7 +133,7 @@ export function decodeToken(token: string): DecodedJwt {
     return {
       ...EMPTY,
       ok: false,
-      error: "不是合法的 JWT：应为 header.payload[.signature] 三段结构",
+      error: t("不是合法的 JWT：应为 header.payload[.signature] 三段结构"),
     };
   }
   const [headerRaw, payloadRaw, signatureRaw = ""] = parts;
@@ -147,7 +149,7 @@ export function decodeToken(token: string): DecodedJwt {
       headerRaw,
       payloadRaw,
       signatureRaw,
-      error: "Base64url 解码失败：令牌中包含非法字符",
+      error: t("Base64url 解码失败：令牌中包含非法字符"),
     };
   }
   const headerJson = tryJson(headerText);
@@ -185,18 +187,18 @@ export interface VerifyOutcome {
 // ---------- 极简 DER (ASN.1) 读取 ----------
 
 function readTlv(bytes: Uint8Array, offset = 0): { tag: number; value: Uint8Array; next: number } {
-  if (offset + 2 > bytes.length) throw new Error("DER 数据截断");
+  if (offset + 2 > bytes.length) throw new Error(t("DER 数据截断"));
   const tag = bytes[offset];
   let len = bytes[offset + 1];
   let pos = offset + 2;
   if (len & 0x80) {
     const count = len & 0x7f;
-    if (count === 0 || pos + count > bytes.length) throw new Error("DER 长度字段无效");
+    if (count === 0 || pos + count > bytes.length) throw new Error(t("DER 长度字段无效"));
     len = 0;
     for (let i = 0; i < count; i++) len = len * 256 + bytes[pos + i];
     pos += count;
   }
-  if (pos + len > bytes.length) throw new Error("DER 内容截断");
+  if (pos + len > bytes.length) throw new Error(t("DER 内容截断"));
   return { tag, value: bytes.slice(pos, pos + len), next: pos + len };
 }
 
@@ -207,11 +209,11 @@ function toArrayBuffer(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
 
 function pkcs1ToJwk(der: Uint8Array): JsonWebKey {
   const outer = readTlv(der);
-  if (outer.tag !== 0x30) throw new Error("RSA 公钥不是合法的 DER SEQUENCE");
+  if (outer.tag !== 0x30) throw new Error(t("RSA 公钥不是合法的 DER SEQUENCE"));
   const nTlv = readTlv(outer.value);
-  if (nTlv.tag !== 0x02) throw new Error("RSA 公钥缺少模数 n");
+  if (nTlv.tag !== 0x02) throw new Error(t("RSA 公钥缺少模数 n"));
   const eTlv = readTlv(outer.value, nTlv.next);
-  if (eTlv.tag !== 0x02) throw new Error("RSA 公钥缺少指数 e");
+  if (eTlv.tag !== 0x02) throw new Error(t("RSA 公钥缺少指数 e"));
   let n = nTlv.value;
   let e = eTlv.value;
   let start = 0;
@@ -248,7 +250,7 @@ function asymmetricImportParams(alg: string): RsaHashedImportParams | EcKeyImpor
   if (alg.startsWith("RS")) return { name: "RSASSA-PKCS1-v1_5", hash };
   if (alg.startsWith("PS")) return { name: "RSA-PSS", hash };
   if (alg.startsWith("ES")) return { name: "ECDSA", namedCurve: CURVE_BY_ALG[alg] ?? "P-256" };
-  throw new Error(`不支持的非对称算法：${alg}`);
+  throw new Error(t("不支持的非对称算法：{alg}", { alg }));
 }
 
 /** 验签参数：Web Crypto 的 ECDSA 签名即裸 r||s（P1363），直接透传。 */
@@ -257,7 +259,7 @@ function verifyParams(alg: string): AlgorithmIdentifier | RsaPssParams | EcdsaPa
   if (alg.startsWith("RS")) return "RSASSA-PKCS1-v1_5";
   if (alg.startsWith("PS")) return { name: "RSA-PSS", saltLength: SALT_LENGTH[alg] ?? 32 };
   if (alg.startsWith("ES")) return { name: "ECDSA", hash: HASH_BY_ALG[alg] ?? "SHA-256" };
-  throw new Error(`不支持的非对称算法：${alg}`);
+  throw new Error(t("不支持的非对称算法：{alg}", { alg }));
 }
 
 /** 拷贝 JWK 并补充 alg 字段（WebKit 对 RSA-PSS 等 JWK 导入较严格）。 */
@@ -270,14 +272,14 @@ function normalizeJwk(jwk: JsonWebKey, alg: string): JsonWebKey {
 async function importJwkKey(alg: string, jwk: JsonWebKey): Promise<CryptoKey> {
   const hash = HASH_BY_ALG[alg] ?? "SHA-256";
   if (alg.startsWith("HS")) {
-    if (jwk.kty !== "oct" || !jwk.k) throw new Error("HS 算法需要 kty=oct 的 JWK（含 k）");
+    if (jwk.kty !== "oct" || !jwk.k) throw new Error(t("HS 算法需要 kty=oct 的 JWK（含 k）"));
     return crypto.subtle.importKey("jwk", normalizeJwk(jwk, alg), { name: "HMAC", hash }, false, [
       "verify",
     ]);
   }
   if (alg.startsWith("RS") || alg.startsWith("PS")) {
     if (jwk.kty !== "RSA" || !jwk.n || !jwk.e)
-      throw new Error("RSA 算法需要 kty=RSA 的 JWK（含 n/e）");
+      throw new Error(t("RSA 算法需要 kty=RSA 的 JWK（含 n/e）"));
     return crypto.subtle.importKey(
       "jwk",
       normalizeJwk(jwk, alg),
@@ -288,7 +290,7 @@ async function importJwkKey(alg: string, jwk: JsonWebKey): Promise<CryptoKey> {
   }
   if (alg.startsWith("ES")) {
     if (jwk.kty !== "EC" || !jwk.crv || !jwk.x || !jwk.y)
-      throw new Error("ES 算法需要 kty=EC 的 JWK（含 crv/x/y）");
+      throw new Error(t("ES 算法需要 kty=EC 的 JWK（含 crv/x/y）"));
     return crypto.subtle.importKey(
       "jwk",
       normalizeJwk(jwk, alg),
@@ -297,7 +299,7 @@ async function importJwkKey(alg: string, jwk: JsonWebKey): Promise<CryptoKey> {
       ["verify"],
     );
   }
-  throw new Error(`不支持通过 JWK 导入的算法：${alg}`);
+  throw new Error(t("不支持通过 JWK 导入的算法：{alg}", { alg }));
 }
 
 async function importVerificationKey(
@@ -313,7 +315,7 @@ async function importVerificationKey(
     try {
       jwk = JSON.parse(trimmed) as JsonWebKey;
     } catch {
-      throw new Error("JWK JSON 解析失败：不是合法的 JSON");
+      throw new Error(t("JWK JSON 解析失败：不是合法的 JSON"));
     }
     return importJwkKey(alg, jwk);
   }
@@ -325,7 +327,7 @@ async function importVerificationKey(
       try {
         keyBytes = base64Decode(trimmed);
       } catch {
-        throw new Error("密钥不是合法的 Base64 内容");
+        throw new Error(t("密钥不是合法的 Base64 内容"));
       }
     } else {
       keyBytes = textEncoder.encode(trimmed);
@@ -342,16 +344,18 @@ async function importVerificationKey(
   const pemKind = detectPem(trimmed);
   if (pemKind === null) {
     throw new Error(
-      "密钥格式无法识别：请粘贴 HMAC 密钥、PEM 公钥（-----BEGIN ... PUBLIC KEY-----）或 JWK JSON",
+      t(
+        "密钥格式无法识别：请粘贴 HMAC 密钥、PEM 公钥（-----BEGIN ... PUBLIC KEY-----）或 JWK JSON",
+      ),
     );
   }
   if (pemKind === "cert") {
-    throw new Error("不支持 X.509 证书，请粘贴 PEM 公钥或 JWK JSON");
+    throw new Error(t("不支持 X.509 证书，请粘贴 PEM 公钥或 JWK JSON"));
   }
   const der = pemToDer(trimmed);
   if (pemKind === "pkcs1") {
     if (!alg.startsWith("RS") && !alg.startsWith("PS")) {
-      throw new Error(`RSA PKCS#1 公钥不能用于 ${alg}，请选择 RS/PS 系列算法`);
+      throw new Error(t("RSA PKCS#1 公钥不能用于 {alg}，请选择 RS/PS 系列算法", { alg }));
     }
     return crypto.subtle.importKey("jwk", pkcs1ToJwk(der), asymmetricImportParams(alg), false, [
       "verify",
@@ -367,13 +371,13 @@ function keyErrorMessage(error: unknown): string {
   if (error instanceof DOMException) {
     switch (error.name) {
       case "NotSupportedError":
-        return "密钥算法与所选算法不匹配（或当前环境不支持）";
+        return t("密钥算法与所选算法不匹配（或当前环境不支持）");
       case "DataError":
-        return "密钥与所选算法不匹配，或密钥格式不正确";
+        return t("密钥与所选算法不匹配，或密钥格式不正确");
       case "SyntaxError":
-        return "密钥内容不是合法的 DER/PEM 数据";
+        return t("密钥内容不是合法的 DER/PEM 数据");
       default:
-        return `密钥导入失败：${error.name}`;
+        return t("密钥导入失败：{name}", { name: error.name });
     }
   }
   return error instanceof Error ? error.message : String(error);
@@ -392,28 +396,28 @@ export async function verifySignature(
 ): Promise<VerifyOutcome> {
   const decoded = decodeToken(token);
   if (!decoded.ok) {
-    return { status: "token-error", message: decoded.error || "令牌格式无效" };
+    return { status: "token-error", message: decoded.error || t("令牌格式无效") };
   }
   if (decoded.unsecured) {
-    return { status: "unsecured", message: "该令牌未签名（alg=none 或无签名段）" };
+    return { status: "unsecured", message: t("该令牌未签名（alg=none 或无签名段）") };
   }
-  if (!alg) return { status: "waiting", message: "未选择算法" };
+  if (!alg) return { status: "waiting", message: t("未选择算法") };
   if (alg === "EdDSA") {
-    return { status: "unsupported", message: "当前 WebView 不支持 EdDSA (Ed25519) 验签" };
+    return { status: "unsupported", message: t("当前 WebView 不支持 EdDSA (Ed25519) 验签") };
   }
   if (!(alg in HASH_BY_ALG)) {
-    return { status: "unsupported", message: `不支持的算法：${alg}` };
+    return { status: "unsupported", message: t("不支持的算法：{alg}", { alg }) };
   }
-  if (!keyText.trim()) return { status: "waiting", message: "输入密钥后开始验证" };
+  if (!keyText.trim()) return { status: "waiting", message: t("输入密钥后开始验证") };
 
   const signingInput = textEncoder.encode(`${decoded.headerRaw}.${decoded.payloadRaw}`);
   let signature: Uint8Array;
   try {
     signature = base64UrlDecode(decoded.signatureRaw);
   } catch {
-    return { status: "invalid", message: "签名字段不是合法的 Base64url" };
+    return { status: "invalid", message: t("签名字段不是合法的 Base64url") };
   }
-  if (signature.length === 0) return { status: "invalid", message: "签名数据为空" };
+  if (signature.length === 0) return { status: "invalid", message: t("签名数据为空") };
 
   try {
     const key = await importVerificationKey(alg, keyText, secretBase64);
@@ -425,8 +429,8 @@ export async function verifySignature(
       toArrayBuffer(signingInput),
     );
     return verified
-      ? { status: "verified", message: "签名有效（Signature Verified）" }
-      : { status: "invalid", message: "签名无效（Signature Invalid）" };
+      ? { status: "verified", message: t("签名有效（Signature Verified）") }
+      : { status: "invalid", message: t("签名无效（Signature Invalid）") };
   } catch (error) {
     return { status: "key-error", message: keyErrorMessage(error) };
   }

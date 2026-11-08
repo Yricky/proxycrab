@@ -1,4 +1,5 @@
 import type { WebSocketMessage, WebSocketPage, WebSocketMessageRef } from "../api/types";
+import { t } from "../i18n";
 
 export function messageBar(message: WebSocketMessage, origin: number, scale: number) {
   return {
@@ -17,7 +18,7 @@ export async function drainWebSocketPages(
   while (current()) {
     const page = await fetchPage(after);
     if (!current()) return;
-    if (page.has_more && page.next_after_id <= after) throw new Error("消息分页游标未前进");
+    if (page.has_more && page.next_after_id <= after) throw new Error(t("消息分页游标未前进"));
     commit(page);
     if (!page.has_more) return;
     after = page.next_after_id;
@@ -149,15 +150,15 @@ export function messageColors(message: WebSocketMessage) {
 export function messageStatusLabel(message: WebSocketMessage) {
   switch (message.status) {
     case "sent":
-      return "已发送";
+      return t("已发送");
     case "dropped":
-      return "已丢弃";
+      return t("已丢弃");
     case "unsent":
-      return "未发送";
+      return t("未发送");
     case "failed":
-      return "发送失败";
+      return t("发送失败");
     default:
-      return "已采集";
+      return t("已采集");
   }
 }
 

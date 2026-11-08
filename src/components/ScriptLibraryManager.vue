@@ -8,6 +8,7 @@ import { confirmDialog } from "../stores/dialog";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { windowsStore } from "../stores/windows";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
+import { t } from "../i18n";
 import FileCreateForm from "./FileCreateForm.vue";
 import FileTree from "./FileTree.vue";
 import { validateScriptPath } from "../utils/script-tree";
@@ -113,7 +114,7 @@ const selectedScript = computed(
 const usageBadge = computed(() => {
   const script = selectedScript.value;
   if (!script || script.usage_count === undefined) return "";
-  return script.usage_count ? `${script.usage_count} 个会话使用` : "未使用";
+  return script.usage_count ? t("{n} 个会话使用", script.usage_count) : t("未使用");
 });
 
 const displayDebugResult = computed(() => debugResult.value || config.debug?.emptyLabel || "");
@@ -137,7 +138,7 @@ const treeEntries = computed(() =>
 
 function deleteMessage(script: ScriptLibraryEntry): string {
   if (config.deleteMessage) return config.deleteMessage(script, dirty.value);
-  return `确定删除脚本「${scriptTitle(script)}」吗？该操作不可撤销。`;
+  return t("确定删除脚本「{name}」吗？该操作不可撤销。", { name: scriptTitle(script) });
 }
 
 function clearDebugResult(): void {
@@ -165,7 +166,7 @@ async function loadScript(script: ScriptLibraryEntry | null): Promise<void> {
       script.display_name = loaded.display_name;
       content.value = loaded.content;
     } catch (error) {
-      reportError(error, `加载${config.sidebarTitle}失败`);
+      reportError(error, t("加载{title}失败", { title: config.sidebarTitle }));
       return;
     }
   } else {
@@ -190,7 +191,7 @@ async function refreshScripts(preferredName?: string): Promise<void> {
     await loadScript(next);
     if (config.selection?.onChanged) await config.selection.onChanged();
   } catch (error) {
-    reportError(error, `加载${config.sidebarTitle}失败`);
+    reportError(error, t("加载{title}失败", { title: config.sidebarTitle }));
   }
 }
 
@@ -218,9 +219,12 @@ function reloadExternal(): void {
 async function confirmDiscard(): Promise<boolean> {
   if (!dirty.value) return true;
   return confirmDialog({
-    title: "放弃未保存更改",
-    message: `${config.sidebarTitle}「${selectedScript.value ? scriptTitle(selectedScript.value) : (selectedName.value ?? "")}」包含未保存的更改，确定放弃吗？`,
-    confirmText: "放弃",
+    title: t("放弃未保存更改"),
+    message: t("{title}「{name}」包含未保存的更改，确定放弃吗？", {
+      title: config.sidebarTitle,
+      name: selectedScript.value ? scriptTitle(selectedScript.value) : (selectedName.value ?? ""),
+    }),
+    confirmText: t("放弃"),
     danger: true,
   });
 }
@@ -239,7 +243,8 @@ function onContentChange(value: string): void {
 
 async function persist(showToast: boolean): Promise<{ ok: true } | { ok: false; message: string }> {
   const name = selectedName.value;
-  if (!name || saving.value) return { ok: false, message: `没有可保存的${config.sidebarTitle}` };
+  if (!name || saving.value)
+    return { ok: false, message: t("没有可保存的{title}", { title: config.sidebarTitle }) };
   saving.value = true;
   try {
     await config.api.update(name, content.value);
@@ -250,7 +255,7 @@ async function persist(showToast: boolean): Promise<{ ok: true } | { ok: false; 
     externalChanged.value = false;
     notifyChanged();
     if (config.selection?.onChanged) await config.selection.onChanged();
-    if (showToast) appStore.toast("已保存", "success");
+    if (showToast) appStore.toast(t("已保存"), "success");
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -262,20 +267,20 @@ async function persist(showToast: boolean): Promise<{ ok: true } | { ok: false; 
 
 async function save(): Promise<void> {
   const result = await persist(true);
-  if (!result.ok) reportError(result.message, "保存失败");
+  if (!result.ok) reportError(result.message, t("保存失败"));
 }
 
 async function saveAndRun(): Promise<void> {
   if (debugging.value || !config.debug) return;
   const sessionId = props.sessionId ?? null;
   if (sessionId === null) {
-    debugResult.value = "请先选择会话";
+    debugResult.value = t("请先选择会话");
     debugFailed.value = true;
     return;
   }
   const logId = Number(debugLogId.value.trim());
   if (!Number.isSafeInteger(logId) || logId <= 0) {
-    debugResult.value = "Log ID 必须为正整数";
+    debugResult.value = t("Log ID 必须为正整数");
     debugFailed.value = true;
     return;
   }
@@ -313,9 +318,12 @@ async function toggleActive(): Promise<void> {
   try {
     activeName.value = (await config.selection.set(name)) ?? null;
     if (config.selection.onChanged) await config.selection.onChanged();
-    appStore.toast(name ? `${config.sidebarTitle}已生效` : "已取消分流规则", "success");
+    appStore.toast(
+      name ? t("{title}已生效", { title: config.sidebarTitle }) : t("已取消分流规则"),
+      "success",
+    );
   } catch (error) {
-    reportError(error, "切换分流规则失败");
+    reportError(error, t("切换分流规则失败"));
     void refreshScripts(selectedName.value ?? undefined);
   }
 }
@@ -323,7 +331,7 @@ async function toggleActive(): Promise<void> {
 async function createScript(): Promise<void> {
   if (creating.value || creatingIn.value === null) return;
   const name = [creatingIn.value, newName.value.trim()].filter(Boolean).join("/");
-  const problem = !newName.value.trim() ? "文件名不能为空" : validateScriptPath(name);
+  const problem = !newName.value.trim() ? t("文件名不能为空") : validateScriptPath(name);
   if (problem) {
     createError.value = problem;
     return;
@@ -347,9 +355,9 @@ async function createScript(): Promise<void> {
 
 async function removeScript(script: ScriptLibraryEntry): Promise<void> {
   const ok = await confirmDialog({
-    title: `删除${config.sidebarTitle}`,
+    title: t("删除{title}", { title: config.sidebarTitle }),
     message: deleteMessage(script),
-    confirmText: "删除",
+    confirmText: t("删除"),
     danger: true,
   });
   if (!ok) return;
@@ -359,7 +367,7 @@ async function removeScript(script: ScriptLibraryEntry): Promise<void> {
     if (selectedName.value === script.name) void loadScript(scripts.value[0] ?? null);
     notifyChanged();
   } catch (error) {
-    reportError(error, `删除${config.sidebarTitle}失败`);
+    reportError(error, t("删除{title}失败", { title: config.sidebarTitle }));
   }
 }
 
@@ -409,8 +417,8 @@ onBeforeUnmount(() => {
         <input
           v-model="filter"
           class="input"
-          placeholder="过滤脚本名称或路径"
-          aria-label="过滤脚本"
+:placeholder="t('过滤脚本名称或路径')"
+:aria-label="t('过滤脚本')"
           :disabled="creatingIn !== null"
         />
       </div>
@@ -418,7 +426,7 @@ onBeforeUnmount(() => {
         class="slm-script-list"
         :entries="treeEntries"
         :selected="selectedName"
-        :empty-hint="filter ? '没有匹配的脚本' : config.emptyListHint"
+        :empty-hint="filter ? t('没有匹配的脚本') : t(config.emptyListHint)"
         :can-create="!!config.api.create"
         :creating-in="creatingIn"
         :create-disabled="creating"
@@ -439,11 +447,11 @@ onBeforeUnmount(() => {
         </template>
         <template #suffix="{ entry }">
           <span v-if="config.selection && activeName === entry.path" class="slm-active"
-            >生效中</span
+            >{{ t("生效中") }}</span
           >
         </template>
         <template #actions="{ entry }">
-          <button class="btn icon danger" title="删除" @click.stop="removeScript(entry.data)">
+          <button class="btn icon danger" :title="t('删除')" @click.stop="removeScript(entry.data)">
             <Io5Trash :size="14" />
           </button>
         </template>
@@ -452,8 +460,8 @@ onBeforeUnmount(() => {
 
     <section class="slm-editor-pane">
       <div v-if="externalChanged" class="slm-external">
-        <span>脚本已被外部修改，未保存内容仍保留在编辑器中。</span>
-        <button class="btn compact" @click="reloadExternal">重新加载</button>
+        <span>{{ t("脚本已被外部修改，未保存内容仍保留在编辑器中。") }}</span>
+        <button class="btn compact" @click="reloadExternal">{{ t("重新加载") }}</button>
       </div>
       <template v-if="selectedScript">
         <div class="slm-editor-toolbar">
@@ -461,7 +469,7 @@ onBeforeUnmount(() => {
             scriptLabel(selectedScript)
           }}</span>
           <span v-if="usageBadge" class="slm-usage">{{ usageBadge }}</span>
-          <span v-if="dirty" class="slm-dirty">未保存</span>
+          <span v-if="dirty" class="slm-dirty">{{ t("未保存") }}</span>
           <span
             v-if="debugResult !== null"
             class="slm-debug-result mono"
@@ -475,8 +483,8 @@ onBeforeUnmount(() => {
             v-if="config.debug?.mode === 'log-id-input'"
             v-model="debugInput"
             class="input slm-argument mono"
-            placeholder="字符串参数"
-            title="通过 Lua ... 传入的字符串"
+:placeholder="t('字符串参数')"
+:title="t('通过 Lua ... 传入的字符串')"
             @input="clearDebugResult"
             @keyup.enter="saveAndRun"
           />
@@ -486,7 +494,7 @@ onBeforeUnmount(() => {
             class="input slm-log-id mono"
             inputmode="numeric"
             placeholder="Log ID"
-            title="当前会话中的 Log ID"
+:title="t('当前会话中的 Log ID')"
             @input="clearDebugResult"
             @keyup.enter="saveAndRun"
           />
@@ -497,11 +505,11 @@ onBeforeUnmount(() => {
             @click="toggleActive"
           >
             <Io5RadioButtonOn :size="14" />
-            {{ activeName === selectedName ? "取消生效" : "设为生效" }}
+            {{ activeName === selectedName ? t("取消生效") : t("设为生效") }}
           </button>
           <button class="btn" :disabled="saving || debugging" @click="save">
             <Io5Save :size="14" />
-            {{ saving && !debugging ? "保存中…" : "保存" }}
+            {{ saving && !debugging ? t("保存中…") : t("保存") }}
           </button>
           <button
             v-if="config.debug"
@@ -510,7 +518,7 @@ onBeforeUnmount(() => {
             @click="saveAndRun"
           >
             <Io5Play :size="14" />
-            {{ debugging ? "运行中…" : "保存并运行" }}
+            {{ debugging ? t("运行中…") : t("保存并运行") }}
           </button>
         </div>
         <MonacoEditor
@@ -519,10 +527,10 @@ onBeforeUnmount(() => {
           language="lua"
           @update:model-value="onContentChange"
         />
-        <div v-if="config.statusbar" class="slm-statusbar text-faint">{{ config.statusbar }}</div>
+        <div v-if="config.statusbar" class="slm-statusbar text-faint">{{ t(config.statusbar) }}</div>
       </template>
       <div v-else class="slm-editor-empty">
-        <span class="empty-hint">{{ config.editorEmptyHint }}</span>
+        <span class="empty-hint">{{ t(config.editorEmptyHint) }}</span>
       </div>
     </section>
   </div>

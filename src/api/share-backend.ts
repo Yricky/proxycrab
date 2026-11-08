@@ -1,4 +1,5 @@
 import type { Backend } from "./backend";
+import { t } from "../i18n";
 import { BackendError } from "./backend-error";
 import { downloadBodyFromBase, fetchBodyFromBase, fetchWebSocketBodyFromBase } from "./body";
 import { saveFileInWebview } from "./save-file";
@@ -82,7 +83,7 @@ export function createShareBackend(
   const unsupported = (name: PropertyKey) => async () => {
     throw new BackendError({
       code: "readonly_share",
-      message: `分享页面不支持操作：${String(name)}`,
+      message: t("分享页面不支持操作：{name}", { name: String(name) }),
     });
   };
   const config: AppConfig = {
@@ -101,7 +102,7 @@ export function createShareBackend(
     if (!response.ok) {
       const payload = (await response.json().catch(() => null)) as { error?: ManagerError } | null;
       throw new BackendError(
-        payload?.error ?? { code: `http_${response.status}`, message: "下载 Session 配置失败" },
+        payload?.error ?? { code: `http_${response.status}`, message: t("下载 Session 配置失败") },
       );
     }
     const { saveBlobInWebview } = await import("./save-file");

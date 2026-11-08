@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useBackend } from "../api";
+import { t } from "../i18n";
 import type { AssetMetadata } from "../api/types";
 import { reportError } from "../stores/app";
 import AssetPreview from "../components/AssetPreview.vue";
@@ -16,7 +17,7 @@ async function refresh(): Promise<void> {
   try {
     assets.value = await backend.listAssets();
   } catch (error) {
-    reportError(error, "加载工作区资源失败");
+    reportError(error, t("加载工作区资源失败"));
   } finally {
     loading.value = false;
   }
@@ -37,7 +38,7 @@ onMounted(refresh);
         @uploaded="uploaded"
       />
       <AssetPreview v-if="current" class="asset-manager-preview" :asset="current" />
-      <div v-else class="empty-hint asset-manager-empty">选择资源查看信息</div>
+      <div v-else class="empty-hint asset-manager-empty">{{ t("选择资源查看信息") }}</div>
     </div>
   </div>
 </template>

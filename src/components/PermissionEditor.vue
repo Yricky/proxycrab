@@ -3,6 +3,7 @@ import { computed, type Component } from "vue";
 import { Io5Ban, Io5Checkmark, Io5HandLeft } from "vue-icons-plus/io5";
 import { LiaStarOfLifeSolid } from "vue-icons-plus/lia";
 import type { ApiActionView, PermissionMode } from "../api/types";
+import { t } from "../i18n";
 import AppTooltip from "./AppTooltip.vue";
 import {
   ACTION_META,
@@ -41,7 +42,7 @@ const ALL_MODES: ModeOption[] = [
 const modes = computed(() =>
   ALL_MODES.filter((option) =>
     (props.allowedModes ?? ["allow", "approval", "deny"]).includes(option.value),
-  ),
+  ).map((option) => ({ ...option, label: t(option.label), description: t(option.description) })),
 );
 
 interface ActionGroup {
@@ -73,7 +74,8 @@ const groups = computed<ActionGroup[]>(() => {
 });
 
 function actionLabel(action: ApiActionView): string {
-  return ACTION_META[action.id]?.label ?? action.route_template;
+  const label = ACTION_META[action.id]?.label;
+  return label ? t(label) : action.route_template;
 }
 
 function groupMode(actions: ApiActionView[]): PermissionMode | typeof MIXED {
@@ -104,17 +106,17 @@ function updateGroup(actions: ApiActionView[], mode: PermissionMode): void {
     <section v-for="group in groups" :key="group.key" class="permission-group">
       <header class="group-header">
         <div>
-          <strong>{{ group.label }}</strong>
-          <span>{{ group.actions.length }} 项</span>
+          <strong>{{ t(group.label) }}</strong>
+          <span>{{ t("{n} 项", group.actions.length) }}</span>
         </div>
-        <div class="mode-group" role="group" :aria-label="`${group.label}整组权限`">
+        <div class="mode-group" role="group" :aria-label="t('{label}整组权限', { label: t(group.label) })">
           <button
             v-for="mode in modes"
             :key="mode.value"
             type="button"
             class="mode-btn"
             :class="[`m-${mode.value}`, { active: groupMode(group.actions) === mode.value }]"
-            :title="`${mode.label}：${mode.description}（应用到整组）`"
+            :title="t('{label}：{description}（应用到整组）', { label: mode.label, description: mode.description })"
             :aria-pressed="groupMode(group.actions) === mode.value"
             :disabled="disabled"
             @click="updateGroup(group.actions, mode.value)"
@@ -132,21 +134,21 @@ function updateGroup(actions: ApiActionView[], mode: PermissionMode): void {
         <div class="permission-controls">
           <AppTooltip
             v-if="ACTION_META[action.id]?.redaction"
-            title="支持脱敏"
-            detail="绑定脱敏脚本后生效"
+            :title="t('支持脱敏')"
+            :detail="t('绑定脱敏脚本后生效')"
           >
-            <span class="redaction-indicator" aria-label="支持脱敏：绑定脱敏脚本后生效">
+            <span class="redaction-indicator" :aria-label="t('支持脱敏：绑定脱敏脚本后生效')">
               <LiaStarOfLifeSolid :size="15" />
             </span>
           </AppTooltip>
-          <div class="mode-group" role="group" :aria-label="`${actionLabel(action)}权限`">
+          <div class="mode-group" role="group" :aria-label="t('{label}权限', { label: actionLabel(action) })">
             <button
               v-for="mode in modes"
               :key="mode.value"
               type="button"
               class="mode-btn"
               :class="[`m-${mode.value}`, { active: actionMode(action) === mode.value }]"
-              :title="`${mode.label}：${mode.description}`"
+              :title="t('{label}：{description}', { label: mode.label, description: mode.description })"
               :aria-pressed="actionMode(action) === mode.value"
               :disabled="disabled"
               @click="updateAction(action.id, mode.value)"

@@ -4,6 +4,7 @@ import QRCode from "qrcode";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Io5Copy, Io5Download, Io5Refresh, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
+import { t } from "../i18n";
 import type { ClashSubscriptionState, HttpApiChange, HttpServiceStatus } from "../api/types";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
@@ -58,7 +59,7 @@ async function refreshConnection(): Promise<void> {
       subscription?.server ??
       (addresses.value.includes(selectedIp.value) ? selectedIp.value : (addresses.value[0] ?? ""));
   } catch (error) {
-    reportError(error, "读取连接配置失败");
+    reportError(error, t("读取连接配置失败"));
   } finally {
     connectionLoading.value = false;
   }
@@ -74,7 +75,7 @@ async function selectIp(event: Event): Promise<void> {
     clashState.value = await backend.clashSubscription.enable(ip);
   } catch (error) {
     selectedIp.value = clashState.value.server ?? "";
-    reportError(error, "更新订阅 IP 失败");
+    reportError(error, t("更新订阅 IP 失败"));
   } finally {
     connectionMutating.value = false;
   }
@@ -94,7 +95,7 @@ async function toggleClash(): Promise<void> {
       ? await backend.clashSubscription.disable()
       : await backend.clashSubscription.enable(selectedIp.value);
   } catch (error) {
-    reportError(error, "切换 Clash 订阅失败");
+    reportError(error, t("切换 Clash 订阅失败"));
   } finally {
     connectionMutating.value = false;
   }
@@ -105,7 +106,7 @@ async function refresh(): Promise<void> {
     const cert = await backend.getCertificate();
     pem.value = cert.pem;
   } catch (error) {
-    reportError(error, "获取证书失败");
+    reportError(error, t("获取证书失败"));
   }
 }
 
@@ -122,9 +123,9 @@ async function copyPem(): Promise<void> {
   if (!pem.value) return;
   try {
     await writeClipboardText(pem.value);
-    appStore.toast("证书 PEM 已复制到剪贴板", "success");
+    appStore.toast(t("证书 PEM 已复制到剪贴板"), "success");
   } catch (error) {
-    reportError(error, "复制失败");
+    reportError(error, t("复制失败"));
   }
 }
 
@@ -132,9 +133,9 @@ async function copyDownloadUrl(): Promise<void> {
   if (!certificateUrl.value) return;
   try {
     await writeClipboardText(certificateUrl.value);
-    appStore.toast("证书下载地址已复制", "success");
+    appStore.toast(t("证书下载地址已复制"), "success");
   } catch (error) {
-    reportError(error, "复制失败");
+    reportError(error, t("复制失败"));
   }
 }
 
@@ -143,7 +144,7 @@ async function openDownloadUrl(): Promise<void> {
   try {
     await backend.openExternal(certificateUrl.value);
   } catch (error) {
-    reportError(error, "打开证书下载地址失败");
+    reportError(error, t("打开证书下载地址失败"));
   }
 }
 
@@ -152,7 +153,7 @@ async function downloadPem(): Promise<void> {
   try {
     await saveBytesFile(backend, "proxycrab-ca.pem", new TextEncoder().encode(pem.value));
   } catch (error) {
-    reportError(error, "保存证书失败");
+    reportError(error, t("保存证书失败"));
   }
 }
 
@@ -160,9 +161,11 @@ async function regenerate(): Promise<void> {
   const host = backend.host;
   if (!host) return;
   const ok = await confirmDialog({
-    title: "重新生成 CA 证书",
-    message: "重新生成后，旧证书签发的所有站点证书将失效，需要重新安装并信任新证书。确定继续吗？",
-    confirmText: "重新生成",
+    title: t("重新生成 CA 证书"),
+    message: t(
+      "重新生成后，旧证书签发的所有站点证书将失效，需要重新安装并信任新证书。确定继续吗？",
+    ),
+    confirmText: t("重新生成"),
     danger: true,
   });
   if (!ok) return;
@@ -170,9 +173,9 @@ async function regenerate(): Promise<void> {
   try {
     const cert = await host.regenerateCertificate();
     pem.value = cert.pem;
-    appStore.toast("证书已重新生成", "success");
+    appStore.toast(t("证书已重新生成"), "success");
   } catch (error) {
-    reportError(error, "重新生成证书失败");
+    reportError(error, t("重新生成证书失败"));
   } finally {
     loading.value = false;
   }
@@ -189,7 +192,7 @@ watch(certificateUrl, async (url, _previous, onCleanup) => {
     const image = await QRCode.toDataURL(url, { errorCorrectionLevel: "M", margin: 1, width: 160 });
     if (!stale) qrCodeDataUrl.value = image;
   } catch (error) {
-    if (!stale) reportError(error, "生成证书下载二维码失败");
+    if (!stale) reportError(error, t("生成证书下载二维码失败"));
   }
 });
 
@@ -206,7 +209,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="cert-manager-root">
-    <div class="cert-tabs" role="tablist" aria-label="代理配置步骤">
+    <div class="cert-tabs" role="tablist" :aria-label="t('代理配置步骤')">
       <button
         id="certificate-tab"
         class="cert-tab"
@@ -216,7 +219,7 @@ onBeforeUnmount(() => {
         aria-controls="certificate-panel"
         @click="activeTab = 'certificate'"
       >
-        1.证书配置
+        {{ t("1.证书配置") }}
       </button>
       <button
         v-if="backend.clashSubscription"
@@ -228,11 +231,11 @@ onBeforeUnmount(() => {
         aria-controls="connection-panel"
         @click="activeTab = 'connection'"
       >
-        2. 代理连接
+        {{ t("2. 代理连接") }}
       </button>
     </div>
     <div class="connection-ip-row">
-      <label for="connection-ip">连接 IP</label>
+      <label for="connection-ip">{{ t("连接 IP") }}</label>
       <select
         id="connection-ip"
         class="input mono"
@@ -240,19 +243,19 @@ onBeforeUnmount(() => {
         :disabled="connectionLoading || connectionMutating || !addresses.length"
         @change="selectIp"
       >
-        <option v-if="!addresses.length" value="">暂无可用的 IPv4 地址</option>
+        <option v-if="!addresses.length" value="">{{ t("暂无可用的 IPv4 地址") }}</option>
         <option
           v-else-if="selectedIp && !addresses.includes(selectedIp)"
           :value="selectedIp"
           disabled
         >
-          {{ selectedIp }}（已不可用）
+          {{ t("{ip}（已不可用）", { ip: selectedIp }) }}
         </option>
         <option v-for="ip in addresses" :key="ip" :value="ip">{{ ip }}</option>
       </select>
       <button
         class="btn icon"
-        title="刷新 IP 和连接状态"
+        :title="t('刷新 IP 和连接状态')"
         :disabled="connectionLoading || connectionMutating"
         @click="refreshConnection"
       >
@@ -260,13 +263,13 @@ onBeforeUnmount(() => {
       </button>
     </div>
     <p v-if="service && !service.running" class="connection-warning">
-      <Io5Warning :size="14" />管理 HTTP 服务未运行，暂时无法下载证书或订阅。
+      <Io5Warning :size="14" />{{ t("管理 HTTP 服务未运行，暂时无法下载证书或订阅。") }}
     </p>
     <p v-else-if="!connectionLoading && !addresses.length" class="connection-warning">
-      <Io5Warning :size="14" />请连接网络后刷新，选择其他设备可访问的本机 IP。
+      <Io5Warning :size="14" />{{ t("请连接网络后刷新，选择其他设备可访问的本机 IP。") }}
     </p>
     <p v-else-if="selectedIp && !addresses.includes(selectedIp)" class="connection-warning">
-      <Io5Warning :size="14" />原 IP 已不可用，请重新选择 IP 并更新 Clash 中的订阅地址。
+      <Io5Warning :size="14" />{{ t("原 IP 已不可用，请重新选择 IP 并更新 Clash 中的订阅地址。") }}
     </p>
     <div
       v-show="activeTab === 'certificate'"
@@ -276,55 +279,60 @@ onBeforeUnmount(() => {
       aria-labelledby="certificate-tab"
     >
       <p class="cert-desc text-secondary">
-        这是 ProxyCrab 的根 CA 证书（PEM 格式）。请将它安装到操作系统或浏览器的受信任根证书列表中，
-        以便代理解密 HTTPS 流量。
+        {{
+          t(
+            "这是 ProxyCrab 的根 CA 证书（PEM 格式）。请将它安装到操作系统或浏览器的受信任根证书列表中，以便代理解密 HTTPS 流量。",
+          )
+        }}
       </p>
 
       <section class="cert-download" aria-labelledby="cert-download-title">
         <div class="cert-download-info">
-          <h3 id="cert-download-title">从其他设备下载</h3>
+          <h3 id="cert-download-title">{{ t("从其他设备下载") }}</h3>
           <p class="text-secondary">
-            让手机或其他设备能访问所选 IP，打开以下链接或扫描二维码，无需先连接代理。
+            {{
+              t("让手机或其他设备能访问所选 IP，打开以下链接或扫描二维码，无需先连接代理。")
+            }}
           </p>
           <div v-if="certificateUrl" class="cert-download-link">
             <a :href="certificateUrl" class="mono" @click.prevent="openDownloadUrl">
               {{ certificateUrl }}
             </a>
-            <button class="btn icon" title="复制证书下载地址" @click="copyDownloadUrl">
+            <button class="btn icon" :title="t('复制证书下载地址')" @click="copyDownloadUrl">
               <Io5Copy :size="14" />
             </button>
           </div>
         </div>
         <div v-if="certificateUrl" class="cert-qr">
-          <img v-if="qrCodeDataUrl" :src="qrCodeDataUrl" alt="证书下载地址二维码" />
-          <span v-else class="text-faint">二维码生成中…</span>
+          <img v-if="qrCodeDataUrl" :src="qrCodeDataUrl" :alt="t('证书下载地址二维码')" />
+          <span v-else class="text-faint">{{ t("二维码生成中…") }}</span>
         </div>
       </section>
 
-      <div class="cert-content-label">证书内容</div>
-      <pre class="cert-pem mono">{{ pem || "加载中…" }}</pre>
+      <div class="cert-content-label">{{ t("证书内容") }}</div>
+      <pre class="cert-pem mono">{{ pem || t("加载中…") }}</pre>
 
       <div v-if="proxyStore.running" class="cert-hint">
         <Io5Warning :size="14" />
-        <span>代理正在运行，需先停止代理才能重新生成证书。</span>
+        <span>{{ t("代理正在运行，需先停止代理才能重新生成证书。") }}</span>
       </div>
 
       <div class="cert-actions">
         <button class="btn" :disabled="!pem" @click="copyPem">
-          <Io5Copy :size="14" /> 复制 PEM
+          <Io5Copy :size="14" /> {{ t("复制 PEM") }}
         </button>
         <button class="btn" :disabled="!pem" @click="downloadPem">
-          <Io5Download :size="14" /> 下载 PEM
+          <Io5Download :size="14" /> {{ t("下载 PEM") }}
         </button>
         <span class="cert-spacer" />
         <button
           v-if="backend.host"
           class="btn danger"
           :disabled="proxyStore.running || loading"
-          :title="proxyStore.running ? '需先停止代理' : '重新生成 CA 证书'"
+          :title="proxyStore.running ? t('需先停止代理') : t('重新生成 CA 证书')"
           @click="regenerate"
         >
-          <Io5Refresh :size="14" /> 重新生成证书
+          <Io5Refresh :size="14" /> {{ t("重新生成证书") }}
         </button>
       </div>
     </div>

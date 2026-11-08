@@ -3,6 +3,7 @@ import { ref } from "vue";
 import AppMain from "../AppMain.vue";
 import { createHttpBackend, verifyCliAccess } from "../api/http-backend";
 import { installBackend } from "../api/runtime-backend";
+import { t } from "../i18n";
 
 const token = ref("");
 const error = ref("");
@@ -32,8 +33,8 @@ async function connect(): Promise<void> {
   <main v-else class="cli-landing">
     <form class="login-card" @submit.prevent="connect">
       <div class="brand">ProxyCrab</div>
-      <h1>连接 CLI</h1>
-      <p>输入 CLI 启动时输出的本次运行 Access Token。</p>
+      <h1>{{ t("连接 CLI") }}</h1>
+      <p>{{ t("输入 CLI 启动时输出的本次运行 Access Token。") }}</p>
       <input
         v-model="token"
         class="input mono"
@@ -45,7 +46,7 @@ async function connect(): Promise<void> {
       />
       <span v-if="error" class="error">{{ error }}</span>
       <button class="btn primary" type="submit" :disabled="!token.trim() || submitting">
-        {{ submitting ? "正在连接…" : "连接" }}
+        {{ submitting ? t("正在连接…") : t("连接") }}
       </button>
     </form>
   </main>

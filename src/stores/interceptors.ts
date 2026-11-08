@@ -6,6 +6,7 @@ import type {
   SessionInterceptorsPayload,
 } from "../api/types";
 import { reportError } from "./app";
+import { t } from "../i18n";
 
 function clone(items: SessionInterceptorItem[]): SessionInterceptorItem[] {
   return items.map((item) => ({ ...item }));
@@ -39,7 +40,7 @@ export const interceptorsStore = reactive({
       const payload = await backend.getSessionInterceptors(sessionId);
       if (version === this.loadVersion) this.apply(payload);
     } catch (error) {
-      if (version === this.loadVersion) reportError(error, "加载会话拦截器失败");
+      if (version === this.loadVersion) reportError(error, t("加载会话拦截器失败"));
     } finally {
       if (version === this.loadVersion) this.loading = false;
     }
@@ -68,7 +69,7 @@ export const interceptorsStore = reactive({
         this.request = previousRequest;
         this.response = previousResponse;
       }
-      reportError(error, "保存会话拦截器失败");
+      reportError(error, t("保存会话拦截器失败"));
       return false;
     } finally {
       this.saving = false;

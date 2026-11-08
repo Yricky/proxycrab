@@ -1,15 +1,17 @@
-/** Epoch-millis → short relative time like "3 分钟前". */
+import { t } from "../i18n";
+
+/** Epoch-millis → short relative time. */
 export function formatRelativeTime(millis: number): string {
   const diff = Date.now() - millis;
   if (diff < 0) return formatDateTime(millis);
   const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return "刚刚";
+  if (seconds < 60) return t("刚刚");
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} 分钟前`;
+  if (minutes < 60) return t("{n} 分钟前", minutes);
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
+  if (hours < 24) return t("{n} 小时前", hours);
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days} 天前`;
+  if (days < 30) return t("{n} 天前", days);
   return formatDateTime(millis);
 }
 

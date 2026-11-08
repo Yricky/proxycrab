@@ -9,6 +9,7 @@ import {
 } from "vue-icons-plus/io5";
 import type { ColumnGroupCache } from "../stores/column-groups";
 import type { ColumnGroupRow, ColumnGroupSort } from "../utils/column-groups";
+import { t } from "../i18n";
 
 const props = defineProps<{
   cache: ColumnGroupCache;
@@ -68,9 +69,9 @@ function updateSort(event: Event): void {
       <input
         v-model="delimiterDraft"
         class="input mono cgp-delimiter"
-        placeholder="分组符"
+        :placeholder="t('分组符')"
         spellcheck="false"
-        title="自定义分组分隔符（如 /），留空为扁平列表"
+        :title="t('自定义分组分隔符（如 /），留空为扁平列表')"
         @keyup.enter="commitDelimiter"
         @keyup.esc="revertDelimiter"
         @blur="commitDelimiter"
@@ -80,18 +81,18 @@ function updateSort(event: Event): void {
         <input
           class="input mono"
           :value="cache.search"
-          placeholder="过滤分组值"
+          :placeholder="t('过滤分组值')"
           spellcheck="false"
           @input="updateSearch"
         />
       </label>
       <select class="input cgp-sort" :value="cache.sort" @change="updateSort">
-        <option value="count">数量</option>
-        <option value="value">字典序</option>
+        <option value="count">{{ t("数量") }}</option>
+        <option value="value">{{ t("字典序") }}</option>
       </select>
       <button
         class="btn icon cgp-direction"
-        :title="cache.descending ? '降序' : '升序'"
+        :title="cache.descending ? t('降序') : t('升序')"
         @click="emit('toggle-direction')"
       >
         <Io5ArrowDown v-if="cache.descending" :size="13" />
@@ -99,7 +100,7 @@ function updateSort(event: Event): void {
       </button>
     </div>
 
-    <div v-if="cache.loading" class="cgp-progress" aria-label="正在计算分组">
+    <div v-if="cache.loading" class="cgp-progress" :aria-label="t('正在计算分组')">
       <span />
     </div>
 
@@ -122,7 +123,7 @@ function updateSort(event: Event): void {
           <span
             v-if="row.hasChildren"
             class="cgp-chevron"
-            :title="row.expanded ? '折叠' : '展开'"
+            :title="row.expanded ? t('折叠') : t('展开')"
             @click.stop="emit('toggle-expand', row)"
           >
             <Io5ChevronDown v-if="row.expanded" :size="12" />
@@ -133,7 +134,7 @@ function updateSort(event: Event): void {
         <span class="cgp-value mono" :title="row.tooltip">{{ row.label }}</span>
         <span class="cgp-count mono">{{ row.count }}</span>
       </button>
-      <div v-if="rows.length === 0 && !cache.loading" class="cgp-empty">暂无匹配分组</div>
+      <div v-if="rows.length === 0 && !cache.loading" class="cgp-empty">{{ t("暂无匹配分组") }}</div>
     </div>
   </div>
 </template>

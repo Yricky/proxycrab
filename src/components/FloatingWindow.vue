@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted } from "vue";
 import { Io5Close } from "vue-icons-plus/io5";
 import { windowsStore, type WindowState } from "../stores/windows";
+import { t } from "../i18n";
 
 const props = defineProps<{ win: WindowState; minWidth?: number; minHeight?: number }>();
 
@@ -104,14 +105,14 @@ onBeforeUnmount(() => {
     <div
       class="fw-titlebar"
       :class="{ 'fw-titlebar-max': win.maximized }"
-      :title="win.maximized ? '双击还原' : '双击最大化'"
+      :title="win.maximized ? t('双击还原') : t('双击最大化')"
       @pointerdown="startDrag"
       @dblclick="toggleMaximize"
     >
       <span class="fw-title">{{ win.title }}</span>
       <button
         class="btn icon fw-close"
-        title="关闭"
+        :title="t('关闭')"
         @click="closeWindow"
         @pointerdown.stop
         @dblclick.stop

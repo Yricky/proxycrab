@@ -5,6 +5,7 @@ import { useBackend } from "../api";
 import { selectFile } from "../api/select-file";
 import { validateAssetPath } from "../utils/asset-path";
 import { reportError } from "../stores/app";
+import { t } from "../i18n";
 import FileCreateForm from "./FileCreateForm.vue";
 import FileTree from "./FileTree.vue";
 
@@ -28,7 +29,7 @@ async function beginUpload(directory: string): Promise<void> {
     error.value = "";
     creatingIn.value = directory;
   } catch (cause) {
-    reportError(cause, "选择文件失败");
+    reportError(cause, t("选择文件失败"));
   } finally {
     busy.value = false;
   }
@@ -36,7 +37,7 @@ async function beginUpload(directory: string): Promise<void> {
 async function upload(): Promise<void> {
   if (!file.value || creatingIn.value === null || !backend.uploadAsset || busy.value) return;
   const id = [creatingIn.value, filename.value].filter(Boolean).join("/");
-  error.value = !filename.value ? "文件名不能为空" : (validateAssetPath(id) ?? "");
+  error.value = !filename.value ? t("文件名不能为空") : (validateAssetPath(id) ?? "");
   if (error.value) return;
   busy.value = true;
   try {
@@ -71,7 +72,7 @@ function formatSize(size: number): string {
     class="mono"
     :entries="entries"
     :selected="selected"
-    empty-hint="工作区暂无资源"
+    :empty-hint="t('工作区暂无资源')"
     :can-create="!!backend.uploadAsset"
     :creating-in="creatingIn"
     :create-disabled="busy"
@@ -86,7 +87,7 @@ function formatSize(size: number): string {
         :directory="creatingIn"
         :busy="busy"
         :error="error"
-        confirm-text="上传"
+        :confirm-text="t('上传')"
         @submit="upload"
         @cancel="
           creatingIn = null;
