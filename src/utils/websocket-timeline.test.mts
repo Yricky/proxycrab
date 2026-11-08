@@ -4,7 +4,6 @@ import {
   messageColors,
   messageStatusLabel,
   findRelatedMessage,
-  hexBytes,
   messageBar,
   messageNeighbors,
   messageAtPosition,
@@ -80,11 +79,6 @@ describe("incremental message pagination", () => {
     expect(committed).toEqual([]);
   });
 });
-test("hex formatting preserves every byte including zero and high bytes", () => {
-  expect(hexBytes(new Uint8Array([0, 10, 128, 255]))).toBe("00 0a 80 ff");
-  expect(hexBytes(new Uint8Array(17))).toBe(`${"00 ".repeat(15)}00\n00`);
-});
-
 describe("overlapping message navigation", () => {
   test("visits every same-millisecond message in both directions, without contiguous IDs", () => {
     const overlapping = [2, 5, 9].map((id) => ({

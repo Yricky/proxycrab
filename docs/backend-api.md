@@ -1108,6 +1108,13 @@ Canvas fill/border is green for original messages and blue for generated message
 have gray fill and unsent/failed messages red fill; borders always retain origin color, including
 when selected. Selection increases border thickness.
 
+Binary message bodies and HTTP Body types without a specialized preview use the shared Canvas
+HexViewer. It renders all loaded bytes, with width-adaptive four-byte groups, optional ASCII,
+synchronized byte selection, and Canvas menus/scrollbars. The selection menu copies grouped,
+byte-separated, compact Hex, or the displayed ASCII string (nonprintable bytes become dots).
+Only text WebSocket previews retain the 64 KiB display cap. API read limits and downloaded bytes
+are unchanged.
+
 Connection metadata and icon actions share one toolbar. Per-direction message counts appear
 as a second, smaller line in the left C→S/S→C legends; direction labels align with Canvas bars.
 

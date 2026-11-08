@@ -32,6 +32,23 @@ const snapshot = ref<InterceptorSnapshotPayload | null>(null);
 const loading = ref(true);
 const loadVersion = ref(0);
 const loadError = ref<string | null>(null);
+const headersWidth = ref("min(320px, 40%)");
+
+function startSplit(event: PointerEvent): void {
+  const handle = event.currentTarget as HTMLElement;
+  handle.setPointerCapture(event.pointerId);
+  event.preventDefault();
+}
+
+function moveSplit(event: PointerEvent): void {
+  const handle = event.currentTarget as HTMLElement;
+  if (!handle.hasPointerCapture(event.pointerId)) return;
+  const page = handle.parentElement;
+  if (!page) return;
+  const rect = page.getBoundingClientRect();
+  const ratio = Math.min(0.85, Math.max(0.15, (event.clientX - rect.left) / rect.width));
+  headersWidth.value = `calc(${ratio * 100}% - 5px)`;
+}
 
 function onRedactionChanged(): void {
   snapshot.value = null;
@@ -152,7 +169,7 @@ const urlSegments = computed(() => (request.value ? buildUrlSegments(request.val
       </header>
 
       <div class="content">
-        <section class="card headers-card">
+        <section class="card headers-card" :style="{ width: headersWidth }">
           <div class="card-title">
             Headers
             <span v-if="headers.length" class="count-badge">{{ headers.length }}</span>
@@ -169,6 +186,13 @@ const urlSegments = computed(() => (request.value ? buildUrlSegments(request.val
             <div v-else class="empty-hint">无 Headers</div>
           </div>
         </section>
+
+        <div
+          class="splitter"
+          title="拖动调整区域大小"
+          @pointerdown="startSplit"
+          @pointermove="moveSplit"
+        />
 
         <div v-if="bodyPending" class="card body-card state-hint">Body 尚未捕获完成</div>
         <BodyViewer
@@ -323,9 +347,34 @@ const urlSegments = computed(() => (request.value ? buildUrlSegments(request.val
   flex: 1;
   min-height: 0;
   display: flex;
-  gap: 10px;
   padding: 10px 12px 12px;
   overflow: hidden;
+}
+
+.splitter {
+  flex: none;
+  width: 8px;
+  margin: 0 1px;
+  cursor: col-resize;
+  position: relative;
+  touch-action: none;
+}
+
+.splitter::after {
+  content: "";
+  position: absolute;
+  top: 40%;
+  bottom: 40%;
+  left: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border-strong);
+  transition: background 0.12s;
+}
+
+.splitter:hover::after,
+.splitter:active::after {
+  background: var(--accent);
 }
 
 .card {
@@ -337,7 +386,7 @@ const urlSegments = computed(() => (request.value ? buildUrlSegments(request.val
 
 .headers-card {
   flex: none;
-  width: min(320px, 40%);
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }

@@ -25,18 +25,6 @@ export async function drainWebSocketPages(
   }
 }
 
-export function hexBytes(bytes: Uint8Array): string {
-  const rows: string[] = [];
-  for (let offset = 0; offset < bytes.length; offset += 16) {
-    rows.push(
-      Array.from(bytes.subarray(offset, offset + 16), (byte) =>
-        byte.toString(16).padStart(2, "0"),
-      ).join(" "),
-    );
-  }
-  return rows.join("\n");
-}
-
 /** Navigate by capture order, including messages with identical timestamps or gaps in IDs. */
 export function messageNeighbors(messages: WebSocketMessage[], selectedId: number) {
   const index = messages.findIndex((message) => message.id === selectedId);

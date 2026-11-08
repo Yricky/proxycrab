@@ -19,12 +19,14 @@ import type { BodySide, LoadedBody } from "../api/body";
 import { appStore, reportError } from "../stores/app";
 import { openReadonlyViewer } from "../windows/launcher";
 import { copyText } from "../utils/clipboard";
+import { formatHex } from "../utils/hex-viewer";
+import { useHexViewerMenu } from "../utils/hex-viewer-menu";
+import HexViewer from "./HexViewer.vue";
 import {
   drainWebSocketPages,
   messageColors,
   messageStatusLabel,
   findRelatedMessage,
-  hexBytes,
   messageBar,
   messageNeighbors,
   messageAtPosition,
@@ -39,6 +41,12 @@ import {
 
 const props = defineProps<{ detail: LogDetail; active: boolean }>();
 const backend = useBackend();
+const {
+  selection: hexSelection,
+  rightPane,
+  contextMenu: hexContextMenu,
+  copied: hexCopied,
+} = useHexViewerMenu();
 const sides: BodySide[] = ["request", "response"];
 const messages = shallowRef<Record<BodySide, WebSocketMessage[]>>({ request: [], response: [] });
 const cursors: Record<BodySide, number> = { request: 0, response: 0 };
@@ -132,7 +140,6 @@ const PREVIEW_LIMIT = 64 * 1024;
 const preview = computed(() => {
   if (!body.value) return "";
   const bytes = body.value.bytes.subarray(0, PREVIEW_LIMIT);
-  if (selected.value?.message.type === "binary") return hexBytes(bytes);
   const text = new TextDecoder().decode(bytes);
   if (formatted.value && body.value.bytes.length <= PREVIEW_LIMIT) {
     try {
@@ -476,7 +483,7 @@ async function copy() {
   try {
     await copyText(
       selected.value?.message.type === "binary"
-        ? hexBytes(body.value.bytes)
+        ? formatHex(body.value.bytes)
         : new TextDecoder().decode(body.value.bytes),
     );
     appStore.toast("消息已复制", "success");
@@ -637,43 +644,13 @@ onBeforeUnmount(() => {
           <Io5ChevronForward :size="13" />
         </button>
         <span>{{ selected.message.type }} · {{ selected.message.size }} B</span>
+
         <span
           >{{ timeLabel(selected.message.started_at - origin) }} →
           {{ timeLabel(selected.message.completed_at - origin) }}</span
         >
         <span>耗时 {{ selected.message.completed_at - selected.message.started_at }} ms</span>
-        <button
-          v-if="selected.message.type === 'text'"
-          class="btn icon"
-          :class="{ on: formatted }"
-          :aria-pressed="formatted"
-          title="格式化 JSON"
-          aria-label="格式化 JSON"
-          @click="formatted = !formatted"
-        >
-          <Io5CodeSlash :size="13" />
-        </button>
-        <button
-          class="btn icon"
-          :disabled="!body"
-          :title="selected.message.type === 'binary' ? '复制 Hex' : '复制消息'"
-          aria-label="复制消息"
-          @click="copy"
-        >
-          <Io5Copy :size="13" />
-        </button>
-        <button
-          class="btn icon"
-          :disabled="!body"
-          title="下载消息"
-          aria-label="下载消息"
-          @click="download"
-        >
-          <Io5DownloadOutline :size="13" />
-        </button>
-      </div>
-      <div class="ws-toolbar ws-provenance">
-        <strong>{{ messageStatusLabel(selected.message) }}</strong>
+                <strong>{{ messageStatusLabel(selected.message) }}</strong>
         <span>{{ selected.message.producer ? "拦截器发送" : "原始消息" }}</span>
         <span v-if="selected.message.sequence != null"
           >处理序号 {{ selected.message.sequence }}</span
@@ -716,6 +693,35 @@ onBeforeUnmount(() => {
           </button>
           <span>调用 #{{ selected.message.dropped_by.invocation_id }}</span>
         </template>
+        <button
+          v-if="selected.message.type === 'text'"
+          class="btn icon"
+          :class="{ on: formatted }"
+          :aria-pressed="formatted"
+          title="格式化 JSON"
+          aria-label="格式化 JSON"
+          @click="formatted = !formatted"
+        >
+          <Io5CodeSlash :size="13" />
+        </button>
+        <button
+          class="btn icon"
+          :disabled="!body"
+          :title="selected.message.type === 'binary' ? '复制 Hex' : '复制消息'"
+          aria-label="复制消息"
+          @click="copy"
+        >
+          <Io5Copy :size="13" />
+        </button>
+        <button
+          class="btn icon"
+          :disabled="!body"
+          title="下载消息"
+          aria-label="下载消息"
+          @click="download"
+        >
+          <Io5DownloadOutline :size="13" />
+        </button>
       </div>
       <div v-if="selected.message.error" class="ws-error">{{ selected.message.error }}</div>
       <div
@@ -738,6 +744,15 @@ onBeforeUnmount(() => {
       <div v-else-if="!selected.message.content_available" class="empty-hint">
         正文不可用：{{ selected.message.omitted_reason || "未保留" }}
       </div>
+      <HexViewer
+        v-else-if="body && selected.message.type === 'binary'"
+        ref="hexViewer"
+        v-model:right-pane="rightPane"
+        :bytes="body.bytes"
+        @selection-change="hexSelection = $event"
+        @contextmenu="hexContextMenu"
+        @copied="hexCopied"
+      />
       <template v-else-if="body">
         <div v-if="truncated" class="preview-note">
           仅预览前 64 KiB；复制和下载包含完整消息（{{ body.bytes.length }} B）。
@@ -791,9 +806,6 @@ onBeforeUnmount(() => {
 }
 .ws-legend .failed {
   color: var(--danger);
-}
-.ws-provenance {
-  overflow-wrap: anywhere;
 }
 .ws-connection-toolbar {
   flex-wrap: nowrap;
@@ -898,6 +910,7 @@ onBeforeUnmount(() => {
 }
 .message-detail {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;

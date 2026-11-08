@@ -19,6 +19,8 @@ import { bodyFilename } from "../utils/body-filename";
 import { inspectGrpc, inspectProtobuf } from "../utils/protobuf";
 import MonacoEditor from "./MonacoEditor.vue";
 import SseBodyViewer from "./SseBodyViewer.vue";
+import HexViewer from "./HexViewer.vue";
+import { useHexViewerMenu } from "../utils/hex-viewer-menu";
 
 const props = defineProps<{
   label: string;
@@ -32,6 +34,12 @@ const props = defineProps<{
 }>();
 
 const backend = useBackend();
+const {
+  selection: hexSelection,
+  rightPane,
+  contextMenu: hexContextMenu,
+  copied: hexCopied,
+} = useHexViewerMenu();
 const loaded = ref<LoadedBody | null>(null);
 const loading = ref(false);
 const downloading = ref(false);
@@ -358,13 +366,23 @@ onBeforeUnmount(() => {
     >
       <MonacoEditor :model-value="editorValue" :language="editorLanguage" readonly />
     </div>
-    <div v-else class="body-state">该二进制类型暂不支持预览</div>
+    <HexViewer
+      v-else-if="loaded"
+      ref="hexViewer"
+      v-model:right-pane="rightPane"
+      :bytes="loaded.bytes"
+      @selection-change="hexSelection = $event"
+      @contextmenu="hexContextMenu"
+      @copied="hexCopied"
+    />
   </section>
 </template>
 
 <style scoped>
 .body-viewer {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
