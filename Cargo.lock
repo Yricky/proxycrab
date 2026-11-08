@@ -3462,7 +3462,7 @@ dependencies = [
 
 [[package]]
 name = "proxy-crab-mgr"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -3498,7 +3498,7 @@ dependencies = [
 
 [[package]]
 name = "proxy-crab-mitm"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3536,7 +3536,7 @@ dependencies = [
 
 [[package]]
 name = "proxy-crab-t"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3566,7 +3566,7 @@ dependencies = [
 
 [[package]]
 name = "proxycrab-cli"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
