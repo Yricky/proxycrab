@@ -22,6 +22,18 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # --workspace 会编译 src-tauri，其 webkit2gtk 依赖需要这些系统库。
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: bindings
