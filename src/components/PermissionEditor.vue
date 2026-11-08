@@ -2,7 +2,8 @@
 import { computed, type Component } from "vue";
 import { Io5Ban, Io5Checkmark, Io5HandLeft } from "vue-icons-plus/io5";
 import { LiaStarOfLifeSolid } from "vue-icons-plus/lia";
-import type { ApiActionView, PermissionMode } from "../api/types";
+import type { ApiActionView } from "../api/generated/ApiActionView";
+import type { PermissionMode } from "../api/generated/PermissionMode";
 import { t } from "../i18n";
 import AppTooltip from "./AppTooltip.vue";
 import {

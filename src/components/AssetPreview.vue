@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Io5Checkmark, Io5Copy, Io5DownloadOutline, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type { AssetMetadata } from "../api/types";
+import type { AssetMetadata } from "../api/generated/AssetMetadata";
 import { appStore } from "../stores/app";
 import { copyText } from "../utils/clipboard";
 import { fileLanguage } from "../utils/file-kind";

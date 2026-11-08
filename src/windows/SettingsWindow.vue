@@ -4,7 +4,9 @@ import { Io5Add, Io5Build, Io5Globe, Io5Settings, Io5Trash, Io5Warning } from "v
 import { useBackend } from "../api";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
 import type { HttpServiceStatus } from "../api/generated/HttpServiceStatus";
-import type { ApiActionView, PermissionIdentitySummary, PermissionMode } from "../api/types";
+import type { ApiActionView } from "../api/generated/ApiActionView";
+import type { PermissionIdentitySummary } from "../api/generated/PermissionIdentitySummary";
+import type { PermissionMode } from "../api/generated/PermissionMode";
 import ApiKeySecretDialog from "../components/ApiKeySecretDialog.vue";
 import CustomSelect, { type CustomSelectOption } from "../components/CustomSelect.vue";
 import RedactionSelect from "../components/RedactionSelect.vue";

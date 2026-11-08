@@ -45,27 +45,25 @@ import type { UpdateScriptRequest } from "./generated/UpdateScriptRequest";
 import type { UpdateAgentsPresetRequest } from "./generated/UpdateAgentsPresetRequest";
 import type { UpdateSessionRequest } from "./generated/UpdateSessionRequest";
 import type { TemporaryExecutionResult } from "./generated/TemporaryExecutionResult";
-import type {
-  ApiActionView,
-  AssetMetadata,
-  ClashConfig,
-  ClashSubscriptionState,
-  CreatedApiKey,
-  IdentityPermissions,
-  PendingApproval,
-  PermissionEntry,
-  PermissionIdentitySummary,
-  ResolveApprovalRequest,
-  SaveFileRequest,
-  Script,
-  SessionShareState,
-  SessionSharesPayload,
-  SessionShareConfig,
-  SkillManagerState,
-  SkillSaveResult,
-  WorkspacePaths,
-} from "./types";
-import type { BodySide, BodyTarget, LoadedBody } from "./body";
+import type { ApiActionView } from "./generated/ApiActionView";
+import type { AssetMetadata } from "./generated/AssetMetadata";
+import type { ClashConfig } from "./generated/ClashConfig";
+import type { ClashSubscriptionState } from "./generated/ClashSubscriptionState";
+import type { CreatedApiKey } from "./generated/CreatedApiKey";
+import type { IdentityPermissions } from "./generated/IdentityPermissions";
+import type { PendingApproval } from "./generated/PendingApproval";
+import type { PermissionEntry } from "./generated/PermissionEntry";
+import type { PermissionIdentitySummary } from "./generated/PermissionIdentitySummary";
+import type { ResolveApprovalRequest } from "./generated/ResolveApprovalRequest";
+import type { SessionShareState } from "./generated/SessionShareState";
+import type { SessionSharesPayload } from "./generated/SessionSharesPayload";
+import type { SessionShareConfig } from "./generated/SessionShareConfig";
+import type { SkillManagerState } from "./generated/SkillManagerState";
+import type { SkillSaveResult } from "./generated/SkillSaveResult";
+import type { WorkspacePaths } from "./generated/WorkspacePaths";
+import type { SaveFileRequest, Script } from "./types";
+import type { BodySide } from "./generated/BodySide";
+import type { BodyTarget, LoadedBody } from "./body";
 
 export type Unsubscribe = () => void;
 
@@ -136,11 +134,11 @@ export interface Backend {
   importBundle?(
     file: File,
     acceptedIntentIds: string[],
-  ): Promise<import("./types").BundleImportResult>;
+  ): Promise<import("./generated/ImportResult").ImportResult>;
   resolveBundle?(
     id: string,
-    resolutions: import("./types").BundleResolution[],
-  ): Promise<import("./types").BundleImportResult>;
+    resolutions: import("./generated/Resolution").Resolution[],
+  ): Promise<import("./generated/ImportResult").ImportResult>;
   downloadSessionConfig?(): Promise<void>;
 
   // sessions
@@ -166,7 +164,7 @@ export interface Backend {
     side: BodySide,
     afterId: number,
     limit?: number,
-  ): Promise<import("./types").WebSocketPage>;
+  ): Promise<import("./generated/WebSocketPage").WebSocketPage>;
   fetchWebSocketMessageBody?(
     sessionId: number,
     id: number,

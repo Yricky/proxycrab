@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+use ts_rs::TS;
 
 use crate::{
     ProxyCrabManager,
@@ -36,8 +37,9 @@ use crate::{
     permission::{PermissionManager, RedactionIdentity},
 };
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(export)]
 pub struct SessionShareConfig {
     #[serde(
         default,
@@ -74,7 +76,8 @@ pub struct EnableSessionShareRequest {
     pub session_share_config: Option<SessionShareConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct SessionShareState {
     #[serde(default)]
     pub session_config_share: Option<crate::bundle::ConfigShare>,
@@ -83,19 +86,22 @@ pub struct SessionShareState {
     pub redaction_script: Option<String>,
     pub session_id: u64,
     pub enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redaction_identity: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct SessionShareSummary {
     pub session_id: u64,
     pub persistent: bool,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct SessionSharesPayload {
     pub shares: Vec<SessionShareSummary>,
 }

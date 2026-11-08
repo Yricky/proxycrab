@@ -1,4 +1,5 @@
-import type { BodySide, BodyTarget } from "../api/body";
+import type { BodySide } from "../api/generated/BodySide";
+import type { BodyTarget } from "../api/body";
 import type { HeaderItem } from "../api/generated/HeaderItem";
 
 const extensions: Record<string, string> = {

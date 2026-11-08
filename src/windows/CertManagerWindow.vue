@@ -7,7 +7,7 @@ import { useBackend } from "../api";
 import { t } from "../i18n";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
 import type { HttpServiceStatus } from "../api/generated/HttpServiceStatus";
-import type { ClashSubscriptionState } from "../api/types";
+import type { ClashSubscriptionState } from "../api/generated/ClashSubscriptionState";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";

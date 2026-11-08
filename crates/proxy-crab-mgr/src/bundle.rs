@@ -18,17 +18,20 @@ use std::{
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
+use ts_rs::TS;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 const MAX_BYTES: usize = 128 * 1024 * 1024;
 const MAX_FILES: usize = 4096;
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(export)]
 pub struct ConfigShare {
     pub assets: Vec<String>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(export)]
 pub struct Intent {
     pub id: String,
     #[serde(rename = "type")]
@@ -43,22 +46,25 @@ pub struct Manifest {
     pub version: u32,
     pub intents: Vec<Intent>,
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, TS)]
+#[ts(export)]
 pub struct FileStatus {
     pub path: String,
     pub status: String,
     pub fingerprint: Option<String>,
     pub can_rename: bool,
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(export)]
 pub struct Resolution {
     pub path: String,
     pub action: String,
     pub fingerprint: Option<String>,
     pub name: Option<String>,
 }
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 pub struct ImportResult {
     pub import_id: Option<String>,
     pub files: Vec<FileStatus>,

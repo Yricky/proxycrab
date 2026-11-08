@@ -11,33 +11,40 @@ use proxy_crab_mgr::{
     skill_install::{self, normalize_parent},
 };
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 const CONFIG_FILE: &str = "skill-paths.json";
 const SKILL_DIRECTORY_NAME: &str = "proxycrab";
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct SkillPathState {
     pub parent_path: String,
     pub target_path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct SkillManagerState {
     pub configured: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub config_error: Option<String>,
     pub paths: Vec<SkillPathState>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct SkillRemovalError {
     pub parent_path: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct SkillSaveResult {
     pub state: SkillManagerState,
     pub removal_errors: Vec<SkillRemovalError>,

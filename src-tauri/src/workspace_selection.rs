@@ -9,10 +9,12 @@ use anyhow::Result;
 use proxy_crab_mgr::dto::ManagerError;
 use proxy_crab_mitm::{ProxyCrab, log_buffer::LogBuffer, workspace::Workspace};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 const POINTER_FILE: &str = "config.json";
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct WorkspacePaths {
     pub current_path: String,
     pub configured_path: String,

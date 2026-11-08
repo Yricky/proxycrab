@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
+use ts_rs::TS;
 
 use crate::hex::hex_lower;
 use crate::workspace::now_millis;
@@ -19,7 +20,8 @@ const MAX_ASSET_ID_BYTES: usize = 255;
 const MAX_ASSET_SEGMENT_BYTES: usize = 100;
 static NEXT_UPLOAD_ID: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct AssetMetadata {
     pub id: String,
     pub size: u64,

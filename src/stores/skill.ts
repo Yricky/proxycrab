@@ -1,7 +1,8 @@
 import { reactive } from "vue";
 import { t } from "../i18n";
 import { runtimeBackend as backend } from "../api/runtime-backend";
-import type { SkillManagerState, SkillSaveResult } from "../api/types";
+import type { SkillManagerState } from "../api/generated/SkillManagerState";
+import type { SkillSaveResult } from "../api/generated/SkillSaveResult";
 
 export const skillStore = reactive({
   state: null as SkillManagerState | null,

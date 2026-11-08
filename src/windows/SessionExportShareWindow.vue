@@ -6,7 +6,8 @@ import ShareAssetTree from "../components/ShareAssetTree.vue";
 import { useBackend } from "../api";
 import { t } from "../i18n";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
-import type { AssetMetadata, SessionShareState } from "../api/types";
+import type { AssetMetadata } from "../api/generated/AssetMetadata";
+import type { SessionShareState } from "../api/generated/SessionShareState";
 import { sessionsStore } from "../stores/sessions";
 import { appStore, reportError } from "../stores/app";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
@@ -68,7 +69,7 @@ async function setRedaction(value: string | null): Promise<void> {
   pageMutating.value = true;
   try {
     pageShare.value = await backend.enableSessionShare(props.sessionId, {
-      redactionScript: value,
+      redaction_script: value,
       persistent: pagePersistent.value,
     });
     sessionsStore.updateShare(pageShare.value);
@@ -110,8 +111,8 @@ async function togglePageShare(): Promise<void> {
       appStore.toast(t("链接分享已关闭"), "success");
     } else {
       pageShare.value = await backend.enableSessionShare(props.sessionId, {
-        sessionConfigShare: configShare.value,
-        redactionScript: pageRedaction.value ?? undefined,
+        session_config_share: configShare.value,
+        redaction_script: pageRedaction.value ?? undefined,
         persistent: pagePersistent.value,
       });
       sessionsStore.updateShare(pageShare.value);
@@ -151,7 +152,7 @@ async function saveConfigShare(value: { assets: string[] } | null): Promise<bool
   try {
     const next = await backend.enableSessionShare(props.sessionId, {
       persistent: pagePersistent.value,
-      sessionConfigShare: value,
+      session_config_share: value,
     });
     pageShare.value = next;
     configShare.value = next.session_config_share ?? null;

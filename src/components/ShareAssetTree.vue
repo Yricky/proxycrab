@@ -6,7 +6,7 @@ import {
   Io5ChevronForward,
   Io5FolderOutline,
 } from "vue-icons-plus/io5";
-import type { AssetMetadata } from "../api/types";
+import type { AssetMetadata } from "../api/generated/AssetMetadata";
 import { fileTreeRows } from "../utils/file-tree";
 import { fileKind } from "../utils/file-kind";
 import { formatBytes } from "../utils/format";

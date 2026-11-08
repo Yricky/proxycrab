@@ -11,8 +11,10 @@ import {
 import { useBackend } from "../api";
 import type { LogDetail } from "../api/generated/LogDetail";
 import type { WsInterceptor } from "../api/generated/WsInterceptor";
-import type { WebSocketMessage, WebSocketMessageRef } from "../api/types";
-import type { BodySide, LoadedBody } from "../api/body";
+import type { WebSocketMessage } from "../api/generated/WebSocketMessage";
+import type { MessageRef } from "../api/generated/MessageRef";
+import type { BodySide } from "../api/generated/BodySide";
+import type { LoadedBody } from "../api/body";
 import { appStore, reportError } from "../stores/app";
 import { t } from "../i18n";
 import { openReadonlyViewer } from "../windows/launcher";
@@ -449,10 +451,10 @@ function navigateMessage(message: WebSocketMessage | undefined, side = selected.
     }
   }
 }
-function referenceLabel(reference: WebSocketMessageRef) {
+function referenceLabel(reference: MessageRef) {
   return `${reference.side === "request" ? "C→S" : "S→C"} #${reference.id}`;
 }
-function navigateRelated(reference: WebSocketMessageRef) {
+function navigateRelated(reference: MessageRef) {
   const related = findRelatedMessage(messages.value, reference);
   if (!related) return;
   navigateMessage(related.message, related.side);

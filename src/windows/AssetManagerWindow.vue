@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useBackend } from "../api";
 import { t } from "../i18n";
-import type { AssetMetadata } from "../api/types";
+import type { AssetMetadata } from "../api/generated/AssetMetadata";
 import { reportError } from "../stores/app";
 import AssetPreview from "../components/AssetPreview.vue";
 import AssetTreePicker from "../components/AssetTreePicker.vue";

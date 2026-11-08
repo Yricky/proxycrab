@@ -72,7 +72,7 @@ test("desktop Session sharing groups redaction and persistence into config", asy
   vi.mocked(invoke).mockResolvedValue(state);
   const backend = createTauriBackend();
   expect(
-    await backend.enableSessionShare(7, { redactionScript: "mask", persistent: true }),
+    await backend.enableSessionShare(7, { redaction_script: "mask", persistent: true }),
   ).toEqual(state);
   expect(invoke).toHaveBeenLastCalledWith(
     "enable_session_share",
@@ -82,9 +82,9 @@ test("desktop Session sharing groups redaction and persistence into config", asy
     },
     undefined,
   );
-  expect(await backend.enableSessionShare(7, { redactionScript: null, persistent: false })).toEqual(
-    state,
-  );
+  expect(
+    await backend.enableSessionShare(7, { redaction_script: null, persistent: false }),
+  ).toEqual(state);
   expect(invoke).toHaveBeenLastCalledWith(
     "enable_session_share",
     {
@@ -139,12 +139,12 @@ test("share IPC distinguishes omitted, inherited and explicitly unredacted polic
     sessionId: 7,
     sessionShareConfig: { persistent: true },
   });
-  await backend.enableSessionShare(7, { persistent: true, redactionScript: "" });
+  await backend.enableSessionShare(7, { persistent: true, redaction_script: "" });
   expect(vi.mocked(invoke).mock.calls.at(-1)![1]).toEqual({
     sessionId: 7,
     sessionShareConfig: { persistent: true, redaction_script: "" },
   });
-  await backend.enableSessionShare(7, { persistent: true, redactionScript: null });
+  await backend.enableSessionShare(7, { persistent: true, redaction_script: null });
   expect(vi.mocked(invoke).mock.calls.at(-1)![1]).toEqual({
     sessionId: 7,
     sessionShareConfig: { persistent: true, redaction_script: null },

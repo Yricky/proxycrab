@@ -36,21 +36,19 @@ import type { SystemLogsQuery } from "./generated/SystemLogsQuery";
 import type { UpdateScriptRequest } from "./generated/UpdateScriptRequest";
 import type { UpdateAgentsPresetRequest } from "./generated/UpdateAgentsPresetRequest";
 import type { UpdateSessionRequest } from "./generated/UpdateSessionRequest";
-import type {
-  ApiActionView,
-  AssetMetadata,
-  CreatedApiKey,
-  ClashConfig,
-  IdentityPermissions,
-  PendingApproval,
-  PermissionEntry,
-  PermissionIdentitySummary,
-  ResolveApprovalRequest,
-  SaveFileRequest,
-  SessionShareState,
-  SessionSharesPayload,
-  SessionShareConfig,
-} from "./types";
+import type { ApiActionView } from "./generated/ApiActionView";
+import type { AssetMetadata } from "./generated/AssetMetadata";
+import type { CreatedApiKey } from "./generated/CreatedApiKey";
+import type { ClashConfig } from "./generated/ClashConfig";
+import type { IdentityPermissions } from "./generated/IdentityPermissions";
+import type { PendingApproval } from "./generated/PendingApproval";
+import type { PermissionEntry } from "./generated/PermissionEntry";
+import type { PermissionIdentitySummary } from "./generated/PermissionIdentitySummary";
+import type { ResolveApprovalRequest } from "./generated/ResolveApprovalRequest";
+import type { SessionShareState } from "./generated/SessionShareState";
+import type { SessionSharesPayload } from "./generated/SessionSharesPayload";
+import type { SessionShareConfig } from "./generated/SessionShareConfig";
+import type { SaveFileRequest } from "./types";
 
 function isManagerError(value: unknown): value is ManagerError {
   return (
@@ -178,15 +176,7 @@ export function createTauriBackend(): Backend {
     enableSessionShare: (sessionId: number, sessionShareConfig?: SessionShareConfig) =>
       call<SessionShareState>("enable_session_share", {
         sessionId,
-        sessionShareConfig: sessionShareConfig && {
-          ...(sessionShareConfig.redactionScript === undefined
-            ? {}
-            : { redaction_script: sessionShareConfig.redactionScript }),
-          persistent: sessionShareConfig.persistent,
-          ...(sessionShareConfig.sessionConfigShare === undefined
-            ? {}
-            : { session_config_share: sessionShareConfig.sessionConfigShare }),
-        },
+        sessionShareConfig,
       }),
     disableSessionShare: (sessionId: number) =>
       call<SessionShareState>("disable_session_share", { sessionId }),

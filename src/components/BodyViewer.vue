@@ -7,10 +7,10 @@ import {
   BodyFetchError,
   DEFAULT_BODY_MAX_SIZE,
   UI_BODY_MAX_SIZE,
-  type BodySide,
   type BodyTarget,
   type LoadedBody,
 } from "../api/body";
+import type { BodySide } from "../api/generated/BodySide";
 import type { BodyPayload } from "../api/generated/BodyPayload";
 import type { HeaderItem } from "../api/generated/HeaderItem";
 import { appStore } from "../stores/app";

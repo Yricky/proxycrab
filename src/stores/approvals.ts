@@ -1,7 +1,8 @@
 import { reactive } from "vue";
 import type { Unsubscribe } from "../api/backend";
 import { runtimeBackend as backend } from "../api/runtime-backend";
-import type { PendingApproval, ResolveApprovalRequest } from "../api/types";
+import type { PendingApproval } from "../api/generated/PendingApproval";
+import type { ResolveApprovalRequest } from "../api/generated/ResolveApprovalRequest";
 import { reportError } from "./app";
 import { t } from "../i18n";
 

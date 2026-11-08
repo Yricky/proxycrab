@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use ts_rs::TS;
 
 use proxy_crab_mgr::permission::PermissionMode;
 use serde::{Deserialize, Serialize};
@@ -37,14 +38,16 @@ pub struct ApiKeyRecord {
     pub permissions: BTreeMap<String, PermissionMode>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum PermissionIdentityKind {
     Local,
     ApiKey,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct PermissionIdentitySummary {
     pub id: String,
     pub kind: PermissionIdentityKind,
@@ -54,20 +57,23 @@ pub struct PermissionIdentitySummary {
     pub last_used_at: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct PermissionEntry {
     pub action_id: String,
     pub mode: PermissionMode,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct IdentityPermissions {
     pub redaction_script: Option<String>,
     pub identity: PermissionIdentitySummary,
     pub permissions: Vec<PermissionEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct ApiActionView {
     pub id: String,
     pub method: String,
@@ -75,13 +81,15 @@ pub struct ApiActionView {
     pub default_mode: PermissionMode,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct CreatedApiKey {
     pub identity: PermissionIdentitySummary,
     pub api_key: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct PendingApproval {
     pub id: u64,
     pub identity: PermissionIdentitySummary,
@@ -99,14 +107,16 @@ pub struct PendingApproval {
     pub deadline_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum ApprovalDecision {
     Allow,
     Deny,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct ResolveApprovalRequest {
     pub decision: ApprovalDecision,
     pub duration_seconds: Option<u64>,

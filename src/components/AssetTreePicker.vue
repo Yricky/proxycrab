@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import type { AssetMetadata } from "../api/types";
+import type { AssetMetadata } from "../api/generated/AssetMetadata";
 import { useBackend } from "../api";
 import { selectFile } from "../api/select-file";
 import { validateAssetPath } from "../utils/asset-path";

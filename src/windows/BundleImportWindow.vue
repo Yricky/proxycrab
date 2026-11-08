@@ -9,7 +9,9 @@ import {
 } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import { t } from "../i18n";
-import type { BundleFileStatus, BundleImportResult, BundleResolution } from "../api/types";
+import type { FileStatus } from "../api/generated/FileStatus";
+import type { ImportResult } from "../api/generated/ImportResult";
+import type { Resolution } from "../api/generated/Resolution";
 import { sessionsStore } from "../stores/sessions";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { windowsStore } from "../stores/windows";
@@ -24,8 +26,8 @@ const props = defineProps<{
 }>();
 const backend = useBackend();
 const selected = ref<string[]>([]);
-const result = ref<BundleImportResult | null>(null);
-const choices = ref<Record<string, BundleResolution>>({});
+const result = ref<ImportResult | null>(null);
+const choices = ref<Record<string, Resolution>>({});
 const busy = ref(false);
 const error = ref("");
 
@@ -90,6 +92,7 @@ async function submit(): Promise<void> {
         path: file.path,
         fingerprint: file.fingerprint,
         action: "keep",
+        name: null,
       };
     if (!next.import_id) {
       await sessionsStore.refresh();
@@ -110,7 +113,7 @@ function back(): void {
   error.value = "";
 }
 
-function modesFor(file: BundleFileStatus): (typeof MODES)[number][] {
+function modesFor(file: FileStatus): (typeof MODES)[number][] {
   return MODES.filter((mode) => mode.value !== "rename" || file.can_rename);
 }
 

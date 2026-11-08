@@ -5,7 +5,8 @@ import { Io5Copy, Io5OpenOutline, Io5Reload, Io5Save, Io5Warning } from "vue-ico
 import { useBackend } from "../api";
 import { t } from "../i18n";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
-import type { ClashConfig, ClashSubscriptionState } from "../api/types";
+import type { ClashConfig } from "../api/generated/ClashConfig";
+import type { ClashSubscriptionState } from "../api/generated/ClashSubscriptionState";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";

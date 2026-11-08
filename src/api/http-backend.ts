@@ -32,19 +32,17 @@ import type { SystemLogsQuery } from "./generated/SystemLogsQuery";
 import type { UpdateAgentsPresetRequest } from "./generated/UpdateAgentsPresetRequest";
 import type { UpdateScriptRequest } from "./generated/UpdateScriptRequest";
 import type { UpdateSessionRequest } from "./generated/UpdateSessionRequest";
-import type {
-  ApiActionView,
-  AssetMetadata,
-  ClashConfig,
-  CreatedApiKey,
-  IdentityPermissions,
-  PermissionEntry,
-  PermissionIdentitySummary,
-  SessionShareState,
-  SessionSharesPayload,
-  SessionShareConfig,
-  WorkspacePaths,
-} from "./types";
+import type { ApiActionView } from "./generated/ApiActionView";
+import type { AssetMetadata } from "./generated/AssetMetadata";
+import type { ClashConfig } from "./generated/ClashConfig";
+import type { CreatedApiKey } from "./generated/CreatedApiKey";
+import type { IdentityPermissions } from "./generated/IdentityPermissions";
+import type { PermissionEntry } from "./generated/PermissionEntry";
+import type { PermissionIdentitySummary } from "./generated/PermissionIdentitySummary";
+import type { SessionShareState } from "./generated/SessionShareState";
+import type { SessionSharesPayload } from "./generated/SessionSharesPayload";
+import type { SessionShareConfig } from "./generated/SessionShareConfig";
+import type { WorkspacePaths } from "./generated/WorkspacePaths";
 
 interface ApiEnvelope<T> {
   ok: boolean;
@@ -207,15 +205,7 @@ export function createHttpBackend(
         "/api/session-shares",
         json("POST", {
           session_id: sessionId,
-          session_share_config: sessionShareConfig && {
-            ...(sessionShareConfig.redactionScript === undefined
-              ? {}
-              : { redaction_script: sessionShareConfig.redactionScript }),
-            persistent: sessionShareConfig.persistent,
-            ...(sessionShareConfig.sessionConfigShare === undefined
-              ? {}
-              : { session_config_share: sessionShareConfig.sessionConfigShare }),
-          },
+          session_share_config: sessionShareConfig,
         }),
       ),
     disableSessionShare: (sessionId: number) =>

@@ -4,7 +4,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Io5ChevronDown, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import { t } from "../i18n";
-import type { AssetMetadata } from "../api/types";
+import type { AssetMetadata } from "../api/generated/AssetMetadata";
 import { proxyStore } from "../stores/proxy";
 import { sessionsStore } from "../stores/sessions";
 import CustomSelect from "../components/CustomSelect.vue";

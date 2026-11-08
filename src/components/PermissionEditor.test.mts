@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { createSSRApp } from "vue";
 import { renderToString } from "vue/server-renderer";
-import type { ApiActionView } from "../api/types";
+import type { ApiActionView } from "../api/generated/ApiActionView";
 import { ACTION_META, type PermissionGroupDimension } from "../utils/permission-meta";
 import PermissionEditor from "./PermissionEditor.vue";
 

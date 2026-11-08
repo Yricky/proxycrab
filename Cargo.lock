@@ -3561,6 +3561,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "ts-rs",
 ]
 
 [[package]]

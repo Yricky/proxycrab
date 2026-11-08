@@ -44,32 +44,37 @@ pub struct WsInterceptor {
     pub execution_id: u64,
     pub name: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct MessageRef {
     pub side: BodySide,
     pub id: u32,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct WsInvocation {
     pub execution_id: u64,
     pub name: String,
     pub invocation_id: u64,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct WsProducer {
     pub execution_id: u64,
     pub name: String,
     pub invocation_id: u64,
     pub send_index: usize,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct WsCallbackError {
     pub execution_id: u64,
     pub name: String,
     pub invocation_id: u64,
     pub error: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct WebSocketMessage {
     pub id: u32,
     #[serde(rename = "type")]
@@ -96,7 +101,8 @@ pub struct WebSocketMessage {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<WsCallbackError>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct WebSocketPage {
     pub messages: Vec<WebSocketMessage>,
     pub has_more: bool,

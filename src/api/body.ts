@@ -1,13 +1,12 @@
 import type { ErrorCode } from "./generated/ErrorCode";
 import type { ManagerError } from "./generated/ManagerError";
 import type { ApiError, TransportErrorCode } from "./types";
+import type { BodySide } from "./generated/BodySide";
 import { t } from "../i18n";
 import { saveBlobInWebview } from "./save-file";
 
 export const DEFAULT_BODY_MAX_SIZE = 16 * 1024 * 1024;
 export const UI_BODY_MAX_SIZE = 1024 * 1024 * 1024;
-
-export type BodySide = "request" | "response";
 
 export type BodyTarget =
   | { kind: "log"; id: number; sessionId: number }

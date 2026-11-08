@@ -52,11 +52,11 @@ test("Session sharing creates and updates config through the same POST", async (
     http_service: { running: true, host: "0.0.0.0", port: 18089, error: null },
   });
   expect(
-    await backend.enableSessionShare(7, { redactionScript: "mask", persistent: true }),
+    await backend.enableSessionShare(7, { redaction_script: "mask", persistent: true }),
   ).toEqual(state);
-  expect(await backend.enableSessionShare(7, { redactionScript: null, persistent: false })).toEqual(
-    state,
-  );
+  expect(
+    await backend.enableSessionShare(7, { redaction_script: null, persistent: false }),
+  ).toEqual(state);
   await backend.enableSessionShare(7);
   for (const [url, init] of fetchMock.mock.calls) {
     expect(new URL(url).pathname).toBe("/api/session-shares");

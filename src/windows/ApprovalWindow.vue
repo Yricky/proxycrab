@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { Io5Checkmark, Io5Close } from "vue-icons-plus/io5";
-import type { PendingApproval } from "../api/types";
+import type { PendingApproval } from "../api/generated/PendingApproval";
 import CustomSelect, { type CustomSelectOption } from "../components/CustomSelect.vue";
 import { approvalsStore } from "../stores/approvals";
 import { t } from "../i18n";

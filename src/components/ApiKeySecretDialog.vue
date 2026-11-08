@@ -2,7 +2,8 @@
 import { computed, nextTick, ref } from "vue";
 import { Io5Checkmark, Io5Copy, Io5Key, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type { CreatedApiKey, PermissionIdentitySummary } from "../api/types";
+import type { CreatedApiKey } from "../api/generated/CreatedApiKey";
+import type { PermissionIdentitySummary } from "../api/generated/PermissionIdentitySummary";
 import { appStore, reportError } from "../stores/app";
 import { copyText as writeClipboardText } from "../utils/clipboard";
 import { t } from "../i18n";

@@ -1,5 +1,5 @@
 import { strFromU8, unzipSync } from "fflate";
-import type { BundleIntent } from "../api/types";
+import type { Intent } from "../api/generated/Intent";
 import { t } from "../i18n";
 
 export const MAX_BUNDLE_BYTES = 128 * 1024 * 1024;
@@ -8,7 +8,7 @@ export function resourceMatches(rules: string[], ids: string[]): string[] {
     rules.some((rule) => (rule.endsWith("/") ? id.startsWith(rule) : id === rule)),
   );
 }
-export function parseBundle(bytes: Uint8Array): { intents: (BundleIntent & { name: string })[] } {
+export function parseBundle(bytes: Uint8Array): { intents: (Intent & { name: string })[] } {
   if (bytes.length > MAX_BUNDLE_BYTES) throw new Error(t("分享包超过 128 MiB"));
   let total = 0,
     count = 0;
@@ -30,7 +30,7 @@ export function parseBundle(bytes: Uint8Array): { intents: (BundleIntent & { nam
   });
   const raw = files["intents.json"];
   if (!raw) throw new Error(t("分享包缺少 intents.json"));
-  const manifest = JSON.parse(strFromU8(raw)) as { version: number; intents: BundleIntent[] };
+  const manifest = JSON.parse(strFromU8(raw)) as { version: number; intents: Intent[] };
   if (manifest.version !== 1 || !Array.isArray(manifest.intents) || !manifest.intents.length)
     throw new Error(t("分享包意图格式不受支持"));
   const ids = new Set<string>();

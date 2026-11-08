@@ -1,4 +1,6 @@
-import type { WebSocketMessage, WebSocketPage, WebSocketMessageRef } from "../api/types";
+import type { WebSocketMessage } from "../api/generated/WebSocketMessage";
+import type { WebSocketPage } from "../api/generated/WebSocketPage";
+import type { MessageRef } from "../api/generated/MessageRef";
 import { t } from "../i18n";
 
 export function messageBar(message: WebSocketMessage, origin: number, scale: number) {
@@ -164,7 +166,7 @@ export function messageStatusLabel(message: WebSocketMessage) {
 
 export function findRelatedMessage(
   messages: Record<"request" | "response", WebSocketMessage[]>,
-  reference: WebSocketMessageRef,
+  reference: MessageRef,
 ) {
   const message = messages[reference.side].find((item) => item.id === reference.id);
   return message ? { side: reference.side, message } : null;

@@ -11,6 +11,7 @@ use brotli::Decompressor;
 use flate2::read::{GzDecoder, ZlibDecoder};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use tokio::io::AsyncWriteExt;
+use ts_rs::TS;
 
 use crate::{
     asset::AssetStore,
@@ -25,8 +26,9 @@ use crate::{
 
 pub(crate) const BODY_DETAIL_LIMIT: u64 = 64 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum BodySide {
     Request,
     Response,
