@@ -1,9 +1,7 @@
-import type {
-  CreateSessionRequest,
-  SessionInterceptorsPayload,
-  SessionMetadata,
-  SessionViewPayload,
-} from "../api/types";
+import type { CreateSessionRequest } from "../api/generated/CreateSessionRequest";
+import type { SessionInterceptorsPayload } from "../api/generated/SessionInterceptorsPayload";
+import type { SessionMetadata } from "../api/generated/SessionMetadata";
+import type { SessionViewPayload } from "../api/generated/SessionViewPayload";
 
 /**
  * 清扫会话：以原会话的身份信息与已保存配置，构造一个配置一致的新会话请求。

@@ -109,14 +109,23 @@ function updateGroup(actions: ApiActionView[], mode: PermissionMode): void {
           <strong>{{ t(group.label) }}</strong>
           <span>{{ t("{n} 项", group.actions.length) }}</span>
         </div>
-        <div class="mode-group" role="group" :aria-label="t('{label}整组权限', { label: t(group.label) })">
+        <div
+          class="mode-group"
+          role="group"
+          :aria-label="t('{label}整组权限', { label: t(group.label) })"
+        >
           <button
             v-for="mode in modes"
             :key="mode.value"
             type="button"
             class="mode-btn"
             :class="[`m-${mode.value}`, { active: groupMode(group.actions) === mode.value }]"
-            :title="t('{label}：{description}（应用到整组）', { label: mode.label, description: mode.description })"
+            :title="
+              t('{label}：{description}（应用到整组）', {
+                label: mode.label,
+                description: mode.description,
+              })
+            "
             :aria-pressed="groupMode(group.actions) === mode.value"
             :disabled="disabled"
             @click="updateGroup(group.actions, mode.value)"
@@ -141,14 +150,20 @@ function updateGroup(actions: ApiActionView[], mode: PermissionMode): void {
               <LiaStarOfLifeSolid :size="15" />
             </span>
           </AppTooltip>
-          <div class="mode-group" role="group" :aria-label="t('{label}权限', { label: actionLabel(action) })">
+          <div
+            class="mode-group"
+            role="group"
+            :aria-label="t('{label}权限', { label: actionLabel(action) })"
+          >
             <button
               v-for="mode in modes"
               :key="mode.value"
               type="button"
               class="mode-btn"
               :class="[`m-${mode.value}`, { active: actionMode(action) === mode.value }]"
-              :title="t('{label}：{description}', { label: mode.label, description: mode.description })"
+              :title="
+                t('{label}：{description}', { label: mode.label, description: mode.description })
+              "
               :aria-pressed="actionMode(action) === mode.value"
               :disabled="disabled"
               @click="updateAction(action.id, mode.value)"

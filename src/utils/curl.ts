@@ -1,4 +1,4 @@
-import type { LogDetail } from "../api/types";
+import type { LogDetail } from "../api/generated/LogDetail";
 import { t } from "../i18n";
 
 function shellQuote(value: string): string {

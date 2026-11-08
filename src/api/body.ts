@@ -1,4 +1,6 @@
-import type { ManagerError } from "./types";
+import type { ErrorCode } from "./generated/ErrorCode";
+import type { ManagerError } from "./generated/ManagerError";
+import type { ApiError, TransportErrorCode } from "./types";
 import { t } from "../i18n";
 import { saveBlobInWebview } from "./save-file";
 
@@ -19,11 +21,11 @@ export interface LoadedBody {
 }
 
 export class BodyFetchError extends Error {
-  readonly code: string;
+  readonly code: ErrorCode | TransportErrorCode;
   readonly actualSize?: number;
   readonly maxSize?: number;
 
-  constructor(error: ManagerError) {
+  constructor(error: ApiError) {
     super(error.message);
     this.name = "BodyFetchError";
     this.code = error.code;
@@ -115,7 +117,7 @@ async function requestBody(
     referrerPolicy: queryToken === undefined ? undefined : "no-referrer",
   });
   if (!response.ok) {
-    let error: ManagerError = {
+    let error: ApiError = {
       code: `http_${response.status}`,
       message: t("Body 请求失败（HTTP {status}）", { status: response.status }),
     };

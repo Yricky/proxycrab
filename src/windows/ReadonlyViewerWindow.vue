@@ -77,8 +77,12 @@ const lineCount = computed(() =>
       <span class="status-item">{{ t("{n} 行", lineCount) }}</span>
       <span class="status-spacer" />
       <template v-if="formattable">
-        <button class="tool-btn" :class="{ on: pretty }" @click="pretty = true">{{ t("格式化") }}</button>
-        <button class="tool-btn" :class="{ on: !pretty }" @click="pretty = false">{{ t("原文") }}</button>
+        <button class="tool-btn" :class="{ on: pretty }" @click="pretty = true">
+          {{ t("格式化") }}
+        </button>
+        <button class="tool-btn" :class="{ on: !pretty }" @click="pretty = false">
+          {{ t("原文") }}
+        </button>
       </template>
       <button
         class="status-toggle"

@@ -15,6 +15,7 @@ use std::{
     sync::Arc,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use ts_rs::TS;
 
 pub(crate) mod interception;
 #[cfg(test)]
@@ -23,7 +24,8 @@ pub(crate) mod transport;
 
 const MAGIC: &[u8; 8] = b"PCWS\x01\0\0\0";
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct WebSocketInfo {
     pub handshake_log_id: u64,
     pub websocket_log_id: u64,
@@ -36,7 +38,8 @@ pub struct WebSocketInfo {
     #[serde(default)]
     pub interceptors: Vec<WsInterceptor>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct WsInterceptor {
     pub execution_id: u64,
     pub name: String,

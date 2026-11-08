@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import type { Backend } from "../api/backend";
-import type { LogDetail } from "../api/types";
+import type { LogDetail } from "../api/generated/LogDetail";
 import { appendHar } from "./har-export";
 function detail(id: number, changes: Partial<LogDetail> = {}): LogDetail {
   return {

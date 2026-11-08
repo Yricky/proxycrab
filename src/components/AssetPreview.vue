@@ -163,7 +163,10 @@ async function download(): Promise<void> {
     await writer.append(data);
     await writer.markAsFinish();
   } catch (cause) {
-    appStore.toast(t("下载失败：{message}", { message: cause instanceof Error ? cause.message : String(cause) }), "error");
+    appStore.toast(
+      t("下载失败：{message}", { message: cause instanceof Error ? cause.message : String(cause) }),
+      "error",
+    );
   } finally {
     downloading.value = false;
   }

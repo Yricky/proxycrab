@@ -1,6 +1,6 @@
 import { reactive } from "vue";
 import { runtimeBackend as backend } from "../api/runtime-backend";
-import type { BypassEntry } from "../api/types";
+import type { BypassEntry } from "../api/generated/BypassEntry";
 import { reportError } from "./app";
 import { t } from "../i18n";
 

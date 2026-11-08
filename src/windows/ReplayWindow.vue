@@ -385,7 +385,9 @@ const bodyExtra = computed(() => {
           >
             #{{ record.logId }}
           </button>
-          <span v-else class="record-chip failed" :title="recordTitle(record)">{{ t("失败") }}</span>
+          <span v-else class="record-chip failed" :title="recordTitle(record)">{{
+            t("失败")
+          }}</span>
         </template>
       </div>
       <div class="send-group" @keydown.esc="closePicker">
@@ -416,7 +418,9 @@ const bodyExtra = computed(() => {
             class="session-trigger"
             :class="{ open: pickerOpen }"
             :disabled="sessionsStore.sessions.length === 0"
-            :title="selectedSession ? t('发送到 {name}', { name: selectedSession.name }) : t('选择会话')"
+            :title="
+              selectedSession ? t('发送到 {name}', { name: selectedSession.name }) : t('选择会话')
+            "
             :aria-expanded="pickerOpen"
             :aria-label="t('选择会话')"
             @click="togglePicker"

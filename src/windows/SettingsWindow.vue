@@ -1,21 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import {
-  Io5Add,
-  Io5Build,
-  Io5Globe,
-  Io5Settings,
-  Io5Trash,
-  Io5Warning,
-} from "vue-icons-plus/io5";
+import { Io5Add, Io5Build, Io5Globe, Io5Settings, Io5Trash, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type {
-  ApiActionView,
-  HttpApiChange,
-  HttpServiceStatus,
-  PermissionIdentitySummary,
-  PermissionMode,
-} from "../api/types";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import type { HttpServiceStatus } from "../api/generated/HttpServiceStatus";
+import type { ApiActionView, PermissionIdentitySummary, PermissionMode } from "../api/types";
 import ApiKeySecretDialog from "../components/ApiKeySecretDialog.vue";
 import CustomSelect, { type CustomSelectOption } from "../components/CustomSelect.vue";
 import RedactionSelect from "../components/RedactionSelect.vue";
@@ -379,9 +368,9 @@ onBeforeUnmount(() => {
           <div>
             <strong>{{ t("管理接口未启动") }}</strong>
             <span>{{ serviceStatus.error }}</span>
-            <small v-if="!permissionConfigError"
-              >{{ t("权限仍可配置，服务将在问题修复并重启应用后使用新设置。") }}</small
-            >
+            <small v-if="!permissionConfigError">{{
+              t("权限仍可配置，服务将在问题修复并重启应用后使用新设置。")
+            }}</small>
           </div>
         </div>
         <div v-if="permissionConfigError" class="service-error permission-error">
@@ -390,7 +379,9 @@ onBeforeUnmount(() => {
             <strong>{{ t("权限配置不可用") }}</strong>
             <span>{{ permissionConfigError }}</span>
             <small>{{
-              t("请修复工作区中的 http_api_permissions.json 后重启应用。ProxyCrab 不会自动覆盖损坏的配置。")
+              t(
+                "请修复工作区中的 http_api_permissions.json 后重启应用。ProxyCrab 不会自动覆盖损坏的配置。",
+              )
             }}</small>
           </div>
         </div>
@@ -423,7 +414,10 @@ onBeforeUnmount(() => {
               @update:model-value="setRedaction"
             />
             <div v-if="selectedIdentity?.kind === 'api_key'" class="identity-detail">
-              <span>{{ t("创建于 {time}") }}{{ formatDateTime(selectedIdentity.created_at ?? 0) }}</span>
+              <span
+                >{{ t("创建于 {time}")
+                }}{{ formatDateTime(selectedIdentity.created_at ?? 0) }}</span
+              >
               <span>
                 {{ t("最近使用") }}
                 {{
@@ -432,13 +426,17 @@ onBeforeUnmount(() => {
                     : t("从未")
                 }}</span
               >
-              <span class="mono">{{ t("前缀 {prefix}", { prefix: selectedIdentity.prefix }) }}</span>
+              <span class="mono">{{
+                t("前缀 {prefix}", { prefix: selectedIdentity.prefix })
+              }}</span>
               <button class="btn danger compact" @click="deleteSelectedKey">
                 <Io5Trash :size="13" />
                 {{ t("删除") }}
               </button>
             </div>
-            <p v-else class="identity-hint">{{ t("未携带 Authorization 的本机请求使用此身份。") }}</p>
+            <p v-else class="identity-hint">
+              {{ t("未携带 Authorization 的本机请求使用此身份。") }}
+            </p>
           </section>
 
           <section class="permission-section">

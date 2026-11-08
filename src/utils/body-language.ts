@@ -1,4 +1,5 @@
-import type { BodyPayload, HeaderItem } from "../api/types";
+import type { BodyPayload } from "../api/generated/BodyPayload";
+import type { HeaderItem } from "../api/generated/HeaderItem";
 
 function contentType(headers: HeaderItem[]): string {
   return (

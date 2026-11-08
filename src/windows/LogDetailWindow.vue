@@ -3,13 +3,11 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useBackend } from "../api";
 import { t } from "../i18n";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
-import type {
-  BreakpointSummary,
-  HeaderItem,
-  InterceptorExecution,
-  InterceptorModification,
-  LogDetail,
-} from "../api/types";
+import type { BreakpointSummary } from "../api/generated/BreakpointSummary";
+import type { HeaderItem } from "../api/generated/HeaderItem";
+import type { InterceptorExecution } from "../api/generated/InterceptorExecution";
+import type { LogDetail } from "../api/generated/LogDetail";
+import type { Modification } from "../api/generated/Modification";
 import { BackendError } from "../api/backend-error";
 import { appStore, reportError, type LogDetailTab } from "../stores/app";
 import { proxyStore } from "../stores/proxy";
@@ -452,13 +450,14 @@ const modificationKindLabels: Record<string, string> = {
   body_replace_string: t("替换 Body 为字符串"),
   body_replace_asset: t("替换 Body 为 Asset"),
   tag_set: t("设置 Tag"),
+  snapshot: t("快照"),
 };
 
-function modificationLabel(mod: InterceptorModification): string {
+function modificationLabel(mod: Modification): string {
   return modificationKindLabels[mod.kind] ?? mod.kind;
 }
 
-function modificationDetail(mod: InterceptorModification): string {
+function modificationDetail(mod: Modification): string {
   switch (mod.kind) {
     case "method_set":
       return mod.method;
@@ -479,13 +478,21 @@ function modificationDetail(mod: InterceptorModification): string {
       return mod.asset_id;
     case "tag_set":
       return `${mod.key}: ${mod.value}`;
+    case "snapshot": {
+      const sides = [mod.request !== null && t("请求"), mod.response !== null && t("响应")]
+        .filter(Boolean)
+        .join(" + ");
+      return sides;
+    }
+    default:
+      return "";
   }
 }
 
 const MOD_DETAIL_LIMIT = 200;
 
 interface ModRow {
-  mod: InterceptorModification;
+  mod: Modification;
   text: string;
   truncated: boolean;
 }
@@ -564,9 +571,13 @@ function headerCount(headers: HeaderItem[]): string {
             {{ detail.response.status }} {{ detail.response.status_text }}
           </span>
           <span class="meta-item">
-            <span class="meta-label">{{ t("来源") }}</span>{{ detail.source_addr ?? t("未知") }}
+            <span class="meta-label">{{ t("来源") }}</span
+            >{{ detail.source_addr ?? t("未知") }}
           </span>
-          <span class="meta-item"> <span class="meta-label">{{ t("阶段") }}</span>{{ detail.stage }} </span>
+          <span class="meta-item">
+            <span class="meta-label">{{ t("阶段") }}</span
+            >{{ detail.stage }}
+          </span>
           <span v-if="loading" class="refreshing text-faint">{{ t("刷新中…") }}</span>
           <span class="summary-spacer" />
           <button
@@ -608,7 +619,9 @@ function headerCount(headers: HeaderItem[]): string {
         :detail="detail"
         :active="active"
       />
-      <div v-else-if="isWebSocket" class="state-hint">{{ t("当前接口不支持读取 WebSocket 消息") }}</div>
+      <div v-else-if="isWebSocket" class="state-hint">
+        {{ t("当前接口不支持读取 WebSocket 消息") }}
+      </div>
       <section v-if="!isWebSocket && breakpoint" class="breakpoint-panel">
         <div class="breakpoint-actions">
           <span class="breakpoint-state">
@@ -764,10 +777,12 @@ function headerCount(headers: HeaderItem[]): string {
                 <span class="execution-name mono" :title="scriptTitle(execution)">{{
                   scriptLabel(execution)
                 }}</span>
-                <span v-if="execution.origin === 'temporary'" class="execution-origin">{{ t("临时") }}</span>
-                <span v-else-if="!execution.completed" class="execution-origin waiting"
-                  >{{ t("暂停中") }}</span
-                >
+                <span v-if="execution.origin === 'temporary'" class="execution-origin">{{
+                  t("临时")
+                }}</span>
+                <span v-else-if="!execution.completed" class="execution-origin waiting">{{
+                  t("暂停中")
+                }}</span>
                 <span class="execution-hash mono">{{ execution.script_hash.slice(0, 12) }}</span>
                 <span class="execution-actions">
                   <button class="execution-open" @click="openExecution(execution)">
@@ -814,10 +829,12 @@ function headerCount(headers: HeaderItem[]): string {
                 <span class="execution-name mono" :title="scriptTitle(execution)">{{
                   scriptLabel(execution)
                 }}</span>
-                <span v-if="execution.origin === 'temporary'" class="execution-origin">{{ t("临时") }}</span>
-                <span v-else-if="!execution.completed" class="execution-origin waiting"
-                  >{{ t("暂停中") }}</span
-                >
+                <span v-if="execution.origin === 'temporary'" class="execution-origin">{{
+                  t("临时")
+                }}</span>
+                <span v-else-if="!execution.completed" class="execution-origin waiting">{{
+                  t("暂停中")
+                }}</span>
                 <span class="execution-hash mono">{{ execution.script_hash.slice(0, 12) }}</span>
                 <span class="execution-actions">
                   <button class="execution-open" @click="openExecution(execution)">

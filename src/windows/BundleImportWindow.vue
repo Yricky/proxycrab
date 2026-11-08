@@ -66,7 +66,10 @@ const canSubmit = computed(() => {
 const footerHint = computed(() => {
   if (!result.value)
     return importable.value.length
-      ? t("已选 {selected}/{total}", { selected: selected.value.length, total: importable.value.length })
+      ? t("已选 {selected}/{total}", {
+          selected: selected.value.length,
+          total: importable.value.length,
+        })
       : t("没有可导入的项");
   if (result.value.import_id) return t("确认后整批导入，失败时回滚");
   return t("导入完成");
@@ -132,15 +135,13 @@ function openSession(sessionId: number): void {
       <Io5ArchiveOutline :size="18" class="bundle-file-icon" />
       <div class="bundle-file-text">
         <strong :title="file.name">{{ file.name }}</strong>
-        <span
-          >{{
-            t("{size} · {intents} 个意图 · {importable} 个可导入", {
-              size: formatBytes(file.size),
-              intents: preview.intents.length,
-              importable: importable.length,
-            })
-          }}</span
-        >
+        <span>{{
+          t("{size} · {intents} 个意图 · {importable} 个可导入", {
+            size: formatBytes(file.size),
+            intents: preview.intents.length,
+            importable: importable.length,
+          })
+        }}</span>
       </div>
     </header>
 
@@ -163,7 +164,9 @@ function openSession(sessionId: number): void {
           <span class="intent-title">
             <strong>{{ intent.name }}</strong>
             <span class="badge">{{ intent.type === "session" ? "Session" : intent.type }}</span>
-            <span v-if="intent.type !== 'session'" class="badge muted">{{ t("当前版本不支持") }}</span>
+            <span v-if="intent.type !== 'session'" class="badge muted">{{
+              t("当前版本不支持")
+            }}</span>
           </span>
           <span class="intent-meta mono">{{ intent.id }}</span>
           <span v-if="intent.assets.length" class="intent-meta">
@@ -175,18 +178,20 @@ function openSession(sessionId: number): void {
 
     <template v-else-if="result.import_id">
       <div class="conflict-summary">
-        <span
-          >{{
-            t("相同 {same} · 新增 {added} · 冲突 {conflict}", {
-              same: counts.same,
-              added: counts.added,
-              conflict: conflicts.length,
-            })
-          }}</span
-        >
+        <span>{{
+          t("相同 {same} · 新增 {added} · 冲突 {conflict}", {
+            same: counts.same,
+            added: counts.added,
+            conflict: conflicts.length,
+          })
+        }}</span>
         <span class="conflict-bulk">
-          <button class="btn" :disabled="busy" @click="chooseAll('keep')">{{ t("全部复用") }}</button>
-          <button class="btn" :disabled="busy" @click="chooseAll('overwrite')">{{ t("全部覆盖") }}</button>
+          <button class="btn" :disabled="busy" @click="chooseAll('keep')">
+            {{ t("全部复用") }}
+          </button>
+          <button class="btn" :disabled="busy" @click="chooseAll('overwrite')">
+            {{ t("全部覆盖") }}
+          </button>
         </span>
       </div>
       <div class="conflict-table">
@@ -197,7 +202,11 @@ function openSession(sessionId: number): void {
         <template v-for="fileStatus in conflicts" :key="fileStatus.path">
           <div class="conflict-row">
             <span class="conflict-path mono">{{ fileStatus.path }}</span>
-            <div class="mode-group" role="group" :aria-label="t('{path} 的处理方式', { path: fileStatus.path })">
+            <div
+              class="mode-group"
+              role="group"
+              :aria-label="t('{path} 的处理方式', { path: fileStatus.path })"
+            >
               <button
                 v-for="mode in modesFor(fileStatus)"
                 :key="mode.value"
@@ -220,7 +229,7 @@ function openSession(sessionId: number): void {
             <input
               v-model="choices[fileStatus.path]!.name"
               class="input"
-:placeholder="t('新脚本名称（不含 .lua）')"
+              :placeholder="t('新脚本名称（不含 .lua）')"
               :disabled="busy"
               :aria-label="t('{path} 的新名称', { path: fileStatus.path })"
             />

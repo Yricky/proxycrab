@@ -7,7 +7,8 @@ import { scriptTitle } from "../utils/script-label";
 // Central launchers for floating windows. Keeping component imports here
 // avoids spreading window ids / default sizes across the UI code.
 import { windowsStore } from "../stores/windows";
-import type { InterceptorExecution, InterceptorKind } from "../api/types";
+import type { InterceptorExecution } from "../api/generated/InterceptorExecution";
+import type { InterceptorKind } from "../api/generated/InterceptorKind";
 import LogDetailWindow from "./LogDetailWindow.vue";
 import InterceptorManagerWindow from "./InterceptorManagerWindow.vue";
 import ColumnManagerWindow from "./ColumnManagerWindow.vue";

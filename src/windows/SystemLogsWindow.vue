@@ -2,7 +2,8 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { Io5Refresh, Io5Trash } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type { HttpApiChange, SystemLogEntry } from "../api/types";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import type { SystemLogEntry } from "../api/generated/SystemLogEntry";
 import VirtualList from "../components/VirtualList.vue";
 import { reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
@@ -102,9 +103,9 @@ onUnmounted(() => {
   <div class="sl-root">
     <div class="sl-toolbar">
       <select v-model="levelFilter" class="select" :title="t('按级别过滤')">
-        <option v-for="lv in LEVELS" :key="lv" :value="lv">{{
-          lv === "all" ? t("全部") : lv
-        }}</option>
+        <option v-for="lv in LEVELS" :key="lv" :value="lv">
+          {{ lv === "all" ? t("全部") : lv }}
+        </option>
       </select>
       <label class="sl-auto">
         <button

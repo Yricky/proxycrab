@@ -16,7 +16,7 @@ import {
   openRoutingManager,
   openSessionExportShare,
 } from "../windows/launcher";
-import type { SessionMetadata } from "../api/types";
+import type { SessionMetadata } from "../api/generated/SessionMetadata";
 import {
   Io5Add,
   Io5Archive,
@@ -195,8 +195,7 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
       action: () => void toggleActive(session),
     },
     {
-      label:
-        sessionsStore.activeSessionId === session.id ? t("归档（请先取消活跃）") : t("归档"),
+      label: sessionsStore.activeSessionId === session.id ? t("归档（请先取消活跃）") : t("归档"),
       icon: Io5Archive,
       dividerBefore: true,
       disabled: sessionsStore.activeSessionId === session.id,
@@ -253,7 +252,12 @@ watch(sidebarWidth, updatePopupPos);
             </span>
             <IoArrowForwardCircle v-else :size="15" />
           </button>
-          <button class="btn icon" :title="t('新建会话')" :disabled="creating" @click="createSession">
+          <button
+            class="btn icon"
+            :title="t('新建会话')"
+            :disabled="creating"
+            @click="createSession"
+          >
             <Io5Add :size="16" />
           </button>
         </div>
@@ -311,7 +315,7 @@ watch(sidebarWidth, updatePopupPos);
         <input
           v-model="editName"
           class="input"
-:placeholder="t('会话名称')"
+          :placeholder="t('会话名称')"
           autofocus
           @keyup.enter="submitEdit"
           @keyup.esc="closeEdit"
@@ -319,12 +323,14 @@ watch(sidebarWidth, updatePopupPos);
         <input
           v-model="editDesc"
           class="input"
-:placeholder="t('描述（可选）')"
+          :placeholder="t('描述（可选）')"
           @keyup.enter="submitEdit"
           @keyup.esc="closeEdit"
         />
         <div class="sb-edit-actions">
-          <button class="btn primary" :disabled="!editName.trim()" @click="submitEdit">{{ t("保存") }}</button>
+          <button class="btn primary" :disabled="!editName.trim()" @click="submitEdit">
+            {{ t("保存") }}
+          </button>
         </div>
       </div>
     </Teleport>

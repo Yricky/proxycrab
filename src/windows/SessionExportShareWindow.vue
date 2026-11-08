@@ -5,7 +5,8 @@ import RedactionSelect from "../components/RedactionSelect.vue";
 import ShareAssetTree from "../components/ShareAssetTree.vue";
 import { useBackend } from "../api";
 import { t } from "../i18n";
-import type { AssetMetadata, HttpApiChange, SessionShareState } from "../api/types";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import type { AssetMetadata, SessionShareState } from "../api/types";
 import { sessionsStore } from "../stores/sessions";
 import { appStore, reportError } from "../stores/app";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
@@ -118,10 +119,7 @@ async function togglePageShare(): Promise<void> {
       appStore.toast(t("链接分享已开启"), "success");
     }
   } catch (error) {
-    reportError(
-      error,
-      pageShare.value.enabled ? t("关闭链接分享失败") : t("开启链接分享失败"),
-    );
+    reportError(error, pageShare.value.enabled ? t("关闭链接分享失败") : t("开启链接分享失败"));
   } finally {
     pageMutating.value = false;
   }
@@ -179,8 +177,7 @@ function setRules(rules: string[]): void {
 
 const configHint = computed(() => {
   if (!pageShare.value?.enabled) return t("开启链接分享后可配置。");
-  if (configShare.value === null)
-    return t("开启后，分享包内附带此 Session 的配置与脚本。");
+  if (configShare.value === null) return t("开启后，分享包内附带此 Session 的配置与脚本。");
   return "";
 });
 
@@ -288,7 +285,7 @@ onBeforeUnmount(() => {
       </div>
       <RedactionSelect
         v-if="backend.listRedactionScripts"
-:inherit-label="t('跟随本机无 API Key')"
+        :inherit-label="t('跟随本机无 API Key')"
         :inherited-value-label="
           pageShare?.redaction_identity ? t('跟随 API Key 脱敏配置') : undefined
         "

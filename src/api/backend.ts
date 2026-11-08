@@ -1,68 +1,68 @@
 import type { FileWriter } from "./save-file";
+import type { ActiveSession } from "./generated/ActiveSession";
+import type { AgentsPresetState } from "./generated/AgentsPresetState";
+import type { AppConfig } from "./generated/AppConfig";
+import type { BreakpointDetailPayload } from "./generated/BreakpointDetailPayload";
+import type { BreakpointQuery } from "./generated/BreakpointQuery";
+import type { BreakpointSummary } from "./generated/BreakpointSummary";
+import type { BypassPage } from "./generated/BypassPage";
+import type { BypassQuery } from "./generated/BypassQuery";
+import type { CertificateResponse } from "./generated/CertificateResponse";
+import type { CreateAgentsPresetRequest } from "./generated/CreateAgentsPresetRequest";
+import type { CreateSessionRequest } from "./generated/CreateSessionRequest";
+import type { DebugFilterScriptRequest } from "./generated/DebugFilterScriptRequest";
+import type { DeleteCount } from "./generated/DeleteCount";
+import type { ExecuteTemporaryScriptRequest } from "./generated/ExecuteTemporaryScriptRequest";
+import type { ExtendBreakpointRequest } from "./generated/ExtendBreakpointRequest";
+import type { InterceptorCreateRequest } from "./generated/InterceptorCreateRequest";
+import type { InterceptorScriptContent } from "./generated/InterceptorScriptContent";
+import type { InterceptorKind } from "./generated/InterceptorKind";
+import type { InterceptorLibraryList } from "./generated/InterceptorLibraryList";
+import type { InterceptorSnapshot } from "./generated/InterceptorSnapshot";
+import type { InterceptorUpdateRequest } from "./generated/InterceptorUpdateRequest";
+import type { HttpServiceStatus } from "./generated/HttpServiceStatus";
+import type { HttpApiChange } from "./generated/HttpApiChange";
+import type { LogDetail } from "./generated/LogDetail";
+import type { LogIdsPayload } from "./generated/LogIdsPayload";
+import type { LogIdsRequest } from "./generated/LogIdsRequest";
+import type { LogViewsPayload } from "./generated/LogViewsPayload";
+import type { LogViewsRequest } from "./generated/LogViewsRequest";
+import type { ProxyStatus } from "./generated/ProxyStatus";
+import type { ReplaceSessionInterceptorsRequest } from "./generated/ReplaceSessionInterceptorsRequest";
+import type { ReplaceSessionViewRequest } from "./generated/ReplaceSessionViewRequest";
+import type { ReplayRequestPayload } from "./generated/ReplayRequestPayload";
+import type { ReplayResult } from "./generated/ReplayResult";
+import type { RoutingSelection } from "./generated/RoutingSelection";
+import type { ScriptRequest } from "./generated/ScriptRequest";
+import type { SessionFilter } from "./generated/SessionFilter";
+import type { SessionMetadata } from "./generated/SessionMetadata";
+import type { SessionsPayload } from "./generated/SessionsPayload";
+import type { SessionInterceptorsPayload } from "./generated/SessionInterceptorsPayload";
+import type { SessionViewPayload } from "./generated/SessionViewPayload";
+import type { SystemLogEntry } from "./generated/SystemLogEntry";
+import type { SystemLogsQuery } from "./generated/SystemLogsQuery";
+import type { UpdateScriptRequest } from "./generated/UpdateScriptRequest";
+import type { UpdateAgentsPresetRequest } from "./generated/UpdateAgentsPresetRequest";
+import type { UpdateSessionRequest } from "./generated/UpdateSessionRequest";
+import type { TemporaryExecutionResult } from "./generated/TemporaryExecutionResult";
 import type {
-  ActiveSession,
   ApiActionView,
-  AgentsPresetState,
-  AppConfig,
   AssetMetadata,
-  BreakpointDetailPayload,
-  BreakpointQuery,
-  BreakpointSummary,
-  BypassPage,
-  BypassQuery,
-  CertificateResponse,
   ClashConfig,
   ClashSubscriptionState,
   CreatedApiKey,
-  CreateAgentsPresetRequest,
-  CreateSessionRequest,
-  DebugFilterScriptRequest,
-  DeleteCount,
-  ExecuteTemporaryScriptRequest,
-  ExtendBreakpointRequest,
-  InterceptorCreateRequest,
-  InterceptorContent,
-  InterceptorKind,
-  InterceptorLibraryList,
-  InterceptorSnapshotPayload,
-  InterceptorUpdateRequest,
-  HttpServiceStatus,
-  HttpApiChange,
   IdentityPermissions,
-  LogDetail,
-  LogIdsPayload,
-  LogIdsRequest,
-  LogViewsPayload,
-  LogViewsRequest,
-  ProxyStatus,
   PendingApproval,
   PermissionEntry,
   PermissionIdentitySummary,
-  ReplaceSessionInterceptorsRequest,
-  ReplaceSessionViewRequest,
-  ReplayRequestPayload,
-  ReplayResult,
   ResolveApprovalRequest,
-  RoutingSelection,
   SaveFileRequest,
   Script,
-  ScriptRequest,
-  SessionFilter,
-  SessionMetadata,
-  SessionsPayload,
   SessionShareState,
   SessionSharesPayload,
   SessionShareConfig,
-  SessionInterceptorsPayload,
-  SessionViewPayload,
-  SystemLogEntry,
-  SystemLogsQuery,
   SkillManagerState,
   SkillSaveResult,
-  UpdateScriptRequest,
-  UpdateAgentsPresetRequest,
-  UpdateSessionRequest,
-  TemporaryExecutionResult,
   WorkspacePaths,
 } from "./types";
 import type { BodySide, BodyTarget, LoadedBody } from "./body";
@@ -188,12 +188,12 @@ export interface Backend {
     sessionId: number | null,
     id: number,
     executionId: number,
-  ): Promise<InterceptorContent>;
+  ): Promise<InterceptorScriptContent>;
   getInterceptorSnapshot(
     sessionId: number | null,
     id: number,
     executionId: number,
-  ): Promise<InterceptorSnapshotPayload>;
+  ): Promise<InterceptorSnapshot>;
   listBreakpoints(query: BreakpointQuery): Promise<BreakpointSummary[]>;
   getBreakpoint(id: number): Promise<BreakpointDetailPayload>;
   extendBreakpoint(id: number, request: ExtendBreakpointRequest): Promise<BreakpointSummary>;

@@ -44,10 +44,7 @@ async function start() {
   messages.value = [];
   progress.value = { processed: 0, total: ids.length, exported: 0, skipped: 0, warnings: 0 };
   status.value = t("选择保存位置");
-  log(
-    "info",
-    t("Session {id}，固定当前列表 {n} 条记录及排序", { id: sessionId, n: ids.length }),
-  );
+  log("info", t("Session {id}，固定当前列表 {n} 条记录及排序", { id: sessionId, n: ids.length }));
   try {
     writer = await backend.saveFile({ filename: `proxycrab-session-${sessionId}.har` });
     if (!writer) {
@@ -85,7 +82,9 @@ async function start() {
     log(signal.aborted ? "info" : "error", `${status.value}：${errorMessage(error)}`);
     await writer
       ?.markAsError()
-      .catch((cleanupError) => log("error", t("清理失败：{error}", { error: errorMessage(cleanupError) })));
+      .catch((cleanupError) =>
+        log("error", t("清理失败：{error}", { error: errorMessage(cleanupError) })),
+      );
   } finally {
     writer = null;
     running.value = false;
@@ -95,7 +94,9 @@ async function start() {
 function cancel() {
   controller?.abort();
   if (running.value) status.value = t("正在取消导出");
-  void writer?.markAsError().catch((error) => log("error", t("清理失败：{error}", { error: errorMessage(error) })));
+  void writer
+    ?.markAsError()
+    .catch((error) => log("error", t("清理失败：{error}", { error: errorMessage(error) })));
 }
 onBeforeUnmount(() => {
   disposed = true;
@@ -118,20 +119,20 @@ onBeforeUnmount(() => {
         </button>
       </span>
     </div>
-    <p class="export-hint">{{ t("按启动时的筛选结果和顺序导出。Body 读取失败将写入失败说明并继续。") }}</p>
+    <p class="export-hint">
+      {{ t("按启动时的筛选结果和顺序导出。Body 读取失败将写入失败说明并继续。") }}
+    </p>
     <div class="export-status" aria-live="polite">
       <strong>{{ status }}</strong>
-      <span
-        >{{
-          t("{processed}/{total} · 已写入 {exported} · 跳过 {skipped} · 警告 {warnings}", {
-            processed: progress.processed,
-            total: progress.total,
-            exported: progress.exported,
-            skipped: progress.skipped,
-            warnings: progress.warnings,
-          })
-        }}</span
-      >
+      <span>{{
+        t("{processed}/{total} · 已写入 {exported} · 跳过 {skipped} · 警告 {warnings}", {
+          processed: progress.processed,
+          total: progress.total,
+          exported: progress.exported,
+          skipped: progress.skipped,
+          warnings: progress.warnings,
+        })
+      }}</span>
     </div>
     <progress
       :value="progress.processed"

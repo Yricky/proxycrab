@@ -133,7 +133,7 @@ onMounted(async () => {
       <input
         v-model="newPath"
         class="input mono sm-input"
-:placeholder="t('添加父目录，例如 ~/.agents/skills')"
+        :placeholder="t('添加父目录，例如 ~/.agents/skills')"
         spellcheck="false"
         @keyup.enter="addPath"
       />
@@ -144,7 +144,9 @@ onMounted(async () => {
     </div>
 
     <div class="sm-list">
-      <div v-if="draftPaths.length === 0" class="sm-empty text-faint">{{ t("暂无受管理路径") }}</div>
+      <div v-if="draftPaths.length === 0" class="sm-empty text-faint">
+        {{ t("暂无受管理路径") }}
+      </div>
       <div v-for="(path, index) in draftPaths" :key="path" class="sm-item">
         <div class="sm-path-wrap">
           <div class="mono sm-path" :title="path">{{ path }}</div>

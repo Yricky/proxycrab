@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { useBackend } from "../api";
-import type { InterceptorKind } from "../api/types";
+import type { InterceptorKind } from "../api/generated/InterceptorKind";
 import { appStore, reportError } from "../stores/app";
 import { breakpointsStore } from "../stores/breakpoints";
 import { t } from "../i18n";

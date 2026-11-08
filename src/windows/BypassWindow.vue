@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, watch } from "vue";
 import { Io5Refresh, Io5Trash } from "vue-icons-plus/io5";
-import type { BypassEntry, HttpApiChange } from "../api/types";
+import type { BypassEntry } from "../api/generated/BypassEntry";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
 import VirtualList from "../components/VirtualList.vue";
 import { appStore } from "../stores/app";
 import { bypassStore } from "../stores/bypass";
@@ -119,7 +120,9 @@ onBeforeUnmount(() => {
       <button class="btn" v-if="selectedDeletableCount > 0" @click="removeSelected">
         {{ t("删除选中") }}
       </button>
-      <button class="btn danger" @click="clearTerminal"><Io5Trash :size="14" />{{ t("清空") }}</button>
+      <button class="btn danger" @click="clearTerminal">
+        <Io5Trash :size="14" />{{ t("清空") }}
+      </button>
     </div>
 
     <div class="bp-header bp-grid">

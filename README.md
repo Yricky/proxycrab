@@ -235,6 +235,7 @@ proxycrab-cli install-skill --parent ~/.agents/skills
 | `src-tauri` | 桌面应用集成 |
 | `cli-app` | CLI 与内嵌浏览器管理服务 |
 | `src` | Vue 管理界面与 Session 分享页面 |
+| `src/api/generated` | ts-rs 从 Rust 类型生成的 TS 绑定（`cargo test --workspace` 产出，提交入库，CI 校验未漂移） |
 | `skills/proxycrab` | Agent Skill、脚本与参考文档 |
 
 安装前端依赖：
@@ -278,7 +279,7 @@ Release 附件直接提供 Linux AppImage、macOS DMG、Windows EXE / MSI 安装
 
 ## 支持作者
 
-ProcyCrab采用 MIT 协议开源，完全免费使用。如果觉得这款软件对你有用，可以通过[以下渠道](docs/support.md)支持一下作者
+ProxyCrab采用 MIT 协议开源，完全免费使用。如果觉得这款软件对你有用，可以通过[以下渠道](docs/support.md)支持一下作者
 
 ## 友情链接
 

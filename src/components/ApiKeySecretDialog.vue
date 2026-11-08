@@ -117,7 +117,9 @@ function close(): void {
             <span>{{ t("我已保存此 API Key") }}</span>
           </label>
           <footer>
-            <button class="btn primary" :disabled="!acknowledged" @click="close">{{ t("完成") }}</button>
+            <button class="btn primary" :disabled="!acknowledged" @click="close">
+              {{ t("完成") }}
+            </button>
           </footer>
         </template>
       </div>

@@ -67,7 +67,9 @@ function clearAll(): void {
     </div>
 
     <div class="b64-buttons">
-      <button class="btn primary" @click="encode"><Io5ArrowDown :size="14" /> {{ t("编码") }}</button>
+      <button class="btn primary" @click="encode">
+        <Io5ArrowDown :size="14" /> {{ t("编码") }}
+      </button>
       <button class="btn" @click="decode"><Io5ArrowUp :size="14" /> {{ t("解码") }}</button>
       <button class="btn" @click="clearAll"><Io5Trash :size="14" /> {{ t("清空") }}</button>
       <span class="b64-spacer" />

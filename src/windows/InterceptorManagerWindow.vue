@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import { useBackend } from "../api";
 import { scriptTitle } from "../utils/script-label";
-import type { InterceptorKind } from "../api/types";
+import type { InterceptorKind } from "../api/generated/InterceptorKind";
 import { t } from "../i18n";
 import ScriptLibraryManager, {
   type ScriptLibraryConfig,

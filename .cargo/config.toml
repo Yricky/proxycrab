@@ -1,0 +1,4 @@
+# ts-rs：cargo test 时把 TS 绑定导出到前端目录（生成物提交入库，CI 用 git diff 校验未漂移）
+[env]
+TS_RS_EXPORT_DIR = { value = "src/api/generated", relative = true }
+TS_RS_LARGE_INT = "number"

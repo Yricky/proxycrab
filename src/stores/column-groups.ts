@@ -1,6 +1,9 @@
 import { reactive } from "vue";
 import type { Backend } from "../api/backend";
-import type { CaptureOutcome, Column, FilterColumn, LogViewRow } from "../api/types";
+import type { CaptureOutcome } from "../api/generated/CaptureOutcome";
+import type { Column } from "../api/generated/Column";
+import type { FilterColumn } from "../api/generated/FilterColumn";
+import type { LogViewRow } from "../api/generated/LogViewRow";
 import {
   columnGroupKey,
   copyFilterColumn,

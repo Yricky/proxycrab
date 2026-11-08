@@ -3,7 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { Io5Add, Io5CheckmarkCircle, Io5Refresh, Io5Save, Io5Trash } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import { t } from "../i18n";
-import type { AgentsPreset, AgentsPresetState } from "../api/types";
+import type { AgentsPreset } from "../api/generated/AgentsPreset";
+import type { AgentsPresetState } from "../api/generated/AgentsPresetState";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
@@ -234,7 +235,7 @@ onBeforeUnmount(() => {
         <input
           v-model="newPresetName"
           class="input"
-:placeholder="t('新预设名称')"
+          :placeholder="t('新预设名称')"
           @keyup.enter="createPreset"
         />
         <button class="btn icon primary" :title="t('新建预设')" @click="createPreset">
@@ -254,7 +255,11 @@ onBeforeUnmount(() => {
           @keydown.enter="selectPreset(preset)"
         >
           <span class="ap-row-state">
-            <Io5CheckmarkCircle v-if="state.active_id === preset.id" :size="14" :title="t('当前激活')" />
+            <Io5CheckmarkCircle
+              v-if="state.active_id === preset.id"
+              :size="14"
+              :title="t('当前激活')"
+            />
           </span>
           <span class="ap-row-name" :title="preset.name">{{ preset.name }}</span>
           <button
@@ -280,7 +285,12 @@ onBeforeUnmount(() => {
       </div>
       <template v-if="selectedPreset">
         <div class="ap-toolbar">
-          <input v-model="draftName" class="input ap-name" :aria-label="t('预设名称')" maxlength="128" />
+          <input
+            v-model="draftName"
+            class="input ap-name"
+            :aria-label="t('预设名称')"
+            maxlength="128"
+          />
           <span v-if="selectedIsActive" class="ap-active-label">{{ t("当前激活") }}</span>
           <span v-if="dirty" class="ap-dirty">{{ t("未保存") }}</span>
           <span class="ap-spacer" />
@@ -300,7 +310,10 @@ onBeforeUnmount(() => {
           @update:model-value="draftContent = $event"
         />
         <div class="ap-statusbar">
-          <span>{{ t("当前激活内容通过") }} <code>GET /api/agents.md</code> {{ t("提供给 Agent") }}</span>
+          <span
+            >{{ t("当前激活内容通过") }} <code>GET /api/agents.md</code>
+            {{ t("提供给 Agent") }}</span
+          >
           <span class="mono">{{ selectedPreset.id }}.md</span>
         </div>
       </template>

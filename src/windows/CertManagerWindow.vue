@@ -5,7 +5,9 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Io5Copy, Io5Download, Io5Refresh, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import { t } from "../i18n";
-import type { ClashSubscriptionState, HttpApiChange, HttpServiceStatus } from "../api/types";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import type { HttpServiceStatus } from "../api/generated/HttpServiceStatus";
+import type { ClashSubscriptionState } from "../api/types";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
@@ -290,9 +292,7 @@ onBeforeUnmount(() => {
         <div class="cert-download-info">
           <h3 id="cert-download-title">{{ t("从其他设备下载") }}</h3>
           <p class="text-secondary">
-            {{
-              t("让手机或其他设备能访问所选 IP，打开以下链接或扫描二维码，无需先连接代理。")
-            }}
+            {{ t("让手机或其他设备能访问所选 IP，打开以下链接或扫描二维码，无需先连接代理。") }}
           </p>
           <div v-if="certificateUrl" class="cert-download-link">
             <a :href="certificateUrl" class="mono" @click.prevent="openDownloadUrl">

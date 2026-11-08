@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { HttpApiChange } from "../api/types";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
 const mocks = vi.hoisted(() => ({
   subscribe: vi.fn(),
   refreshShares: vi.fn(),

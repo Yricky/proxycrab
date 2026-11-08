@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
 import { Io5ArrowUndo, Io5Refresh, Io5Trash } from "vue-icons-plus/io5";
-import type { SessionMetadata } from "../api/types";
+import type { SessionMetadata } from "../api/generated/SessionMetadata";
 import { appStore } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 import { sessionsStore } from "../stores/sessions";

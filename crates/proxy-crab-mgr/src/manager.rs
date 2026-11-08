@@ -1075,7 +1075,7 @@ impl ProxyCrabManager for MitmManager {
                     id,
                     created_at: item.created_at,
                     updated_at: item.updated_at,
-                    outcome: outcome_name(item.outcome).into(),
+                    outcome: item.outcome,
                     cells,
                 });
             }
@@ -2079,7 +2079,7 @@ fn log_detail_from_capture(detail: CaptureDetail) -> LogDetail {
         source_type: "ip".into(),
         source_addr: Some(detail.summary.source),
         stage: detail.summary.stage,
-        outcome: outcome_name(detail.summary.outcome).into(),
+        outcome: detail.summary.outcome,
         error: detail.summary.error,
         request: RequestDetail {
             method: detail.summary.request.method,
@@ -2107,15 +2107,6 @@ fn status_text(status: u16) -> String {
         .and_then(|status| status.canonical_reason())
         .unwrap_or_default()
         .to_owned()
-}
-
-fn outcome_name(outcome: CaptureOutcome) -> &'static str {
-    match outcome {
-        CaptureOutcome::InProgress => "in_progress",
-        CaptureOutcome::Success => "success",
-        CaptureOutcome::Failed => "failed",
-        CaptureOutcome::Tunneled => "tunneled",
-    }
 }
 
 fn interceptor_script_kind(kind: InterceptorKind) -> ScriptKind {
@@ -2766,7 +2757,10 @@ mod tests {
             ]
         );
         assert!(payload.rows[0].created_at > 0);
-        assert_eq!(payload.rows[0].outcome, "in_progress");
+        assert_eq!(
+            payload.rows[0].outcome,
+            proxy_crab_mitm::model::CaptureOutcome::InProgress
+        );
         assert_eq!(payload.exceptions.len(), 2);
         assert!(payload.exceptions.iter().any(|error| {
             error.id == second

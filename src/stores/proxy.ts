@@ -1,6 +1,7 @@
 import { reactive } from "vue";
 import { runtimeBackend as backend } from "../api/runtime-backend";
-import type { AppConfig, ProxyStatus } from "../api/types";
+import type { AppConfig } from "../api/generated/AppConfig";
+import type { ProxyStatus } from "../api/generated/ProxyStatus";
 import { reportError } from "./app";
 import { t } from "../i18n";
 

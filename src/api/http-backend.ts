@@ -1,47 +1,48 @@
 import type { Backend } from "./backend";
 import { t } from "../i18n";
 import { BackendError } from "./backend-error";
+import type { ApiError } from "./types";
 import { downloadBodyFromBase, fetchBodyFromBase, fetchWebSocketBodyFromBase } from "./body";
 import { saveFileInWebview } from "./save-file";
+import type { ActiveSession } from "./generated/ActiveSession";
+import type { BreakpointQuery } from "./generated/BreakpointQuery";
+import type { BypassQuery } from "./generated/BypassQuery";
+import type { CreateAgentsPresetRequest } from "./generated/CreateAgentsPresetRequest";
+import type { CreateSessionRequest } from "./generated/CreateSessionRequest";
+import type { DebugFilterScriptRequest } from "./generated/DebugFilterScriptRequest";
+import type { ExecuteTemporaryScriptRequest } from "./generated/ExecuteTemporaryScriptRequest";
+import type { ExtendBreakpointRequest } from "./generated/ExtendBreakpointRequest";
+import type { HttpApiChange } from "./generated/HttpApiChange";
+import type { HttpServiceStatus } from "./generated/HttpServiceStatus";
+import type { InterceptorCreateRequest } from "./generated/InterceptorCreateRequest";
+import type { InterceptorKind } from "./generated/InterceptorKind";
+import type { InterceptorSnapshot } from "./generated/InterceptorSnapshot";
+import type { InterceptorUpdateRequest } from "./generated/InterceptorUpdateRequest";
+import type { LogDetail } from "./generated/LogDetail";
+import type { LogIdsRequest } from "./generated/LogIdsRequest";
+import type { LogViewsRequest } from "./generated/LogViewsRequest";
+import type { ManagerError } from "./generated/ManagerError";
+import type { ReplaceSessionInterceptorsRequest } from "./generated/ReplaceSessionInterceptorsRequest";
+import type { ReplaceSessionViewRequest } from "./generated/ReplaceSessionViewRequest";
+import type { ReplayRequestPayload } from "./generated/ReplayRequestPayload";
+import type { ReplayResult } from "./generated/ReplayResult";
+import type { RoutingSelection } from "./generated/RoutingSelection";
+import type { ScriptRequest } from "./generated/ScriptRequest";
+import type { SystemLogsQuery } from "./generated/SystemLogsQuery";
+import type { UpdateAgentsPresetRequest } from "./generated/UpdateAgentsPresetRequest";
+import type { UpdateScriptRequest } from "./generated/UpdateScriptRequest";
+import type { UpdateSessionRequest } from "./generated/UpdateSessionRequest";
 import type {
-  ActiveSession,
   ApiActionView,
   AssetMetadata,
-  BreakpointQuery,
-  BypassQuery,
   ClashConfig,
   CreatedApiKey,
-  CreateAgentsPresetRequest,
-  CreateSessionRequest,
-  DebugFilterScriptRequest,
-  ExecuteTemporaryScriptRequest,
-  ExtendBreakpointRequest,
-  HttpApiChange,
-  HttpServiceStatus,
   IdentityPermissions,
-  InterceptorCreateRequest,
-  InterceptorKind,
-  InterceptorSnapshotPayload,
-  InterceptorUpdateRequest,
-  LogDetail,
-  LogIdsRequest,
-  LogViewsRequest,
-  ManagerError,
   PermissionEntry,
   PermissionIdentitySummary,
-  ReplaceSessionInterceptorsRequest,
-  ReplaceSessionViewRequest,
-  ReplayRequestPayload,
-  ReplayResult,
-  RoutingSelection,
   SessionShareState,
   SessionSharesPayload,
   SessionShareConfig,
-  ScriptRequest,
-  SystemLogsQuery,
-  UpdateAgentsPresetRequest,
-  UpdateScriptRequest,
-  UpdateSessionRequest,
   WorkspacePaths,
 } from "./types";
 
@@ -276,7 +277,7 @@ export function createHttpBackend(
         throw new BackendError({ code: "network_error", message: String(cause) });
       }
       if (!response.ok) {
-        let error: ManagerError = {
+        let error: ApiError = {
           code: `http_${response.status}`,
           message: `HTTP ${response.status}`,
         };
@@ -294,7 +295,7 @@ export function createHttpBackend(
       };
     },
     getInterceptorSnapshot: (sessionId, id, executionId) =>
-      call<InterceptorSnapshotPayload>(
+      call<InterceptorSnapshot>(
         query(`/api/logs/${id}/interceptors/${executionId}/snapshot`, {
           session_id: sessionId,
         }),

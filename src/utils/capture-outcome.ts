@@ -1,4 +1,5 @@
-import type { CaptureOutcome, ProxyStatus } from "../api/types";
+import type { CaptureOutcome } from "../api/generated/CaptureOutcome";
+import type { ProxyStatus } from "../api/generated/ProxyStatus";
 
 export function isStaleByProxyRun(
   outcome: CaptureOutcome,

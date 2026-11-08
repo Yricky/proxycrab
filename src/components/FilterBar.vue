@@ -13,13 +13,11 @@ import {
 } from "vue-icons-plus/io5";
 import ColumnGroupPopup from "./ColumnGroupPopup.vue";
 import { useBackend } from "../api";
-import type {
-  FilterColumn,
-  FilterOption,
-  HttpApiChange,
-  Script,
-  SessionFilter,
-} from "../api/types";
+import type { FilterColumn } from "../api/generated/FilterColumn";
+import type { FilterOption } from "../api/generated/FilterOption";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import type { SessionFilter } from "../api/generated/SessionFilter";
+import type { Script } from "../api/types";
 import { reportError } from "../stores/app";
 import { cloneSessionFilter, emptySessionFilter } from "../stores/logs";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
@@ -86,14 +84,18 @@ const targetLabel = computed(() => {
   const option = draft.value.option;
   if (!option) return t("未选择");
   if (option.kind === "script")
-    return t("过滤脚本 · {name}", { name: scriptLabelFor(filterScripts.value, option.script_name) });
+    return t("过滤脚本 · {name}", {
+      name: scriptLabelFor(filterScripts.value, option.script_name),
+    });
   if (option.column.kind === "script") {
-    return t("自定义列 · {name}", { name: scriptLabelFor(columnScripts.value, option.column.script_name) });
+    return t("自定义列 · {name}", {
+      name: scriptLabelFor(columnScripts.value, option.column.script_name),
+    });
   }
   return t("列 · {name}", {
-      name:
-        BUILTIN_COLUMNS.find((item) => item.kind === option.column.kind)?.label ?? option.column.kind,
-    });
+    name:
+      BUILTIN_COLUMNS.find((item) => item.kind === option.column.kind)?.label ?? option.column.kind,
+  });
 });
 const placeholder = computed(() =>
   draft.value.option?.kind === "script"
@@ -423,7 +425,9 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="fb-section">
-          <div class="fb-section-heading"><span>{{ t("过滤脚本") }}</span></div>
+          <div class="fb-section-heading">
+            <span>{{ t("过滤脚本") }}</span>
+          </div>
           <div v-if="filterScripts.length === 0" class="fb-empty">{{ t("暂无过滤脚本") }}</div>
           <button
             v-for="script in filterScripts"

@@ -1,6 +1,8 @@
 import { expect, test } from "vitest";
 import { sweepCreateRequest } from "./session-sweep.ts";
-import type { SessionInterceptorsPayload, SessionMetadata, SessionViewPayload } from "../api/types";
+import type { SessionInterceptorsPayload } from "../api/generated/SessionInterceptorsPayload";
+import type { SessionMetadata } from "../api/generated/SessionMetadata";
+import type { SessionViewPayload } from "../api/generated/SessionViewPayload";
 
 const session: SessionMetadata = {
   id: 7,

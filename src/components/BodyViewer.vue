@@ -11,7 +11,8 @@ import {
   type BodyTarget,
   type LoadedBody,
 } from "../api/body";
-import type { BodyPayload, HeaderItem } from "../api/types";
+import type { BodyPayload } from "../api/generated/BodyPayload";
+import type { HeaderItem } from "../api/generated/HeaderItem";
 import { appStore } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
 import { copyText as writeClipboardText } from "../utils/clipboard";
@@ -241,7 +242,9 @@ async function download(): Promise<void> {
     );
   } catch (cause) {
     appStore.toast(
-      t("Body 下载失败：{message}", { message: cause instanceof Error ? cause.message : String(cause) }),
+      t("Body 下载失败：{message}", {
+        message: cause instanceof Error ? cause.message : String(cause),
+      }),
       "error",
     );
   } finally {
@@ -322,8 +325,12 @@ onBeforeUnmount(() => {
           <Io5DownloadOutline :size="13" />
         </button>
         <template v-if="loaded && previewKind === 'text'">
-          <button class="tool-btn" :class="{ on: pretty }" @click="pretty = true">{{ t("格式化") }}</button>
-          <button class="tool-btn" :class="{ on: !pretty }" @click="pretty = false">{{ t("原文") }}</button>
+          <button class="tool-btn" :class="{ on: pretty }" @click="pretty = true">
+            {{ t("格式化") }}
+          </button>
+          <button class="tool-btn" :class="{ on: !pretty }" @click="pretty = false">
+            {{ t("原文") }}
+          </button>
           <button class="btn icon" :title="t('复制 Body')" @click="copy('body', editorValue)">
             <Io5Checkmark v-if="copied === 'body'" :size="13" class="text-success" />
             <Io5Copy v-else :size="13" />
@@ -333,7 +340,9 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="body.type === 'empty'" class="body-state">{{ t("无 Body") }}</div>
-    <div v-else-if="loading && !(loaded && previewKind === 'sse')" class="body-state">{{ t("加载中…") }}</div>
+    <div v-else-if="loading && !(loaded && previewKind === 'sse')" class="body-state">
+      {{ t("加载中…") }}
+    </div>
     <div v-else-if="overDefaultLimit" class="body-state body-limit">
       <Io5Warning :size="18" />
       <span>{{ t("Body 超过自动加载限制") }}</span>

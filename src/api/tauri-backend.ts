@@ -7,49 +7,49 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Backend } from "./backend";
 import { BackendError } from "./backend-error";
 import { BodyFetchError, DEFAULT_BODY_MAX_SIZE, UI_BODY_MAX_SIZE } from "./body";
+import type { ActiveSession } from "./generated/ActiveSession";
+import type { AppConfig } from "./generated/AppConfig";
+import type { CreateAgentsPresetRequest } from "./generated/CreateAgentsPresetRequest";
+import type { BreakpointQuery } from "./generated/BreakpointQuery";
+import type { BypassQuery } from "./generated/BypassQuery";
+import type { CreateSessionRequest } from "./generated/CreateSessionRequest";
+import type { DebugFilterScriptRequest } from "./generated/DebugFilterScriptRequest";
+import type { ExecuteTemporaryScriptRequest } from "./generated/ExecuteTemporaryScriptRequest";
+import type { ExtendBreakpointRequest } from "./generated/ExtendBreakpointRequest";
+import type { InterceptorCreateRequest } from "./generated/InterceptorCreateRequest";
+import type { InterceptorScriptContent } from "./generated/InterceptorScriptContent";
+import type { InterceptorKind } from "./generated/InterceptorKind";
+import type { InterceptorSnapshot } from "./generated/InterceptorSnapshot";
+import type { InterceptorUpdateRequest } from "./generated/InterceptorUpdateRequest";
+import type { HttpServiceStatus } from "./generated/HttpServiceStatus";
+import type { LogDetail } from "./generated/LogDetail";
+import type { LogIdsRequest } from "./generated/LogIdsRequest";
+import type { LogViewsRequest } from "./generated/LogViewsRequest";
+import type { ManagerError } from "./generated/ManagerError";
+import type { ReplaceSessionInterceptorsRequest } from "./generated/ReplaceSessionInterceptorsRequest";
+import type { ReplaceSessionViewRequest } from "./generated/ReplaceSessionViewRequest";
+import type { ReplayRequestPayload } from "./generated/ReplayRequestPayload";
+import type { ReplayResult } from "./generated/ReplayResult";
+import type { RoutingSelection } from "./generated/RoutingSelection";
+import type { ScriptRequest } from "./generated/ScriptRequest";
+import type { SystemLogsQuery } from "./generated/SystemLogsQuery";
+import type { UpdateScriptRequest } from "./generated/UpdateScriptRequest";
+import type { UpdateAgentsPresetRequest } from "./generated/UpdateAgentsPresetRequest";
+import type { UpdateSessionRequest } from "./generated/UpdateSessionRequest";
 import type {
-  ActiveSession,
   ApiActionView,
-  AppConfig,
   AssetMetadata,
   CreatedApiKey,
-  CreateAgentsPresetRequest,
-  BreakpointQuery,
-  BypassQuery,
   ClashConfig,
-  CreateSessionRequest,
-  DebugFilterScriptRequest,
-  ExecuteTemporaryScriptRequest,
-  ExtendBreakpointRequest,
-  InterceptorCreateRequest,
-  InterceptorContent,
-  InterceptorKind,
-  InterceptorSnapshotPayload,
-  InterceptorUpdateRequest,
-  HttpServiceStatus,
   IdentityPermissions,
-  LogDetail,
-  LogIdsRequest,
-  LogViewsRequest,
-  ManagerError,
   PendingApproval,
   PermissionEntry,
   PermissionIdentitySummary,
-  ReplaceSessionInterceptorsRequest,
-  ReplaceSessionViewRequest,
-  ReplayRequestPayload,
-  ReplayResult,
   ResolveApprovalRequest,
-  RoutingSelection,
   SaveFileRequest,
   SessionShareState,
   SessionSharesPayload,
   SessionShareConfig,
-  ScriptRequest,
-  SystemLogsQuery,
-  UpdateScriptRequest,
-  UpdateAgentsPresetRequest,
-  UpdateSessionRequest,
 } from "./types";
 
 function isManagerError(value: unknown): value is ManagerError {
@@ -113,7 +113,7 @@ export function createTauriBackend(): Backend {
     },
     subscribeChanges: async (handler) => {
       const unlisten = await listen("proxycrab://http-api-change", (event) =>
-        handler(event.payload as import("./types").HttpApiChange),
+        handler(event.payload as import("./generated/HttpApiChange").HttpApiChange),
       );
       return unlisten;
     },
@@ -220,9 +220,9 @@ export function createTauriBackend(): Backend {
         },
       }),
     getInterceptorContent: (sessionId: number | null, id: number, executionId: number) =>
-      call<InterceptorContent>("get_interceptor_content", { sessionId, id, executionId }),
+      call<InterceptorScriptContent>("get_interceptor_content", { sessionId, id, executionId }),
     getInterceptorSnapshot: (sessionId: number | null, id: number, executionId: number) =>
-      call<InterceptorSnapshotPayload>("get_interceptor_snapshot", {
+      call<InterceptorSnapshot>("get_interceptor_snapshot", {
         sessionId,
         id,
         executionId,

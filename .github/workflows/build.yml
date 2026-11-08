@@ -14,6 +14,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  bindings:
+    name: TS bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bindings
+
+      # cargo test 触发 ts-rs 导出（.cargo/config.toml 指定输出目录），
+      # 生成物提交入库；有 diff 说明 Rust 类型改了但未重新生成，红灯拦截。
+      - name: Regenerate and verify TS bindings
+        run: |
+          cargo test --workspace --quiet
+          git diff --exit-code src/api/generated
+
   desktop:
     name: Desktop (${{ matrix.platform }})
     strategy:

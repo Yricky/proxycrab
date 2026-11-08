@@ -3,12 +3,10 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useBackend } from "../api";
 import type { BodyTarget } from "../api/body";
 import { t } from "../i18n";
-import type {
-  BodyPayload,
-  HeaderItem,
-  InterceptorExecution,
-  InterceptorSnapshotPayload,
-} from "../api/types";
+import type { BodyPayload } from "../api/generated/BodyPayload";
+import type { HeaderItem } from "../api/generated/HeaderItem";
+import type { InterceptorExecution } from "../api/generated/InterceptorExecution";
+import type { InterceptorSnapshot } from "../api/generated/InterceptorSnapshot";
 import BodyViewer from "../components/BodyViewer.vue";
 import SegmentedUrl from "../components/SegmentedUrl.vue";
 import { urlSegments as buildUrlSegments } from "../utils/url-segments";
@@ -29,7 +27,7 @@ const props = defineProps<{
 }>();
 
 const backend = useBackend();
-const snapshot = ref<InterceptorSnapshotPayload | null>(null);
+const snapshot = ref<InterceptorSnapshot | null>(null);
 const loading = ref(true);
 const loadVersion = ref(0);
 const loadError = ref<string | null>(null);
@@ -154,7 +152,8 @@ const urlSegments = computed(() => (request.value ? buildUrlSegments(request.val
           </span>
           <span class="meta-item mono">{{ state.version }}</span>
           <span v-if="assetId" class="meta-item asset-meta" :title="assetId">
-            <span class="meta-label">{{ t("Body 资产") }}</span>{{ assetId }}
+            <span class="meta-label">{{ t("Body 资产") }}</span
+            >{{ assetId }}
           </span>
           <span class="summary-spacer" />
           <button

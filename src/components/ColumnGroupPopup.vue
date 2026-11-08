@@ -134,7 +134,9 @@ function updateSort(event: Event): void {
         <span class="cgp-value mono" :title="row.tooltip">{{ row.label }}</span>
         <span class="cgp-count mono">{{ row.count }}</span>
       </button>
-      <div v-if="rows.length === 0 && !cache.loading" class="cgp-empty">{{ t("暂无匹配分组") }}</div>
+      <div v-if="rows.length === 0 && !cache.loading" class="cgp-empty">
+        {{ t("暂无匹配分组") }}
+      </div>
     </div>
   </div>
 </template>

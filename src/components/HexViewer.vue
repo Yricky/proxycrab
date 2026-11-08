@@ -629,7 +629,9 @@ onBeforeUnmount(() => {
         }"
         tabindex="0"
         :aria-label="
-          t('二进制 Hex 与 ASCII 视图，拖动选择字节，Command 或 Control 加 C 复制，加 A 全选，Enter 打开右侧栏菜单')
+          t(
+            '二进制 Hex 与 ASCII 视图，拖动选择字节，Command 或 Control 加 C 复制，加 A 全选，Enter 打开右侧栏菜单',
+          )
         "
         aria-haspopup="menu"
         :aria-expanded="menuOpen"

@@ -10,7 +10,10 @@ import { openContextMenu, openMenuAt, confirmDialog, type MenuItem } from "../st
 import { openColumnManager, openLogDetail } from "../windows/launcher";
 import LogDetailWindow from "../windows/LogDetailWindow.vue";
 import CellContentPopup from "./CellContentPopup.vue";
-import type { Column, HttpApiChange, LogViewRow, Script } from "../api/types";
+import type { Column } from "../api/generated/Column";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import type { LogViewRow } from "../api/generated/LogViewRow";
+import type { Script } from "../api/types";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { scriptLabel, scriptLabelFor, scriptTitle } from "../utils/script-label";
 import { isInactiveInProgress } from "../utils/capture-outcome";
@@ -1664,7 +1667,12 @@ onBeforeUnmount(() => {
         @contextmenu="onCanvasContextMenu"
         @wheel="onWheel"
       />
-      <div v-if="logsStore.loading" class="lt-loading" role="status" :aria-label="t('正在加载日志')">
+      <div
+        v-if="logsStore.loading"
+        class="lt-loading"
+        role="status"
+        :aria-label="t('正在加载日志')"
+      >
         <svg
           v-if="logsStore.loadProgress !== null"
           class="lt-progress"

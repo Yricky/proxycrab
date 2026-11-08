@@ -4,7 +4,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Io5Copy, Io5OpenOutline, Io5Reload, Io5Save, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import { t } from "../i18n";
-import type { ClashConfig, ClashSubscriptionState, HttpApiChange } from "../api/types";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import type { ClashConfig, ClashSubscriptionState } from "../api/types";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
@@ -131,10 +132,7 @@ async function importClash(): Promise<void> {
   try {
     await backend.openExternal(clashImportUrl(props.url));
   } catch (error) {
-    reportError(
-      error,
-      t("打开 Clash 失败，请确认已安装客户端，或复制链接手动导入"),
-    );
+    reportError(error, t("打开 Clash 失败，请确认已安装客户端，或复制链接手动导入"));
   }
 }
 
@@ -200,7 +198,9 @@ onBeforeUnmount(() => {
       <section v-if="url" class="subscription-content">
         <div class="subscription-info">
           <h3>{{ t("订阅链接") }}</h3>
-          <p class="text-secondary">{{ t("其他设备需能访问所选 IP。扫描二维码或复制链接导入订阅。") }}</p>
+          <p class="text-secondary">
+            {{ t("其他设备需能访问所选 IP。扫描二维码或复制链接导入订阅。") }}
+          </p>
           <div class="subscription-link">
             <span class="mono">{{ url }}</span>
             <button class="btn icon" :title="t('复制 Clash 订阅链接')" @click="copyUrl">

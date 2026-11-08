@@ -1,12 +1,10 @@
 import { effectScope, reactive, watch } from "vue";
 import { runtimeBackend as backend } from "../api/runtime-backend";
-import type {
-  HttpApiChange,
-  Column,
-  LogViewRow,
-  LogViewsPayload,
-  SessionFilter,
-} from "../api/types";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import type { Column } from "../api/generated/Column";
+import type { LogViewRow } from "../api/generated/LogViewRow";
+import type { LogViewsPayload } from "../api/generated/LogViewsPayload";
+import type { SessionFilter } from "../api/generated/SessionFilter";
 import { LruKeys } from "../utils/lru";
 import { reportError } from "./app";
 import { t } from "../i18n";

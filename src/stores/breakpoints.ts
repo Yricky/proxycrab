@@ -1,6 +1,7 @@
 import { reactive } from "vue";
 import { runtimeBackend as backend } from "../api/runtime-backend";
-import type { BreakpointSummary, InterceptorKind } from "../api/types";
+import type { BreakpointSummary } from "../api/generated/BreakpointSummary";
+import type { InterceptorKind } from "../api/generated/InterceptorKind";
 
 const POLL_INTERVAL = 500;
 let timer: number | undefined;

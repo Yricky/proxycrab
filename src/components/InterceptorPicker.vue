@@ -2,7 +2,8 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { Io5Close, Io5Search } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type { InterceptorKind, InterceptorLibraryItem } from "../api/types";
+import type { InterceptorKind } from "../api/generated/InterceptorKind";
+import type { InterceptorLibraryItem } from "../api/generated/InterceptorLibraryItem";
 import { reportError } from "../stores/app";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
 import { t } from "../i18n";

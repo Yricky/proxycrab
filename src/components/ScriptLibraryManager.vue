@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { Io5Play, Io5RadioButtonOn, Io5Save, Io5Trash } from "vue-icons-plus/io5";
-import type { HttpApiChange, HttpApiResource } from "../api/types";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import type { HttpApiResource } from "../api/generated/HttpApiResource";
 import MonacoEditor from "./MonacoEditor.vue";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
@@ -417,8 +418,8 @@ onBeforeUnmount(() => {
         <input
           v-model="filter"
           class="input"
-:placeholder="t('过滤脚本名称或路径')"
-:aria-label="t('过滤脚本')"
+          :placeholder="t('过滤脚本名称或路径')"
+          :aria-label="t('过滤脚本')"
           :disabled="creatingIn !== null"
         />
       </div>
@@ -446,9 +447,9 @@ onBeforeUnmount(() => {
           />
         </template>
         <template #suffix="{ entry }">
-          <span v-if="config.selection && activeName === entry.path" class="slm-active"
-            >{{ t("生效中") }}</span
-          >
+          <span v-if="config.selection && activeName === entry.path" class="slm-active">{{
+            t("生效中")
+          }}</span>
         </template>
         <template #actions="{ entry }">
           <button class="btn icon danger" :title="t('删除')" @click.stop="removeScript(entry.data)">
@@ -483,8 +484,8 @@ onBeforeUnmount(() => {
             v-if="config.debug?.mode === 'log-id-input'"
             v-model="debugInput"
             class="input slm-argument mono"
-:placeholder="t('字符串参数')"
-:title="t('通过 Lua ... 传入的字符串')"
+            :placeholder="t('字符串参数')"
+            :title="t('通过 Lua ... 传入的字符串')"
             @input="clearDebugResult"
             @keyup.enter="saveAndRun"
           />
@@ -494,7 +495,7 @@ onBeforeUnmount(() => {
             class="input slm-log-id mono"
             inputmode="numeric"
             placeholder="Log ID"
-:title="t('当前会话中的 Log ID')"
+            :title="t('当前会话中的 Log ID')"
             @input="clearDebugResult"
             @keyup.enter="saveAndRun"
           />
@@ -527,7 +528,9 @@ onBeforeUnmount(() => {
           language="lua"
           @update:model-value="onContentChange"
         />
-        <div v-if="config.statusbar" class="slm-statusbar text-faint">{{ t(config.statusbar) }}</div>
+        <div v-if="config.statusbar" class="slm-statusbar text-faint">
+          {{ t(config.statusbar) }}
+        </div>
       </template>
       <div v-else class="slm-editor-empty">
         <span class="empty-hint">{{ t(config.editorEmptyHint) }}</span>

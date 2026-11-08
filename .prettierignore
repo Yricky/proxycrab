@@ -1,0 +1,2 @@
+# ts-rs 生成物保持机器格式，避免与 cargo test 再生成产生假性漂移
+src/api/generated/

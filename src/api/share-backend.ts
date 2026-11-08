@@ -1,19 +1,18 @@
 import type { Backend } from "./backend";
 import { t } from "../i18n";
 import { BackendError } from "./backend-error";
+import type { ApiError } from "./types";
 import { downloadBodyFromBase, fetchBodyFromBase, fetchWebSocketBodyFromBase } from "./body";
 import { saveFileInWebview } from "./save-file";
-import type {
-  AppConfig,
-  InterceptorSnapshotPayload,
-  LogDetail,
-  ManagerError,
-  ProxyStatus,
-  Script,
-  SessionMetadata,
-  SessionInterceptorsPayload,
-  SessionViewPayload,
-} from "./types";
+import type { AppConfig } from "./generated/AppConfig";
+import type { InterceptorSnapshot } from "./generated/InterceptorSnapshot";
+import type { LogDetail } from "./generated/LogDetail";
+import type { ManagerError } from "./generated/ManagerError";
+import type { ProxyStatus } from "./generated/ProxyStatus";
+import type { SessionMetadata } from "./generated/SessionMetadata";
+import type { SessionInterceptorsPayload } from "./generated/SessionInterceptorsPayload";
+import type { SessionViewPayload } from "./generated/SessionViewPayload";
+import type { Script } from "./types";
 
 interface ApiEnvelope<T> {
   ok: boolean;
@@ -260,7 +259,7 @@ export function createShareBackend(
         throw new BackendError({ code: "network_error", message: String(cause) });
       }
       if (!response.ok) {
-        let error: ManagerError = {
+        let error: ApiError = {
           code: `http_${response.status}`,
           message: `HTTP ${response.status}`,
         };
@@ -278,9 +277,7 @@ export function createShareBackend(
       };
     },
     getInterceptorSnapshot: (_sessionId, id, executionId) =>
-      call<InterceptorSnapshotPayload>(
-        `/share-api/logs/${id}/interceptors/${executionId}/snapshot`,
-      ),
+      call<InterceptorSnapshot>(`/share-api/logs/${id}/interceptors/${executionId}/snapshot`),
     getSessionView: () => call("/share-api/session-view"),
     getSessionInterceptors: () =>
       call<SessionInterceptorsPayload>("/share-api/session-interceptors"),

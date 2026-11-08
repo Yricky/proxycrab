@@ -4,7 +4,7 @@ import AppReadonly from "../AppReadonly.vue";
 import { createShareBackend, SHARE_INVALID_EVENT, verifyShareAccess } from "../api/share-backend";
 import { installBackend } from "../api/runtime-backend";
 import { t } from "../i18n";
-import type { ManagerError } from "../api/types";
+import type { ManagerError } from "../api/generated/ManagerError";
 
 const ready = ref(false);
 const error = ref("");

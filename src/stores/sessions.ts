@@ -1,6 +1,7 @@
 import { reactive } from "vue";
 import { runtimeBackend as backend } from "../api/runtime-backend";
-import type { SessionMetadata, SessionShareState, SessionShareSummary } from "../api/types";
+import type { SessionMetadata } from "../api/generated/SessionMetadata";
+import type { SessionShareState, SessionShareSummary } from "../api/types";
 import { sweepCreateRequest } from "../utils/session-sweep";
 import { reportError } from "./app";
 import { t } from "../i18n";

@@ -9,9 +9,7 @@ export type AppLocale = "zh-CN" | "en-US";
  * 中文原文即 key：en-US 是唯一人工维护的翻译表；
  * zh-CN 由 en-US 的 key 恒等生成，无需单独维护。
  */
-const zhCN: Record<string, string> = Object.fromEntries(
-  Object.keys(enUS).map((key) => [key, key]),
-);
+const zhCN: Record<string, string> = Object.fromEntries(Object.keys(enUS).map((key) => [key, key]));
 
 function initialLocale(): AppLocale {
   if (typeof localStorage !== "undefined") {

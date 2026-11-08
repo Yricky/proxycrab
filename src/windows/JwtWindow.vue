@@ -200,9 +200,7 @@ const FORMULA_NAMES: Record<string, string> = {
 const isHmac = computed(() => alg.value.startsWith("HS"));
 const formulaName = computed(() => FORMULA_NAMES[alg.value] ?? (alg.value || "ALGORITHM"));
 const keyPlaceholder = computed(() =>
-  isHmac.value
-    ? t("HMAC 密钥文本（或 kty=oct 的 JWK JSON）")
-    : t("粘贴 PEM 公钥或 JWK JSON"),
+  isHmac.value ? t("HMAC 密钥文本（或 kty=oct 的 JWK JSON）") : t("粘贴 PEM 公钥或 JWK JSON"),
 );
 
 const outcome = ref<VerifyOutcome | null>(null);
@@ -328,7 +326,9 @@ async function copy(key: string, value: string): Promise<void> {
         <div class="jwt-decoded-head">
           <span class="jwt-label">Decoded</span>
           <span class="jwt-spacer" />
-          <span v-if="algAuto" class="jwt-autohint" :title="t('从 header 自动识别')">{{ t("自动") }}</span>
+          <span v-if="algAuto" class="jwt-autohint" :title="t('从 header 自动识别')">{{
+            t("自动")
+          }}</span>
           <select v-model="alg" class="select jwt-alg">
             <option value="" disabled>{{ t("算法") }}</option>
             <option v-for="a in JWT_ALGORITHMS" :key="a" :value="a">{{ a }}</option>

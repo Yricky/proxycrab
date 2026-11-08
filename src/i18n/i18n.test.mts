@@ -61,7 +61,7 @@ describe("i18n", () => {
 });
 
 describe("静态 key 覆盖检查", () => {
-  it("所有 t(\"...\") 字面量 key 均存在于 en-US 翻译表", () => {
+  it('所有 t("...") 字面量 key 均存在于 en-US 翻译表', () => {
     const keys = new Set(Object.keys(enUS));
     const used = new Map<string, string>();
     const collect = (dir: string): void => {

@@ -1,6 +1,7 @@
 import type { Unsubscribe } from "../api/backend";
 import { runtimeBackend as backend } from "../api/runtime-backend";
-import type { HttpApiChange, HttpApiResource } from "../api/types";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import type { HttpApiResource } from "../api/generated/HttpApiResource";
 import { reportError } from "./app";
 import { t } from "../i18n";
 import { proxyStore } from "./proxy";

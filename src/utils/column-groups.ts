@@ -1,4 +1,4 @@
-import type { FilterColumn } from "../api/types";
+import type { FilterColumn } from "../api/generated/FilterColumn";
 import { t } from "../i18n";
 
 export type ColumnGroupSort = "count" | "value";

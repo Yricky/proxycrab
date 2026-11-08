@@ -7,7 +7,7 @@
 import { computed } from "vue";
 import { sessionsStore } from "../stores/sessions";
 import { Io5Link, Io5RadioButtonOn } from "vue-icons-plus/io5";
-import type { SessionMetadata } from "../api/types";
+import type { SessionMetadata } from "../api/generated/SessionMetadata";
 import { formatActivityCount, formatRelativeTime } from "../utils/format";
 import { t } from "../i18n";
 
@@ -38,7 +38,9 @@ const share = computed(() => sessionsStore.shares[props.session.id]);
             :aria-label="
               share.persistent ? t('已开启分享 · 重启后保留') : t('已开启分享 · 应用退出后失效')
             "
-            :title="share.persistent ? t('已开启分享 · 重启后保留') : t('已开启分享 · 应用退出后失效')"
+            :title="
+              share.persistent ? t('已开启分享 · 重启后保留') : t('已开启分享 · 应用退出后失效')
+            "
           >
             <Io5Link :size="12" />
           </span>
@@ -47,7 +49,9 @@ const share = computed(() => sessionsStore.shares[props.session.id]);
         <span
           v-if="active"
           class="session-item-active"
-          :title="activeConnections > 0 ? t('活跃会话，{n} 条活跃连接', activeConnections) : t('活跃会话')"
+          :title="
+            activeConnections > 0 ? t('活跃会话，{n} 条活跃连接', activeConnections) : t('活跃会话')
+          "
         >
           <span v-if="activeConnections > 0" class="activity-badge session-item-badge">
             {{ formatActivityCount(activeConnections) }}

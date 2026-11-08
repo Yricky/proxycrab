@@ -12,7 +12,9 @@ import {
 import { useBackend } from "../api";
 import { t } from "../i18n";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
-import type { HttpApiChange, InterceptorKind, SessionInterceptorItem } from "../api/types";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import type { InterceptorKind } from "../api/generated/InterceptorKind";
+import type { SessionInterceptorItem } from "../api/generated/SessionInterceptorItem";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog, openContextMenu, type MenuItem } from "../stores/dialog";
 import { interceptorsStore } from "../stores/interceptors";
@@ -117,9 +119,7 @@ function kindLabel(kind: InterceptorKind): string {
 
 function statusLabel(item: SessionInterceptorItem): string {
   if (!item.valid)
-    return canCreateScript.value
-      ? t("脚本文件不存在 · 右键可重新创建")
-      : t("脚本文件不存在");
+    return canCreateScript.value ? t("脚本文件不存在 · 右键可重新创建") : t("脚本文件不存在");
   if (!canMutate.value) return item.enabled ? t("已开启") : t("已关闭");
   return item.enabled ? t("已开启 · 点击关闭") : t("已关闭 · 点击开启");
 }
@@ -483,7 +483,11 @@ onBeforeUnmount(() => {
         <Io5ArchiveOutline :size="16" />
       </button>
     </AppTooltip>
-    <AppTooltip v-if="canSweep" :title="t('清扫会话')" :detail="t('新建配置一致的活跃会话，原会话转入已归档')">
+    <AppTooltip
+      v-if="canSweep"
+      :title="t('清扫会话')"
+      :detail="t('新建配置一致的活跃会话，原会话转入已归档')"
+    >
       <button
         class="pipeline-sweep"
         type="button"

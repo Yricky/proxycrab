@@ -9,12 +9,9 @@ import {
   Io5CodeSlash,
 } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
-import type {
-  LogDetail,
-  WebSocketMessage,
-  WebSocketMessageRef,
-  WebSocketInterceptor,
-} from "../api/types";
+import type { LogDetail } from "../api/generated/LogDetail";
+import type { WsInterceptor } from "../api/generated/WsInterceptor";
+import type { WebSocketMessage, WebSocketMessageRef } from "../api/types";
 import type { BodySide, LoadedBody } from "../api/body";
 import { appStore, reportError } from "../stores/app";
 import { t } from "../i18n";
@@ -460,7 +457,7 @@ function navigateRelated(reference: WebSocketMessageRef) {
   if (!related) return;
   navigateMessage(related.message, related.side);
 }
-async function openSource(interceptor: WebSocketInterceptor) {
+async function openSource(interceptor: WsInterceptor) {
   if (!info.value || !backend.getInterceptorContent) return;
   const { session_id } = props.detail;
   const id = info.value.handshake_log_id;
@@ -578,8 +575,10 @@ onBeforeUnmount(() => {
       </button>
     </div>
     <div class="ws-toolbar ws-legend" :aria-label="t('消息颜色图例')">
-      <span class="original">{{ t("原始消息") }}</span><span class="generated">{{ t("拦截器发送") }}</span>
-      <span class="dropped">{{ t("灰框：已丢弃") }}</span><span class="failed">{{ t("红框：未发送／失败") }}</span>
+      <span class="original">{{ t("原始消息") }}</span
+      ><span class="generated">{{ t("拦截器发送") }}</span>
+      <span class="dropped">{{ t("灰框：已丢弃") }}</span
+      ><span class="failed">{{ t("红框：未发送／失败") }}</span>
     </div>
     <div v-if="listError" class="ws-error">{{ listError }}</div>
     <div class="waterfall">
@@ -587,9 +586,9 @@ onBeforeUnmount(() => {
         <div class="time-label">{{ t("时间") }}</div>
         <div v-for="side in sides" :key="side" class="lane-label">
           <span>{{ side === "request" ? "C→S" : "S→C" }}</span>
-          <small :aria-label="`${side === 'request' ? 'C→S' : 'S→C'} ${t('消息数量')}`"
-            >{{ t("{n} 条", messages[side].length) }}</small
-          >
+          <small :aria-label="`${side === 'request' ? 'C→S' : 'S→C'} ${t('消息数量')}`">{{
+            t("{n} 条", messages[side].length)
+          }}</small>
         </div>
       </div>
       <div
@@ -653,12 +652,14 @@ onBeforeUnmount(() => {
           >{{ timeLabel(selected.message.started_at - origin) }} →
           {{ timeLabel(selected.message.completed_at - origin) }}</span
         >
-        <span>{{ t("耗时 {n} ms", selected.message.completed_at - selected.message.started_at) }}</span>
-                <strong>{{ messageStatusLabel(selected.message) }}</strong>
+        <span>{{
+          t("耗时 {n} ms", selected.message.completed_at - selected.message.started_at)
+        }}</span>
+        <strong>{{ messageStatusLabel(selected.message) }}</strong>
         <span>{{ selected.message.producer ? t("拦截器发送") : t("原始消息") }}</span>
-        <span v-if="selected.message.sequence != null"
-          >{{ t("处理序号 {n}", selected.message.sequence) }}</span
-        >
+        <span v-if="selected.message.sequence != null">{{
+          t("处理序号 {n}", selected.message.sequence)
+        }}</span>
         <template v-for="relation in ['root', 'parent'] as const" :key="relation">
           <template v-if="selected.message[relation]">
             <span>{{ relation === "root" ? t("源头") : t("直接触发") }}</span>
@@ -681,9 +682,12 @@ onBeforeUnmount(() => {
           >
             {{ selected.message.producer.name }} #{{ selected.message.producer.execution_id }}
           </button>
-          <span
-            >{{ t("调用 #{id} · 第 {n} 次发送", { id: selected.message.producer.invocation_id, n: selected.message.producer.send_index }) }}</span
-          >
+          <span>{{
+            t("调用 #{id} · 第 {n} 次发送", {
+              id: selected.message.producer.invocation_id,
+              n: selected.message.producer.send_index,
+            })
+          }}</span>
         </template>
         <template v-if="selected.message.dropped_by">
           <span>{{ t("丢弃者") }}</span>
@@ -740,7 +744,9 @@ onBeforeUnmount(() => {
         >
           {{ failure.name }} #{{ failure.execution_id }}
         </button>
-        <span>{{ t("调用 #{id}：{error}", { id: failure.invocation_id, error: failure.error }) }}</span>
+        <span>{{
+          t("调用 #{id}：{error}", { id: failure.invocation_id, error: failure.error })
+        }}</span>
       </div>
       <div v-if="bodyLoading" class="empty-hint">{{ t("加载消息正文…") }}</div>
       <div v-else-if="bodyError" class="ws-error">{{ bodyError }}</div>

@@ -1,201 +1,63 @@
-// Types mirroring crates/proxy-crab-mitm/src/model.rs and crates/proxy-crab-mgr/src/dto.rs.
-// Field names match serde's snake_case wire format exactly.
+// API 类型契约：
+// - `./generated/`：ts-rs 从 Rust（crates/*/src/{model,dto,websocket,bypass}.rs）生成的绑定，
+//   由 `cargo test --workspace` 产出并提交入库，CI 校验未漂移——新增/修改 Rust 类型后重跑即可。
+// - 本文件：仅保留尚未迁移到 ts-rs 的手写类型（Script 的 display_name 由 Rust 自定义
+//   序列化器派生；session_share / permission / skill / bundle / clash / websocket 消息等
+//   属后续批次），以及传输层合成的错误码扩展。
 
-export interface ManagerError {
-  code: string;
-  message: string;
-  actual_size?: number;
-  max_size?: number;
-}
+import type { ErrorCode } from "./generated/ErrorCode";
+import type { ManagerError } from "./generated/ManagerError";
+import type { SessionMetadata } from "./generated/SessionMetadata";
+import type { WsInterceptor } from "./generated/WsInterceptor";
 
-// ---------- model.rs ----------
+export type { ErrorCode, ManagerError, SessionMetadata, WsInterceptor };
 
-export type ColumnKind =
-  "method" | "uri" | "code" | "source" | "stage" | "created_at" | "updated_at" | "script";
+/** 传输层合成错误码：网络失败、Tauri invoke 失败、只读分享或非 JSON 响应时前端兜底构造。 */
+export type TransportErrorCode =
+  "network_error" | "readonly_share" | "invoke_error" | `http_${number}`;
 
-export type Column =
-  | { kind: "method"; width: number }
-  | { kind: "uri"; width: number }
-  | { kind: "code"; width: number }
-  | { kind: "source"; width: number }
-  | { kind: "stage"; width: number }
-  | { kind: "created_at"; width: number }
-  | { kind: "updated_at"; width: number }
-  | { kind: "script"; width: number; script_name: string };
+/** API 层实际可抛出的错误形态：后端契约错误 + 传输层合成错误。 */
+export type ApiError = Omit<ManagerError, "code"> & { code: ErrorCode | TransportErrorCode };
 
-export type FilterColumn =
-  | { kind: "method" }
-  | { kind: "uri" }
-  | { kind: "code" }
-  | { kind: "source" }
-  | { kind: "stage" }
-  | { kind: "script"; script_name: string };
-
-export type FilterOption =
-  | { kind: "column"; column: FilterColumn; regex: boolean }
-  | { kind: "script"; script_name: string };
-
-export interface SessionFilter {
-  option: FilterOption | null;
-  input: string;
-}
-
-export interface AppConfig {
-  proxy_host: string;
-  proxy_port: number;
-  api_port: number;
-  routing_script_name: string | null;
-  active_session_id: number | null;
-}
-
-export interface SessionMetadata {
-  id: number;
-  name: string;
-  created_at: number;
-  description: string | null;
-}
-
-export interface SessionsPayload {
-  sessions: SessionMetadata[];
-  active_session_id: number | null;
-}
-
+// Script 的 display_name 由 Rust 侧自定义序列化器从内容注释派生（存在时才输出），暂保留手写。
 export interface Script {
   name: string;
   display_name?: string | null;
   content: string;
 }
 
-export interface AgentsPreset {
-  id: string;
-  name: string;
-  content: string;
+/** 内置列 kind 字面量（Column 的窄化辅助）。 */
+export type ColumnKind =
+  "method" | "uri" | "code" | "source" | "stage" | "created_at" | "updated_at" | "script";
+
+export interface WebSocketInvocation extends WsInterceptor {
+  invocation_id: number;
 }
-
-export interface AgentsPresetState {
-  active_id: string;
-  presets: AgentsPreset[];
+export interface WebSocketMessageRef {
+  side: "request" | "response";
+  id: number;
 }
-
-export type InterceptorKind = "request" | "response";
-
-export interface InterceptorLibraryItem {
-  name: string;
-  display_name?: string | null;
-  usage_count: number;
+export interface WebSocketMessage {
+  id: number;
+  sequence?: number;
+  root?: WebSocketMessageRef;
+  parent?: WebSocketMessageRef;
+  producer?: WebSocketInvocation & { send_index: number };
+  dropped_by?: WebSocketInvocation;
+  status?: "sent" | "dropped" | "unsent" | "failed";
+  error?: string;
+  errors?: (WebSocketInvocation & { error: string })[];
+  type: "text" | "binary";
+  started_at: number;
+  completed_at: number;
+  size: number;
+  content_available: boolean;
+  omitted_reason: string | null;
 }
-
-export interface InterceptorLibraryList {
-  kind: InterceptorKind;
-  items: InterceptorLibraryItem[];
-}
-
-export interface SessionInterceptorItem {
-  name: string;
-  display_name?: string | null;
-  enabled: boolean;
-  valid: boolean;
-}
-
-export interface SessionInterceptorsPayload {
-  session_id: number;
-  request: SessionInterceptorItem[];
-  response: SessionInterceptorItem[];
-}
-
-export interface ReplaceSessionInterceptorsRequest {
-  request: Array<{ name: string; enabled: boolean }>;
-  response: Array<{ name: string; enabled: boolean }>;
-}
-
-export type CaptureOutcome = "in_progress" | "success" | "failed" | "tunneled";
-
-export type ErrorStage =
-  "connect" | "tls_handshake" | "request_body" | "interceptor" | "upstream" | "response_body";
-
-export interface CaptureError {
-  stage: ErrorStage;
-  kind: string;
-  message: string;
-}
-
-export type BodyPayload =
-  | { type: "empty" }
-  | { type: "text"; content: string; size: number }
-  | { type: "json"; content: unknown; size: number }
-  | { type: "binary"; size: number }
-  | { type: "large"; size: number };
-
-export type BodySourceType =
-  { type: "original" } | { type: "string"; content: string } | { type: "asset"; asset_id: string };
-
-export interface RequestInterceptorSnapshot {
-  method: string;
-  uri: string;
-  version: string;
-  headers: Record<string, string[]>;
-  body: BodySourceType;
-}
-
-export interface ResponseInterceptorSnapshot {
-  status: number;
-  version: string;
-  headers: Record<string, string[]>;
-  body: BodySourceType;
-}
-
-/** Returned by the dedicated interceptor snapshot endpoint. Exactly one side is present. */
-export interface InterceptorSnapshotPayload {
-  request: RequestInterceptorSnapshot | null;
-  response: ResponseInterceptorSnapshot | null;
-}
-
-/** Returned by the dedicated interceptor script content endpoint. */
-export interface InterceptorContent {
-  hash: string;
-  content: string;
-}
-
-export type Modification =
-  | {
-      kind: "snapshot";
-      request: RequestInterceptorSnapshot | null;
-      response: ResponseInterceptorSnapshot | null;
-    }
-  | { kind: "method_set"; method: string }
-  | { kind: "uri_set"; uri: string }
-  | { kind: "status_set"; status: number }
-  | { kind: "header_append"; name: string; value: string }
-  | { kind: "header_set"; name: string; value: string }
-  | { kind: "header_remove"; name: string; values: string[] }
-  | { kind: "body_replace_string"; content: string }
-  | { kind: "body_replace_asset"; asset_id: string }
-  | { kind: "tag_set"; key: string; value: string };
-
-/** Log detail omits the snapshot entry; fetch it from the snapshot endpoint instead. */
-export type InterceptorModification = Exclude<Modification, { kind: "snapshot" }>;
-
-export type InterceptorExecutionOrigin = "saved" | "temporary";
-
-export type ProxyStatus =
-  | { status: "stopped" }
-  | { status: "starting" }
-  | {
-      status: "running";
-      host: string;
-      port: number;
-      started_at: number;
-      active_netlog: Record<string, number[]>;
-      active_bypass_count?: number;
-    }
-  | { status: "stopping" }
-  | { status: "failed"; message: string };
-
-export interface SystemLogEntry {
-  seq: number;
-  timestamp: number;
-  level: string;
-  message: string;
+export interface WebSocketPage {
+  messages: WebSocketMessage[];
+  next_after_id: number;
+  has_more: boolean;
 }
 
 export interface WorkspacePaths {
@@ -206,33 +68,6 @@ export interface WorkspacePaths {
 /** 创建一次保存，字节通过返回的 Writer 追加。 */
 export interface SaveFileRequest {
   filename: string;
-}
-
-export type HttpApiResource =
-  | "workspace"
-  | "config"
-  | "proxy"
-  | "sessions"
-  | "archived_sessions"
-  | "active_session"
-  | "session_share"
-  | "session_view"
-  | "column_scripts"
-  | "filter_scripts"
-  | "routing_scripts"
-  | "routing_selection"
-  | "bypass"
-  | "interceptors"
-  | "session_interceptors"
-  | "certificate"
-  | "clash_subscription"
-  | "clash_config"
-  | "system_logs"
-  | "all";
-
-export interface HttpApiChange {
-  resources: HttpApiResource[];
-  session_id?: number;
 }
 
 export interface SkillPathState {
@@ -255,30 +90,6 @@ export interface SkillRemovalError {
 export interface SkillSaveResult {
   state: SkillManagerState;
   removal_errors: SkillRemovalError[];
-}
-
-// ---------- dto.rs ----------
-
-export interface CreateSessionRequest {
-  name?: string | null;
-  description?: string | null;
-  view?: {
-    columns?: Column[];
-    filter?: SessionFilter;
-  } | null;
-  interceptors?: {
-    request?: Array<{ name: string; enabled: boolean }>;
-    response?: Array<{ name: string; enabled: boolean }>;
-  } | null;
-}
-
-export interface UpdateSessionRequest {
-  name?: string | null;
-  description?: string | null;
-}
-
-export interface ActiveSession {
-  session_id: number | null;
 }
 
 export interface SessionShareSummary {
@@ -306,283 +117,6 @@ export interface SessionShareState {
   token?: string;
 }
 
-export interface LogIdsRequest {
-  session_id?: number | null;
-  filter?: SessionFilter | null;
-  ids?: number[] | null;
-  min_id?: number | null;
-  max_id?: number | null;
-  limit?: number | null;
-}
-
-export interface CreateAgentsPresetRequest {
-  name: string;
-}
-
-export interface UpdateAgentsPresetRequest {
-  name?: string | null;
-  content?: string | null;
-}
-
-export interface LogIdsPayload {
-  matched_ids: number[];
-  in_progress_ids: number[];
-}
-
-export interface LogViewItem {
-  id: number;
-  updated_at?: number | null;
-}
-
-export interface SessionViewInput {
-  columns: Column[];
-}
-
-export interface LogViewsRequest {
-  session_id?: number | null;
-  logs: LogViewItem[];
-  view?: SessionViewInput | null;
-}
-
-export interface LogViewRow {
-  id: number;
-  created_at: number;
-  updated_at: number;
-  outcome: CaptureOutcome;
-  cells: string[];
-}
-
-export interface LogViewException {
-  id: number;
-  column_index?: number | null;
-  code: string;
-  message: string;
-}
-
-export interface LogViewsPayload {
-  columns: Column[];
-  rows: LogViewRow[];
-  exceptions: LogViewException[];
-}
-
-export interface SessionViewPayload {
-  redaction_revision?: string | null;
-  session_id: number;
-  columns: Column[];
-  filter: SessionFilter;
-}
-
-export interface ReplaceSessionViewRequest {
-  columns: Column[];
-}
-
-export interface HeaderItem {
-  name: string;
-  value: string;
-}
-
-export interface RequestDetail {
-  method: string;
-  uri: string;
-  version: string;
-  headers: HeaderItem[];
-  tags: Record<string, string>;
-  body: BodyPayload;
-}
-
-export interface ResponseDetail {
-  status: number;
-  status_text: string;
-  version: string;
-  headers: HeaderItem[];
-  body: BodyPayload;
-}
-
-export interface WebSocketInterceptor {
-  execution_id: number;
-  name: string;
-}
-export interface WebSocketInvocation extends WebSocketInterceptor {
-  invocation_id: number;
-}
-export interface WebSocketMessageRef {
-  side: "request" | "response";
-  id: number;
-}
-export interface WebSocketInfo {
-  interceptors?: WebSocketInterceptor[];
-  handshake_log_id: number;
-  websocket_log_id: number;
-  extensions: string;
-  subprotocol: string | null;
-  opened_at: number;
-  closed_at: number | null;
-  close_code: number | null;
-  close_reason: string | null;
-}
-export interface WebSocketMessage {
-  id: number;
-  sequence?: number;
-  root?: WebSocketMessageRef;
-  parent?: WebSocketMessageRef;
-  producer?: WebSocketInvocation & { send_index: number };
-  dropped_by?: WebSocketInvocation;
-  status?: "sent" | "dropped" | "unsent" | "failed";
-  error?: string;
-  errors?: (WebSocketInvocation & { error: string })[];
-  type: "text" | "binary";
-  started_at: number;
-  completed_at: number;
-  size: number;
-  content_available: boolean;
-  omitted_reason: string | null;
-}
-export interface WebSocketPage {
-  messages: WebSocketMessage[];
-  next_after_id: number;
-  has_more: boolean;
-}
-export interface LogDetail {
-  websocket?: WebSocketInfo;
-
-  id: number;
-  session_id: number;
-  created_at: number;
-  updated_at: number;
-  source_type: string;
-  source_addr: string | null;
-  stage: string;
-  outcome: CaptureOutcome;
-  error: CaptureError | null;
-  request: RequestDetail;
-  response: ResponseDetail | null;
-  request_interceptors: InterceptorExecution[];
-  response_interceptors: InterceptorExecution[];
-}
-
-export interface InterceptorExecution {
-  execution_id: number;
-  origin: InterceptorExecutionOrigin;
-  completed: boolean;
-  phase: InterceptorKind;
-  position: number;
-  name: string;
-  display_name?: string | null;
-  script_hash: string;
-  has_snapshot: boolean;
-  modifications: InterceptorModification[];
-  error: string | null;
-}
-
-export interface BreakpointSummary {
-  id: number;
-  session_id: number;
-  capture_id: number;
-  phase: InterceptorKind;
-  position: number;
-  interceptor_name: string;
-  display_name?: string | null;
-  method: string;
-  uri: string;
-  created_at: number;
-  expires_at: number;
-  remaining_ms: number;
-}
-
-export interface BreakpointQuery {
-  session_id?: number | null;
-  phase?: InterceptorKind | null;
-  interceptor_name?: string | null;
-}
-
-export interface BreakpointDetailPayload {
-  breakpoint: BreakpointSummary;
-  log: LogDetail;
-}
-
-export interface ExtendBreakpointRequest {
-  timeout_ms: number;
-}
-
-export interface ExecuteTemporaryScriptRequest {
-  content: string;
-}
-
-export interface TemporaryExecutionResult {
-  execution: InterceptorExecution;
-  breakpoint: BreakpointSummary;
-}
-
-export interface ScriptRequest {
-  name: string;
-  content?: string;
-}
-
-export interface UpdateScriptRequest {
-  content: string;
-}
-
-export interface DebugFilterScriptRequest {
-  session_id?: number | null;
-  log_id: number;
-  input: string;
-}
-
-export interface InterceptorCreateRequest {
-  kind: InterceptorKind;
-  name: string;
-  content?: string;
-}
-
-export interface InterceptorUpdateRequest {
-  content: string;
-}
-
-export interface RoutingSelection {
-  name: string | null;
-}
-
-export type BypassOutcome = "in_progress" | "success" | "failed";
-
-export interface BypassEntry {
-  id: number;
-  created_at: number;
-  updated_at: number;
-  source: string;
-  method: string;
-  uri: string;
-  version: string;
-  reason: string;
-  outcome: BypassOutcome;
-  response_status: number | null;
-  error: string | null;
-  upload_bytes: number | null;
-  download_bytes: number | null;
-}
-
-export interface BypassQuery {
-  before_id?: number | null;
-  limit?: number | null;
-}
-
-export interface BypassPage {
-  rows: BypassEntry[];
-  has_more: boolean;
-}
-
-export interface DeleteCount {
-  deleted: number;
-}
-
-export interface SystemLogsQuery {
-  after_seq?: number | null;
-  limit?: number | null;
-}
-
-export interface CertificateResponse {
-  pem: string;
-}
-
 export interface ClashSubscriptionState {
   enabled: boolean;
   server?: string;
@@ -591,13 +125,6 @@ export interface ClashSubscriptionState {
 export interface ClashConfig {
   yaml: string;
   default_yaml: string;
-}
-
-export interface HttpServiceStatus {
-  running: boolean;
-  host: string;
-  port: number;
-  error: string | null;
 }
 
 export type PermissionMode = "allow" | "approval" | "deny";
@@ -657,27 +184,6 @@ export type ApprovalDecision = "allow" | "deny";
 export interface ResolveApprovalRequest {
   decision: ApprovalDecision;
   duration_seconds: number | null;
-}
-
-export type ReplayBodyPayload =
-  | { type: "text"; text: string; charset?: "utf8" }
-  | {
-      type: "body_ref";
-      session_id: number;
-      log_id: number;
-      side: "request" | "response";
-    }
-  | { type: "asset"; asset_id: string };
-
-export interface ReplayRequestPayload {
-  method: string;
-  url: string;
-  headers: Array<[string, string]>;
-  body?: ReplayBodyPayload;
-}
-
-export interface ReplayResult {
-  log_id: number;
 }
 
 export interface AssetMetadata {

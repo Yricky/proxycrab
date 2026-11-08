@@ -1,6 +1,8 @@
 // 重放草稿与预填、headers 表格规范化、header 警告的纯逻辑。
 
-import type { BodySourceType, InterceptorSnapshotPayload, LogDetail } from "../api/types";
+import type { BodySourceType } from "../api/generated/BodySourceType";
+import type { InterceptorSnapshot } from "../api/generated/InterceptorSnapshot";
+import type { LogDetail } from "../api/generated/LogDetail";
 
 export type ReplayBodySpec =
   | { type: "text"; text: string; charset: "utf8" }
@@ -43,7 +45,7 @@ export function prefillFromLog(detail: LogDetail): ReplayDraft {
 export function prefillFromSnapshot(
   sessionId: number,
   logId: number,
-  snapshot: InterceptorSnapshotPayload,
+  snapshot: InterceptorSnapshot,
 ): ReplayDraft | null {
   const request = snapshot.request;
   if (!request) return null;

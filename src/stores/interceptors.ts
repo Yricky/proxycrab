@@ -1,10 +1,8 @@
 import { reactive } from "vue";
 import { runtimeBackend as backend } from "../api/runtime-backend";
-import type {
-  InterceptorKind,
-  SessionInterceptorItem,
-  SessionInterceptorsPayload,
-} from "../api/types";
+import type { InterceptorKind } from "../api/generated/InterceptorKind";
+import type { SessionInterceptorItem } from "../api/generated/SessionInterceptorItem";
+import type { SessionInterceptorsPayload } from "../api/generated/SessionInterceptorsPayload";
 import { reportError } from "./app";
 import { t } from "../i18n";
 

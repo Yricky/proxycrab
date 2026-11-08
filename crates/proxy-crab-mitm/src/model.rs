@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use ts_rs::TS;
 
 use crate::hex::hex_lower;
 
@@ -9,7 +10,8 @@ pub type HeaderValues = BTreeMap<String, Vec<String>>;
 pub type RequestTags = BTreeMap<String, String>;
 pub const MAX_SESSION_INTERCEPTORS_PER_KIND: usize = 12;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub struct AppConfig {
     #[serde(default = "default_proxy_host")]
     pub proxy_host: String,
@@ -56,7 +58,8 @@ pub fn default_columns() -> Vec<Column> {
     ]
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub struct SessionView {
     #[serde(default = "default_columns")]
     pub columns: Vec<Column>,
@@ -64,8 +67,9 @@ pub struct SessionView {
     pub filter: SessionFilter,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export)]
 pub enum FilterColumn {
     Method,
     Uri,
@@ -75,8 +79,9 @@ pub enum FilterColumn {
     Script { script_name: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export)]
 pub enum FilterOption {
     Column {
         column: FilterColumn,
@@ -88,19 +93,22 @@ pub enum FilterOption {
     },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct SessionFilter {
     pub option: Option<FilterOption>,
     pub input: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct SessionInterceptor {
     pub name: String,
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct SessionInterceptors {
     #[serde(default)]
     pub request: Vec<SessionInterceptor>,
@@ -117,8 +125,9 @@ impl Default for SessionView {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export)]
 pub enum Column {
     Method { width: f32 },
     Uri { width: f32 },
@@ -158,7 +167,8 @@ impl Column {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct SessionMetadata {
     pub id: u64,
     pub name: String,
@@ -231,8 +241,9 @@ pub enum ScriptKind {
     ResponseInterceptor,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum InterceptorKind {
     Request,
     Response,
@@ -254,16 +265,19 @@ pub struct ResolvedSessionInterceptors {
     pub response: Vec<ResolvedSessionInterceptor>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct InterceptorLibraryItem {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub display_name: Option<String>,
     pub usage_count: usize,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum CaptureOutcome {
     InProgress,
     Success,
@@ -271,8 +285,9 @@ pub enum CaptureOutcome {
     Tunneled,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum ErrorStage {
     Connect,
     TlsHandshake,
@@ -282,7 +297,8 @@ pub enum ErrorStage {
     ResponseBody,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct CaptureError {
     pub stage: ErrorStage,
     pub kind: String,
@@ -307,8 +323,9 @@ pub struct ResponseData {
     pub headers: HeaderValues,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[ts(export)]
 pub enum BodyPayload {
     Empty,
     Text {
@@ -316,6 +333,7 @@ pub enum BodyPayload {
         size: u64,
     },
     Json {
+        #[ts(type = "unknown")]
         content: serde_json::Value,
         size: u64,
     },
@@ -330,8 +348,9 @@ pub enum BodyPayload {
 /// Where a request/response Body comes from: the original network bytes, an inline replacement
 /// string, or a workspace Asset. Shared by the final Body after interceptors and by the Body
 /// captured in interceptor-entry snapshots.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[ts(export)]
 pub enum BodySourceType {
     Original,
     String { content: String },
@@ -349,7 +368,8 @@ pub struct CaptureModifications {
     pub final_body: BodySourceType,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct RequestInterceptorSnapshot {
     pub method: String,
     pub uri: String,
@@ -358,7 +378,8 @@ pub struct RequestInterceptorSnapshot {
     pub body: BodySourceType,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct ResponseInterceptorSnapshot {
     pub status: u16,
     pub version: String,
@@ -367,21 +388,24 @@ pub struct ResponseInterceptorSnapshot {
 }
 
 /// The complete request and/or response state captured on entry to one interceptor execution.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct InterceptorSnapshot {
     pub request: Option<RequestInterceptorSnapshot>,
     pub response: Option<ResponseInterceptorSnapshot>,
 }
 
 /// The exact source executed by one interceptor execution, with its stored SHA-256.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct InterceptorScriptContent {
     pub hash: String,
     pub content: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export)]
 pub enum Modification {
     Snapshot {
         request: Option<RequestInterceptorSnapshot>,
@@ -420,14 +444,16 @@ pub enum Modification {
     },
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum InterceptorExecutionOrigin {
     Saved,
     Temporary,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct InterceptorExecution {
     pub execution_id: u64,
     pub origin: InterceptorExecutionOrigin,
@@ -436,6 +462,7 @@ pub struct InterceptorExecution {
     pub position: usize,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub display_name: Option<String>,
     pub script_hash: String,
     pub has_snapshot: bool,
@@ -484,7 +511,8 @@ pub struct CaptureDetail {
     pub response_interceptors: Vec<InterceptorExecution>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct BreakpointSummary {
     pub id: u64,
     pub session_id: u64,
@@ -493,6 +521,7 @@ pub struct BreakpointSummary {
     pub position: usize,
     pub interceptor_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub display_name: Option<String>,
     pub method: String,
     pub uri: String,
@@ -514,14 +543,16 @@ pub struct BreakpointDetail {
     pub capture: CaptureDetail,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct TemporaryExecutionResult {
     pub execution: InterceptorExecution,
     pub breakpoint: BreakpointSummary,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(tag = "status", rename_all = "snake_case")]
+#[ts(export)]
 pub enum ProxyStatus {
     Stopped,
     Starting,
@@ -529,6 +560,7 @@ pub enum ProxyStatus {
         host: String,
         port: u16,
         started_at: u64,
+        #[ts(type = "Record<string, number[]>")]
         active_netlog: BTreeMap<u64, Vec<u64>>,
         active_bypass_count: usize,
     },
@@ -538,7 +570,8 @@ pub enum ProxyStatus {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct SystemLogEntry {
     pub seq: u64,
     pub timestamp: u64,

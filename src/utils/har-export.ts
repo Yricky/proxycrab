@@ -2,7 +2,9 @@ import type { Backend } from "../api/backend";
 import { t } from "../i18n";
 import { UI_BODY_MAX_SIZE } from "../api/body";
 import type { FileWriter } from "../api/save-file";
-import type { BodyPayload, HeaderItem, LogDetail } from "../api/types";
+import type { BodyPayload } from "../api/generated/BodyPayload";
+import type { HeaderItem } from "../api/generated/HeaderItem";
+import type { LogDetail } from "../api/generated/LogDetail";
 import { version } from "../../package.json";
 
 export interface ExportProgress {
