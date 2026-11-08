@@ -1,5 +1,7 @@
 # ProxyCrab
 
+[English](README.en.md) | 简体中文
+
 支持 Agent 协作的 HTTP/HTTPS 抓包与调试工具。
 
 通过 Lua 定制请求与响应，检查 WebSocket 双向消息，把 Session 分享给同事或 Agent。支持桌面应用，也支持通过 CLI 运行并在浏览器中管理。
