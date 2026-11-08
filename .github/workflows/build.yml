@@ -53,10 +53,18 @@ jobs:
         include:
           - os: ubuntu-latest
             platform: linux-x64
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
           - os: macos-latest
             platform: macos-aarch64
+          - os: macos-15-intel
+            platform: macos-x64
           - os: windows-latest
             platform: windows-x64
+          # WiX 不支持 ARM64，Windows on ARM 只打 NSIS。
+          - os: windows-11-arm
+            platform: windows-aarch64
+            args: --bundles nsis
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -96,7 +104,7 @@ jobs:
           key: desktop-${{ matrix.platform }}
 
       - name: Build desktop app
-        run: pnpm tauri build
+        run: pnpm tauri build ${{ matrix.args }}
 
       - name: Upload desktop bundles (Linux)
         if: runner.os == 'Linux'
@@ -136,8 +144,12 @@ jobs:
             platform: linux-aarch64
           - os: macos-latest
             platform: macos-aarch64
+          - os: macos-15-intel
+            platform: macos-x64
           - os: windows-latest
             platform: windows-x64
+          - os: windows-11-arm
+            platform: windows-aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
