@@ -126,6 +126,48 @@ test("body read failures become explanatory text and warnings without stopping t
   expect(result.warnings).toBe(4);
   expect(log).toHaveBeenCalledWith("warning", expect.stringContaining("#1"));
 });
+test("fast exports yield by elapsed time instead of once per row", async () => {
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  const timer = vi.spyOn(globalThis, "setTimeout");
+  try {
+    const { result } = await run(Array.from({ length: 100 }, (_, i) => detail(i)));
+    expect(result.exported).toBe(100);
+    expect(timer.mock.calls.length).toBe(0);
+  } finally {
+    clock.mockRestore();
+    timer.mockRestore();
+  }
+});
+
+test("exports yield to pending cancellation when the time budget is reached", async () => {
+  const clock = vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(32);
+  const controller = new AbortController();
+  const getLog = vi.fn(async (_sessionId, id) =>
+    detail(id, {
+      request: { ...detail(id).request, body: { type: "empty" } },
+      response: null,
+    }),
+  );
+  const timer = setTimeout(() => controller.abort(), 0);
+  try {
+    await expect(
+      appendHar(
+        { getLog } as unknown as Backend,
+        { append: async () => {}, markAsFinish: vi.fn(), markAsError: vi.fn() },
+        7,
+        [1, 2, 3],
+        controller.signal,
+        vi.fn(),
+        vi.fn(),
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(getLog).toHaveBeenCalledTimes(1);
+  } finally {
+    clearTimeout(timer);
+    clock.mockRestore();
+  }
+});
+
 test("empty selection produces valid HAR", async () => {
   expect((await run([])).har.log.entries).toEqual([]);
 });

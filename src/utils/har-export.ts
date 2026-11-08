@@ -214,6 +214,7 @@ export async function appendHar(
   await append(
     `{"log":{"version":"1.2","creator":${JSON.stringify({ name: "ProxyCrab", version })},"entries":[`,
   );
+  let lastYield = performance.now();
   for (const id of ids) {
     signal.throwIfAborted();
     let detail: LogDetail;
@@ -271,8 +272,11 @@ export async function appendHar(
     }
     progress.processed++;
     onProgress({ ...progress });
-    // Let progress and cancellation UI paint even when reads resolve from a local cache.
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // Keep cached reads responsive without paying a timer delay for every row.
+    if (performance.now() - lastYield >= 16) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      lastYield = performance.now();
+    }
   }
   await append("]}}");
   return progress;

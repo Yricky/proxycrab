@@ -96,13 +96,16 @@ export function createTauriBackend(): Backend {
         throw new BodyFetchError({ code: "bad_request", message: t("无效的 Body 大小限制") });
       }
       try {
-        const result = await invoke<{ bytes: number[]; contentType: string }>("fetch_body", {
+        const result = await invoke<ArrayBuffer>("fetch_body", {
           target,
           side,
           maxSize,
         });
-        const bytes = new Uint8Array(result.bytes);
-        return { bytes, decodedSize: bytes.byteLength, contentType: result.contentType };
+        // Raw IPC frame: u32 LE MIME byte length, UTF-8 MIME type, then decoded Body bytes.
+        const bodyOffset = 4 + new DataView(result).getUint32(0, true);
+        const bytes = new Uint8Array(result, bodyOffset);
+        const contentType = new TextDecoder().decode(new Uint8Array(result, 4, bodyOffset - 4));
+        return { bytes, decodedSize: bytes.byteLength, contentType };
       } catch (error) {
         throw new BodyFetchError(
           isManagerError(error) ? error : { code: "invoke_error", message: String(error) },

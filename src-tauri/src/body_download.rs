@@ -40,19 +40,32 @@ pub(crate) struct LoadedBody {
     content_type: String,
 }
 
+impl LoadedBody {
+    fn into_response(self) -> tauri::ipc::Response {
+        // Match fetchBody's raw frame: u32 LE MIME byte length, UTF-8 MIME, Body bytes.
+        let mut frame = Vec::with_capacity(4 + self.content_type.len() + self.bytes.len());
+        frame.extend_from_slice(&(self.content_type.len() as u32).to_le_bytes());
+        frame.extend_from_slice(self.content_type.as_bytes());
+        frame.extend_from_slice(&self.bytes);
+        tauri::ipc::Response::new(frame)
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn fetch_body(
     state: State<'_, BackendState>,
     target: BodyTarget,
     side: String,
     max_size: Option<u64>,
-) -> Result<LoadedBody, ManagerError> {
+) -> Result<tauri::ipc::Response, ManagerError> {
     let max_size = max_size.unwrap_or(16 * 1024 * 1024);
     if max_size == 0 || max_size > 1024 * 1024 * 1024 {
         return Err(ManagerError::bad_request("无效的 Body 大小限制"));
     }
     let source = body_source(&state, target, &side).await?;
-    load_body(&source, max_size).await
+    load_body(&source, max_size)
+        .await
+        .map(LoadedBody::into_response)
 }
 
 /// 工作区资源预览：读取原始字节，供资源详情页按类型展示。
@@ -214,6 +227,24 @@ fn save_error(error: std::io::Error) -> ManagerError {
 mod tests {
     use super::*;
     use proxy_crab_mitm::storage::BodySourceData;
+
+    #[test]
+    fn body_ipc_is_raw_and_preserves_mime_and_bytes() {
+        use tauri::ipc::{InvokeResponseBody, IpcResponse};
+        for bytes in [vec![], vec![0, 255, 13, 10]] {
+            let response = LoadedBody {
+                bytes: bytes.clone(),
+                content_type: "image/png".into(),
+            }
+            .into_response();
+            let InvokeResponseBody::Raw(frame) = response.body().unwrap() else {
+                panic!("Body must use binary IPC");
+            };
+            assert_eq!(&frame[..4], &9_u32.to_le_bytes());
+            assert_eq!(&frame[4..13], b"image/png");
+            assert_eq!(&frame[13..], bytes.as_slice());
+        }
+    }
 
     #[tokio::test]
     async fn save_preserves_bytes_and_keeps_existing_file_on_decode_failure() {

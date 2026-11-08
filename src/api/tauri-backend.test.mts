@@ -11,6 +11,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function bodyResponse(bytes: Uint8Array, contentType: string): ArrayBuffer {
+  const mime = new TextEncoder().encode(contentType);
+  const result = new Uint8Array(4 + mime.length + bytes.length);
+  new DataView(result.buffer).setUint32(0, mime.length, true);
+  result.set(mime, 4);
+  result.set(bytes, 4 + mime.length);
+  return result.buffer;
+}
+
 test.each([
   { kind: "log", id: 42, sessionId: 3 },
   { kind: "interceptor", id: 42, sessionId: 3, executionId: 17 },
@@ -18,7 +27,7 @@ test.each([
 ] as const)("desktop preview loads $kind bytes through IPC without HTTP", async (target) => {
   const fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
-  vi.mocked(invoke).mockResolvedValue({ bytes: [0, 255, 13, 10], contentType: "image/png" });
+  vi.mocked(invoke).mockResolvedValue(bodyResponse(new Uint8Array([0, 255, 13, 10]), "image/png"));
   const body = await createTauriBackend().fetchBody(target, "response");
   expect(body).toEqual({
     bytes: new Uint8Array([0, 255, 13, 10]),
@@ -48,7 +57,9 @@ test("desktop preview preserves size errors for manual loading and forwards the 
     actualSize: error.actual_size,
     maxSize: error.max_size,
   });
-  vi.mocked(invoke).mockResolvedValueOnce({ bytes: [], contentType: "application/octet-stream" });
+  vi.mocked(invoke).mockResolvedValueOnce(
+    bodyResponse(new Uint8Array(), "application/octet-stream"),
+  );
   await createTauriBackend().fetchBody(target, "request", UI_BODY_MAX_SIZE);
   expect(invoke).toHaveBeenLastCalledWith("fetch_body", {
     target,
@@ -56,6 +67,24 @@ test("desktop preview preserves size errors for manual loading and forwards the 
     maxSize: UI_BODY_MAX_SIZE,
   });
 });
+
+test.each([0, 1024 * 1024])(
+  "desktop binary Body preserves all %i bytes without copying",
+  async (size) => {
+    const bytes = Uint8Array.from({ length: size }, (_, i) => i % 256);
+    const response = bodyResponse(bytes, "application/octet-stream");
+    vi.mocked(invoke).mockResolvedValueOnce(response);
+    const body = await createTauriBackend().fetchBody(
+      { kind: "log", id: 42, sessionId: 3 },
+      "response",
+    );
+    expect(body.bytes.length).toBe(bytes.length);
+    expect(body.bytes.every((value, index) => value === bytes[index])).toBe(true);
+    expect(body.bytes.buffer).toBe(response);
+    expect(body.decodedSize).toBe(size);
+    expect(body.contentType).toBe("application/octet-stream");
+  },
+);
 
 test.each([0, -1, 1.5, NaN, UI_BODY_MAX_SIZE + 1])(
   "invalid preview limit %s never invokes IPC",

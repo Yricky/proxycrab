@@ -4,6 +4,8 @@
 
 **Architecture:** `saveFile({filename})` returns a Writer (`append`, `markAsFinish`, `markAsError`). Desktop writers append binary IPC chunks to same-directory temporary files and publish only on finish; browser writers accumulate Blob parts. A floating export window freezes the current Session/ordered IDs when its export button is pressed, reports progress/logs, and cancels on close. HAR is generated one entry at a time from existing read APIs; Body read failures become explanatory content. Ordinary HTTP failures/in-progress rows remain; synthetic CONNECT and WebSocket connection rows are skipped.
 
+**Performance follow-up:** The export loop yields on a 16 ms time budget instead of after every row. Desktop `fetch_body` returns raw binary IPC: a four-byte little-endian MIME byte length, UTF-8 MIME bytes, then the decoded Body. The frontend views the Body in the returned buffer without copying it. Existing decoding, size errors, authorization, and other Body commands retain their behavior.
+
 **Tech Stack:** Vue/TypeScript, Tauri IPC, Rust/tempfile, Vitest/cargo tests.
 
 Execution stays in this chat, without subagents, per user/repository instructions.
