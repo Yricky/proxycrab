@@ -22,6 +22,7 @@ import { copyText } from "../utils/clipboard";
 import { formatHex } from "../utils/hex-viewer";
 import { useHexViewerMenu } from "../utils/hex-viewer-menu";
 import HexViewer from "./HexViewer.vue";
+import MonacoEditor from "./MonacoEditor.vue";
 import {
   drainWebSocketPages,
   messageColors,
@@ -138,17 +139,17 @@ const visibleMessages = computed(
 );
 const PREVIEW_LIMIT = 64 * 1024;
 const preview = computed(() => {
-  if (!body.value) return "";
-  const bytes = body.value.bytes.subarray(0, PREVIEW_LIMIT);
-  const text = new TextDecoder().decode(bytes);
-  if (formatted.value && body.value.bytes.length <= PREVIEW_LIMIT) {
+  const bytes = body.value?.bytes.subarray(0, PREVIEW_LIMIT);
+  const text = bytes ? new TextDecoder().decode(bytes) : "";
+  if ((body.value?.bytes.length ?? 0) <= PREVIEW_LIMIT) {
     try {
-      return JSON.stringify(JSON.parse(text), null, 2);
+      const json = JSON.parse(text);
+      return { text: formatted.value ? JSON.stringify(json, null, 2) : text, language: "json" };
     } catch {
       /* Plain text. */
     }
   }
-  return text;
+  return { text, language: "plaintext" };
 });
 const truncated = computed(() => (body.value?.bytes.length ?? 0) > PREVIEW_LIMIT);
 function paint() {
@@ -757,7 +758,9 @@ onBeforeUnmount(() => {
         <div v-if="truncated" class="preview-note">
           仅预览前 64 KiB；复制和下载包含完整消息（{{ body.bytes.length }} B）。
         </div>
-        <pre class="message-body mono">{{ preview }}</pre>
+        <div class="message-editor">
+          <MonacoEditor :model-value="preview.text" :language="preview.language" readonly />
+        </div>
       </template>
     </div>
     <div v-else class="empty-hint">
@@ -915,16 +918,11 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
 }
-.message-body {
+.message-editor {
   flex: 1;
-  overflow: auto;
+  display: flex;
+  min-width: 0;
   min-height: 0;
-  margin: 0;
-  padding: 10px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  user-select: text;
-  font-size: 11px;
 }
 .preview-note,
 .ws-error,

@@ -7,7 +7,6 @@ import {
   Io5Refresh,
   Io5ServerOutline,
   Io5Trash,
-  Io5DownloadOutline,
   Io5ArchiveOutline,
 } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
@@ -24,6 +23,7 @@ import { openHarExport, openBreakpointList, openScriptEditor } from "../windows/
 import AppTooltip from "./AppTooltip.vue";
 import InterceptorPicker from "./InterceptorPicker.vue";
 import { GiBroom } from "vue-icons-plus/gi";
+import { RiFileDownloadFill } from "vue-icons-plus/ri";
 
 const props = defineProps<{ logs: LogsStore }>();
 const logs = props.logs;
@@ -462,7 +462,7 @@ onBeforeUnmount(() => {
         aria-label="导出 HAR"
         @click="openHarExport(logs)"
       >
-        <Io5DownloadOutline :size="16" />
+        <RiFileDownloadFill :size="16" />
       </button>
     </AppTooltip>
     <AppTooltip
@@ -542,7 +542,6 @@ onBeforeUnmount(() => {
   flex: none;
   width: 24px;
   height: 24px;
-  margin-left: 4px;
   padding: 0;
   display: inline-flex;
   align-items: center;

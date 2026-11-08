@@ -32,6 +32,7 @@ import {
   Io5OpenOutline,
   Io5Trash,
 } from "vue-icons-plus/io5";
+import { FiMaximize } from "vue-icons-plus/fi";
 
 const props = defineProps<{ logs: LogsStore }>();
 // 实例由宿主组件（AppMain / AppReadonly）持有；同一实例贯穿本组件生命周期。
@@ -277,7 +278,7 @@ function showCellMenu(
     });
     items.push({
       label: "展示完整内容",
-      icon: Io5OpenOutline,
+      icon: FiMaximize,
       action: () => {
         cellPopup.value = {
           text: value,

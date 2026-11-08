@@ -32,7 +32,6 @@ import { IoHandRight } from "vue-icons-plus/io";
 import {
   Io5ArrowDown,
   Io5ArrowUp,
-  Io5Build,
   Io5Checkmark,
   Io5ChevronDown,
   Io5CodeSlash,
@@ -53,7 +52,7 @@ import {
   Io5GitCompare,
   Io5QrCode,
 } from "vue-icons-plus/io5";
-import { BsFillSendFill } from "vue-icons-plus/bs";
+import { BsAlphabetUppercase, BsFillSendFill } from "vue-icons-plus/bs";
 import { GrConnect } from "vue-icons-plus/gr";
 import { LiaStarOfLifeSolid } from "vue-icons-plus/lia";
 
@@ -303,7 +302,7 @@ onBeforeUnmount(() => {
         </button>
         <div v-if="activeMenu === 'tools'" class="tb-menu">
           <button class="tb-menu-item" @click="runMenuAction(openBase64)">
-            <Io5Build :size="14" />
+            <BsAlphabetUppercase :size="14" />
             <span>Base64 编解码</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openJwt)">

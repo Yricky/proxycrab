@@ -1112,8 +1112,9 @@ Binary message bodies and HTTP Body types without a specialized preview use the 
 HexViewer. It renders all loaded bytes, with width-adaptive four-byte groups, optional ASCII,
 synchronized byte selection, and Canvas menus/scrollbars. The selection menu copies grouped,
 byte-separated, compact Hex, or the displayed ASCII string (nonprintable bytes become dots).
-Only text WebSocket previews retain the 64 KiB display cap. API read limits and downloaded bytes
-are unchanged.
+WebSocket text messages use read-only Monaco, with JSON highlighting for valid JSON and the
+existing formatting toggle; other content uses plain-text mode. The 64 KiB text-preview cap
+remains. Toolbar copy/download preserve the complete original message; API read limits are unchanged.
 
 Connection metadata and icon actions share one toolbar. Per-direction message counts appear
 as a second, smaller line in the left C→S/S→C legends; direction labels align with Canvas bars.

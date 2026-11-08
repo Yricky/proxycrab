@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   Io5Add,
-  Io5CodeSlash,
+  Io5Build,
   Io5Globe,
   Io5Settings,
   Io5Trash,
@@ -301,7 +301,7 @@ onBeforeUnmount(() => {
         :class="{ active: page === 'development' }"
         @click="selectPage('development')"
       >
-        <Io5CodeSlash :size="15" />
+        <Io5Build :size="15" />
         开发
       </button>
     </aside>
