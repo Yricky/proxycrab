@@ -1743,6 +1743,17 @@ pub async fn body_reader(
                 .await
                 .map_err(|error| ManagerError::new(ErrorCode::BodyReadFailed, error.to_string()))?,
         ),
+        BodySourceData::TemporaryFile(path) => {
+            let guard = path.clone();
+            let file = tokio::fs::File::open(path.as_ref())
+                .await
+                .map_err(|error| ManagerError::new(ErrorCode::BodyReadFailed, error.to_string()))?;
+            let stream = ReaderStream::new(file).map(move |chunk| {
+                let _ = &guard;
+                chunk
+            });
+            Box::pin(StreamReader::new(stream))
+        }
         BodySourceData::Bytes(bytes) => {
             let stream = stream::once({
                 let bytes = Bytes::copy_from_slice(bytes);

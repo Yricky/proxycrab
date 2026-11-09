@@ -281,6 +281,80 @@ async fn redaction_builtin_fast_paths_and_uri_only_environment() {
 }
 
 #[tokio::test]
+async fn binary_redaction_stream_lifetime_and_snapshot_do_not_retain_original_content() {
+    use tokio::io::AsyncReadExt;
+    let f = Fixture::new(
+        "if req.body then req.body:replace_with_bytes(bytes.view(string.char(0,255))) end",
+    )
+    .await;
+    let reader = f
+        .manager
+        .reader(Some("mask"), "/api/logs/{id}/body")
+        .unwrap();
+    let source = reader
+        .log_body_source(Some(f.sid), f.id, BodySide::Request)
+        .await
+        .unwrap();
+    let BodySourceData::TemporaryFile(path) = &source.data else {
+        panic!("binary redaction output must remain temporary");
+    };
+    let path = path.to_path_buf();
+    let mut stream = proxy_crab_mgr::http::body_reader(&source, false)
+        .await
+        .unwrap();
+    drop(source);
+    assert!(path.exists());
+    let mut bytes = Vec::new();
+    stream.read_to_end(&mut bytes).await.unwrap();
+    assert_eq!(bytes, [0, 255]);
+    drop(stream);
+    assert!(!path.exists());
+
+    let snapshot = RequestInterceptorSnapshot {
+        method: "GET".into(),
+        uri: "https://example.com/".into(),
+        version: "HTTP/1.1".into(),
+        headers: HeaderValues::from([("content-type".into(), vec!["text/plain".into()])]),
+        body: BodySourceType::String {
+            content: "original inline secret".into(),
+        },
+    };
+    let run = InterceptorRun {
+        origin: InterceptorExecutionOrigin::Saved,
+        completed: true,
+        phase: InterceptorKind::Request,
+        position: 0,
+        name: "historical".into(),
+        script_hash: script_content_hash("-- original"),
+        content: "-- original".into(),
+        error: None,
+        modifications: vec![Modification::Snapshot {
+            request: Some(snapshot),
+            response: None,
+        }],
+    };
+    let execution = f.store.begin_interceptor_run(f.id, &run).unwrap();
+    let redacted = reader
+        .interceptor_snapshot(Some(f.sid), f.id, execution)
+        .await
+        .unwrap();
+    assert_eq!(redacted.request.unwrap().body, BodySourceType::Original);
+    let body = reader
+        .interceptor_snapshot_body_source(Some(f.sid), f.id, execution, BodySide::Request)
+        .await
+        .unwrap();
+    assert_eq!(body.data.read_all().unwrap(), [0, 255]);
+    let original = f
+        .manager
+        .interceptor_snapshot(Some(f.sid), f.id, execution)
+        .await
+        .unwrap();
+    assert!(
+        matches!(original.request.unwrap().body, BodySourceType::String { content } if content == "original inline secret")
+    );
+}
+
+#[tokio::test]
 async fn redaction_shared_snapshot_and_body_are_scoped_and_transformed() {
     let f = Fixture::new(MASK).await;
     let snapshot = RequestInterceptorSnapshot {

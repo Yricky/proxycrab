@@ -1339,7 +1339,10 @@ Routing and capture lifecycle details:
 - A bypassed CONNECT is transparently tunneled without TLS decryption.
 - Request/response bodies stream to capture files without an application-level size limit.
 - Interceptors execute once at the request/response header boundary. Body getters may wait for the
-  complete original body and then switch the normal forwarding path to disk replay.
+  complete original body and then switch the normal forwarding path to disk replay. `as_bytes()`
+  returns an editable view over immutable files/memory, including files above 16 MiB. Edits remain
+  local until submitted. HTTP `replace_with_bytes` streams into a generated persistent Asset and
+  records the existing `body_replace_asset`; binary read-time redaction output stays temporary.
 - `_crab_resp_bodyframe_timeout` optionally bounds idle milliseconds before each upstream response
   body frame; normal responses fail on expiry, while replacement responses retain success and record
   the raw-drain timeout as diagnostic metadata.

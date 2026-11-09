@@ -27,6 +27,7 @@ use crate::{
     storage::{BodySide, BodySource, BodySourceData},
 };
 
+mod bytes;
 mod codec;
 pub mod redaction;
 pub(crate) mod websocket;
@@ -221,7 +222,7 @@ impl ReusableScript {
                      local environment = {}
                      for key, value in next, base do
                        if key ~= "_G" then
-                         if type(value) == "table" and key ~= "base64" and key ~= "json" then
+                         if type(value) == "table" and key ~= "base64" and key ~= "json" and key ~= "bytes" then
                            local copy = {}
                            for table_key, table_value in next, value do
                              copy[table_key] = table_value
@@ -591,6 +592,7 @@ fn safe_lua() -> Result<(Lua, codec::JsonWarningState)> {
             }
         },
     )?;
+    bytes::install(&lua)?;
     let warnings = codec::install(&lua)?;
     Ok((lua, warnings))
 }
@@ -634,6 +636,10 @@ struct CaptureBodyAccessInner {
     resolver: Option<Arc<BodySourceResolver>>,
     request: OnceLock<CachedBody>,
     response: OnceLock<CachedBody>,
+    request_bytes: OnceLock<Result<Option<bytes::Source>, String>>,
+    response_bytes: OnceLock<Result<Option<bytes::Source>, String>>,
+    strict_text: bool,
+    failed: AtomicBool,
 }
 
 impl CaptureBodyAccess {
@@ -641,19 +647,53 @@ impl CaptureBodyAccess {
     where
         F: Fn(BodySide) -> Result<Option<BodySource>> + Send + Sync + 'static,
     {
-        Self(Arc::new(CaptureBodyAccessInner {
-            resolver: Some(Arc::new(resolver)),
-            request: OnceLock::new(),
-            response: OnceLock::new(),
-        }))
+        Self::from_resolver(Some(Arc::new(resolver)))
     }
 
     pub fn unavailable() -> Self {
+        Self::from_resolver(None)
+    }
+
+    fn from_resolver(resolver: Option<Arc<BodySourceResolver>>) -> Self {
         Self(Arc::new(CaptureBodyAccessInner {
-            resolver: None,
+            resolver,
             request: OnceLock::new(),
             response: OnceLock::new(),
+            request_bytes: OnceLock::new(),
+            response_bytes: OnceLock::new(),
+            strict_text: false,
+            failed: AtomicBool::new(false),
         }))
+    }
+
+    fn strict(mut self) -> Self {
+        Arc::get_mut(&mut self.0)
+            .expect("new body access")
+            .strict_text = true;
+        self
+    }
+
+    fn bytes_source(&self, side: BodySide) -> mlua::Result<Option<bytes::Source>> {
+        let cache = match side {
+            BodySide::Request => &self.0.request_bytes,
+            BodySide::Response => &self.0.response_bytes,
+        };
+        let result = cache
+            .get_or_init(|| {
+                let Some(resolver) = &self.0.resolver else {
+                    return Ok(None);
+                };
+                resolver(side)
+                    .map_err(|error| error.to_string())?
+                    .map(bytes::Source::body)
+                    .transpose()
+                    .map_err(|error| error.to_string())
+            })
+            .clone();
+        if result.is_err() {
+            self.0.failed.store(true, Ordering::Relaxed);
+        }
+        result.map_err(LuaError::runtime)
     }
 
     fn text_bytes(&self, side: BodySide) -> mlua::Result<Option<Arc<[u8]>>> {
@@ -668,6 +708,14 @@ impl CaptureBodyAccess {
                 };
                 let Some(source) = resolver(side).map_err(|error| error.to_string())? else {
                     return Ok(None);
+                };
+                let source = if self.0.strict_text {
+                    redaction::strict_source(source).map_err(|error| {
+                        self.0.failed.store(true, Ordering::Relaxed);
+                        error.to_string()
+                    })?
+                } else {
+                    source
                 };
                 read_text_body_source(source)
                     .map(|bytes| bytes.map(Arc::from))
@@ -757,6 +805,12 @@ struct ReadBody {
 
 impl UserData for ReadBody {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("as_bytes", |lua, this, ()| {
+            this.access
+                .bytes_source(this.side)?
+                .map(|source| source.view(lua))
+                .transpose()
+        });
         methods.add_method("as_string", |lua, this, ()| {
             let Some(bytes) = this.access.text_bytes(this.side)? else {
                 return Ok(Value::Nil);
@@ -885,6 +939,8 @@ impl UserData for ReadHeaders {
     }
 }
 
+type DecodedBodyCache = Option<(Option<std::path::PathBuf>, Vec<String>, bytes::Source)>;
+
 #[derive(Clone)]
 pub(crate) struct SharedInterceptorState {
     method: Arc<Mutex<Option<String>>>,
@@ -895,6 +951,7 @@ pub(crate) struct SharedInterceptorState {
     tags: Arc<Mutex<RequestTags>>,
     raw_body: Arc<Mutex<Option<DeferredBodyReader>>>,
     assets: Arc<Mutex<Option<AssetStore>>>,
+    decoded_body: Arc<Mutex<DecodedBodyCache>>,
     response_phase: bool,
     read_only: Arc<AtomicBool>,
 }
@@ -910,6 +967,7 @@ impl SharedInterceptorState {
             tags: Arc::new(Mutex::new(tags)),
             raw_body: Arc::new(Mutex::new(None)),
             assets: Arc::new(Mutex::new(None)),
+            decoded_body: Arc::new(Mutex::new(None)),
             response_phase: false,
             read_only: Arc::new(AtomicBool::new(false)),
         }
@@ -1435,6 +1493,30 @@ struct MutableBody {
 
 impl UserData for MutableBody {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("as_bytes", |lua, this, ()| {
+            effective_byte_source(this)?.view(lua)
+        });
+        methods.add_method("replace_with_bytes", |lua, this, data: Value| {
+            this.state.ensure_writable()?;
+            let view = bytes::BytesView::input(lua, data)?;
+            let assets = this
+                .state
+                .assets
+                .lock()
+                .expect("Lua asset store lock")
+                .clone()
+                .ok_or_else(|| LuaError::runtime("asset store unavailable"))?;
+            let asset = assets
+                .create_generated(|file| view.copy_to(file).map_err(std::io::Error::other))
+                .map_err(LuaError::external)?;
+            this.state
+                .set_body(Some(BodyReplacement::Asset(asset.clone())));
+            this.journal.push(Modification::BodyReplaceAsset {
+                asset_id: asset.metadata.id,
+            });
+            remove_content_encoding(&this.state, &this.journal);
+            Ok(())
+        });
         methods.add_method("replace_with_string", |_, this, content: String| {
             this.state.ensure_writable()?;
             *this
@@ -1494,6 +1576,12 @@ impl UserData for MutableBody {
 struct LuaAsset(Asset);
 
 impl UserData for LuaAsset {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("as_bytes", |lua, this, ()| {
+            bytes::Source::file(this.0.path())?.view(lua)
+        });
+    }
+
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         fields.add_field_method_get("id", |_, this| Ok(this.0.metadata.id.clone()));
         fields.add_field_method_get("size", |_, this| Ok(this.0.metadata.size));
@@ -1506,6 +1594,69 @@ impl UserData for LuaAsset {
 }
 
 const LUA_BODY_LIMIT: u64 = 16 * 1024 * 1024;
+
+fn effective_byte_source(body: &MutableBody) -> mlua::Result<bytes::Source> {
+    let source = match body.state.body() {
+        Some(BodyReplacement::String(content)) => {
+            return Ok(bytes::Source::Memory(content.into_bytes().into()));
+        }
+        Some(BodyReplacement::Asset(asset)) => DeferredBodyRead::File(asset.path().to_owned()),
+        None => {
+            let reader = body
+                .state
+                .raw_body
+                .lock()
+                .expect("Lua raw body lock")
+                .clone()
+                .ok_or_else(|| LuaError::runtime("raw body is unavailable"))?;
+            let timeout = body
+                .state
+                .response_phase
+                .then(|| {
+                    body.state
+                        .tags()
+                        .get("_crab_resp_bodyframe_timeout")
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .filter(|&v| v > 0)
+                        .map(std::time::Duration::from_millis)
+                })
+                .flatten();
+            reader.read(timeout).map_err(LuaError::runtime)?
+        }
+    };
+    let path = match source {
+        DeferredBodyRead::Empty => None,
+        DeferredBodyRead::File(path) => Some(path),
+    };
+    let headers = body.state.headers();
+    let encodings = header_values(&headers, "content-encoding")
+        .into_iter()
+        .flatten()
+        .flat_map(|v| v.split(','))
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty() && v != "identity")
+        .collect::<Vec<_>>();
+    let mut cache = body.state.decoded_body.lock().expect("decoded body lock");
+    if let Some((cached_path, cached_encodings, source)) = &*cache
+        && *cached_path == path
+        && *cached_encodings == encodings
+    {
+        return Ok(source.clone());
+    }
+    let data = path.as_ref().map_or_else(
+        || BodySourceData::Bytes(Vec::new()),
+        |path| BodySourceData::File(path.clone()),
+    );
+    let source = bytes::Source::body(BodySource {
+        data,
+        path: None,
+        stored_size: 0,
+        content_type: None,
+        content_encodings: encodings.clone(),
+    })?;
+    *cache = Some((path, encodings, source.clone()));
+    Ok(source)
+}
 
 fn effective_text_bytes(body: &MutableBody) -> mlua::Result<Option<Vec<u8>>> {
     let headers = body.state.headers();
@@ -1573,6 +1724,7 @@ fn read_text_body_source(source: BodySource) -> mlua::Result<Option<Vec<u8>>> {
             &source.content_encodings,
         ),
         BodySourceData::File(path) => read_body_file(&path, &source.content_encodings),
+        BodySourceData::TemporaryFile(path) => read_body_file(&path, &source.content_encodings),
     }
 }
 
@@ -2181,6 +2333,81 @@ mod tests {
             assert_eq!(effects.headers.len(), 1);
             assert!(effects.modifications.is_empty());
         }
+    }
+
+    #[test]
+    fn binary_views_are_independent_and_http_submission_uses_assets() {
+        use crate::{asset::AssetStore, model::Modification};
+        use std::{
+            fs::File,
+            io::{Seek, SeekFrom},
+        };
+        let root = tempfile::tempdir().unwrap();
+        let store = AssetStore::open(root.path()).unwrap();
+        let original = store
+            .create_generated(|file| {
+                file.set_len(24 * 1024 * 1024)?;
+                file.seek(SeekFrom::Start(0))?;
+                file.write_all(&[0, 255, 128])
+            })
+            .unwrap();
+        let request = entry().request;
+        let state = SharedInterceptorState::new_request(
+            request.method.clone(),
+            request.uri.clone(),
+            HeaderValues::from([(
+                "content-type".into(),
+                vec!["application/octet-stream".into()],
+            )]),
+            RequestTags::new(),
+        );
+        state.set_asset_store(store.clone());
+        state.set_body(Some(BodyReplacement::Asset(original.clone())));
+        let source = format!(
+            r#"
+            local asset = get_asset('{}')
+            local a, b = req.body:as_bytes(), req.body:as_bytes()
+            assert(#a == 24 * 1024 * 1024 and a[2] == 255)
+            a[1] = 42
+            assert(b[1] == 0 and asset:as_bytes()[1] == 0)
+            req.body:replace_with_bytes(a)
+            a[1] = 43
+            assert(req.body:as_bytes()[1] == 42)
+            assert(base64.encode(a:sub(1,3)) == 'K/+A')
+            assert(base64.url_encode(a:sub(1,3), false) == 'K_-A')
+        "#,
+            original.metadata.id
+        );
+        let journal = ModificationJournal::for_current_request(&request, &state);
+        let (effects, error) =
+            execute_request_with_state(&source, &request, state, journal, "bytes", None, None)
+                .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        let Some(BodyReplacement::Asset(asset)) = effects.body else {
+            panic!("bytes must reuse Asset replacement");
+        };
+        let mut first = [0];
+        std::io::Read::read_exact(&mut File::open(asset.path()).unwrap(), &mut first).unwrap();
+        assert_eq!(first, [42]);
+        std::io::Read::read_exact(&mut File::open(original.path()).unwrap(), &mut first).unwrap();
+        assert_eq!(first, [0]);
+        assert_eq!(asset.metadata.size, 24 * 1024 * 1024);
+        assert!(effects.modifications.iter().any(|m| matches!(m, Modification::BodyReplaceAsset { asset_id } if asset_id == &asset.metadata.id)));
+
+        let mut capture = entry();
+        capture.outcome = CaptureOutcome::Success;
+        let path = original.path().to_owned();
+        let access = CaptureBodyAccess::new(move |_| {
+            Ok(Some(BodySource {
+                data: BodySourceData::File(path.clone()),
+                path: None,
+                stored_size: 24 * 1024 * 1024,
+                content_type: Some("application/octet-stream".into()),
+                content_encodings: vec![],
+            }))
+        });
+        let filter = FilterEvaluator::new("local a = entry.req.body:as_bytes(); a[1] = 9; return entry.req.body:as_bytes()[1] == 0 and #a > 16777216", "bytes").unwrap();
+        assert!(filter.evaluate_with_bodies("", &capture, access).unwrap());
     }
 
     #[tokio::test]

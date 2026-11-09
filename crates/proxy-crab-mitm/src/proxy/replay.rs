@@ -98,6 +98,11 @@ impl ProxyCrab {
                     .ok_or(ReplayError::BodyNotFound)?;
                 match source.data {
                     BodySourceData::Bytes(bytes) => Bytes::from(bytes),
+                    BodySourceData::TemporaryFile(path) => Bytes::from(
+                        tokio::fs::read(path.as_ref())
+                            .await
+                            .map_err(|error| ReplayError::Internal(error.into()))?,
+                    ),
                     BodySourceData::File(path) => Bytes::from(
                         tokio::fs::read(&path)
                             .await

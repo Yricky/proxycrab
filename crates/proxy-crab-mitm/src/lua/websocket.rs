@@ -146,7 +146,17 @@ impl UserData for WsContext {
         });
         methods.add_method(
             "send",
-            |_, this, (direction, body, kind): (String, mlua::LuaString, Option<String>)| {
+            |lua, this, (direction, body, kind): (String, Value, Option<String>)| {
+                let body = match body {
+                    Value::String(body) => body,
+                    data => {
+                        let view = bytes::BytesView::input(lua, data)?;
+                        if view.len > LUA_BODY_LIMIT as usize {
+                            return Err(LuaError::runtime("WebSocket message exceeds 16 MiB"));
+                        }
+                        view.to_string(lua)?
+                    }
+                };
                 let mut guard = this.pending.lock().unwrap();
                 let pending = guard.as_mut().ok_or_else(expired)?;
                 if pending.queued.saturating_add(pending.effects.sends.len()) >= QUEUE_LIMIT {
@@ -210,6 +220,12 @@ fn expired() -> LuaError {
 
 impl UserData for WsMessageInput {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("as_bytes", |lua, this, ()| {
+            this.body
+                .read()?
+                .map(|body| bytes::Source::Memory(body).view(lua))
+                .transpose()
+        });
         methods.add_meta_method(MetaMethod::Index, |lua, this, key: String| {
             match key.as_str() {
                 "body" => match this.body.read()? {
@@ -511,6 +527,27 @@ mod tests {
         );
         callback.unwrap().call(message(3), history, 0).unwrap();
         assert_eq!(reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn message_and_history_views_only_change_explicit_sends() {
+        let (callback, error) = register(
+            r#"
+            req:on_ws_message(function(ws)
+                local current, old = ws.message:as_bytes(), ws:history()[1]:as_bytes()
+                current[1] = 0
+                old[1] = 255
+                assert(ws.message.body == 'hello' and ws:history()[1].body == 'hello')
+                ws:drop()
+                ws:send('request', current, 'binary')
+                current[1] = 42
+            end)
+        "#,
+        );
+        assert!(error.is_none(), "{error:?}");
+        let effects = callback.unwrap().call(message(2), history(), 0).unwrap();
+        assert!(effects.dropped);
+        assert_eq!(effects.sends[0].body.as_ref(), b"\0ello");
     }
 
     #[test]

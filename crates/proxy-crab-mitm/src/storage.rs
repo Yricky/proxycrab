@@ -38,6 +38,18 @@ pub enum BodySide {
 pub enum BodySourceData {
     File(PathBuf),
     Bytes(Vec<u8>),
+    /// Read-time output only; the immutable file lives as long as its consumers.
+    TemporaryFile(Arc<tempfile::TempPath>),
+}
+
+impl BodySourceData {
+    pub fn read_all(self) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::File(path) => fs::read(path),
+            Self::Bytes(bytes) => Ok(bytes),
+            Self::TemporaryFile(path) => fs::read(path.as_ref()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1048,10 +1060,7 @@ impl CaptureStore {
                 size: source.stored_size,
             });
         }
-        let mut bytes = match source.data {
-            BodySourceData::File(path) => fs::read(path)?,
-            BodySourceData::Bytes(bytes) => bytes,
-        };
+        let mut bytes = source.data.read_all()?;
         if !source.content_encodings.is_empty() {
             bytes = match decode_body(
                 &bytes,
@@ -1085,10 +1094,7 @@ pub fn read_body_payload(source: BodySource) -> Result<BodyPayload> {
             size: source.stored_size,
         });
     }
-    let bytes = match source.data {
-        BodySourceData::File(path) => fs::read(path)?,
-        BodySourceData::Bytes(bytes) => bytes,
-    };
+    let bytes = source.data.read_all()?;
     let bytes = if source.content_encodings.is_empty() {
         bytes
     } else {

@@ -161,6 +161,57 @@ impl AssetStore {
         })
     }
 
+    /// Stream a Lua binary replacement into an immutable, content-addressed Asset.
+    pub(crate) fn create_generated(
+        &self,
+        write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+    ) -> Result<Asset, AssetError> {
+        use std::io::{Read, Seek, SeekFrom, Write};
+        let mut temporary = tempfile::NamedTempFile::new_in(&self.uploads)?;
+        write(temporary.as_file_mut())?;
+        temporary.as_file_mut().flush()?;
+        temporary.as_file().sync_all()?;
+        temporary.as_file_mut().seek(SeekFrom::Start(0))?;
+        let size = temporary.as_file().metadata()?.len();
+        let mut digest = Sha256::new();
+        let mut buffer = [0; 64 * 1024];
+        loop {
+            let count = temporary.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
+        }
+        let sha256 = hex_lower(&digest.finalize());
+        let id = format!("lua-bytes/{sha256}.bin");
+        let mutation = self.file_mutation.clone();
+        let _guard = mutation.lock().unwrap();
+        if let Some(asset) = self.get(&id)? {
+            return Ok(asset);
+        }
+        self.ensure_available(&id)?;
+        let path = self.asset_path(&id);
+        let metadata_path = self.metadata_path(&id);
+        create_parent(&path, &id)?;
+        create_parent(&metadata_path, &id)?;
+        let metadata = AssetMetadata {
+            id,
+            size,
+            content_type: "application/octet-stream".into(),
+            sha256,
+            created_at: now_millis(),
+        };
+        let mut metadata_temporary = tempfile::NamedTempFile::new_in(&self.uploads)?;
+        metadata_temporary.write_all(&serde_json::to_vec_pretty(&metadata)?)?;
+        metadata_temporary.as_file().sync_all()?;
+        std::fs::hard_link(temporary.path(), &path)?;
+        if let Err(error) = std::fs::hard_link(metadata_temporary.path(), &metadata_path) {
+            let _ = std::fs::remove_file(&path);
+            return Err(error.into());
+        }
+        Ok(Asset { metadata, path })
+    }
+
     pub(crate) fn ensure_available(&self, id: &str) -> Result<(), AssetError> {
         let asset_path = self.asset_path(id);
         let metadata_path = self.metadata_path(id);

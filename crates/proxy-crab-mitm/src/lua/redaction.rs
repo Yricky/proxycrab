@@ -148,7 +148,7 @@ impl UserData for WebSocketRedactionBody {
             lua.create_string(this.original.as_slice())
         });
         methods.add_method("as_bytes", |lua, this, ()| {
-            lua.create_string(this.original.as_slice())
+            bytes::BytesView::string(lua, lua.create_string(this.original.as_slice())?)
         });
         methods.add_method("as_json", |lua, this, ()| {
             let _: serde_json::Value =
@@ -157,15 +157,22 @@ impl UserData for WebSocketRedactionBody {
             json.get::<Function>("decode")?
                 .call::<Value>(lua.create_string(this.original.as_slice())?)
         });
-        for name in ["replace_with_string", "replace_with_bytes"] {
-            methods.add_method(name, |_, this, value: mlua::LuaString| {
-                if value.as_bytes().len() as u64 > LUA_BODY_LIMIT {
-                    return Err(LuaError::runtime("body exceeds limit"));
-                }
-                *this.output.lock().expect("message output lock") = Some(value.as_bytes().to_vec());
-                Ok(())
-            });
-        }
+        methods.add_method("replace_with_string", |_, this, value: mlua::LuaString| {
+            if value.as_bytes().len() as u64 > LUA_BODY_LIMIT {
+                return Err(LuaError::runtime("body exceeds limit"));
+            }
+            *this.output.lock().expect("message output lock") = Some(value.as_bytes().to_vec());
+            Ok(())
+        });
+        methods.add_method("replace_with_bytes", |lua, this, value: Value| {
+            let view = bytes::BytesView::input(lua, value)?;
+            if view.len as u64 > LUA_BODY_LIMIT {
+                return Err(LuaError::runtime("body exceeds limit"));
+            }
+            *this.output.lock().expect("message output lock") =
+                Some(view.to_string(lua)?.as_bytes().to_vec());
+            Ok(())
+        });
         methods.add_method("replace_with_json", |lua, this, value: Value| {
             let json: Table = lua.globals().get("json")?;
             let encoded = json
@@ -186,6 +193,12 @@ impl UserData for WebSocketRedactionBody {
 
 #[derive(Clone)]
 pub struct RedactedCapture(Arc<Mutex<Flow>>);
+#[derive(Clone)]
+enum RedactionReplacement {
+    Text(String),
+    Bytes(bytes::Source),
+}
+
 struct Flow {
     evaluator: RedactionEvaluator,
     api: String,
@@ -195,8 +208,7 @@ struct Flow {
     resolver: Arc<BodySourceResolver>,
     sources: Arc<[OnceLock<Option<BodySource>>; 2]>,
     raw: CaptureBodyAccess,
-    read_failed: Arc<std::sync::atomic::AtomicBool>,
-    replacements: [Option<String>; 2],
+    replacements: [Option<RedactionReplacement>; 2],
     uri_only: bool,
     failed: bool,
 }
@@ -264,21 +276,11 @@ impl RedactedCapture {
         let response = original.response.is_some();
         let sources: Arc<[OnceLock<Option<BodySource>>; 2]> =
             Arc::new([OnceLock::new(), OnceLock::new()]);
-        let read_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let slots = sources.clone();
-        let failure = read_failed.clone();
         let raw = CaptureBodyAccess::new(move |side| {
-            let result = slots[side_index(side)]
-                .get()
-                .cloned()
-                .flatten()
-                .map(strict_source)
-                .transpose();
-            if result.is_err() {
-                failure.store(true, Ordering::Relaxed);
-            }
-            result
-        });
+            Ok(slots[side_index(side)].get().cloned().flatten())
+        })
+        .strict();
         let mut flow = Flow {
             evaluator,
             api: api.into(),
@@ -301,7 +303,6 @@ impl RedactedCapture {
             resolver,
             sources,
             raw,
-            read_failed,
             replacements: [None, None],
             uri_only,
             failed: false,
@@ -319,7 +320,10 @@ impl RedactedCapture {
         let flow = self.0.lock().expect("redaction flow lock");
         let mut output = flow.output.clone();
         for side in 0..2 {
-            if flow.replacements[side].is_some() || flow.cached_bytes(side).is_some() {
+            if flow.replacements[side].is_some()
+                || flow.cached_bytes(side).is_some()
+                || flow.cached_source(side).is_some()
+            {
                 let headers = if side == 0 {
                     Some(&mut output.request.headers)
                 } else {
@@ -369,10 +373,17 @@ impl RedactedCapture {
                 .and_then(|values| values.first())
                 .cloned();
             if let Some(content) = &flow.replacements[index] {
+                let (data, stored_size) = match content {
+                    RedactionReplacement::Text(content) => (
+                        BodySourceData::Bytes(content.as_bytes().to_vec()),
+                        content.len() as u64,
+                    ),
+                    RedactionReplacement::Bytes(source) => (source.data(), source.len() as u64),
+                };
                 return Ok(Some(BodySource {
-                    data: BodySourceData::Bytes(content.as_bytes().to_vec()),
+                    data,
                     path: None,
-                    stored_size: content.len() as u64,
+                    stored_size,
                     content_type,
                     content_encodings: Vec::new(),
                 }));
@@ -382,6 +393,15 @@ impl RedactedCapture {
                     data: BodySourceData::Bytes(bytes.to_vec()),
                     path: None,
                     stored_size: bytes.len() as u64,
+                    content_type,
+                    content_encodings: Vec::new(),
+                }));
+            }
+            if let Some(source) = flow.cached_source(index) {
+                return Ok(Some(BodySource {
+                    data: source.data(),
+                    path: None,
+                    stored_size: source.len() as u64,
                     content_type,
                     content_encodings: Vec::new(),
                 }));
@@ -413,10 +433,21 @@ struct Invocation {
     original: Arc<CaptureSummary>,
     states: [PartState; 4],
     raw: CaptureBodyAccess,
-    output: Arc<Mutex<(CaptureSummary, [Option<String>; 2])>>,
+    output: Arc<Mutex<(CaptureSummary, [Option<RedactionReplacement>; 2])>>,
     uri_only: bool,
 }
 impl Flow {
+    fn cached_source(&self, side: usize) -> Option<&bytes::Source> {
+        let slot = if side == 0 {
+            &self.raw.0.request_bytes
+        } else {
+            &self.raw.0.response_bytes
+        };
+        slot.get()
+            .and_then(|value| value.as_ref().ok())
+            .and_then(Option::as_ref)
+    }
+
     fn cached_bytes(&self, side: usize) -> Option<&Arc<[u8]>> {
         let slot = if side == 0 {
             &self.raw.0.request
@@ -482,7 +513,7 @@ impl Flow {
         // No script-controlled warning/error payload is published through system logs.
         let _ = script.warnings.take();
         result?;
-        if self.read_failed.load(Ordering::Relaxed) {
+        if self.raw.0.failed.load(Ordering::Relaxed) {
             bail!("redaction body read failed");
         }
         let output = invocation.output.lock().expect("redaction output lock");
@@ -644,6 +675,31 @@ impl UserData for RedactionHeaders {
 struct RedactionBody(RedactionMessage);
 impl UserData for RedactionBody {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("as_bytes", |lua, this, ()| {
+            let side = if this.0.side == 0 {
+                BodySide::Request
+            } else {
+                BodySide::Response
+            };
+            this.0
+                .invocation
+                .raw
+                .bytes_source(side)?
+                .map(|source| source.view(lua))
+                .transpose()
+        });
+        methods.add_method("replace_with_bytes", |lua, this, value: Value| {
+            if this.0.invocation.states[this.0.side * 2 + 1] == PartState::Loaded {
+                let source = bytes::BytesView::input(lua, value)?.temporary()?;
+                this.0
+                    .invocation
+                    .output
+                    .lock()
+                    .expect("redaction output lock")
+                    .1[this.0.side] = Some(RedactionReplacement::Bytes(source));
+            }
+            Ok(())
+        });
         methods.add_method("as_string", |lua, this, ()| {
             let side = if this.0.side == 0 {
                 BodySide::Request
@@ -678,19 +734,22 @@ impl UserData for RedactionBody {
                     .output
                     .lock()
                     .expect("redaction output lock")
-                    .1[this.0.side] = Some(content);
+                    .1[this.0.side] = Some(RedactionReplacement::Text(content));
             }
             Ok(())
         });
     }
 }
 
-fn strict_source(mut source: BodySource) -> Result<BodySource> {
+pub(super) fn strict_source(mut source: BodySource) -> Result<BodySource> {
     if !is_textual(source.content_type.as_deref().unwrap_or_default()) {
         return Ok(source);
     }
     let mut reader: Box<dyn Read> = match source.data {
         BodySourceData::File(ref path) => Box::new(File::open(path)?.take(source.stored_size)),
+        BodySourceData::TemporaryFile(ref path) => {
+            Box::new(File::open(path.as_ref())?.take(source.stored_size))
+        }
         BodySourceData::Bytes(ref bytes) => Box::new(std::io::Cursor::new(bytes.clone())),
     };
     for encoding in source.content_encodings.iter().rev() {
@@ -887,6 +946,63 @@ mod tests {
             matches!(view.body_source(BodySide::Request).unwrap().unwrap().data, BodySourceData::Bytes(b) if b == b"first")
         );
     }
+    #[test]
+    fn binary_redaction_streams_large_output_to_a_temporary_file() {
+        use std::io::Write;
+        let mut original_file = tempfile::NamedTempFile::new().unwrap();
+        original_file.as_file().set_len(24 * 1024 * 1024).unwrap();
+        original_file.write_all(&[0, 255]).unwrap();
+        let path = original_file.path().to_owned();
+        let mut capture = summary();
+        capture.request.headers.insert(
+            "content-type".into(),
+            vec!["application/octet-stream".into()],
+        );
+        let script = RedactionEvaluator::new(
+            r#"
+            if req.body then
+                local data = req.body:as_bytes()
+                data[1] = 42
+                req.body:replace_with_bytes(data)
+                data[1] = 43
+                assert(req.body:as_bytes()[1] == 0)
+            end
+        "#,
+            "bytes",
+        )
+        .unwrap();
+        let view = RedactedCapture::new(script, "/test", capture, move |_| {
+            Ok(Some(BodySource {
+                data: BodySourceData::File(path.clone()),
+                path: None,
+                stored_size: 24 * 1024 * 1024,
+                content_type: Some("application/octet-stream".into()),
+                content_encodings: vec![],
+            }))
+        })
+        .unwrap();
+        let result = view.body_source(BodySide::Request).unwrap().unwrap();
+        assert_eq!(result.stored_size, 24 * 1024 * 1024);
+        let BodySourceData::TemporaryFile(output) = result.data else {
+            panic!("read-time bytes must remain temporary");
+        };
+        let output_path = output.to_path_buf();
+        drop(view);
+        let mut first = [0];
+        File::open(output.as_ref())
+            .unwrap()
+            .read_exact(&mut first)
+            .unwrap();
+        assert_eq!(first, [42]);
+        File::open(original_file.path())
+            .unwrap()
+            .read_exact(&mut first)
+            .unwrap();
+        assert_eq!(first, [0]);
+        drop(output);
+        assert!(!output_path.exists());
+    }
+
     #[test]
     fn redaction_missing_request_stays_unloaded_in_response_snapshot() {
         let mut original = summary();

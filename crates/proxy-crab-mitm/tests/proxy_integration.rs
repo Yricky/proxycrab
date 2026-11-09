@@ -1591,6 +1591,125 @@ async fn response_body_getter_timeout_terminates_the_downstream_body() {
 }
 
 #[tokio::test]
+async fn binary_views_forward_asset_replacements_and_preserve_raw_capture_files() {
+    let (app_data, runtime, proxy_port) = runtime().await;
+    let session = create_active_session(&runtime, None).await;
+    let (upstream_port, observed, upstream) = body_gated_http_upstream().await;
+    for (kind, name, content) in [
+        (
+            ScriptKind::RequestInterceptor,
+            "binary-request",
+            r#"
+            local data = req.body:as_bytes()
+            assert(data[1] == 0 and data[2] == 128)
+            data[1] = 42
+            req.body:replace_with_bytes(data)
+            data[1] = 43
+        "#,
+        ),
+        (
+            ScriptKind::ResponseInterceptor,
+            "binary-response",
+            r#"
+            local data = resp.body:as_bytes()
+            assert(data:to_string() == 'ok')
+            data[1] = 255
+            resp.headers:set('content-type', 'application/octet-stream')
+            resp.body:replace_with_bytes(data)
+            data[1] = 0
+        "#,
+        ),
+    ] {
+        runtime
+            .create_script(
+                kind,
+                Script {
+                    name: name.into(),
+                    content: content.into(),
+                },
+            )
+            .unwrap();
+    }
+    runtime
+        .replace_session_interceptors(
+            session.id,
+            SessionInterceptors {
+                request: vec![SessionInterceptor {
+                    name: "binary-request".into(),
+                    enabled: true,
+                }],
+                response: vec![SessionInterceptor {
+                    name: "binary-response".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+    let mut client = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    client.write_all(format!("POST http://127.0.0.1:{upstream_port}/bytes HTTP/1.1\r\nHost: 127.0.0.1:{upstream_port}\r\nContent-Type: application/octet-stream\r\nContent-Length: 5\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+    client.write_all(b"\0\x80abc").await.unwrap();
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(5), client.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(response.ends_with(b"\xffk"), "{response:?}");
+    assert_eq!(observed.await.unwrap().body, b"*\x80abc");
+    upstream.await.unwrap();
+    let capture = runtime
+        .list_captures(session.id, 1, None)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let detail = runtime.capture(session.id, capture.id).unwrap().unwrap();
+    for execution in detail
+        .request_interceptors
+        .iter()
+        .chain(&detail.response_interceptors)
+    {
+        assert!(execution.error.is_none(), "{:?}", execution.error);
+        assert!(
+            execution
+                .modifications
+                .iter()
+                .any(|m| matches!(m, Modification::BodyReplaceAsset { .. }))
+        );
+    }
+    let raw = runtime.workspace().session_dir(session.id).join("blob");
+    assert_eq!(
+        std::fs::read(raw.join(format!("{}-request.body", capture.id))).unwrap(),
+        b"\0\x80abc"
+    );
+    assert_eq!(
+        std::fs::read(raw.join(format!("{}-response.body", capture.id))).unwrap(),
+        b"ok"
+    );
+    runtime.stop_proxy().await.unwrap();
+    drop(runtime);
+    let reopened = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+    assert_eq!(
+        reopened
+            .capture_body_source(session.id, capture.id, BodySide::Request)
+            .unwrap()
+            .unwrap()
+            .data
+            .read_all()
+            .unwrap(),
+        b"*\x80abc"
+    );
+    assert_eq!(
+        reopened
+            .capture_body_source(session.id, capture.id, BodySide::Response)
+            .unwrap()
+            .unwrap()
+            .data
+            .read_all()
+            .unwrap(),
+        b"\xffk"
+    );
+}
+
+#[tokio::test]
 async fn asset_replacement_exposes_metadata_and_current_body() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;
@@ -1952,10 +2071,7 @@ async fn breakpoint_accepts_temporary_changes_and_resumes_saved_script() {
         .breakpoint_body_source(breakpoint.id, BodySide::Request)
         .unwrap()
         .unwrap();
-    let preview = match source.data {
-        BodySourceData::File(path) => std::fs::read(path).unwrap(),
-        BodySourceData::Bytes(bytes) => bytes,
-    };
+    let preview = source.data.read_all().unwrap();
     assert_eq!(preview, b"before hold");
 
     let temporary = runtime
@@ -3001,10 +3117,7 @@ async fn replay_body_ref_reuses_stored_capture_body() {
         .capture_body_source(session.id, second_id, BodySide::Request)
         .unwrap()
         .unwrap();
-    let bytes = match source.data {
-        BodySourceData::Bytes(bytes) => bytes,
-        BodySourceData::File(path) => std::fs::read(path).unwrap(),
-    };
+    let bytes = source.data.read_all().unwrap();
     assert_eq!(bytes, b"stored-body");
     runtime.stop_proxy().await.unwrap();
 }

@@ -147,11 +147,13 @@ pub(crate) fn snapshot_output(
 ) -> ManagerResult<InterceptorSnapshot> {
     for side in [BodySide::Request, BodySide::Response] {
         let body = view.body_source(side).map_err(|_| failed())?;
-        let replacement = body.and_then(|s| match s.data {
+        // Binary/file output is read through the authorized snapshot Body endpoint.
+        // Never retain an original inline string or Asset reference after redaction.
+        let replacement = body.map(|s| match s.data {
             BodySourceData::Bytes(b) => String::from_utf8(b)
-                .ok()
-                .map(|content| BodySourceType::String { content }),
-            _ => None,
+                .map(|content| BodySourceType::String { content })
+                .unwrap_or_default(),
+            _ => BodySourceType::Original,
         });
         let output = view.summary();
         match side {

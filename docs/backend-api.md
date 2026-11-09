@@ -894,7 +894,11 @@ wait for the original body to finish downloading and being captured, after which
 body is replayed from disk. Without a getter, original request and response bodies continue
 streaming directly to append-only capture files without an application-level size limit.
 Replacement strings are sent from memory and immutable Assets are streamed from disk while any
-unused raw body drains independently. Capture-storage failures are recorded without interrupting
+unused raw body drains independently. Lua `as_bytes()` exposes editable views over immutable
+files/memory, including files above 16 MiB. View edits stay local until explicitly submitted.
+`replace_with_bytes` streams the snapshot into a generated `lua-bytes/<sha256>.bin` Asset and
+uses the existing Asset Body source and `body_replace_asset` history. Binary read-time redaction
+uses temporary files rather than persistent workspace resources. Capture-storage failures are recorded without interrupting
 the business transfer when possible. The proxy accepts at most 256 client connections.
 
 `_crab_resp_bodyframe_timeout` optionally bounds idle time before each upstream response-body frame.

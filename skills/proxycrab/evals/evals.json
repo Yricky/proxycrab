@@ -398,6 +398,12 @@
       "prompt": "Create ProxyCrab request and response interceptors that replace x-proxycrab-skill-eval with two values, first and second, and delete x-proxycrab-skill-eval-remove using headers:set. Preserve the existing chains and verify both on a new capture. Explain what happens if an array element is a number or an invalid header string.",
       "expected_output": "Uses headers:set(name, {\"first\", \"second\"}) on req.headers and resp.headers, and headers:set(name, {}) to delete the header. Preserves both existing interceptor chains when attaching. Explains dense string arrays, case-insensitive replacement, ordered values, and validation of every element before any mutation; numbers and invalid header values raise an error without partial changes. Verifies historical source and final headers plus header_set followed by header_append for two values and header_remove for the empty array on a new capture.",
       "files": ["fixtures/test-header-arrays.lua"]
+    },
+    {
+      "id": 68,
+      "prompt": "Create a ProxyCrab request interceptor for /proxycrab-skill-eval/bytes that reads the binary body, changes its first big-endian uint32 to 12345, and explicitly submits the result. Preserve existing chains and verify on a new capture. Explain how the API handles a 40 MiB captured file, independent slices, and WS redaction migration.",
+      "expected_output": "Uses req.body:as_bytes() returning an editable userdata view, checks availability and minimum length, uses pack(1, '>I4', 12345), and calls replace_with_bytes(view). Explains immutable source files, independent as_bytes/sub/clone snapshots, local edits until submission, bounded file access above 16 MiB, memory-limited edits/materialization without delta spilling, literal-only find and no to_hex/chunks. Verifies an existing body_replace_asset modification and the final body through the authorized body endpoint; historical references use a generated persistent Asset while read-time redaction remains temporary. WS as_bytes now returns a view, to_string materializes a binary string, and WS keeps its 16 MiB limit.",
+      "files": ["fixtures/test-bytes.lua"]
     }
   ]
 }

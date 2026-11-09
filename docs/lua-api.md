@@ -1,6 +1,6 @@
 # ProxyCrab Lua API
 
-ProxyCrab embeds sandboxed Lua 5.4. `io`, `os`, `package`, `debug`, `dofile`, `loadfile`, and `require` are unavailable. Each execution is limited to 100,000 VM instructions and 16 MiB of Lua-managed memory.
+ProxyCrab embeds sandboxed Lua 5.4. `io`, `os`, `package`, `debug`, `dofile`, `loadfile`, and `require` are unavailable. Each execution is limited to 100,000 VM instructions and a 16 MiB sandbox memory budget, including bytes edits and native range metadata.
 
 Scripts are syntax-checked before being saved. Script files use the `.lua` suffix.
 
@@ -26,6 +26,82 @@ the top to open and select that script, including in an already-open editor. Lab
 metadata from their captured script source, not the current script file. The share UI receives the
 parsed display name while script content remains hidden. Metadata is derived from the Lua source,
 not stored in a separate settings file.
+
+## Bytes views
+
+The read-only global `bytes` module constructs editable byte views. HTTP Body objects,
+Assets returned by `get_asset`, WebSocket current/history messages, and HTTP/WebSocket redaction
+Body objects expose `as_bytes()`. It returns a view, **not a Lua string**. Existing
+`ws.message.body` and history `.body` properties remain Lua binary strings.
+
+Views share immutable backing memory/files and store edits separately. Nothing writes to a source
+file. Repeated `as_bytes()` calls, `sub()` and `clone()` produce independent snapshots: they include
+existing edits at creation but do not observe subsequent edits to each other. Ordinary assignment
+(`local other = view`) aliases the same editable view.
+
+| API | Behavior |
+| --- | --- |
+| `bytes.view(binary_string)` | Construct a view over a Lua binary string |
+| `bytes.new(size, fill?)` | Create a view filled with a byte; default fill is zero; subject to the memory budget |
+| `#view` | Current byte length |
+| `view[i]` / `view[i] = byte` | Positive, 1-based byte access; reads outside the view return nil, writes raise an error |
+| `view:byte(i?, j?)` | Like `string.byte`: defaults to byte 1, supports negative positions and multiple return values |
+| `view:sub(i, j?)` | Like `string.sub`, including negative positions, but returns an independent view |
+| `view:find(needle, init?)` | Literal byte search only; accepts a string or view, returns inclusive start/end or nil; no Lua patterns |
+| `view:unpack(format, pos?)` | Lua `string.unpack(format, data, pos)` semantics, including alignment and next position; defaults to position 1 |
+| `view:set(i, byte)` | Replace one byte with an integer in 0..255 |
+| `view:write(i, data)` | Overwrite with a binary string or view without changing length |
+| `view:splice(i, delete_count, data)` | Delete then insert bytes; accepts a string or view and can change length; append at `#view + 1` with zero deletions |
+| `view:pack(i, format, ...)` | Overwrite with `string.pack(format, ...)` output; does not resize |
+| `view:clone()` | Independent snapshot without copying the full content |
+| `view:to_string()` | Materialize a Lua binary string, without UTF-8 validation |
+
+Modification positions must be positive integers; out-of-bounds writes, invalid byte values and
+memory-limit failures raise errors without partially changing the view. `find` supports the same
+initial-position rules as literal Lua string search. `unpack` string fields remain Lua strings.
+`tostring(view)` returns a description such as `bytes(128)`, never the payload. Standard Lua
+string functions do not accept the userdata directly: use its methods or `to_string()`.
+
+File-backed views may exceed 16 MiB. Length, slices and clones do not read the complete file.
+Reads/searches and HTTP submissions use bounded buffers. Lua allocations, edit strings and native
+range metadata share the 16 MiB sandbox budget. Large `to_string`, `unpack` string results,
+`byte(i,j)` result lists, search needles or edits may exceed that budget and raise errors; slice
+first. Edits do not automatically spill to disk. HTTP `as_bytes()` ignores Content-Type and UTF-8,
+and decodes gzip/br/deflate/zstd into an immutable temporary file when needed. Reads are lazy but
+an interceptor's first original-body getter still waits for the complete capture. Unavailable
+bodies return nil; available empty bodies return zero-length views. Storage/decoding failures raise
+errors. Assets expose their stored file bytes without automatic content decoding.
+
+Editing a view does not submit it:
+
+```lua
+local data = req.body:as_bytes()
+if data ~= nil and #data > 0 then
+    data[1] = data[1] | 1
+    req.body:replace_with_bytes(data)
+end
+```
+
+`body:replace_with_bytes(data)`, `ws:send(direction, data, type?)`, `base64.encode(data)` and
+`base64.url_encode(data, with_padding)` accept binary strings or views. Submissions freeze the
+current contents; later edits do not affect them. Base64 decode still returns a binary string.
+Existing source permissions remain: filters, custom columns, Assets and WS history cannot write
+back. HTTP interceptors use `replace_with_bytes`; WS callbacks use `drop` plus `send`.
+
+HTTP interceptor byte replacement streams into a content-addressed workspace Asset under
+`lua-bytes/<sha256>.bin`, reuses identical generated resources, and records the existing
+`body_replace_asset` modification and Asset Body source. These resources are visible in the normal
+resource list and persist for history/replay; no new Body source type or automatic cleanup is added.
+Generated metadata uses `application/octet-stream`; the HTTP Content-Type remains unchanged.
+Replacement removes Content-Encoding and forwarding handles the final length as with Asset replacement.
+HTTP redaction instead creates a temporary file for the authorized read, without persisting a
+workspace Asset. Binary/file-backed redacted snapshot metadata does not retain original inline
+content or Asset references; use the authorized snapshot Body endpoint for its bytes. Redaction
+getters continue reading originals, including after replacement. WS sends and WS redaction retain
+the 16 MiB message limit.
+
+Migration: WS redaction `body:as_bytes()` now returns this editable view. Use
+`body:as_bytes():to_string()` when a Lua binary string is required.
 
 ## Base64 and JSON
 
@@ -181,7 +257,8 @@ Modification history records a nonempty `set` as `header_set` for the first valu
 `header_append` for each remaining value. An empty-array `set` records `header_remove` with the
 removed values.
 
-Persisted request and response bodies provide only `as_string()` and `as_json()`:
+Persisted request and response bodies provide `as_bytes()`, `as_string()` and `as_json()`;
+only the text/JSON getters below require textual content:
 
 ```lua
 local request_text = entry.req.body:as_string()
@@ -191,7 +268,7 @@ local response_json = entry.resp and entry.resp.body:as_json()
 The first getter lazily loads the persisted final Body source recorded on the capture (original
 network bytes, a complete string replacement, or an Asset), and later getters for that capture side
 reuse the decoded bytes. Bodies on
-`in_progress` captures are unavailable and both getters return `nil`, even if a partial capture file
+`in_progress` captures are unavailable and all getters return `nil`, even if a partial capture file
 already exists. The getters require a textual `Content-Type`; `as_string()` also requires valid
 UTF-8, while `as_json()` returns `nil` for malformed JSON. Empty text returns `""` / `nil`.
 gzip, br, deflate, and zstd are decoded first; unknown or malformed encodings return `nil` and
@@ -291,7 +368,7 @@ interceptors.
 status codes and status/body combinations. `resp.version` remains read-only.
 
 Request interceptors run once after downstream request headers arrive. Response interceptors run
-once after upstream response headers arrive. The first `as_string()` or `as_json()` call that needs
+once after upstream response headers arrive. The first `as_bytes()`, `as_string()` or `as_json()` call that needs
 the original body waits for it to finish downloading and being captured, then ProxyCrab replays it
 from the capture file. Without a getter call, bodies retain their normal streaming behavior. SSE or
 an infinite stream can therefore block a getter indefinitely unless the configured response-frame
@@ -319,12 +396,12 @@ encoding returns `nil`. Decoded content over 16 MiB raises a runtime error.
 
 `get_asset(id)` is available to request and response interceptors. It returns `nil` when the ID is
 invalid or absent, and otherwise returns a read-only Asset with `id`, `size`, `content_type`,
-`sha256`, and `created_at`. `replace_with_asset` accepts only this Asset object and streams its
+`sha256`, and `created_at`, plus `as_bytes()` for an editable view. `replace_with_asset` accepts only this Asset object and streams its
 workspace file without loading it into Lua memory. Assets are workspace-wide and immutable through
 the API. Both replacement methods remove an existing `Content-Encoding` header and record that
 removal; neither changes `Content-Type`, so the script should set it when appropriate.
 
-Asset IDs use only lowercase ASCII letters, digits, `_`, `.`, and `/`; they cannot start or end in
+Asset IDs use only lowercase ASCII letters, digits, `_`, `-`, `.`, and `/`; they cannot start or end in
 `/`, contain `//`, or contain `.`, `..`, or `.metadata` as a path segment. IDs are at most 255 bytes
 and each segment is at most 100 bytes. Upload and download Assets through the management API
 documented in `backend-api.md`.
@@ -375,7 +452,7 @@ redacted input, with bodies loaded only when accessed.
 Within a redactor, getters always return the original value for this record/snapshot, including
 reads after writes and reads of already-redacted parts. Only parts `loaded` at invocation start
 accept writes. Header `get/get_all/all/set/append/remove`, request `uri` assignment, and Body
-`as_string/as_json/replace_with_string` are supported. Method, status and HTTP version are read-only.
+`as_bytes/as_string/as_json/replace_with_bytes/replace_with_string` are supported. Method, status and HTTP version are read-only.
 Successful completion (including early return/no edits) marks every loaded part redacted and commits
 all writes. Failure commits none and refuses output. Header decisions that depend on a later body
 cannot be deferred by early return. Body replacement normalizes output encoding/length metadata;
@@ -474,7 +551,7 @@ The message invocation provides read-only `context`: kind, api, session_id, log_
 started_at, completed_at, size, content_available, omitted_reason. `req`/`resp` offers read-only
 connection `uri` (the usual URI view), `version` (`WebSocket/13`), and current-message `body`.
 No top-level `message` object, HTTP headers/method/status, or raw container is exposed.
-Message body methods: `as_string()` (UTF-8), `as_bytes()` (Lua binary string), `as_json()`,
+Message body methods: `as_string()` (UTF-8), `as_bytes()` (editable bytes view), `as_json()`,
 `replace_with_string(value)`, `replace_with_bytes(value)`, `replace_with_json(value)`, `hide()`.
 Reads observe original message bytes; replacements stage output and do not modify capture/forwarding.
 `hide()` differs from replacing with an empty string. Size limits and script failures are fail-closed.

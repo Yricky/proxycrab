@@ -101,7 +101,11 @@ fn install_base64(lua: &Lua) -> mlua::Result<()> {
     let module = lua.create_table()?;
     module.set(
         "encode",
-        lua.create_function(|lua, data: LuaString| {
+        lua.create_function(|lua, data: Value| {
+            let data = match data {
+                Value::String(data) => data,
+                data => super::bytes::BytesView::input(lua, data)?.to_string(lua)?,
+            };
             ensure_input_limit(data.as_bytes().len(), "Base64")?;
             let output_len = base64::encoded_len(data.as_bytes().len(), true)
                 .ok_or_else(|| LuaError::runtime("Base64 output size overflow"))?;
@@ -122,7 +126,11 @@ fn install_base64(lua: &Lua) -> mlua::Result<()> {
     )?;
     module.set(
         "url_encode",
-        lua.create_function(|lua, (data, with_padding): (LuaString, Value)| {
+        lua.create_function(|lua, (data, with_padding): (Value, Value)| {
+            let data = match data {
+                Value::String(data) => data,
+                data => super::bytes::BytesView::input(lua, data)?.to_string(lua)?,
+            };
             let Value::Boolean(with_padding) = with_padding else {
                 return Err(LuaError::runtime(
                     "base64.url_encode requires a boolean with_padding argument",
@@ -196,7 +204,11 @@ fn install_json(lua: &Lua, warnings: JsonWarningState) -> mlua::Result<()> {
     Ok(())
 }
 
-fn read_only_module(lua: &Lua, backing: Table, name: &'static str) -> mlua::Result<Table> {
+pub(super) fn read_only_module(
+    lua: &Lua,
+    backing: Table,
+    name: &'static str,
+) -> mlua::Result<Table> {
     let proxy = lua.create_table()?;
     let metatable = lua.create_table()?;
     metatable.set("__index", backing)?;

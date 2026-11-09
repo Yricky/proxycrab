@@ -354,8 +354,12 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
   a deliberate output path and stored-size maximum (default 16 MiB). See the HTTP reference for
   encoding negotiation and interceptor-entry snapshot selection.
 - Interceptor mutations made before a Lua runtime error remain applied: inspect both modifications
-  and errors. Body getters can wait forever on SSE/infinite streams; decoded getter output is
-  limited to 16 MiB. See the Lua reference for Body access, tags, and traffic controls.
+  and errors. Body getters can wait forever on SSE/infinite streams. Text/JSON getters and
+  materialized Lua results are limited by the 16 MiB budget; `as_bytes()` returns an editable view
+  over immutable memory/files and can inspect larger files. Edits affect only the view until
+  explicitly submitted. HTTP `replace_with_bytes` persists an Asset reference; read-time binary
+  redaction stays temporary. WS redaction `as_bytes` now returns a view, so use `:to_string()` when
+  a binary string is required. See the Lua reference for the complete API.
 - Use `_crab_tls_insecure` only for a narrowly matched controlled test host and warn that it disables
   upstream certificate-chain and hostname verification. Forced upstream `HTTP/2` has no HTTP/1.1
   fallback. These tags affect the upstream hop, not the captured client protocol.
