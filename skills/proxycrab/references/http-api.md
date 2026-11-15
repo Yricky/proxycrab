@@ -37,8 +37,7 @@ Script operations do not follow symlinks within the library. Encode the **whole*
 URL parameter: `/api/filter-scripts/business%2Ferrors` (and append `/debug` for debugging).
 JSON bodies and helper `--name` arguments use the unencoded value `business/errors`.
 
-The script managers and replay workspace-asset picker use the same compact, directory-first file-tree component. Asset entries retain their original extensions, size and content-type metadata; script labels append `.lua` without changing API identities. Directories are derived from
-script paths; empty-directory management, rename and drag-and-drop moves are not supported.
+There are no script rename, move, or empty-directory management endpoints.
 
 ## Script display metadata
 
@@ -69,14 +68,11 @@ Every method and route template has a permission for each identity. The desktop 
 desktop window asks the user. A decision can apply once or for 5, 30, or 60 minutes to the same
 identity and route action. Temporary decisions are in-memory and disappear on restart. The CLI
 target supports only `allow` and `deny`, treats a persisted `approval` as deny, and never creates an
-approval request. API-key creation, deletion, and permission editing are management-UI-only
-operations under Settings > 管理接口; they are not public Agent HTTP resources.
+approval request. API-key creation, deletion, and permission editing are unavailable through
+the Agent HTTP API.
 
-The CLI prints its UI access token for the browser landing page. It generates a per-run
-`pcrab_ui_…` token by default; `--ui-key KEY` (with or without `run`) supplies a custom value.
-Custom values require nonempty visible ASCII without whitespace/control characters, but no prefix.
-There is no environment-variable or persisted-config option. Both forms authorize private UI
-routes and trusted UI calls, are not Agent API keys, and must never be copied into
+Browser UIKeys use the `pcrab_ui_…` prefix by default; custom values may lack that prefix.
+Both forms are browser credentials, are not Agent API keys, and must never be copied into
 `PROXYCRAB_API_KEY`. A custom UIKey cannot bypass a startup `--redaction-script` policy.
 
 Session sharing uses separate `pcrab_share_…` tokens and `/share-api/*` routes for browsers and
@@ -85,8 +81,7 @@ process; optional persistent shares restore the same token after restart while s
 below, without a management key. Share tokens are not accepted by `/api/*` and are not
 `PROXYCRAB_API_KEY` values or Bearer credentials.
 
-The service binds to every IPv4 interface. Public CLI UI and Session-share assets can load remotely,
-but a remote Host or Origin on `/api/*` requires Bearer authorization. Remote CORS preflight is
+A remote Host or Origin on `/api/*` requires Bearer authorization. Remote CORS preflight is
 accepted only when it requests `Authorization`; the subsequent request still passes normal token
 authentication and route permissions. Bundled Agent scripts accept a remote `--base-url` or
 `PROXYCRAB_API_URL` only when `PROXYCRAB_API_KEY` is set. Prefer authenticated TLS or an SSH local
@@ -116,11 +111,10 @@ Every failure is:
 Requests and responses use `application/json`. URL path segments and query values must be
 percent-encoded normally.
 
-### UI synchronization
+### Mutation side effects
 
-Successful management mutations synchronize into the desktop or CLI browser UI. They preserve the
-viewed Session unless it is archived, in which case the first remaining Session is selected.
-Open editors preserve unsaved input and warn about external changes; do not discard the user's work.
+Management mutations also update the open application. Archiving the viewed Session changes its
+selection to the first remaining Session. Preserve unsaved work when an external-edit conflict is reported.
 
 ## Agent instructions
 
@@ -131,10 +125,9 @@ ProxyCrab API. It returns the current workspace's active AGENTS.md preset as an 
 with `Content-Type: text/plain; charset=utf-8`.
 
 The user's current explicit request takes precedence over the returned document. If the endpoint is
-unavailable, use the Skill's conservative built-in behavior. This read is stateless and does not
-notify or refresh the desktop UI.
+unavailable, use the Skill's conservative built-in behavior. This read is stateless.
 
-Preset management is available in the owner UI, not through the Agent HTTP API.
+Preset management is unavailable through the Agent HTTP API.
 
 ## Shared data types
 
@@ -311,9 +304,7 @@ the binary was compiled for.
 
 Returns `ProxyStatus`.
 
-Runtime lifecycle and activity transitions publish the existing `proxy` UI-change resource. The
-management UI reads this endpoint initially and after those notifications rather than polling it.
-Share-token browser responses use the same status contract internally but retain only their
+Share-token responses use the same status contract but retain only their
 authorized Session in `active_netlog` and omit `active_bypass_count`; `/share-api/proxy/changes`
 provides the authenticated revision-based long-poll invalidation.
 
@@ -385,10 +376,8 @@ uses ordinary management authentication. It returns only currently non-archived 
 Presence means sharing is enabled; disabled, archived, and deleted Sessions are omitted. No token,
 redaction binding, or unrelated state is returned. Restored Sessions reappear if sharing remains
 enabled. Ordering is unspecified. Use `scripts/session-share-list.mjs` to inspect summaries.
-The desktop equivalent is `list_session_shares`; both backends expose optional `listSessionShares()`.
-List indicators consume this batch rather than querying each Session. A denied/failed read does not
-mean all shares are disabled: preserve last known state, or treat it as unknown if none was loaded.
-Share changes refresh summaries; Session list refreshes fetch both lists in parallel.
+A denied/failed read does not mean all shares are disabled: preserve last known state,
+or treat it as unknown if none was loaded.
 
 ### `POST /api/session-shares`
 
@@ -406,8 +395,8 @@ The existing POST handles both creation and configuration; there is no separate 
 }
 ```
 
-Share redaction is resolved by the backend, not copied by the frontend. For a new owner-created
-share, omitting `session_share_config.redaction_script` inherits the current local no-API-key binding.
+For a new share created through the local no-API-key identity, omitting
+`session_share_config.redaction_script` inherits that identity's current binding.
 Explicit `null` selects that same inheritance; `""` explicitly disables share-level redaction; a
 nonempty name selects a library script. On updates, an omitted redaction field preserves the current
 policy; use explicit null to switch back to local inheritance. A supplied config updates persistence
@@ -417,20 +406,18 @@ API keys have stricter rules. A Key bound to a nonempty script must omit the sha
 and the share follows that Key's binding dynamically, including on updates. An unconfigured Key
 (null/missing binding) also cannot supply the field; new shares inherit local. Only a Key whose own
 binding is explicitly `""` may supply the field, including null, empty, or a script name. Violations
-return HTTP 403 `share_redaction_forbidden` before modifying share state. Owner Tauri IPC, local
-management requests and the trusted CLI UI may select policies normally. Ordinary route permission
+return HTTP 403 `share_redaction_forbidden` before modifying share state. Local no-API-key
+management requests may select policies normally. Ordinary route permission
 checks still apply. Existing null Key bindings are not treated as explicit opt-out.
 
 Inherited policies resolve their identity on each share request, so changing local or Key bindings
 updates share reads without rotating links. A missing/deleted Key or failed identity lookup fails
 closed (`redaction_failed`); it never falls back to original data. Status reports the configured
 `redaction_script` and optional `redaction_identity` (a stable Key ID, never an API Key credential).
-The frontend shows inheritance separately from explicit no redaction and never reads local defaults.
 The startup `--redaction-script` policy still overrides all these settings.
 
 Updates use `POST /api/session-shares` exclusively. The old
-`PUT /api/session-shares/{id}/redaction` route and desktop `set_session_share_redaction` command
-have been removed; persisted permissions drop that obsolete action.
+`PUT /api/session-shares/{id}/redaction` route is unavailable.
 
 Persistent share files use version 2 and retain policy references. Version 1 files remain readable:
 old null share bindings migrate to explicit `""` to preserve their original unredacted behavior;
@@ -501,12 +488,6 @@ query parameters are present). JSON success responses use `{"ok":true,"data":…
 | `GET /share-api/filter-scripts` | Same metadata-only shape for filter scripts. |
 | `POST /share-api/validate-filter-regex` | `{"pattern":"…"}`; data is `null` for a valid Rust regex, otherwise a validation error string. |
 
-The shared UI reuses the interceptor pipeline with operation availability determined by Backend
-methods. It can show chain order, display names, enabled/valid state and HAR export, while hiding
-add/edit/recreate/remove, toggle, drag, sweep and breakpoint controls. The existing 1.5-second metadata
-poll detects chain changes and emits scoped `session_interceptors` updates; stopped subscriptions
-emit no further events. Current chain configuration is distinct from historical per-log executions.
-
 Only the routes above exist on the share surface; there are no Session writes, filter persistence,
 replay, export, breakpoint control, or `/agents.md` routes. Share reads honor effective redaction.
 `invalid_share_token` (401) means missing, duplicate, invalid, or revoked token;
@@ -514,35 +495,11 @@ replay, export, breakpoint control, or `/agents.md` routes. Share reads honor ef
 restore the same token on restart. Report these errors rather than falling back to management
 credentials; report `redaction_failed` without changing the policy.
 
-### Frontend HAR export
+### HAR API boundary
 
-The export button beside the sweep action opens a floating window. Its Export HAR button freezes
-all matching list IDs and their displayed order, then reads details and bodies through existing
-Backend methods (`getLog`, `fetchBody`). No HAR export or sharing HTTP endpoint exists. The shared
-Session page uses the existing scoped read APIs and exports their policy-filtered data.
-
-Entries are generated one at a time. Failed and unfinished ordinary HTTP records are retained;
-missing responses have status 0 and `_proxyCrab` carries outcome/error metadata. WebSocket connection
-rows and synthetic TLS CONNECT records are skipped; HTTP upgrade handshakes remain. Body read
-failures (including decode and size errors) become text explaining the failure and `bodyErrors`
-metadata, with warnings in the export window. Unavailable details produce a failed placeholder
-entry. Empty selections produce valid HAR. Body bytes are read separately rather than reusing JSON
-previews, preserving formatting; binary content uses Base64 (`encoding` for responses, `_encoding`
-for request postData). Detailed timings/header sizes are unknown (-1).
-
-`saveFile({filename})` returns `FileWriter | null`; null means the desktop picker was cancelled.
-The Writer offers async `append(bytes)`, `markAsFinish()`, and `markAsError()`. Desktop chunks use
-binary IPC (at most 256 KiB each) and a same-directory temporary file; finish publishes the file,
-error discards it. Failed writes cannot be committed. Browser writers buffer Blob parts and start
-a download only on finish; this acknowledges download initiation, not completion on disk. Abort
-never starts a download. No new management or share HTTP route is needed for writing.
-
-Progress includes processed/exported/skipped records and warning counts. The window retains the
-latest 1000 log lines; cancel/close abandons an unfinished export. Each Body still uses the existing
-read interface (explicit 1 GiB stored-size ceiling); a single entry is buffered, and the browser
-fallback buffers the final file. Export does not provide an atomic snapshot of changing captures
-or pin one redaction revision across separate reads. Original content is never used as a fallback
-for policy-denied reads. Exported files may contain sensitive data from the authorized read view.
+No HAR generation, download, or sharing HTTP endpoint exists. Use the documented capture and Body
+read endpoints for evidence; their effective redaction policies still apply. Do not invent HAR
+routes or use a different credential to bypass a failed read.
 
 ### `PUT /api/sessions/{id}`
 
@@ -646,7 +603,7 @@ The arrays may overlap. Use `matched_ids` for result membership. `in_progress_id
 persisted in-progress records that are also active in the current run's authoritative status; stale
 unfinished records from earlier runs are excluded. Keep re-evaluating those IDs until they complete.
 When an ID leaves `in_progress_ids`, re-evaluate it once more and use that final `matched_ids`
-membership; current UI activity still comes only from `ProxyStatus.running.active_netlog`.
+membership; current activity still comes only from `ProxyStatus.running.active_netlog`.
 
 ### `POST /api/logs/views`
 
@@ -816,7 +773,7 @@ Returns the final Body constructed after interceptors as an unwrapped raw byte s
 source is the original network body, a complete replacement string, or an Asset.
 
 Add `execution_id=17` to read the selected interceptor-entry snapshot body. The endpoint can
-resolve `original`, `string`, and `asset` sources, including in the snapshot viewer. `side` is required and must be
+resolve `original`, `string`, and `asset` sources. `side` is required and must be
 `request` or `response`.
 `max_size` defaults to 16 MiB, has no server maximum, and checks the selected final Body source
 before any decoding or recompression. Oversized bodies return 413 with the stored sizes:
@@ -855,11 +812,8 @@ uses the same snapshot selection, encoding negotiation, and size rules. The shar
 Session; a supplied `session_id` cannot select another Session. A missing snapshot returns a
 snapshot error rather than falling back to the final Body. Share tokens remain share-only credentials.
 
-The UI's Body download button saves complete HTTP-decoded bytes independently of preview loading,
-formatting, and size limits. Browser resource limits still apply to large downloads. Snapshot
-selection does not fall back to the final Body when the snapshot is missing. `body-get.mjs` requires
-an output path and uses its explicit stored-size maximum or the 16 MiB default. Applicable read-time
-redaction policies still apply.
+`body-get.mjs` requires an output path and uses its explicit stored-size maximum or the 16 MiB
+default. Applicable read-time redaction policies still apply.
 
 ### Replaying a request: `POST /api/replay?session=3`
 
@@ -1004,8 +958,8 @@ routing-debug endpoint.
 
 Assets are immutable files shared across the active workspace. They have no update or delete
 endpoint. `GET /api/assets` lists every asset's metadata (`id`, `size`, `content_type`,
-`sha256`, `created_at`) sorted by id inside the normal envelope; build trees from the
-`/`-separated ids. Upload with a raw request body:
+`sha256`, `created_at`) sorted by id inside the normal envelope. Use complete IDs, including
+directory segments and extensions. Upload with a raw request body:
 
 ```text
 POST /api/assets/fixtures/example.json
@@ -1263,12 +1217,10 @@ rules:
 ```
 
 The proxy port is read from current configuration on each download. The proxy may be stopped when
-enabling or downloading the subscription; neither operation changes its lifecycle. The QR code
-contains the HTTP download URL. The import button opens
-`clash://install-config?url=ENCODED_HTTP_URL`. Users select the imported profile and enable system
-proxy in Clash. Changing the chosen IP changes the URL host, so update the subscription URL in
-Clash; changing the proxy port only requires refreshing the subscription. Re-enabling with the same
-IP keeps the same URL. Closing the subscription does not remove previously imported configurations
+enabling or downloading the subscription; neither operation changes its lifecycle.
+Changing the chosen IP changes the URL host; changing the proxy port changes subsequent
+subscription downloads. Re-enabling with the same IP keeps the same URL.
+Disabling the subscription does not remove previously imported configurations
 or stop existing proxy traffic.
 
 ```bash
@@ -1377,8 +1329,8 @@ Routing and capture lifecycle details:
 
 ## Redaction library and bindings
 
-The desktop and CLI owner UI expose a global redaction script library and one script selector for
-each local identity/API key, Session share. Normal capture and forwarding are unaffected.
+Redaction scripts are workspace-wide; bindings apply to local/API-key identities and Session
+shares. Normal capture and forwarding are unaffected.
 
 | Endpoint | Contract |
 | --- | --- |
@@ -1393,7 +1345,7 @@ It reads and compiles the file before starting the HTTP API or proxy; a missing/
 invalid Lua aborts startup. The source is pinned in memory for the process lifetime, is not added to
 the workspace library, and changes require a restart. This policy overrides identity and share
 bindings, including missing bindings and the UI access token (`UIKey`). It applies to the existing
-redaction-supported reads marked in the permissions UI and to Session share reads; it does not
+redaction-supported reads listed below and to Session share reads; it does not
 expand the redaction data contract below or change capture/forwarding.
 
 In this mode, all five library operations above reject authorized calls with HTTP 403,
@@ -1405,14 +1357,10 @@ another identity or treat this error as an upsert conflict.
 `POST /api/session-shares` accepts redaction and persistence together in `session_share_config`,
 including updates to enabled shares without rotating tokens. Share-state responses include
 nullable `redaction_script`.
-Owner-only CLI `PUT /ui-api/permissions/identities/{id}/redaction` accepts the same binding object;
-the desktop command is `set_http_identity_redaction`. Identity permission reads include the binding,
-and permission-table updates preserve it. Without a startup redaction script, the CLI UI access
-token and ordinary Tauri IPC reads are unbound. Desktop Body previews (`fetch_body`) and native
-downloads (`download_body`) use trusted Tauri IPC and do not use the local HTTP identity binding.
+Identity-binding management is unavailable through the Agent HTTP API.
 
 Redaction applies to log details, body reads, snapshot details/bodies, URL/custom-column view cells,
-URI/custom filters, filter debugging, breakpoint details/bodies/summary URLs, bypass URLs. Frontend HAR uses those same authorized reads.
+URI/custom filters, filter debugging, breakpoint details/bodies/summary URLs, bypass URLs.
 It does not sanitize interceptor modification history, script source, tags, system logs or Asset
 raw downloads. Column output is not post-processed; column scripts receive sanitized inputs.
 
@@ -1420,17 +1368,11 @@ Every read resolves a script version. Missing/failed bound scripts return HTTP 5
 `redaction_failed` with a fixed message; script-controlled errors are not included. Body execution
 is lazy and failures are propagated even if a downstream column/filter catches the body error.
 Bound view requests re-render requested rows even when `updated_at` is unchanged. Session-view
-responses include `redaction_revision` when bound; share clients invalidate membership, rows and
-open detail/body views when it changes. Frontend HAR reads resolve policies independently per
-request and replace failed reads with diagnostics; they never retry with original data.
+responses include `redaction_revision` when bound; invalidate cached membership, rows and details
+when it changes. Separate requests may resolve different policy versions; never retry failed reads
+with original data.
 
 See the Lua reference's **Read-time redaction scripts** section for the three-state context contract.
-
-### Browser secure-context limits
-
-JWT decoding works on HTTP, but signature verification requires a secure context (HTTPS or trusted
-localhost). A browser JWT verification failure does not establish a server-side replay failure or
-change management API permissions.
 
 ## WebSocket message capture
 
@@ -1465,11 +1407,10 @@ error text is replaced with generic errors under read policies to avoid exposing
   Omitted capture content produces `message_content_unavailable` (422), policy-hidden content
   `message_content_hidden` (403), failed/legacy policies `redaction_failed` (500).
 - Equivalent `/share-api/...` paths use the share-scoped Session and policy; supplied Session IDs
-  cannot escape the share. Desktop methods call the same manager implementation.
+  cannot escape the share.
 
 The request body file stores C2S and response body file S2C. These are internal containers,
-not HTTP response bodies: generic body reads are rejected, detail payloads are empty, and
-WebSocket connection rows are excluded from HAR. Handshake HAR entries remain eligible.
+not HTTP response bodies: generic body reads are rejected and detail payloads are empty.
 No historical message backfill or connection-wide export is provided.
 
 Messages are unmasked, reassembled and permessage-deflate decoded before storage. Complete messages
@@ -1483,48 +1424,6 @@ context takeover even when a message is dropped. Outgoing frames are uncompresse
 which is valid under permessage-deflate negotiation and avoids corrupting peer compression state. Dropped messages never reach the destination;
 unsent/failed messages are recorded with reasons. Callback errors cancel only that invocation's
 pending sends/drop and pass the original message to the next callback. HTTP/2/3 extended CONNECT is out of scope.
-
-Internal format v1: eight-byte magic `PCWS\x01\0\0\0`, followed by little-endian u32 message ID,
-u32 record length, u32 metadata length, UTF-8 JSON metadata, and payload bytes.
-`record_length = 4 + metadata_length + payload_length`; total record bytes are `8 + record_length`.
-Readers only publish complete records; incomplete tails do not become empty messages. No length backfill.
-
-The dedicated WebSocket UI uses a compact 84px Canvas waterfall (85px including border) with two directional lanes,
-viewport-sized high-DPI rendering, Command/Ctrl + wheel pointer-anchored horizontal zoom,
-scroll, and message selection. The time row uses adaptive, evenly spaced 1/2/5 time ticks with short vertical marks on its bottom divider;
-compact icon toolbars replace text buttons, without a zoom slider, scale ruler, or reserved scrollbar space. Handshake/connection
-IDs remain available in the API. WS details show source and direct-trigger links (including across
-lanes), generating/dropping callback invocation IDs, send ordinal, delivery failures and callback
-errors. Connection source buttons and callback links open the historical handshake script snapshot
-through the existing content API; these controls require the corresponding backend capability.
-Canvas fill/border is green for original messages and blue for generated messages. Dropped messages
-have gray fill and unsent/failed messages red fill; borders always retain origin color, including
-when selected. Selection increases border thickness.
-
-Connection metadata and icon actions share one toolbar. Per-direction message counts appear
-as a second, smaller line in the left C→S/S→C legends; direction labels align with Canvas bars.
-
-WebSocket messages refresh automatically while the connection is active; there are no manual
-follow/refresh buttons. At full extent (no horizontal overflow), incoming data keeps the timeline
-fitted. Zoomed views keep their scale and scroll position; each lane shows a right-edge pill for
-unseen new messages. Clicking it reveals that direction’s newest message and clears its unread
-count without changing zoom. Returning to full extent resumes continuous fitting.
-
-Zoom is absolute: 1× means 100 CSS pixels per second, capped at 64× (6.4 px/ms,
-100px = 15.625ms), independent of the captured time range. Full-extent fitting also respects
-this cap; a short capture may leave unused space to the right.
-
-## Resource manager UI capabilities
-
-The workspace resource manager requires `listAssets`; its upload actions and those in the replay
-asset picker require `uploadAsset`. HTTP upload uses the existing raw-body POST asset endpoint.
-The desktop backend exposes `upload_asset` over binary Tauri IPC using `x-asset-id` and
-`x-asset-content-type` headers; it uses the same asset store and conflict rules without HTTP.
-The shared single-file picker does not upload on selection: users confirm the destination name.
-Asset IDs allow lowercase ASCII letters, digits, `_`, `-`, `.`, and `/`; maximum length is 255
-bytes, each segment at most 100 bytes, and empty, `.`, `..`, `.metadata` segments are invalid.
-No overwrite, move, rename, delete or empty-directory API has been introduced.
-
 
 ## Session configuration ZIPs and intent imports
 

@@ -34,7 +34,7 @@
     {
       "id": 6,
       "prompt": "List the newest transparent-forwarding entries in ProxyCrab and explain why the latest failed item bypassed capture. Do not claim access to headers or bodies.",
-      "expected_output": "The agent queries the bypass page, cites the entry ID, source, method, URI, reason, outcome, and error, and explicitly avoids inventing header/body evidence.",
+      "expected_output": "The agent queries the bypass API, cites the entry ID, source, method, URI, reason, outcome, and error, and explicitly avoids inventing header/body evidence.",
       "files": []
     },
     {
@@ -146,7 +146,7 @@
     {
       "id": 25,
       "prompt": "Use the ProxyCrab management HTTP API to report the current workspace and immediately switch to /tmp/proxycrab-next.",
-      "expected_output": "The agent explains that workspace inspection/switching is unavailable through the Agent HTTP API and makes no HTTP attempt. It directs desktop users to Settings > 通用 > 切换工作区, warning that switching restarts the app and discards unsaved edits. CLI users select --workspace at startup.",
+      "expected_output": "The agent explains that workspace inspection/switching is unavailable through the Agent HTTP API and makes no HTTP attempt. It notes that workspace switching restarts the desktop app and discards unsaved edits; CLI workspaces are selected with --workspace at startup.",
       "files": []
     },
     {
@@ -193,8 +193,8 @@
     },
     {
       "id": 33,
-      "prompt": "Explain how to export the current ProxyCrab list as HAR from desktop or a shared Session page, including Body read failures. Is a HAR sharing token or new share API needed?",
-      "expected_output": "Uses the export button beside sweep to open a progress/log window, then starts export inside it. Freezes all matching IDs and displayed order; retains failed/in-progress HTTP entries with missing-response status 0. Uses existing authorized detail/Body APIs. Body errors become diagnostic text with warnings while continuing. Desktop Writer appends chunks and commits/aborts temporary files; browser buffers Blob parts. Closing cancels. No backend HAR generator, HAR tokens, HAR share routes, or new share API. Never bypasses redaction.",
+      "prompt": "Does ProxyCrab provide a management or Session-share API to generate or download HAR? How can an Agent obtain capture evidence through the available APIs?",
+      "expected_output": "Explains that no HAR generation, download, or sharing HTTP endpoint or HAR token exists. Uses log-query.mjs, log-get.mjs, log-export.mjs for capture JSON, and body-get.mjs for complete bodies under management access; a supplied Session link uses the scoped /share-api read routes directly. Respects permissions and redaction failures without inventing export routes or switching credentials.",
       "files": []
     },
     {
@@ -231,8 +231,8 @@
     },
     {
       "id": 39,
-      "prompt": "Give the existing ProxyCrab custom-column script auth-token the UI label 鉴权token. Preserve its logic, file name, and all Session references; verify the saved label and explain how removing it and duplicate labels behave.",
-      "expected_output": "The agent reads auth-token, adds or updates the first leading -- #display_name: 鉴权token annotation, preserves the rest of the Lua source, updates content using the existing script name, and reads it back to verify name remains auth-token and display_name is 鉴权token. It does not rename files or rewrite script_name references. It explains missing or empty metadata falls back to auth-token, the first header declaration wins, duplicate labels are allowed while original names distinguish scripts, and share pages retain labels without exposing source.",
+      "prompt": "Set display_name metadata to 鉴权token for the existing ProxyCrab custom-column script auth-token through the API. Preserve its logic, file name, and all Session references; verify the saved metadata and explain how missing and duplicate labels behave.",
+      "expected_output": "The agent reads auth-token, adds or updates the first leading -- #display_name: 鉴权token annotation, preserves the rest of the Lua source, updates content using the existing script name, and reads it back to verify name remains auth-token and display_name is 鉴权token. It does not rename files or rewrite script_name references. It explains missing or empty metadata falls back to auth-token, the first header declaration wins, duplicate labels are allowed while original names distinguish scripts, and share responses retain labels without exposing source.",
       "files": []
     },
     {
@@ -244,7 +244,7 @@
     {
       "id": 41,
       "prompt": "Download the current public CA certificate from the local ProxyCrab management service to /tmp/proxycrab-ca.crt while the proxy is stopped. Do not start the proxy or configure system proxy. Explain how a phone can download the same certificate.",
-      "expected_output": "The agent reads active Agent instructions and uses certificate-download.mjs or GET /ca.crt on the management port, saves only the public certificate, and reports the path/size. It explains using the non-loopback IPv4 URL or QR in certificate management without prior proxy setup, and keeps the proxy stopped. It does not use the removed /api/ca endpoint or request a certificate-read permission.",
+      "expected_output": "The agent reads active Agent instructions and uses certificate-download.mjs or GET /ca.crt on the management port, saves only the public certificate, and reports the path/size. It explains using http://<reachable-IPv4>:<api-port>/ca.crt without prior proxy setup, and keeps the proxy stopped. It does not use the removed /api/ca endpoint or request a certificate-read permission.",
       "files": []
     },
     {
@@ -255,8 +255,8 @@
     },
     {
       "id": 43,
-      "prompt": "Explain how to download a complete Body larger than 1 GiB from ProxyCrab UI, and how to save the exact interceptor-entry snapshot from a read-only Session share. Does formatting JSON change the downloaded bytes, and does this change body-get.mjs limits?",
-      "expected_output": "The agent points to the Body download button without requiring preview loading and explains that downloads preserve complete HTTP-decoded bytes independently of preview formatting and limits, subject to the effective redaction policy and browser resources. Share snapshots stay scoped to the shared Session and missing snapshots never fall back to final bodies. For a supplied share link, the agent may download /share-api/logs/{id}/body using exactly one token query parameter, side, and execution_id; it handles the raw bytes rather than a JSON envelope. body-get.mjs requires an output path and defaults to a 16 MiB stored-size maximum unless explicitly overridden.",
+      "prompt": "Using only a supplied ProxyCrab Session sharing link, save the request Body that interceptor execution 17 saw on entry for log 42 to /tmp/proxycrab-share-snapshot.bin with a 32 MiB stored-size maximum. Explain missing-snapshot behavior and the bundled management helper's default size limit.",
+      "expected_output": "Calls /share-api/logs/42/body on the supplied link origin with exactly one token query parameter, side=request, execution_id=17, and max_size=33554432. Uses Accept-Encoding: identity for HTTP-decoded bytes, handles the response as raw bytes rather than a JSON envelope, and saves to the requested path. The token fixes the Session; a missing snapshot never falls back to the final Body. Respects redaction and size errors. Does not use management credentials or body-get.mjs for share authentication; explains that the management helper requires an output path and defaults to a 16 MiB stored-size maximum unless explicitly overridden.",
       "files": []
     },
     {
@@ -267,8 +267,8 @@
     },
     {
       "id": 45,
-      "prompt": "A bound ProxyCrab body read returns redaction_failed. Diagnose without changing credentials or policies, and explain whether exported capture JSON and HAR downloads are always unredacted.",
-      "expected_output": "Reports the read failure without switching credentials, removing the policy, or using raw Assets/history to bypass it. Explains that capture JSON and HAR can be transformed by the effective redaction policy; preserves API-returned evidence and checks remaining sensitive fields before sharing. Asks the owner to diagnose the intended script.",
+      "prompt": "A bound ProxyCrab Body read returns redaction_failed. Diagnose without changing credentials or policies, and explain whether capture JSON exported with log-export.mjs is always unredacted.",
+      "expected_output": "Reports the read failure without switching credentials, removing the policy, or using raw Assets/history to bypass it. Explains that exported capture JSON preserves API-returned evidence and may be transformed by the effective redaction policy. Checks remaining sensitive fields before sharing and asks the owner to diagnose the intended script.",
       "files": []
     },
     {
@@ -279,14 +279,8 @@
     },
     {
       "id": 47,
-      "prompt": "Explain how to start headless ProxyCrab with a custom browser UIKey and a mandatory redaction script. Does a key without pcrab_ui_ become an Agent API key?",
-      "expected_output": "Show --ui-key KEY and --redaction-script FILE with --workspace DIR, using placeholders only. Explain nonempty visible ASCII without whitespace/control characters, no required prefix, random token fallback when omitted, actual token printed at startup, and no new environment variable or persistence. Custom UIKeys remain browser credentials and cannot bypass redaction; do not place them in PROXYCRAB_API_KEY or Agent commands.",
-      "files": []
-    },
-    {
-      "id": 49,
-      "prompt": "On a remote HTTP ProxyCrab CLI page, the request window opens but JWT verification reports importKey unavailable. Explain which behavior is a browser secure-context restriction and whether it means /api/replay is broken.",
-      "expected_output": "Explain that JWT decoding works on HTTP, while signature verification needs HTTPS or trusted localhost. A browser JWT verification failure does not establish that /api/replay is broken. Do not bypass authentication or redaction.",
+      "prompt": "A supplied ProxyCrab browser UIKey has no pcrab_ui_ prefix. Can the Agent use it in PROXYCRAB_API_KEY or bypass the server's startup redaction policy?",
+      "expected_output": "Explains that custom UIKeys remain browser credentials regardless of prefix. Never places the value in PROXYCRAB_API_KEY, Agent commands, URLs, logs, or reports. Management operations require a separately authorized Agent identity; startup redaction overrides identity/share bindings and cannot be bypassed with UIKey.",
       "files": []
     },
     {
@@ -317,14 +311,14 @@
     },
     {
       "id": 54,
-      "prompt": "In the WebSocket Canvas a blue-bordered message has a red fill. Explain its meaning, find its direct trigger and root message, and identify the exact callback that sent it.",
-      "expected_output": "Blue border means interceptor-generated; red fill means unsent/delivery failure, not drop (gray). Uses side plus ID for root/parent jumps, producer execution_id/invocation_id/send_index for sender, failure reason and connection source snapshot. Original borders are green and selection preserves origin border.",
+      "prompt": "A ProxyCrab WebSocket message returned by the message API has producer metadata and status failed. Find its direct trigger and root message, identify the exact callback that sent it, and explain the delivery failure.",
+      "expected_output": "Uses parent and root references with both side and ID, producer.execution_id/invocation_id/send_index for the generating callback, and error for delivery failure. Reads the historical source through the handshake log execution ID rather than current library code. Distinguishes failed/unsent delivery from dropped status and passive records with no delivery status; respects policy-filtered error text.",
       "files": []
     },
     {
       "id": 55,
       "prompt": "Create a ProxyCrab filter script named business/errors and a request interceptor named mobile/debug/header. Bind each using its complete relative path, then read and update the nested scripts. Do not rename scripts or manage empty directories.",
-      "expected_output": "Uses unencoded relative names without the automatic .lua extension in helper arguments and JSON bindings, encodes each entire name as one URL parameter for detail/update/debug/delete, verifies returned full names and nested file-tree visibility, and preserves existing chains. Rejects traversal and absolute paths.",
+      "expected_output": "Uses unencoded relative names without the automatic .lua extension in helper arguments and JSON bindings, encodes each entire name as one URL parameter for detail/update/debug/delete, verifies returned full names, and preserves existing chains. Rejects traversal and absolute paths.",
       "files": []
     },
     {
@@ -341,26 +335,26 @@
     },
     {
       "id": 58,
-      "prompt": "Enable a persistent ProxyCrab Session 3 share with redaction mask, change it to temporary without rotating its token, and explain restart, revocation, and HAR behavior.",
-      "expected_output": "Uses existing permission-controlled POST /api/session-shares with session_id:3 and session_share_config:{redaction_script:\"mask\",persistent:true}, then the same POST with persistent:false and the preserved redaction_script. No new persistence route or IPC command. Reads persistent in state, verifies same token without reporting it, explains optional omitted config preserves enabled state, omitted redaction fields preserve existing policy; explicit null restores local inheritance, persistent entries restore with token/binding, disable removes disk state, re-enable rotates token, and HAR export is now a local frontend action without a sharing token.",
+      "prompt": "Enable a persistent ProxyCrab Session 3 share with redaction mask, change it to temporary without rotating its token, and explain restart and revocation behavior.",
+      "expected_output": "Uses existing permission-controlled POST /api/session-shares with session_id:3 and session_share_config:{redaction_script:\"mask\",persistent:true}, then the same POST with persistent:false and the preserved redaction_script. No new persistence route. Reads persistent in state, verifies same token without reporting it, explains optional omitted config preserves enabled state, omitted redaction fields preserve existing policy; explicit null restores local inheritance, persistent entries restore with token/binding, disable removes disk state, re-enable rotates token.",
       "files": []
     },
     {
       "id": 59,
       "prompt": "List all currently shared ProxyCrab Sessions, distinguish temporary and persistent sharing, and explain why an archived Session without an enabled page share is absent. Do not retrieve tokens.",
-      "expected_output": "Calls session-share-list.mjs or permission-controlled GET /api/session-shares once, consumes shares:[{session_id,persistent}], and joins names from the Session list if needed. Only enabled non-archived page shares are returned; Token/redaction bindings are excluded; HAR link sharing has been removed. Does not issue N per-Session status queries or equate denied/failed reads with all shares disabled. Recognizes default allow and restored enabled Sessions reappearing.",
+      "expected_output": "Calls session-share-list.mjs or permission-controlled GET /api/session-shares once, consumes shares:[{session_id,persistent}], and joins names from the Session list if needed. Only enabled non-archived page shares are returned; Token/redaction bindings are excluded. Does not issue N per-Session status queries or equate denied/failed reads with all shares disabled. Recognizes default allow and restored enabled Sessions reappearing.",
       "files": []
     },
     {
       "id": 60,
-      "prompt": "Given a ProxyCrab Session sharing link, inspect its currently configured request/response interceptor chain and explain how the shared UI follows owner changes. Do not modify configuration or retrieve library source.",
-      "expected_output": "Uses GET /share-api/session-interceptors with exactly one token query parameter on the supplied link origin. Treats session_id as server-scoped, preserves order, and reads only name/display_name/enabled/valid. Distinguishes current configuration from per-capture historical execution. Does not invent writes or use management credentials or library source. Explains the shared pipeline reuses the component with capabilities inferred from Backend methods; no add/edit/toggle/drag/sweep/breakpoint controls, frontend HAR export remains, and existing metadata polling detects changes with scoped session_interceptors events. Reports invalid/revoked/unavailable shares without bypass.",
+      "prompt": "Given a ProxyCrab Session sharing link, inspect its currently configured request/response interceptor chain through the API. Explain whether this proves what executed for a historical capture. Do not modify configuration or retrieve library source.",
+      "expected_output": "Uses GET /share-api/session-interceptors with exactly one token query parameter on the supplied link origin. Treats session_id as server-scoped, preserves order, and reads only name/display_name/enabled/valid. Current configuration does not prove per-capture historical execution; historical evidence uses the capture's execution metadata and source/snapshot endpoints. Does not invent writes or use management credentials or library source. Reports invalid/revoked/unavailable shares without bypass.",
       "files": []
     },
     {
       "id": 61,
-      "prompt": "Explain the default redaction choice when creating a ProxyCrab Session share from its sharing window or a log-row focused-link shortcut. What happens to existing shares, an explicit no-redaction selection, later local binding changes, and lookup failures?",
-      "expected_output": "Backend enforces defaults: omitted field on creation inherits local dynamically, explicit null restores inheritance, empty string explicitly disables share-level redaction, and nonempty values select scripts. Bound Keys must omit the field and shares follow their Key binding; unconfigured Keys must omit it; only explicitly unredacted Keys may supply it. Forbidden fields return share_redaction_forbidden and identity lookup failure fails closed. Existing omitted-field updates preserve policy. Frontend reads no local defaults and every update uses POST /api/session-shares, with no separate redaction route. Inherited binding changes propagate; startup forced redaction still overrides.",
+      "prompt": "Explain redaction defaults for POST /api/session-shares when creating or updating a share. How do omitted, null, empty-string and named-script values differ, and what happens after local or API-key binding changes or lookup failures?",
+      "expected_output": "Omitted redaction on creation through the local no-API-key identity inherits local dynamically; explicit null restores inheritance, empty string disables share-level redaction, and nonempty values select scripts. Bound Keys must omit the field and shares follow their Key binding; unconfigured Keys must omit it; only explicitly unredacted Keys may supply it. Forbidden fields return share_redaction_forbidden and identity lookup failure fails closed. Omitted-field updates preserve policy. Every update uses POST /api/session-shares, with no separate redaction route. Inherited binding changes propagate; startup forced redaction still overrides.",
       "files": []
     },
     {
@@ -371,14 +365,14 @@
     },
     {
       "id": 63,
-      "prompt": "Explain how nested scripts and workspace assets are shown in the script managers and replay asset picker. A script is named business/errors and an asset is named images/icon.png. Which identifiers should API helpers use?",
-      "expected_output": "Both views use the shared compact directory-first file tree. Script errors.lua is only a display label; helpers and bindings retain business/errors. The asset retains images/icon.png, including its extension, and the picker displays size and type metadata. No move, rename, empty-directory API is invented.",
+      "prompt": "A ProxyCrab script has name business/errors and a workspace Asset has ID images/icon.png. Which identifiers and URL encoding should API helpers and Session bindings use? Are rename, move, and empty-directory management available?",
+      "expected_output": "Uses business/errors without the automatic .lua extension in script helper arguments and bindings; encodes the whole script name as one URL parameter for direct script routes. Asset helpers use the complete images/icon.png ID including its extension. Does not reduce either identifier to its leaf name or pre-encode helper arguments. No move or empty-directory API is invented; script rename is unavailable and Assets are immutable with no update/delete endpoint.",
       "files": []
     },
     {
       "id": 64,
-      "prompt": "Upload a file named Demo-Image.png into the images directory from the workspace resource manager, then upload another file from the replay asset picker. Explain how root and directory creation differ, without overwriting existing resources.",
-      "expected_output": "Uses the directory plus or dashed root plus, selects one file, presents its unchanged name for confirmation, reports uppercase as invalid and allows explicit editing to demo-image.png. Conflicts remain errors. Upload requires backend capability, works via HTTP or Tauri binary IPC, and replay selects the new resource and refreshes its list. Script toolbar input filters; script creation uses directory/root plus and the default template.",
+      "prompt": "Upload /tmp/Demo-Image.png to ProxyCrab with the explicitly accepted Asset ID images/demo-image.png and content type image/png, then verify its metadata through the API. Explain what happens if the ID contains uppercase letters or already exists. Do not overwrite or choose another ID.",
+      "expected_output": "Uses asset-upload.mjs with --file /tmp/Demo-Image.png --id images/demo-image.png --content-type image/png, or the equivalent raw-body POST /api/assets/{id}. Verifies the full ID, size, content_type and sha256 via GET /api/assets/{id}. Distinguishes local file names from Asset IDs; uppercase IDs fail invalid_asset_id and existing IDs fail asset_already_exists or asset_path_conflict without overwriting. Does not silently rewrite IDs, retry with another ID, or invent directory-creation endpoints.",
       "files": []
     },
     {

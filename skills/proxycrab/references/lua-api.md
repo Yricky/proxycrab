@@ -640,9 +640,8 @@ errors and size-limit errors fail the read. Binary `as_string/as_json` returns n
 body with a string is supported without reading its original bytes.
 
 Each API request compiles its selected script once and isolates globals between records/stages.
-States and output are scoped to a record/snapshot in that request. Frontend HAR derives query
-strings, cookies, redirects and Body fields from these authorized reads. Each request resolves its
-own policy version; failed reads become export diagnostics without fallback to original data.
+States and output are scoped to a record/snapshot in that request. Each request resolves its
+own policy version; failed reads must not fall back to original data.
 No cross-request or cross-snapshot result cache is used.
 
 ## WebSocket interception callbacks

@@ -50,10 +50,9 @@ surface has no `/api/agents.md` endpoint and needs no management API key or loca
   retry and approve it; do not loop automatically. The CLI target has no approval decisions and
   treats `approval` as deny. `permission_denied` means the selected identity cannot perform the
   action, and `invalid_api_key` means the environment key is missing, malformed, unknown, or deleted.
-- Never use the browser UIKey as an Agent API key. It defaults to a per-run `pcrab_ui_…` token,
-  but `--ui-key KEY` can supply a custom value without that prefix. Both are trusted UI credentials
-  printed for a human; do not copy them into `PROXYCRAB_API_KEY` or any Agent command. A custom
-  UIKey cannot bypass startup redaction.
+- Never use the browser UIKey as an Agent API key. The default `pcrab_ui_…` token and custom
+  UIKeys without that prefix are browser credentials; do not copy them into `PROXYCRAB_API_KEY`
+  or any Agent command. UIKey cannot bypass startup redaction.
 - Use a supplied `pcrab_share_…` Session link token to read its Session through `/share-api/*`
   with a `token` query parameter. It is not a management API key; see the sharing workflow below.
 - Treat the `GET`, `POST`, and `DELETE` Session-share management routes as normal
@@ -63,9 +62,8 @@ surface has no `/api/agents.md` endpoint and needs no management API key or loca
   service must be deliberately bound to a reachable address, and that API-key identity must allow
   the requested route. Prefer authenticated TLS or an SSH local port forward; plain HTTP exposes
   the Bearer key and captured data, so use it only on a trusted network.
-- Successful management mutations synchronize into the open desktop UI. Archiving the viewed
-  Session selects the first remaining Session; other mutations keep the viewed Session. Open
-  editors preserve unsaved local changes.
+- Management mutations also update the open application. Preserve the user's unsaved edits
+  when an external-edit conflict is reported.
 
 ## Choose the smallest workflow
 
@@ -133,7 +131,7 @@ scripts use `/api/*` and do not support share authentication; use an HTTP client
 3. Read current chain metadata with `GET /share-api/session-interceptors` when needed. It returns
    ordered request/response items (`name`, optional `display_name`, `enabled`, `valid`) for the shared
    Session only, with no library source or writes. This is current configuration, not proof of what
-   executed for a historical capture. The shared UI displays this chain read-only and follows changes.
+   executed for a historical capture.
    Read raw bodies, WebSocket messages, or historical interceptor source/snapshots as needed using
    the [complete share route table](references/http-api.md#session-share-read-api).
    These endpoints always use the shared Session; a supplied `session_id` cannot select another one.
@@ -338,16 +336,16 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
 ## Safety and evidence rules
 
 - Follow the active AGENTS.md instructions for mutations. When the endpoint is unavailable, do not
-  make UI-visible changes unless the user explicitly requests them.
+  mutate application state unless the user explicitly requests it.
 - Respect API permissions. Do not bypass a denial or expired approval by switching credentials or
-  retrying. The user can adjust the selected identity in Settings > 管理接口.
+  retrying. Identity and permission management are unavailable through the Agent API.
 - Archive/restore/delete Sessions, delete scripts, clear records, and replay requests only when
   requested. Do not configure another process's proxy environment automatically. Keep debugging
   state unless the user asks for cleanup. An active Session cannot be archived; deactivating it
   requires authorization too.
 - CA regeneration, full application-config replacement, and workspace changes are unavailable
-  through the Agent API. Desktop workspace switching is under Settings > 通用 > 切换工作区 and
-  restarts the app, discarding unsaved edits. CLI users select `--workspace` at startup.
+  through the Agent API. Workspace switching restarts the desktop app and discards unsaved edits;
+  CLI workspaces are selected with `--workspace` at startup.
 - Preserve API-returned evidence, which may already be redacted. Check for credentials and personal
   data before sharing summaries or artifacts; do not assume read-time redaction covers every field.
 - Log detail embeds at most 64 KiB of decoded text/JSON. Use `body-get.mjs` for complete bodies with
@@ -363,7 +361,6 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
 - Use `_crab_tls_insecure` only for a narrowly matched controlled test host and warn that it disables
   upstream certificate-chain and hostname verification. Forced upstream `HTTP/2` has no HTTP/1.1
   fallback. These tags affect the upstream hop, not the captured client protocol.
-- If the UI reports an external-edit conflict, preserve the user's unsaved work.
 
 ## References
 
@@ -379,8 +376,6 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
 Management reads may be transformed by the selected identity's bound Lua redaction script. An
 unbound identity normally returns original data; a failed/missing bound script refuses the read. Do not retry
 with another credential or remove a binding to bypass that failure. Ordinary captures are unchanged.
-The owner can manage bindings in settings and Session sharing. Frontend HAR exports use the
-existing authorized detail/Body reads, with no separate HAR policy or download API.
 
 Use `scripts/redaction-upsert.mjs --name NAME --file SCRIPT.lua` to create/update an authorized
 redaction script. Use `scripts/share-redaction-set.mjs --session ID --kind page --name NAME`
@@ -407,7 +402,7 @@ for current connection activity. Message IDs are per direction (`request` = C2S,
 List metadata with `websocket-messages.mjs`, using `next_after_id` for pagination/polling, then read
 one payload with `body-get.mjs --message-id`. Never attempt raw container download or treat it as
 an HTTP body. Capture content is decoded/reassembled and limited to 16 MiB per message; omitted
-messages retain metadata. HAR excludes WS connection rows but may include handshake rows.
+messages retain metadata.
 Bound redaction scripts must opt into WebSocket messages; never bypass a failed/legacy policy.
 
 
@@ -429,28 +424,12 @@ All script helpers accept relative paths through `--name`, for example
 Session bindings and routing selection. Helpers encode the whole name in URL parameters;
 do not pre-encode the argument. See [script path rules](references/http-api.md#script-relative-paths).
 
-## HAR export
+## HAR API boundary
 
-Use the UI export button beside sweep, then start export inside its progress/log window. The
-selection includes every current filtered row in displayed order, frozen on start. Failed and
-unfinished HTTP records remain (missing response status 0); WS connection rows and synthetic TLS
-CONNECT are skipped. Body read failures become failure text and warnings, not truncated downloads.
-The browser buffers Blob parts; desktop writes temporary-file chunks and commits on finish. Closing
-the export window cancels it. There is no HAR link sharing or backend HAR generation API. Agents
-should read supplied Session links through the existing share routes rather than invent export
+There is no HAR generation, download, or sharing HTTP endpoint. Agents should read supplied
+Session links through the existing share routes rather than invent export
 routes. Read failures never authorize changing credentials or bypassing redaction.
 
-Script sidebars and the existing workspace-asset picker share one file-tree presentation.
-This UI refactor does not change helper arguments, API paths or script/asset identifiers;
-continue using the complete relative identifier, not the displayed leaf label.
-
-### Resource upload UI
-
-The workspace resource manager and replay asset picker expose upload only when the backend provides
-that capability. Directory `+` targets that directory; the dashed top `+` targets the root. A single
-file is selected, then its destination name is confirmed. Names are not automatically rewritten;
-conflicts never overwrite existing assets. Script trees use the same creation locations and their
-top text field filters scripts. Tauri uploads use binary IPC; agent uploads still use
-`scripts/asset-upload.mjs` and the existing HTTP endpoint.
+## Session configuration bundles
 
 Configuration ZIP downloads require the link owner to enable `session_config_share`. Asset dependencies are manually selected exact IDs or slash-terminated prefixes; see the asset best practices in `references/lua-api.md`. Import only intent IDs and conflict choices explicitly accepted by the user; never activate sessions as part of import.
