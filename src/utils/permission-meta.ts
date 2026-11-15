@@ -24,6 +24,7 @@ export const ACTION_META: Readonly<Record<string, PermissionActionMeta>> = {
   "GET /api/assets/{*asset_id}": { label: "读取资源", impact: "read" },
   "POST /api/assets/{*asset_id}": { label: "上传资源", impact: "write" },
   "GET /api/config": { label: "读取全局配置", impact: "read" },
+  "GET /api/info": { label: "读取构建信息", impact: "read" },
   "GET /api/proxy/status": { label: "读取代理状态", impact: "read" },
   "POST /api/proxy/start": { label: "启动代理", impact: "write" },
   "POST /api/proxy/stop": { label: "停止代理", impact: "write" },

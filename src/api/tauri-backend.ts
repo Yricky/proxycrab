@@ -144,6 +144,7 @@ export function createTauriBackend(): Backend {
 
     getWorkspace: () => call("get_workspace"),
     getConfig: () => call("get_config"),
+    getSystemInfo: () => call("get_system_info"),
     getAgentsPresets: () => call("get_agents_presets"),
     createAgentsPreset: (request: CreateAgentsPresetRequest) =>
       call("create_agents_preset", { request }),

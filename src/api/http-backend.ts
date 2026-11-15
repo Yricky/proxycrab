@@ -161,6 +161,7 @@ export function createHttpBackend(
 
     getWorkspace: async () => bootstrap.workspace,
     getConfig: () => call("/api/config"),
+    getSystemInfo: () => call("/api/info"),
     getAgentsPresets: () => call("/ui-api/agents-presets"),
     createAgentsPreset: (requestValue: CreateAgentsPresetRequest) =>
       call("/ui-api/agents-presets", json("POST", requestValue)),

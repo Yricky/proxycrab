@@ -21,7 +21,7 @@ use proxy_crab_mgr::{
         InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest, LogViewsPayload,
         LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
         ReplaceSessionViewRequest, ReplayRequestPayload, ReplayResult, RoutingSelection,
-        ScriptRequest, SessionInterceptorsPayload, SessionViewPayload, SessionsPayload,
+        ScriptRequest, SessionInterceptorsPayload, SessionViewPayload, SessionsPayload, SystemInfo,
         SystemLogsQuery, UpdateAgentsPresetRequest, UpdateScriptRequest, UpdateSessionRequest,
     },
     http::{HttpServerHandle, start_http_server_with_routes},
@@ -194,6 +194,11 @@ async fn switch_workspace(
 #[tauri::command]
 async fn get_config(state: State<'_, BackendState>) -> Result<AppConfig, ManagerError> {
     state.manager().config().await
+}
+
+#[tauri::command]
+fn get_system_info() -> SystemInfo {
+    SystemInfo::current()
 }
 
 #[tauri::command]
@@ -1161,6 +1166,7 @@ pub fn run() {
             get_workspace,
             switch_workspace,
             get_config,
+            get_system_info,
             replace_config,
             get_agents_presets,
             create_agents_preset,

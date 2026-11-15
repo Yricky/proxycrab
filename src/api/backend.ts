@@ -39,6 +39,7 @@ import type { SessionMetadata } from "./generated/SessionMetadata";
 import type { SessionsPayload } from "./generated/SessionsPayload";
 import type { SessionInterceptorsPayload } from "./generated/SessionInterceptorsPayload";
 import type { SessionViewPayload } from "./generated/SessionViewPayload";
+import type { SystemInfo } from "./generated/SystemInfo";
 import type { SystemLogEntry } from "./generated/SystemLogEntry";
 import type { SystemLogsQuery } from "./generated/SystemLogsQuery";
 import type { UpdateScriptRequest } from "./generated/UpdateScriptRequest";
@@ -118,6 +119,7 @@ export interface Backend {
   // workspace & config
   getWorkspace(): Promise<WorkspacePaths>;
   getConfig(): Promise<AppConfig>;
+  getSystemInfo(): Promise<SystemInfo>;
   getAgentsPresets(): Promise<AgentsPresetState>;
   createAgentsPreset(request: CreateAgentsPresetRequest): Promise<AgentsPresetState>;
   updateAgentsPreset(id: string, request: UpdateAgentsPresetRequest): Promise<AgentsPresetState>;

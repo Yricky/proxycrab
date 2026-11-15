@@ -297,6 +297,14 @@ text.
 
 Returns `AppConfig`.
 
+## Build info
+
+### `GET /api/info`
+
+Returns `SystemInfo`: `version` (crate version baked in at compile time), `os` and `arch`
+(`std::env::consts`), and `family`. No runtime system probing, so the values describe the target
+the binary was compiled for.
+
 ## Proxy lifecycle
 
 ### `GET /api/proxy/status`

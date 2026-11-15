@@ -44,8 +44,8 @@ use crate::{
         ExtendBreakpointRequest, HttpApiChange, HttpApiResource, InterceptorCreateRequest,
         InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError, ManagerResult,
         ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ReplayRequestPayload,
-        RoutingSelection, ScriptRequest, SessionQuery, SystemLogsQuery, UpdateScriptRequest,
-        UpdateSessionRequest, WebSocketQuery, default_body_max_size,
+        RoutingSelection, ScriptRequest, SessionQuery, SystemInfo, SystemLogsQuery,
+        UpdateScriptRequest, UpdateSessionRequest, WebSocketQuery, default_body_max_size,
     },
     manager::ProxyCrabManager,
     permission::{
@@ -286,6 +286,7 @@ fn router_with_changes_and_extra(
         .route("/api/assets/{*asset_id}", get(asset).post(upload_asset))
         .route("/api/replay", post(replay))
         .route("/api/config", get(get_config))
+        .route("/api/info", get(system_info))
         .route("/api/proxy/status", get(proxy_status))
         .route("/api/proxy/start", post(start_proxy))
         .route("/api/proxy/stop", post(stop_proxy))
@@ -787,6 +788,10 @@ async fn replay(
 
 async fn get_config(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.config().await?)
+}
+
+async fn system_info() -> ApiResult {
+    success(SystemInfo::current())
 }
 
 async fn agents_markdown(State(manager): State<ManagerState>) -> Result<Response, ApiError> {

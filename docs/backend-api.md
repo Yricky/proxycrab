@@ -255,6 +255,7 @@ browser UI.
 | --- | --- |
 | `/api/agents.md` | `GET` active workspace Agent instructions as raw `text/plain` |
 | `/api/config` | `GET` |
+| `/api/info` | `GET` build info (`version`, `os`, `arch`, `family`) |
 | `/api/proxy/status` | `GET` |
 | `/api/proxy/start`, `/api/proxy/stop` | `POST` |
 | `/api/sessions` | `GET` list plus nullable active Session ID, `POST` create |

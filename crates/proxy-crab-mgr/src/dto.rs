@@ -578,6 +578,27 @@ pub struct CertificateResponse {
     pub pem: String,
 }
 
+/// 构建期常量，不探测系统 API。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SystemInfo {
+    pub version: String,
+    pub os: String,
+    pub arch: String,
+    pub family: String,
+}
+
+impl SystemInfo {
+    pub fn current() -> Self {
+        Self {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            os: std::env::consts::OS.to_owned(),
+            arch: std::env::consts::ARCH.to_owned(),
+            family: std::env::consts::FAMILY.to_owned(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct HttpServiceStatus {
