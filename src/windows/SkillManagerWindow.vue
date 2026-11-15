@@ -13,6 +13,8 @@ import { choiceDialog } from "../stores/dialog";
 import { skillStore } from "../stores/skill";
 import { t } from "../i18n";
 
+const DEFAULT_SKILL_PARENT = "~/.agents/skills";
+
 const draftPaths = ref<string[]>([]);
 const newPath = ref("");
 
@@ -107,6 +109,8 @@ onMounted(async () => {
   } catch (error) {
     reportError(error, t("读取 Skill 路径失败"));
   }
+  // 只在打开窗口时判断一次：没有已添加的 Skill 目录就直接填入默认父目录。
+  if (draftPaths.value.length === 0) newPath.value = DEFAULT_SKILL_PARENT;
 });
 </script>
 

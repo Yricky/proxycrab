@@ -133,10 +133,13 @@ pub fn uninstall(parent: &str) -> Result<bool, ManagerError> {
 }
 
 fn home_directory() -> Result<PathBuf, ManagerError> {
-    env::var_os("HOME")
+    // Windows 原生环境通常只有 USERPROFILE，HOME 仅在类 Unix 环境或 Git Bash 下存在。
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(env::var_os)
         .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .ok_or_else(|| ManagerError::internal("HOME is unavailable"))
+        .find(|path| path.is_absolute())
+        .ok_or_else(|| ManagerError::internal("home directory is unavailable"))
 }
 
 fn validate_existing_directory(path: &Path, label: &str) -> Result<(), ManagerError> {
