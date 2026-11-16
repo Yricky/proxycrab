@@ -54,6 +54,15 @@ function base64(bytes: Uint8Array): string {
   return parts.join("");
 }
 
+function latin1(bytes: Uint8Array): string {
+  const parts: string[] = [];
+  // TextDecoder("latin1") uses Windows-1252, which changes bytes 0x80–0x9f.
+  for (let offset = 0; offset < bytes.length; offset += 24_576) {
+    parts.push(String.fromCharCode(...bytes.subarray(offset, offset + 24_576)));
+  }
+  return parts.join("");
+}
+
 async function readBody(
   backend: Backend,
   detail: LogDetail,
@@ -75,12 +84,21 @@ async function readBody(
     let text: string;
     let encoding: "base64" | undefined;
     try {
-      if (!/^text\/|json|xml|javascript|x-www-form-urlencoded/i.test(mimeType))
+      // Match Chromium's FormDataToString: UTF-8 first, then Latin-1 for requests.
+      // Binary responses use HAR's standard content.encoding field.
+      if (
+        side === "response" &&
+        !/^text\/|json|xml|javascript|x-www-form-urlencoded/i.test(mimeType)
+      )
         throw new Error("binary");
       text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(body.bytes);
     } catch {
-      text = base64(body.bytes);
-      encoding = "base64";
+      if (side === "request") {
+        text = latin1(body.bytes);
+      } else {
+        text = base64(body.bytes);
+        encoding = "base64";
+      }
     }
     return { size: body.bytes.length, storedSize: payload.size, mimeType, text, encoding };
   } catch (error) {
@@ -140,7 +158,6 @@ export async function buildHarEntry(
             postData: {
               mimeType: requestBody.mimeType,
               text: requestBody.text,
-              ...(requestBody.encoding ? { _encoding: requestBody.encoding } : {}),
             },
           }),
     },

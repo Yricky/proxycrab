@@ -40,12 +40,14 @@ function detail(id: number, changes: Partial<LogDetail> = {}): LogDetail {
     ...changes,
   };
 }
-async function run(records: LogDetail[], failBody = false) {
+async function run(records: LogDetail[], failBody = false, requestBytes?: Uint8Array) {
   const getLog = vi.fn(async (_sid, id) => records.find((record) => record.id === id)!);
   const fetchBody = vi.fn(async (_target, side) => {
     if (failBody) throw new Error("decode failure");
     const bytes =
-      side === "request" ? new TextEncoder().encode('{ "a": 1 }\n') : new Uint8Array([0, 1, 255]);
+      side === "request"
+        ? (requestBytes ?? new TextEncoder().encode('{ "a": 1 }\n'))
+        : new Uint8Array([0, 1, 255]);
     return { bytes, contentType: "", decodedSize: bytes.length };
   });
   const chunks: Uint8Array[] = [];
@@ -99,6 +101,50 @@ test("HAR preserves list order, original JSON whitespace, binary content and der
   expect(entries[0].time).toBe(125);
   expect(result).toMatchObject({ processed: 2, exported: 2, warnings: 0 });
 });
+test.each([
+  undefined,
+  "application/octet-stream",
+  "application/yaml",
+  "multipart/form-data; boundary=example",
+])("UTF-8 request bodies remain readable with Content-Type %s", async (contentType) => {
+  const record = detail(1);
+  record.request.headers = contentType ? [{ name: "Content-Type", value: contentType }] : [];
+  const text =
+    '--example\r\nContent-Disposition: form-data; name="message"\r\n\r\n你好\r\n--example--\r\n';
+  const { har } = await run([record], false, new TextEncoder().encode(text));
+  expect(har.log.entries[0].request.postData).toEqual({
+    mimeType: contentType ?? "application/octet-stream",
+    text,
+  });
+});
+
+test.each([
+  ["control and high bytes", new Uint8Array([0, 1, 255]), "\u0000\u0001\u00ff"],
+  ["Latin-1 controls", new Uint8Array([0x80, 0x91, 0x9f, 0xff]), "\u0080\u0091\u009f\u00ff"],
+  ["mixed UTF-8 and invalid bytes", new Uint8Array([0xc3, 0xa9, 0xff]), "\u00c3\u00a9\u00ff"],
+  ["large binary body", new Uint8Array(100_000).fill(255), "\u00ff".repeat(100_000)],
+] as const)(
+  "binary request bodies follow Chromium's Latin-1 fallback: %s",
+  async (_name, bytes, text) => {
+    const record = detail(1);
+    record.request.headers = [{ name: "Content-Type", value: "application/octet-stream" }];
+    record.request.body = { type: "binary", size: bytes.length };
+    const { har } = await run([record], false, bytes);
+    expect(har.log.entries[0].request.postData).toEqual({
+      mimeType: "application/octet-stream",
+      text,
+    });
+    expect(har.log.entries[0].request.bodySize).toBe(bytes.length);
+    expect(har.log.entries[0].response.content).toMatchObject({ text: "AAH/", encoding: "base64" });
+  },
+);
+
+test("UTF-8 request text preserves its BOM and control characters", async () => {
+  const text = "\ufeff你好\u0000\r\n";
+  const { har } = await run([detail(1)], false, new TextEncoder().encode(text));
+  expect(har.log.entries[0].request.postData).toEqual({ mimeType: "application/json", text });
+});
+
 test("failed and unfinished requests remain with status zero; websocket and synthetic CONNECT skip", async () => {
   const base = detail(1);
   const { har, result } = await run([

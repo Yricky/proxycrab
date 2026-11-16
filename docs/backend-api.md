@@ -563,8 +563,17 @@ rows and synthetic TLS CONNECT records are skipped; HTTP upgrade handshakes rema
 failures (including decode and size errors) become text explaining the failure and `bodyErrors`
 metadata, with warnings in the export window. Unavailable details produce a failed placeholder
 entry. Empty selections produce valid HAR. Body bytes are read separately rather than reusing JSON
-previews, preserving formatting; binary content uses Base64 (`encoding` for responses, `_encoding`
-for request postData). Detailed timings/header sizes are unknown (-1).
+previews, preserving formatting. Request bodies follow Chromium's inline `FormDataToString`
+conversion: try UTF-8, then map the entire body as Latin-1 if UTF-8 decoding fails, regardless of
+Content-Type. The resulting string is written directly to `postData.text`, including binary and
+multipart bodies; no request `_encoding` extension is emitted. Binary responses use the standard
+`content.encoding: "base64"` field. As in Chromium, request text is a display representation rather
+than a self-describing binary archive; use Body downloads for original bytes. Detailed timings/header
+sizes are unknown (-1).
+
+References: Chromium [request conversion](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/inspector/inspector_network_agent.cc)
+and DevTools [HAR export](https://github.com/ChromeDevTools/devtools-frontend/blob/main/front_end/models/har/Log.ts)
+and [HAR import](https://github.com/ChromeDevTools/devtools-frontend/blob/main/front_end/models/har/Importer.ts).
 
 `saveFile({filename})` returns `FileWriter | null`; null means the desktop picker was cancelled.
 The Writer offers async `append(bytes)`, `markAsFinish()`, and `markAsError()`. Desktop chunks use

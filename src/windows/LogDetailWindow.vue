@@ -603,7 +603,7 @@ function headerCount(headers: HeaderItem[]): string {
             <Io5ChevronDown :size="10" />
           </button>
         </div>
-        <SegmentedUrl class="url" :segments="urlSegments" :title="detail.request.uri" />
+        <SegmentedUrl :segments="urlSegments" :title="detail.request.uri" />
         <!-- 错误横幅 -->
         <div v-if="detail.error" class="error-banner">
           <Io5Warning :size="14" class="error-icon" />
@@ -1038,10 +1038,6 @@ function headerCount(headers: HeaderItem[]): string {
   background: var(--text-faint);
 }
 
-/* URL 分段着色见 SegmentedUrl 组件 */
-.url {
-  margin-top: 4px;
-}
 
 .meta-item {
   font-size: 11px;
@@ -1153,7 +1149,7 @@ function headerCount(headers: HeaderItem[]): string {
   flex: none;
   display: flex;
   gap: 2px;
-  padding: 0 8px 0;
+  padding: 0 4px 0;
   border-bottom: 1px solid var(--border);
   border-top: 1px solid var(--border);
 }
@@ -1163,7 +1159,7 @@ function headerCount(headers: HeaderItem[]): string {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 6px 14px 8px;
+  padding: 4px 16px 5px;
   border: none;
   background: transparent;
   color: var(--text-secondary);

@@ -90,8 +90,17 @@ onBeforeUnmount(() => {
 // 拖放导入：dragenter/dragleave 计数决定覆盖层，避免在子元素间移动时闪烁。
 const draggingFiles = ref(false);
 let dragDepth = 0;
+let draggingInternally = false;
+function fileDragStart(): void {
+  draggingInternally = true;
+}
+function fileDragEnd(): void {
+  draggingInternally = false;
+  dragDepth = 0;
+  draggingFiles.value = false;
+}
 function carriesFiles(event: DragEvent): boolean {
-  return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+  return !draggingInternally && Array.from(event.dataTransfer?.types ?? []).includes("Files");
 }
 function fileDragEnter(event: DragEvent): void {
   if (!backend.importBundle || !carriesFiles(event)) return;
@@ -109,7 +118,7 @@ function fileDrag(event: DragEvent): void {
 async function fileDrop(event: DragEvent): Promise<void> {
   dragDepth = 0;
   draggingFiles.value = false;
-  if (!backend.importBundle || !event.dataTransfer?.files.length) return;
+  if (!backend.importBundle || !carriesFiles(event) || !event.dataTransfer?.files.length) return;
   event.preventDefault();
   event.stopPropagation();
   for (const file of Array.from(event.dataTransfer.files)) {
@@ -129,6 +138,8 @@ function onOpenSession(event: Event): void {
 <template>
   <div
     class="app-shell"
+    @dragstart.capture="fileDragStart"
+    @dragend.capture="fileDragEnd"
     @dragenter="fileDragEnter"
     @dragover="fileDrag"
     @dragleave="fileDragLeave"

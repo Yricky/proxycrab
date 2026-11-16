@@ -1774,7 +1774,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  height: 32px;
+  height: 30px;
   padding: 0 var(--space-2);
   border-bottom: 1px solid var(--border);
 }
