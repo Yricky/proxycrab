@@ -7,6 +7,7 @@ import { useBackend } from "../api";
 import { t } from "../i18n";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
 import type { AssetMetadata } from "../api/generated/AssetMetadata";
+import type { SessionPage } from "../api/generated/SessionPage";
 import type { SessionShareState } from "../api/generated/SessionShareState";
 import { sessionsStore } from "../stores/sessions";
 import { appStore, reportError } from "../stores/app";
@@ -33,6 +34,20 @@ const assets = ref<AssetMetadata[]>([]);
 const assetsLoading = ref(false);
 const assetsError = ref("");
 const treeExpanded = ref(false);
+const sessionPages = ref<SessionPage[]>([]);
+const sharedPages = ref<string[]>([]);
+const sharedPageLinks = computed(() =>
+  sessionPages.value
+    .filter((p) => sharedPages.value.includes(p.id))
+    .map((page) => ({
+      page,
+      links: pageLinks.value.map((link) => {
+        const url = new URL(link);
+        url.pathname = "/session-pages/" + page.id + "/";
+        return url.href;
+      }),
+    })),
+);
 let loadSequence = 0;
 
 async function load(): Promise<void> {
@@ -46,6 +61,7 @@ async function load(): Promise<void> {
     ]);
     if (sequence !== loadSequence) return;
     pageShare.value = nextPageShare;
+    if (nextPageShare.enabled) sharedPages.value = nextPageShare.session_pages ?? [];
     if (nextPageShare.enabled) configShare.value = nextPageShare.session_config_share ?? null;
     sessionsStore.updateShare(nextPageShare);
     if (nextPageShare.enabled) pagePersistent.value = nextPageShare.persistent;
@@ -111,6 +127,7 @@ async function togglePageShare(): Promise<void> {
       appStore.toast(t("链接分享已关闭"), "success");
     } else {
       pageShare.value = await backend.enableSessionShare(props.sessionId, {
+        session_pages: sharedPages.value,
         session_config_share: configShare.value,
         redaction_script: pageRedaction.value ?? undefined,
         persistent: pagePersistent.value,
@@ -200,6 +217,35 @@ const configSummary = computed(() => {
   });
 });
 
+async function loadSessionPages(): Promise<void> {
+  if (!backend.listSessionPages) return;
+  try {
+    sessionPages.value = await backend.listSessionPages();
+  } catch (e) {
+    reportError(e, t("加载会话页面失败"));
+  }
+}
+async function toggleSessionPage(id: string, enabled: boolean): Promise<void> {
+  const next = enabled ? [...sharedPages.value, id] : sharedPages.value.filter((p) => p !== id);
+  if (!pageShare.value?.enabled) {
+    sharedPages.value = next;
+    return;
+  }
+  pageMutating.value = true;
+  try {
+    pageShare.value = await backend.enableSessionShare(props.sessionId, {
+      persistent: pagePersistent.value,
+      session_pages: next,
+    });
+    sharedPages.value = pageShare.value.session_pages;
+    sessionsStore.updateShare(pageShare.value);
+  } catch (e) {
+    reportError(e, t("保存会话页面分享设置失败"));
+  } finally {
+    pageMutating.value = false;
+  }
+}
+
 async function loadAssets(): Promise<void> {
   if (!canPickAssets.value) return;
   assetsLoading.value = true;
@@ -219,6 +265,10 @@ function onRefreshRequest(event: Event): void {
 
 function onHttpApiChange(event: Event): void {
   const change = (event as CustomEvent<HttpApiChange>).detail;
+  if (change.resources.includes("session_pages") || change.resources.includes("all")) {
+    void loadSessionPages();
+    void load();
+  }
   if (
     (change.resources.includes("all") || change.resources.includes("session_share")) &&
     (change.session_id === undefined || change.session_id === props.sessionId)
@@ -230,6 +280,7 @@ function onHttpApiChange(event: Event): void {
 onMounted(() => {
   void load();
   void loadAssets();
+  void loadSessionPages();
   window.addEventListener("proxycrab-refresh-session-share", onRefreshRequest);
   window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
@@ -294,6 +345,22 @@ onBeforeUnmount(() => {
         :disabled="loading || pageMutating"
         @update:model-value="setRedaction($event)"
       />
+      <div v-if="backend.listSessionPages" class="setting-block page-selection">
+        <strong>{{ t("一并分享的会话页面") }}</strong>
+        <p v-if="!sessionPages.length" class="setting-hint">
+          {{ t("工作区暂无会话页面，请从资产菜单导入。") }}
+        </p>
+        <label v-for="page in sessionPages" :key="page.id" class="page-choice">
+          <input
+            type="checkbox"
+            :checked="sharedPages.includes(page.id)"
+            :disabled="loading || pageMutating"
+            @change="toggleSessionPage(page.id, ($event.target as HTMLInputElement).checked)"
+          />
+          <span>{{ page.name }}</span
+          ><span class="page-id">{{ page.id }}</span>
+        </label>
+      </div>
       <div v-if="canPickAssets" class="setting-block">
         <div class="setting-row">
           <span>{{ t("允许下载 Session 配置") }}</span>
@@ -355,6 +422,13 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div v-else class="share-empty">{{ t("暂无可用的本机 IPv4 地址") }}</div>
+      <div v-for="item in sharedPageLinks" :key="item.page.id" class="page-link-group">
+        <strong>{{ item.page.name }}</strong>
+        <div v-for="url in item.links" :key="url" class="share-link-row">
+          <a class="share-link mono" :href="url" @click.prevent="openLink(url)">{{ url }}</a>
+          <button class="btn" @click="copyLink(url)">{{ t("复制") }}</button>
+        </div>
+      </div>
       <p v-if="!serviceRunning" class="share-warning">
         {{ t("管理 HTTP 服务未运行，以上地址当前无法访问。") }}
       </p>
@@ -364,6 +438,28 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.page-selection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.page-choice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+.page-id {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.page-link-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+}
 .share-root {
   flex: 1;
   min-height: 0;

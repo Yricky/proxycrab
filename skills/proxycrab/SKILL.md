@@ -70,6 +70,7 @@ surface has no `/api/agents.md` endpoint and needs no management API key or loca
 | Goal | Start here |
 | --- | --- |
 | Read active Agent instructions | `scripts/agents-get.mjs` |
+| Write/import a reusable Session page | Import `{ backend }` from `./init.js`; see [Session pages](references/session-pages.md) and `scripts/session-page-import.mjs` |
 | Import explicitly accepted bundle intents / resolve conflicts | `scripts/bundle-import.mjs`; see `references/http-api.md#session-configuration-zips-and-intent-imports` |
 | List enabled Session shares without tokens | `scripts/session-share-list.mjs` |
 | Enable or configure sharing, including restart persistence | `POST /api/session-shares` with optional `session_share_config`; see `references/http-api.md` |
@@ -110,6 +111,15 @@ Never remove bindings or change credentials to bypass `share_redaction_forbidden
 means no share-level redaction; explicit null restores local inheritance. Omitted update fields
 preserve existing policy. Use POST /api/session-shares for every update; the separate redaction
 route is removed. Local/Key lookups fail closed. Startup redaction remains authoritative.
+
+## Write a Session page
+
+Create a ZIP with root `manifest.json` (version/id/name/backend_version: 1) and `index.html`.
+Use `import { backend } from "./init.js"` inside a native ES module; initialization is automatic.
+ProxyCrab serves init.js: do not package it. Use relative resource paths, the exported Backend
+methods, and method presence for optional features. Open the page through a Session sharing link;
+the Backend reads only that link's Session. For format, types, examples and import/share operations, read
+[Session pages](references/session-pages.md).
 
 ## Read a Session sharing link
 

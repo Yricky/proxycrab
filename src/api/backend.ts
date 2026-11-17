@@ -133,6 +133,14 @@ export interface Backend {
   stopProxy(): Promise<ProxyStatus>;
   listLocalIps?(): Promise<string[]>;
 
+  listSessionPages?(): Promise<import("./generated/SessionPage").SessionPage[]>;
+  importSessionPage?(
+    file: File,
+    replace?: boolean,
+  ): Promise<import("./generated/SessionPage").SessionPage>;
+  exportSessionPage?(id: string): Promise<Uint8Array<ArrayBuffer>>;
+  deleteSessionPage?(id: string): Promise<void>;
+
   importBundle?(
     file: File,
     acceptedIntentIds: string[],

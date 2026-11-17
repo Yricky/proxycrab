@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 83);
+    assert_eq!(actions.len(), 87);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -71,6 +71,8 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "GET /api/routing-scripts",
         "GET /api/routing-scripts/{name}",
         "GET /api/session-interceptors",
+        "GET /api/session-pages",
+        "GET /api/session-pages/{id}",
         "GET /api/session-shares",
         "GET /api/session-shares/{id}",
         "GET /api/session-view",
@@ -99,6 +101,8 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "POST /api/proxy/start",
         "POST /api/proxy/stop",
         "POST /api/routing-scripts",
+        "POST /api/session-pages",
+        "DELETE /api/session-pages/{id}",
         "POST /api/session-shares",
         "POST /api/sessions",
         "PUT /api/active-session",
@@ -146,6 +150,8 @@ fn permission_lookup_uses_both_method_and_route_template() {
             .default_mode,
         PermissionMode::Approval
     );
+    assert!(find_api_action("POST", "/api/session-page-previews").is_none());
+    assert!(find_api_action("DELETE", "/api/session-page-previews/{token}").is_none());
     assert!(find_api_action("GET", "/api/ca").is_none());
     assert!(find_api_action("GET", "/ca.crt").is_none());
     assert!(find_api_action("POST", "/api/ca").is_none());

@@ -1,6 +1,7 @@
 import BundleImportWindow from "./BundleImportWindow.vue";
 import { parseBundle, MAX_BUNDLE_BYTES } from "../utils/bundle";
 import AssetManagerWindow from "./AssetManagerWindow.vue";
+import SessionPageManagerWindow from "./SessionPageManagerWindow.vue";
 import HarExportWindow from "./HarExportWindow.vue";
 import type { LogsStore } from "../stores/logs";
 import { scriptTitle } from "../utils/script-label";
@@ -358,6 +359,16 @@ export function openHarExport(logs: LogsStore): void {
     props: { logs },
     width: 720,
     height: 460,
+  });
+}
+
+export function openSessionPageManager(): void {
+  if (!getBackend().listSessionPages) return;
+  windowsStore.open("session-page-manager", {
+    title: t("会话页面"),
+    component: SessionPageManagerWindow,
+    width: 760,
+    height: 520,
   });
 }
 

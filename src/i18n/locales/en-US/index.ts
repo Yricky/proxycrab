@@ -5,6 +5,7 @@ import permissions from "./permissions";
 import stores from "./stores";
 import utils from "./utils";
 import windows from "./windows";
+import sessionPages from "./session-pages";
 
 export default {
   ...common,
@@ -14,4 +15,5 @@ export default {
   ...stores,
   ...utils,
   ...windows,
+  ...sessionPages,
 };

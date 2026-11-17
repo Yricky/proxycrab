@@ -349,7 +349,7 @@ fn static_asset(path: &str) -> Response {
     let is_html = path.ends_with(".html");
     response.headers_mut().insert(
         CACHE_CONTROL,
-        HeaderValue::from_static(if is_html {
+        HeaderValue::from_static(if is_html || path == "assets/session-page-runtime.js" {
             "no-store"
         } else {
             "public, max-age=31536000, immutable"

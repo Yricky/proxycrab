@@ -12,6 +12,7 @@ import {
   openAbout,
   openBase64,
   openAssetManager,
+  openSessionPageManager,
   openAgentsPresets,
   openApprovals,
   openCertManager,
@@ -285,6 +286,13 @@ onBeforeUnmount(() => {
             <span>{{ t("分流规则") }}</span>
           </button>
           <div class="tb-menu-divider" />
+          <button
+            v-if="backend.listSessionPages"
+            class="tb-menu-item"
+            @click="runMenuAction(openSessionPageManager)"
+          >
+            <Io5Newspaper :size="14" /><span>{{ t("会话页面") }}</span>
+          </button>
           <button class="tb-menu-item" @click="runMenuAction(openAssetManager)">
             <Io5DocumentText :size="14" /><span>{{ t("工作区资源") }}</span>
           </button>

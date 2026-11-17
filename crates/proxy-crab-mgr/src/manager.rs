@@ -48,6 +48,15 @@ const MAX_BLOCKING_MANAGEMENT_TASKS: usize = 8;
 
 #[async_trait]
 pub trait ProxyCrabManager: Send + Sync {
+    async fn session_pages(&self) -> ManagerResult<Vec<crate::session_page::SessionPage>>;
+    async fn import_session_page(
+        &self,
+        bytes: Vec<u8>,
+        replace: bool,
+    ) -> ManagerResult<crate::session_page::SessionPage>;
+    async fn export_session_page(&self, id: String) -> ManagerResult<Vec<u8>>;
+    async fn delete_session_page(&self, id: String) -> ManagerResult<()>;
+    async fn session_page_file(&self, id: String, path: String) -> ManagerResult<Vec<u8>>;
     async fn export_session_config(
         &self,
         id: u64,
@@ -274,6 +283,7 @@ pub trait ProxyCrabManager: Send + Sync {
 #[derive(Clone)]
 pub struct MitmManager {
     imports: Arc<crate::bundle::BundleImports>,
+    pages: Arc<crate::session_page::PageStore>,
     forced_redaction: Option<Script>,
     read_policy: Option<ReadPolicy>,
     runtime: Arc<ProxyCrab>,
@@ -313,6 +323,9 @@ impl MitmManager {
         let clash_subscription = Arc::new(ClashSubscription::new(runtime.workspace().root()));
         Arc::new(Self {
             imports: Arc::new(crate::bundle::BundleImports::default()),
+            pages: Arc::new(crate::session_page::PageStore::new(
+                runtime.workspace().root(),
+            )),
             forced_redaction: None,
             read_policy: None,
             runtime,
@@ -550,6 +563,35 @@ impl MitmManager {
 
 #[async_trait]
 impl ProxyCrabManager for MitmManager {
+    async fn session_pages(&self) -> ManagerResult<Vec<crate::session_page::SessionPage>> {
+        let pages = self.pages.clone();
+        self.run_blocking("list session pages", move || pages.list())
+            .await
+    }
+    async fn import_session_page(
+        &self,
+        bytes: Vec<u8>,
+        replace: bool,
+    ) -> ManagerResult<crate::session_page::SessionPage> {
+        let pages = self.pages.clone();
+        self.run_blocking("import session page", move || pages.import(bytes, replace))
+            .await
+    }
+    async fn export_session_page(&self, id: String) -> ManagerResult<Vec<u8>> {
+        let pages = self.pages.clone();
+        self.run_blocking("export session page", move || pages.export(&id))
+            .await
+    }
+    async fn delete_session_page(&self, id: String) -> ManagerResult<()> {
+        let pages = self.pages.clone();
+        self.run_blocking("delete session page", move || pages.delete(&id))
+            .await
+    }
+    async fn session_page_file(&self, id: String, path: String) -> ManagerResult<Vec<u8>> {
+        let pages = self.pages.clone();
+        self.run_blocking("read session page", move || pages.file(&id, &path))
+            .await
+    }
     async fn export_session_config(
         &self,
         id: u64,

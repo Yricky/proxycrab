@@ -179,6 +179,30 @@ export function createHttpBackend(
     stopProxy: () => call("/api/proxy/stop", json("POST")),
     listLocalIps: async () => [window.location.hostname],
 
+    listSessionPages: () => call("/api/session-pages"),
+    importSessionPage: (file, replace = false) =>
+      call("/api/session-pages?replace=" + replace, {
+        method: "POST",
+        body: file,
+        headers: { "Content-Type": "application/zip" },
+      }),
+    exportSessionPage: async (id) => {
+      const response = await fetch(
+        new URL("/api/session-pages/" + encodeURIComponent(id), baseUrl),
+        { headers: { Authorization: authorization(token) } },
+      );
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as {
+          error?: ManagerError;
+        } | null;
+        throw new BackendError(
+          payload?.error ?? { code: `http_${response.status}`, message: "Page export failed" },
+        );
+      }
+      return new Uint8Array(await response.arrayBuffer());
+    },
+    deleteSessionPage: (id) => call("/api/session-pages/" + encodeURIComponent(id), json("DELETE")),
+
     importBundle: (file, acceptedIntentIds) => {
       const body = new FormData();
       body.set("file", file);

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>请求摘要</title>
+  <style>
+    body { margin: 16px; color: #20242b; font: 13px system-ui; }
+    header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    h1 { margin: 0; font-size: 16px; } button { margin-left: auto; padding: 4px 12px; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th, td { padding: 7px 9px; border-bottom: 1px solid #ddd; overflow-wrap: anywhere; }
+    th { color: #646a73; } #state { color: #646a73; }
+  </style>
+</head>
+<body>
+  <header><h1>请求摘要</h1><span id="state">正在加载…</span><button id="refresh">刷新</button></header>
+  <table><thead><tr><th>ID</th><th>方法</th><th>地址</th><th>状态</th></tr></thead><tbody></tbody></table>
+  <script type="module">
+    import { backend } from "./init.js";
+    const { sessions: [session] } = await backend.listSessions();
+    document.querySelector("h1").textContent = session.name;
+    const button = document.querySelector("#refresh");
+    const state = document.querySelector("#state");
+    async function refresh() {
+      button.disabled = true;
+      try {
+        const { matched_ids } = await backend.getLogIds({ session_id: session.id, limit: 50 });
+        const logs = await Promise.all(matched_ids.map(id => backend.getLog(session.id, id)));
+        const rows = logs.map(log => {
+          const row = document.createElement("tr");
+          for (const value of [log.id, log.request.method, log.request.uri, log.response?.status ?? "…"]) {
+            const cell = document.createElement("td"); cell.textContent = String(value); row.append(cell);
+          }
+          return row;
+        });
+        document.querySelector("tbody").replaceChildren(...rows);
+        state.textContent = `${logs.length} 条请求`;
+      } catch (error) { state.textContent = error.message; }
+      finally { button.disabled = false; }
+    }
+    button.addEventListener("click", refresh);
+    await refresh();
+  </script>
+</body>
+</html>

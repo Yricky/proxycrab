@@ -164,6 +164,10 @@ back to `127.0.0.1`. Each row can be opened or copied directly. These links use 
 so the token and captured data must be shared only on a trusted network or protected by a TLS
 reverse proxy.
 
+## Session pages
+
+Assets → 会话页面 manages reusable ZIP websites and displays package details. Pages import an initialized Backend from `./init.js`; selected packages can accompany a Session share at their own paths with its existing token. Open the sharing link to view Session contents. See [Session pages](session-pages.md) for storage, runtime and authorization details.
+
 ## HAR export
 
 The export button beside the sweep action opens a floating window. Its Export HAR button freezes

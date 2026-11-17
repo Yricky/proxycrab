@@ -13,6 +13,10 @@ interface PermissionActionMeta {
 
 /** 动作 id（`METHOD /route/template`）→ 展示元数据。 */
 export const ACTION_META: Readonly<Record<string, PermissionActionMeta>> = {
+  "GET /api/session-pages": { label: "列出会话页面", impact: "read" },
+  "POST /api/session-pages": { label: "导入会话页面", impact: "write" },
+  "GET /api/session-pages/{id}": { label: "导出会话页面", impact: "read" },
+  "DELETE /api/session-pages/{id}": { label: "删除会话页面", impact: "write" },
   "POST /api/imports": { label: "导入分享包", impact: "write" },
   "POST /api/imports/{id}/resolve": { label: "解决分享包导入冲突", impact: "write" },
   "GET /api/redaction-scripts": { label: "列出脱敏脚本", impact: "read" },
@@ -132,6 +136,7 @@ export const FUNCTION_GROUPS: FunctionGroupDef[] = [
     prefixes: [
       "/api/sessions",
       "/api/session-shares",
+      "/api/session-pages",
       "/api/archived-sessions",
       "/api/active-session",
     ],

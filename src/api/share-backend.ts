@@ -1,4 +1,5 @@
 import type { Backend } from "./backend";
+import type { Backend as PageBackend } from "./session-page-backend";
 import { t } from "../i18n";
 import { BackendError } from "./backend-error";
 import type { ApiError } from "./types";
@@ -107,7 +108,7 @@ export function createShareBackend(
     const { saveBlobInWebview } = await import("./save-file");
     await saveBlobInWebview(await response.blob(), "session-config.zip");
   };
-  const implemented: Partial<Backend> = {
+  const implemented: PageBackend = {
     downloadSessionConfig: bootstrap.session_config_download ? downloadConfig : undefined,
     host: undefined,
     downloadBody: (target, side, filename) => {

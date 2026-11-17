@@ -159,6 +159,15 @@ export function createTauriBackend(): Backend {
     stopProxy: () => call("stop_proxy"),
     listLocalIps: () => call("list_local_ips"),
 
+    listSessionPages: () => call("list_session_pages"),
+    importSessionPage: async (file, replace = false) =>
+      call("import_session_page", await file.arrayBuffer(), {
+        headers: { "x-page-replace": String(replace) },
+      }),
+    exportSessionPage: async (id) =>
+      new Uint8Array(await call<ArrayBuffer>("export_session_page", { id })),
+    deleteSessionPage: (id) => call("delete_session_page", { id }),
+
     importBundle: async (file, acceptedIntentIds) =>
       call("import_bundle", {
         bytes: Array.from(new Uint8Array(await file.arrayBuffer())),

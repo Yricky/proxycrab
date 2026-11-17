@@ -398,6 +398,12 @@
       "prompt": "Create a ProxyCrab request interceptor for /proxycrab-skill-eval/bytes that reads the binary body, changes its first big-endian uint32 to 12345, and explicitly submits the result. Preserve existing chains and verify on a new capture. Explain how the API handles a 40 MiB captured file, independent slices, and WS redaction migration.",
       "expected_output": "Uses req.body:as_bytes() returning an editable userdata view, checks availability and minimum length, uses pack(1, '>I4', 12345), and calls replace_with_bytes(view). Explains immutable source files, independent as_bytes/sub/clone snapshots, local edits until submission, bounded file access above 16 MiB, memory-limited edits/materialization without delta spilling, literal-only find and no to_hex/chunks. Verifies an existing body_replace_asset modification and the final body through the authorized body endpoint; historical references use a generated persistent Asset while read-time redaction remains temporary. WS as_bytes now returns a view, to_string materializes a binary string, and WS keeps its 16 MiB limit.",
       "files": ["fixtures/test-bytes.lua"]
+    },
+    {
+      "id": 69,
+      "prompt": "Create a reusable ProxyCrab Session page called request-summary that displays the selected Session's latest requests. Import its ZIP and include it in my existing Session share without changing the token or persistence. Explain initialization and sharing access.",
+      "expected_output": "Builds root manifest.json with version/backend_version 1 and a valid stable ID plus index.html. Uses native import { backend } from './init.js' and normal Backend methods, with no packaged init.js, custom HTTP calls or token plumbing. Uses relative resources, text-safe rendering and method-presence checks. Reads active agent instructions before management calls; imports with session-page-import.mjs without replacing unless explicitly accepted, preserves share settings and sets session_pages using POST /api/session-shares. Shares the package path with the existing token, never a management API key. Opens pages through Session sharing links and explains that Backend reads only the authorized Session with its effective redaction policy; visitors cannot download the ZIP.",
+      "files": []
     }
   ]
 }

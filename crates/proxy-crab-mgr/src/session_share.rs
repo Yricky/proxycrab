@@ -37,10 +37,14 @@ use crate::{
     permission::{PermissionManager, RedactionIdentity},
 };
 
+mod page;
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 #[ts(export)]
 pub struct SessionShareConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_pages: Option<Vec<String>>,
     #[serde(
         default,
         deserialize_with = "provided_config_share",
@@ -79,6 +83,8 @@ pub struct EnableSessionShareRequest {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, TS)]
 #[ts(export)]
 pub struct SessionShareState {
+    #[serde(default)]
+    pub session_pages: Vec<String>,
     #[serde(default)]
     pub session_config_share: Option<crate::bundle::ConfigShare>,
 
@@ -163,6 +169,7 @@ fn scope_proxy_status(
 
 #[derive(Clone)]
 struct ShareEntry {
+    session_pages: Vec<String>,
     session_config_share: Option<crate::bundle::ConfigShare>,
 
     persistent: bool,
@@ -174,6 +181,7 @@ struct ShareEntry {
 
 #[derive(Debug, Clone)]
 struct ShareScope {
+    session_pages: Vec<String>,
     session_config_share: Option<crate::bundle::ConfigShare>,
 
     redaction_script: Option<String>,
@@ -183,6 +191,8 @@ struct ShareScope {
 
 #[derive(Deserialize, Serialize, PartialEq, Eq)]
 struct StoredShare {
+    #[serde(default)]
+    session_pages: Vec<String>,
     #[serde(default)]
     session_config_share: Option<crate::bundle::ConfigShare>,
 
@@ -207,6 +217,23 @@ pub struct SessionShareService {
 }
 
 impl SessionShareService {
+    pub async fn clean_pages(
+        &self,
+        manager: &Arc<dyn ProxyCrabManager>,
+    ) -> Result<(), ManagerError> {
+        let available = manager
+            .session_pages()
+            .await?
+            .into_iter()
+            .map(|p| p.manifest.id)
+            .collect::<Vec<_>>();
+        let mut entries = self.entries.lock().unwrap();
+        let mut next = entries.clone();
+        for entry in next.values_mut() {
+            entry.session_pages.retain(|id| available.contains(id));
+        }
+        self.commit(&mut entries, next)
+    }
     pub fn set_permissions(&self, permissions: Arc<dyn PermissionManager>) {
         *self
             .permissions
@@ -284,6 +311,7 @@ impl SessionShareService {
                     entries.insert(
                         share.session_id,
                         ShareEntry {
+                            session_pages: share.session_pages,
                             persistent: true,
                             digest: Sha256::digest(share.token.as_bytes()).into(),
                             token: share.token,
@@ -323,6 +351,7 @@ impl SessionShareService {
                 .iter()
                 .filter(|(_, entry)| entry.persistent)
                 .map(|(id, entry)| StoredShare {
+                    session_pages: entry.session_pages.clone(),
                     session_id: *id,
                     session_config_share: entry.session_config_share.clone(),
                     token: entry.token.clone(),
@@ -409,6 +438,7 @@ impl SessionShareService {
         &self,
         manager: &Arc<dyn ProxyCrabManager>,
     ) -> Result<SessionSharesPayload, ManagerError> {
+        self.clean_pages(manager).await?;
         let sessions = manager.sessions().await?.sessions;
         let entries = self.entries.lock().expect("session share lock poisoned");
         let shares = sessions
@@ -429,9 +459,11 @@ impl SessionShareService {
         session_id: u64,
     ) -> Result<SessionShareState, ManagerError> {
         Self::ensure_session(manager, session_id).await?;
+        self.clean_pages(manager).await?;
         let entries = self.entries.lock().expect("session share lock poisoned");
         Ok(match entries.get(&session_id) {
             Some(entry) => SessionShareState {
+                session_pages: entry.session_pages.clone(),
                 session_config_share: entry.session_config_share.clone(),
                 persistent: entry.persistent,
                 redaction_script: entry.redaction_script.clone(),
@@ -441,6 +473,7 @@ impl SessionShareService {
                 token: Some(entry.token.clone()),
             },
             None => SessionShareState {
+                session_pages: vec![],
                 session_config_share: None,
                 persistent: false,
                 redaction_script: None,
@@ -470,6 +503,7 @@ impl SessionShareService {
             manager,
             session_id,
             Some(SessionShareConfig {
+                session_pages: None,
                 session_config_share: None,
                 redaction_script: redaction_script.map(Some),
                 persistent: false,
@@ -492,7 +526,7 @@ impl SessionShareService {
         &self,
         manager: &Arc<dyn ProxyCrabManager>,
         session_id: u64,
-        config: Option<SessionShareConfig>,
+        mut config: Option<SessionShareConfig>,
         identity: Option<RedactionIdentity>,
     ) -> Result<SessionShareState, ManagerError> {
         if identity
@@ -531,6 +565,21 @@ impl SessionShareService {
                 .export_session_config(session_id, share.clone())
                 .await?;
         }
+        self.clean_pages(manager).await?;
+        if let Some(pages) = config.as_mut().and_then(|c| c.session_pages.as_mut()) {
+            let available = manager
+                .session_pages()
+                .await?
+                .into_iter()
+                .map(|p| p.manifest.id)
+                .collect::<Vec<_>>();
+            for id in pages.iter() {
+                crate::session_page::valid_id(id)?;
+            }
+            pages.retain(|id| available.contains(id));
+            pages.sort();
+            pages.dedup();
+        }
         let mut entries = self.entries.lock().expect("session share lock poisoned");
         let mut entry = match entries.get(&session_id) {
             Some(entry) => entry.clone(),
@@ -541,6 +590,7 @@ impl SessionShareService {
                 })?;
                 let token = format!("pcrab_share_{}", URL_SAFE_NO_PAD.encode(bytes));
                 ShareEntry {
+                    session_pages: vec![],
                     session_config_share: None,
                     persistent: false,
                     redaction_script: None,
@@ -561,12 +611,16 @@ impl SessionShareService {
             entry.redaction_identity = None;
         }
         if let Some(config) = config {
+            if let Some(pages) = config.session_pages {
+                entry.session_pages = pages;
+            }
             if let Some(value) = config.session_config_share {
                 entry.session_config_share = value;
             }
             entry.persistent = config.persistent;
         }
         let result = SessionShareState {
+            session_pages: entry.session_pages.clone(),
             session_config_share: entry.session_config_share.clone(),
             persistent: entry.persistent,
             redaction_script: entry.redaction_script.clone(),
@@ -589,6 +643,7 @@ impl SessionShareService {
         Self::ensure_session(manager, session_id).await?;
         self.remove(session_id)?;
         Ok(SessionShareState {
+            session_pages: vec![],
             session_config_share: None,
             persistent: false,
             redaction_script: None,
@@ -609,6 +664,7 @@ impl SessionShareService {
             .iter()
             .find(|(_, entry)| bool::from(entry.digest.ct_eq(&digest)))
             .map(|(session_id, entry)| ShareScope {
+                session_pages: entry.session_pages.clone(),
                 session_config_share: entry.session_config_share.clone(),
                 redaction_script: entry.redaction_script.clone(),
                 redaction_identity: entry.redaction_identity.clone(),
@@ -672,7 +728,8 @@ pub fn router(manager: Arc<dyn ProxyCrabManager>, shares: Arc<SessionShareServic
             authorize_share,
         ))
         .layer(middleware::from_fn(no_store))
-        .with_state(state)
+        .with_state(state.clone())
+        .merge(page::router(state))
 }
 
 async fn no_store(request: Request, next: Next) -> Response {
@@ -1177,6 +1234,7 @@ mod tests {
                 &manager,
                 session.id,
                 Some(SessionShareConfig {
+                    session_pages: None,
                     session_config_share: None,
                     persistent: true,
                     redaction_script: None,
@@ -1342,6 +1400,7 @@ mod tests {
                 &manager,
                 session.id,
                 Some(SessionShareConfig {
+                    session_pages: None,
                     session_config_share: None,
                     persistent: true,
                     redaction_script: Some(Some(String::new())),
@@ -1421,6 +1480,7 @@ mod tests {
                 &manager,
                 second.id,
                 Some(SessionShareConfig {
+                    session_pages: None,
                     session_config_share: None,
                     persistent: true,
                     redaction_script: None,
@@ -1474,6 +1534,7 @@ mod tests {
                 &manager,
                 session.id,
                 Some(SessionShareConfig {
+                    session_pages: None,
                     session_config_share: None,
                     persistent: true,
                     redaction_script: None,
@@ -1498,6 +1559,7 @@ mod tests {
                 &manager,
                 session.id,
                 Some(SessionShareConfig {
+                    session_pages: None,
                     session_config_share: None,
                     persistent: false,
                     redaction_script: None,
@@ -1523,6 +1585,7 @@ mod tests {
                 &manager,
                 session.id,
                 Some(SessionShareConfig {
+                    session_pages: None,
                     session_config_share: None,
                     persistent: true,
                     redaction_script: None,
@@ -1542,6 +1605,7 @@ mod tests {
                 &manager,
                 session.id,
                 Some(SessionShareConfig {
+                    session_pages: None,
                     session_config_share: None,
                     redaction_script: None,
                     persistent: true,
@@ -1576,6 +1640,7 @@ mod tests {
                 &manager,
                 session.id,
                 Some(SessionShareConfig {
+                    session_pages: None,
                     session_config_share: None,
                     redaction_script: None,
                     persistent: true,
@@ -1600,6 +1665,7 @@ mod tests {
                     &manager,
                     session.id,
                     Some(SessionShareConfig {
+                        session_pages: None,
                         session_config_share: None,
                         persistent: true,
                         redaction_script: Some(Some("mask".into()))
@@ -1618,6 +1684,7 @@ mod tests {
                     &manager,
                     other.id,
                     Some(SessionShareConfig {
+                        session_pages: None,
                         session_config_share: None,
                         redaction_script: None,
                         persistent: true
@@ -1634,6 +1701,7 @@ mod tests {
                     &manager,
                     session.id,
                     Some(SessionShareConfig {
+                        session_pages: None,
                         session_config_share: None,
                         persistent: false,
                         redaction_script: None
@@ -1668,6 +1736,7 @@ mod tests {
                 &manager,
                 session.id,
                 Some(SessionShareConfig {
+                    session_pages: None,
                     session_config_share: None,
                     redaction_script: Some(Some("mask".into())),
                     persistent: true,
@@ -1697,6 +1766,7 @@ mod tests {
                 &manager,
                 session.id,
                 Some(SessionShareConfig {
+                    session_pages: None,
                     session_config_share: None,
                     persistent: true,
                     redaction_script: Some(Some(String::new())),
@@ -1718,6 +1788,7 @@ mod tests {
                 &manager,
                 session.id,
                 Some(SessionShareConfig {
+                    session_pages: None,
                     session_config_share: None,
                     persistent: true,
                     redaction_script: Some(Some("mask".into())),
@@ -2005,6 +2076,7 @@ mod tests {
         assert_eq!(
             service.status(&manager, session.id).await.unwrap(),
             SessionShareState {
+                session_pages: vec![],
                 session_config_share: None,
                 persistent: false,
                 redaction_script: None,
@@ -2026,6 +2098,7 @@ mod tests {
         assert_eq!(
             service.disable(&manager, session.id).await.unwrap(),
             SessionShareState {
+                session_pages: vec![],
                 session_config_share: None,
                 persistent: false,
                 redaction_script: None,

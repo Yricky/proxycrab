@@ -542,6 +542,10 @@ active Session is allowed while the proxy runs. An actual change closes every es
 connection, CONNECT tunnel, Upgrade/WebSocket, and upstream pooled connection before returning;
 the listener remains running. Setting the current value again is a no-op for connections.
 
+## Session page packages
+
+See [Session pages](session-pages.md) for the package format, `./init.js` Backend import, raw ZIP upload, owner export/delete and page-sharing configuration. The management routes are `GET`/`POST /api/session-pages` and `GET`/`DELETE /api/session-pages/{id}`. Import/delete default to approval. Set `session_share_config.session_pages` to selected IDs; omission preserves them and `[]` clears them without rotating the token.
+
 ## Capture logs
 
 Log endpoints accept an optional Session. POST requests use `session_id` in JSON; detail/body

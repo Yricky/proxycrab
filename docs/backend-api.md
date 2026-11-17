@@ -1,5 +1,9 @@
 # ProxyCrab Backend API
 
+## Session page packages
+
+The optional Backend page-management methods and `/api/session-pages` resources manage ZIP websites. Session shares can select `session_pages`, serving package paths through the existing Session token. See the [Session page API and runtime contract](session-pages.md).
+
 ## Shared management contract
 
 HTTP handlers and ordinary proxy Tauri commands call the same `ProxyCrabManager` trait and use the

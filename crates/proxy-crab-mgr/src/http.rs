@@ -284,6 +284,16 @@ fn router_with_changes_and_extra(
         .route("/api/agents.md", get(agents_markdown))
         .route("/api/assets", get(assets))
         .route("/api/assets/{*asset_id}", get(asset).post(upload_asset))
+        .route(
+            "/api/session-pages",
+            get(session_pages)
+                .post(import_session_page)
+                .layer(axum::extract::DefaultBodyLimit::max(128 * 1024 * 1024)),
+        )
+        .route(
+            "/api/session-pages/{id}",
+            get(export_session_page).delete(delete_session_page),
+        )
         .route("/api/replay", post(replay))
         .route("/api/config", get(get_config))
         .route("/api/info", get(system_info))
@@ -661,6 +671,10 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
         {
             vec![HttpApiResource::All]
         }
+        (&Method::POST, "/api/session-pages") => vec![HttpApiResource::SessionPages],
+        (&Method::DELETE, value) if value.starts_with("/api/session-pages/") => {
+            vec![HttpApiResource::SessionPages, HttpApiResource::SessionShare]
+        }
         (&Method::POST, "/api/sessions") => {
             vec![HttpApiResource::Sessions, HttpApiResource::ActiveSession]
         }
@@ -819,6 +833,49 @@ async fn archived_sessions(State(manager): State<ManagerState>) -> ApiResult {
     success(manager.archived_sessions().await?)
 }
 
+async fn session_pages(State(manager): State<ManagerState>) -> ApiResult {
+    success(manager.session_pages().await?)
+}
+#[derive(Deserialize)]
+struct PageImportQuery {
+    #[serde(default)]
+    replace: bool,
+}
+async fn import_session_page(
+    State(manager): State<ManagerState>,
+    ApiQuery(query): ApiQuery<PageImportQuery>,
+    bytes: bytes::Bytes,
+) -> ApiResult {
+    success(
+        manager
+            .import_session_page(bytes.to_vec(), query.replace)
+            .await?,
+    )
+}
+async fn export_session_page(
+    State(manager): State<ManagerState>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Response, ApiError> {
+    crate::session_page::valid_id(&id)?;
+    Ok((
+        [
+            (CONTENT_TYPE, "application/zip"),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                &format!("attachment; filename={id}.zip"),
+            ),
+        ],
+        manager.export_session_page(id).await?,
+    )
+        .into_response())
+}
+async fn delete_session_page(
+    State(manager): State<ManagerState>,
+    ApiPath(id): ApiPath<String>,
+) -> ApiResult {
+    manager.delete_session_page(id).await?;
+    success(())
+}
 async fn import_bundle(
     State(manager): State<ManagerState>,
     mut multipart: axum::extract::Multipart,
@@ -1862,7 +1919,8 @@ impl ErrorCode {
         match self {
             Self::RedactionManagementDisabled
             | Self::MessageContentHidden
-            | Self::ShareRedactionForbidden => StatusCode::FORBIDDEN,
+            | Self::ShareRedactionForbidden
+            | Self::PageNotAuthorized => StatusCode::FORBIDDEN,
             Self::MessageContentUnavailable => StatusCode::UNPROCESSABLE_ENTITY,
             Self::BadRequest | Self::InvalidAssetId | Self::InvalidAssetFormat => {
                 StatusCode::BAD_REQUEST
@@ -4493,11 +4551,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn removed_har_routes_are_not_available() {
+    async fn removed_share_routes_are_not_available() {
         let directory = tempdir().unwrap();
         let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
         let app = router(MitmManager::new(runtime), allow_all());
         for (method, path) in [
+            ("POST", "/api/session-page-previews"),
+            ("DELETE", "/api/session-page-previews/old"),
             ("POST", "/api/session-har-shares"),
             ("GET", "/api/session-har-shares/1"),
             ("DELETE", "/api/session-har-shares/1"),

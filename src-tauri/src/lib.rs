@@ -1,6 +1,7 @@
 mod body_download;
 mod file_writer;
 mod http_permissions;
+mod session_pages;
 mod share_ui;
 mod skill_manager;
 mod workspace_selection;
@@ -1260,6 +1261,10 @@ pub fn run() {
             get_http_service_error,
             get_http_service_status,
             list_session_shares,
+            session_pages::list_session_pages,
+            session_pages::import_session_page,
+            session_pages::export_session_page,
+            session_pages::delete_session_page,
             get_session_share,
             import_bundle,
             resolve_bundle,

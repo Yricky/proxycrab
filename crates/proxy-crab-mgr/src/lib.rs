@@ -7,6 +7,7 @@ pub mod dto;
 pub mod http;
 pub mod manager;
 pub mod permission;
+pub mod session_page;
 pub mod session_share;
 pub mod skill_install;
 

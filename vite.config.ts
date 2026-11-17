@@ -55,12 +55,21 @@ export default defineConfig({
     ],
   },
   build: {
+    target: "es2022",
     outDir: `${projectRoot}/dist`,
     emptyOutDir: true,
     rollupOptions: {
+      preserveEntrySignatures: "strict",
+      output: {
+        entryFileNames: (chunk) =>
+          chunk.name === "session-page-runtime"
+            ? "assets/session-page-runtime.js"
+            : "assets/[name]-[hash].js",
+      },
       input: {
         app: `${sourceRoot}/index.html`,
         session: `${sourceRoot}/session.html`,
+        "session-page-runtime": `${sourceRoot}/session-page-runtime.ts`,
       },
     },
   },

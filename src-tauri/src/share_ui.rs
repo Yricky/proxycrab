@@ -66,7 +66,7 @@ fn static_asset(state: &ShareUiState, path: &str) -> Response {
     response.headers_mut().insert(CONTENT_TYPE, content_type);
     response.headers_mut().insert(
         CACHE_CONTROL,
-        HeaderValue::from_static(if is_html {
+        HeaderValue::from_static(if is_html || path == "assets/session-page-runtime.js" {
             "no-store"
         } else {
             "public, max-age=31536000, immutable"

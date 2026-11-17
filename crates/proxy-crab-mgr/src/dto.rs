@@ -17,6 +17,7 @@ use ts_rs::TS;
 pub enum ErrorCode {
     RedactionFailed,
     ShareRedactionForbidden,
+    PageNotAuthorized,
     MessageContentUnavailable,
     MessageContentHidden,
     RedactionManagementDisabled,
@@ -55,6 +56,7 @@ impl ErrorCode {
             Self::RedactionManagementDisabled => "redaction_management_disabled",
             Self::RedactionFailed => "redaction_failed",
             Self::ShareRedactionForbidden => "share_redaction_forbidden",
+            Self::PageNotAuthorized => "page_not_authorized",
             Self::MessageContentUnavailable => "message_content_unavailable",
             Self::MessageContentHidden => "message_content_hidden",
             Self::BadRequest => "bad_request",
@@ -619,6 +621,7 @@ pub enum HttpApiResource {
     ArchivedSessions,
     ActiveSession,
     SessionShare,
+    SessionPages,
     SessionView,
     ColumnScripts,
     FilterScripts,
