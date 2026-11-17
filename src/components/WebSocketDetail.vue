@@ -563,7 +563,6 @@ onBeforeUnmount(() => {
           {{ info.close_reason }}</span
         >
       </div>
-      <span v-if="refreshing">{{ t("加载中…") }}</span>
     </div>
     <div v-if="info?.interceptors?.length && backend.getInterceptorContent" class="ws-toolbar">
       <span>{{ t("连接脚本快照") }}</span>

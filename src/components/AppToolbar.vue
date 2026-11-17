@@ -30,7 +30,7 @@ import {
   openSkillManager,
   openSystemLogs,
 } from "../windows/launcher";
-import { IoHandRight } from "vue-icons-plus/io";
+import { IoArrowForwardCircle, IoHandRight } from "vue-icons-plus/io";
 import {
   Io5ArrowDown,
   Io5ArrowUp,
@@ -45,7 +45,6 @@ import {
   Io5Moon,
   Io5Newspaper,
   Io5Play,
-  Io5RadioButtonOn,
   Io5Settings,
   Io5ShieldCheckmark,
   Io5Stop,
@@ -57,6 +56,7 @@ import {
 import { BsAlphabetUppercase, BsFillSendFill } from "vue-icons-plus/bs";
 import { GrConnect } from "vue-icons-plus/gr";
 import { LiaStarOfLifeSolid } from "vue-icons-plus/lia";
+import { IpPage } from "vue-icons-plus/ip";
 
 type ToolbarMenu = "ai" | "scripts" | "tools" | "system";
 
@@ -179,6 +179,7 @@ onBeforeUnmount(() => {
         <div class="proxy-seg proxy-btn-seg">
           <button
             class="proxy-toggle-btn"
+            data-guide="proxy-toggle"
             :class="proxyStore.running ? 'running' : proxyStore.canToggle ? 'ready' : 'off'"
             :disabled="!proxyStore.canToggle"
             :title="proxyStore.running ? t('停止代理') : t('启动代理')"
@@ -189,7 +190,12 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <button class="cert-entry-btn" :title="t('证书管理')" @click="openCertManager">
+      <button
+        class="cert-entry-btn"
+        data-guide="connect"
+        :title="t('证书管理')"
+        @click="openCertManager"
+      >
         <GrConnect :size="13" />
         <span>{{ t("连接") }}</span>
       </button>
@@ -282,7 +288,7 @@ onBeforeUnmount(() => {
             <LiaStarOfLifeSolid :size="15" /><span>{{ t("脱敏脚本") }}</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openRoutingManager)">
-            <Io5RadioButtonOn :size="14" />
+            <IoArrowForwardCircle :size="14" />
             <span>{{ t("分流规则") }}</span>
           </button>
           <div class="tb-menu-divider" />
@@ -291,7 +297,7 @@ onBeforeUnmount(() => {
             class="tb-menu-item"
             @click="runMenuAction(openSessionPageManager)"
           >
-            <Io5Newspaper :size="14" /><span>{{ t("会话页面") }}</span>
+            <IpPage :size="14" /><span>{{ t("会话页面") }}</span>
           </button>
           <button class="tb-menu-item" @click="runMenuAction(openAssetManager)">
             <Io5DocumentText :size="14" /><span>{{ t("工作区资源") }}</span>

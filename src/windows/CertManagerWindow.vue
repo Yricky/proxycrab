@@ -2,7 +2,13 @@
 import { saveBytesFile } from "../api/save-file";
 import QRCode from "qrcode";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { Io5Copy, Io5Download, Io5Refresh, Io5Warning } from "vue-icons-plus/io5";
+import {
+  Io5Copy,
+  Io5Download,
+  Io5InformationCircle,
+  Io5Refresh,
+  Io5Warning,
+} from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import { t } from "../i18n";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
@@ -15,6 +21,7 @@ import { proxyStore } from "../stores/proxy";
 import { copyText as writeClipboardText } from "../utils/clipboard";
 import { clashServerAddresses, clashSubscriptionUrl } from "../utils/clash-subscription";
 import ClashConnectionPanel from "./ClashConnectionPanel.vue";
+import AppTooltip from "../components/AppTooltip.vue";
 
 const backend = useBackend();
 const addresses = ref<string[]>([]);
@@ -280,14 +287,6 @@ onBeforeUnmount(() => {
       role="tabpanel"
       aria-labelledby="certificate-tab"
     >
-      <p class="cert-desc text-secondary">
-        {{
-          t(
-            "这是 ProxyCrab 的根 CA 证书（PEM 格式）。请将它安装到操作系统或浏览器的受信任根证书列表中，以便代理解密 HTTPS 流量。",
-          )
-        }}
-      </p>
-
       <section class="cert-download" aria-labelledby="cert-download-title">
         <div class="cert-download-info">
           <h3 id="cert-download-title">{{ t("从其他设备下载") }}</h3>
@@ -309,7 +308,19 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <div class="cert-content-label">{{ t("证书内容") }}</div>
+      <div class="cert-content-label">
+        {{ t("证书内容") }}
+        <AppTooltip
+          :detail="
+            t(
+              '这是 ProxyCrab 的根 CA 证书（PEM 格式）。请将它安装到操作系统或浏览器的受信任根证书列表中，以便代理解密 HTTPS 流量。',
+            )
+          "
+          :immediate="true"
+        >
+          <Io5InformationCircle :size="13" class="cert-help" />
+        </AppTooltip>
+      </div>
       <pre class="cert-pem mono">{{ pem || t("加载中…") }}</pre>
 
       <div v-if="proxyStore.running" class="cert-hint">
@@ -420,12 +431,6 @@ onBeforeUnmount(() => {
   gap: var(--space-2);
 }
 
-.cert-desc {
-  margin: 0;
-  font-size: 12px;
-  flex: none;
-}
-
 .cert-download {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 112px;
@@ -501,10 +506,23 @@ onBeforeUnmount(() => {
 }
 
 .cert-content-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
   flex: none;
+}
+
+.cert-help {
+  display: block;
+  color: var(--text-faint);
+  cursor: help;
+}
+
+.cert-help:hover {
+  color: var(--text-secondary);
 }
 
 .cert-pem {

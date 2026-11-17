@@ -163,6 +163,8 @@ body {
   background: transparent;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
+  /* 固定宽高的纯图标按钮靠底对齐会偏左，统一居中。 */
+  justify-content: center;
 }
 .btn.icon:hover:not(:disabled) {
   background: var(--bg-hover);

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { LogsStore } from "../stores/logs";
 import { sessionsStore } from "../stores/sessions";
 import { routingStore } from "../stores/routing";
@@ -35,29 +35,47 @@ const editingId = ref<number | null>(null);
 const editName = ref("");
 const editDesc = ref("");
 
-/* ---- 编辑 popup 定位 ---- */
+/* ---- 侧边栏气泡 popup 定位（编辑 / 新建引导共用） ---- */
 const POPUP_WIDTH = 260;
 const POPUP_EDGE_MARGIN = 8;
 const POPUP_ARROW_GAP = 9;
+const rootEl = ref<HTMLElement | null>(null);
 const editAnchor = ref<HTMLElement | null>(null);
 const popupEl = ref<HTMLElement | null>(null);
 const popupStyle = ref({ left: "0px", top: "0px" });
 const arrowTop = ref(0);
 
-function updatePopupPos(): void {
-  if (editingId.value === null) return;
-  const anchor = editAnchor.value;
-  const popup = popupEl.value;
-  if (!anchor || !popup) return;
+/** 侧边栏顶部（即工具栏底边）：气泡不得越过它，否则会盖住工具栏按钮。 */
+function popupTopLimit(): number {
+  return rootEl.value?.getBoundingClientRect().top ?? POPUP_EDGE_MARGIN;
+}
+
+/** 贴在锚点右侧、垂直居中，箭头指向锚点中心；顶部不低于工具栏底边。 */
+function placePopup(
+  anchor: HTMLElement | null,
+  popup: HTMLElement | null,
+): { style: { left: string; top: string }; arrowTop: number } | null {
+  if (!anchor || !popup) return null;
   const rect = anchor.getBoundingClientRect();
   const centerY = rect.top + rect.height / 2;
   const height = popup.offsetHeight;
+  const minTop = popupTopLimit() + POPUP_EDGE_MARGIN;
   const maxTop = Math.max(window.innerHeight - POPUP_EDGE_MARGIN - height, POPUP_EDGE_MARGIN);
-  const top = Math.min(Math.max(centerY - height / 2, POPUP_EDGE_MARGIN), maxTop);
+  const top = Math.min(Math.max(centerY - height / 2, minTop), maxTop);
   const maxLeft = Math.max(window.innerWidth - POPUP_EDGE_MARGIN - POPUP_WIDTH, POPUP_EDGE_MARGIN);
   const left = Math.min(rect.right + POPUP_ARROW_GAP, maxLeft);
-  popupStyle.value = { left: `${Math.round(left)}px`, top: `${Math.round(top)}px` };
-  arrowTop.value = Math.min(Math.max(centerY - top, 14), height - 14);
+  return {
+    style: { left: `${Math.round(left)}px`, top: `${Math.round(top)}px` },
+    arrowTop: Math.min(Math.max(centerY - top, 14), height - 14),
+  };
+}
+
+function updatePopupPos(): void {
+  if (editingId.value === null) return;
+  const placement = placePopup(editAnchor.value, popupEl.value);
+  if (!placement) return;
+  popupStyle.value = placement.style;
+  arrowTop.value = placement.arrowTop;
 }
 
 function closeEdit(): void {
@@ -74,7 +92,71 @@ function onDocMouseDown(e: MouseEvent): void {
 
 function onWindowResize(): void {
   updatePopupPos();
+  updateNewHintPos();
+  updateActiveHintPos();
 }
+
+/* ---- 代理运行但没有活跃会话时的提示 ---- */
+const activeHintDismissed = ref(false);
+const activeHintEl = ref<HTMLElement | null>(null);
+const routingEl = ref<HTMLElement | null>(null);
+const activeHintStyle = ref({ left: "0px", top: "0px" });
+const activeHintArrowTop = ref(0);
+
+const showActiveHint = computed(
+  () =>
+    proxyStore.running &&
+    !activeHintDismissed.value &&
+    !sessionsStore.loading &&
+    sessionsStore.sessions.length > 0 &&
+    sessionsStore.activeSessionId === null,
+);
+
+function updateActiveHintPos(): void {
+  const placement = placePopup(routingEl.value, activeHintEl.value);
+  if (!placement) return;
+  activeHintStyle.value = placement.style;
+  activeHintArrowTop.value = placement.arrowTop;
+}
+
+watch(showActiveHint, (visible) => {
+  if (visible) void nextTick(updateActiveHintPos);
+});
+
+/* ---- 代理运行但无会话时的新建引导 ---- */
+const newHintDismissed = ref(false);
+const newHintEl = ref<HTMLElement | null>(null);
+const newBtnEl = ref<HTMLElement | null>(null);
+const newHintStyle = ref({ left: "0px", top: "0px" });
+const newHintArrowTop = ref(0);
+
+const showNewHint = computed(
+  () =>
+    proxyStore.running &&
+    !newHintDismissed.value &&
+    !sessionsStore.loading &&
+    sessionsStore.sessions.length === 0,
+);
+
+function updateNewHintPos(): void {
+  const placement = placePopup(newBtnEl.value, newHintEl.value);
+  if (!placement) return;
+  newHintStyle.value = placement.style;
+  newHintArrowTop.value = placement.arrowTop;
+}
+
+// 不持久化：“我知道了”只在本次代理运行内生效，代理启停一次就重新计。
+watch(
+  () => proxyStore.running,
+  () => {
+    newHintDismissed.value = false;
+    activeHintDismissed.value = false;
+  },
+);
+
+watch(showNewHint, (visible) => {
+  if (visible) void nextTick(updateNewHintPos);
+});
 
 /* ---- 侧边栏宽度拖拽调整 ---- */
 const SIDEBAR_MIN = 160;
@@ -215,11 +297,15 @@ onUnmounted(() => {
   window.removeEventListener("resize", onWindowResize);
 });
 
-watch(sidebarWidth, updatePopupPos);
+watch(sidebarWidth, () => {
+  updatePopupPos();
+  updateNewHintPos();
+  updateActiveHintPos();
+});
 </script>
 
 <template>
-  <aside class="sidebar" :style="{ width: sidebarWidth + 'px' }">
+  <aside ref="rootEl" class="sidebar" :style="{ width: sidebarWidth + 'px' }">
     <div
       class="sb-resize"
       :class="{ dragging }"
@@ -232,68 +318,75 @@ watch(sidebarWidth, updatePopupPos);
     <div class="sb-top">
       <div class="sb-header">
         <span class="sb-title">{{ t("会话") }}</span>
-        <div class="sb-header-actions">
-          <button
-            class="btn icon"
-            :title="
-              proxyStore.activeBypassCount > 0
-                ? t('透明转发记录（{n} 条活跃）', proxyStore.activeBypassCount)
-                : t('透明转发记录')
-            "
-            :aria-label="
-              proxyStore.activeBypassCount > 0
-                ? t('透明转发记录，{n} 条活跃', proxyStore.activeBypassCount)
-                : t('透明转发记录')
-            "
-            @click="openBypass"
-          >
-            <span v-if="proxyStore.activeBypassCount > 0" class="activity-badge">
-              {{ formatActivityCount(proxyStore.activeBypassCount) }}
-            </span>
-            <IoArrowForwardCircle v-else :size="15" />
-          </button>
-          <button
-            class="btn icon"
-            :title="t('新建会话')"
-            :disabled="creating"
-            @click="createSession"
-          >
-            <Io5Add :size="16" />
-          </button>
-        </div>
       </div>
-      <button
-        class="sb-routing"
-        :class="{ empty: !routingStore.selectedName }"
-        :title="t('打开分流规则管理器')"
-        @click="openRoutingManager"
-      >
-        <Io5RadioButtonOn :size="13" />
-        <span
-          v-if="routingStore.selectedName"
-          class="sb-routing-name"
-          :title="routingStore.selectedName"
+      <div class="sb-routing" ref="routingEl" :class="{ empty: !routingStore.selectedName }">
+        <button
+          class="sb-bypass"
+          :title="
+            proxyStore.activeBypassCount > 0
+              ? t('透明转发记录（{n} 条活跃）', proxyStore.activeBypassCount)
+              : t('透明转发记录')
+          "
+          :aria-label="
+            proxyStore.activeBypassCount > 0
+              ? t('透明转发记录，{n} 条活跃', proxyStore.activeBypassCount)
+              : t('透明转发记录')
+          "
+          @click="openBypass"
         >
-          {{ scriptLabelFor(routingStore.scripts, routingStore.selectedName) }}
-        </span>
-        <span v-else>{{ t("未设置分流规则") }}</span>
-      </button>
+          <span v-if="proxyStore.activeBypassCount > 0" class="activity-badge">
+            {{ formatActivityCount(proxyStore.activeBypassCount) }}
+          </span>
+          <IoArrowForwardCircle v-else :size="18" />
+        </button>
+        <button
+          class="sb-routing-main"
+          :title="t('打开分流规则管理器')"
+          @click="openRoutingManager"
+        >
+          <span
+            v-if="routingStore.selectedName"
+            class="sb-routing-name"
+            :title="routingStore.selectedName"
+          >
+            {{ scriptLabelFor(routingStore.scripts, routingStore.selectedName) }}
+          </span>
+          <span v-else>{{ t("未设置分流规则") }}</span>
+        </button>
+      </div>
     </div>
 
-    <div class="sb-list" @scroll.passive="updatePopupPos">
-      <SessionListItem
-        v-for="session in sessionsStore.sessions"
-        :key="session.id"
-        :session="session"
-        :viewing="logs.sessionId === session.id"
-        :active="sessionsStore.activeSessionId === session.id"
-        :active-connections="proxyStore.activeNetlogCount(session.id)"
-        @click="logs.view(session.id)"
-        @contextmenu="sessionMenu($event, session)"
-        @dblclick="onItemDblclick($event, session)"
-      />
-      <div v-if="!sessionsStore.loading && sessionsStore.sessions.length === 0" class="empty-hint">
-        {{ t("暂无会话，点击右上角 + 新建") }}
+    <div class="sb-body">
+      <div class="sb-list" @scroll.passive="updatePopupPos">
+        <SessionListItem
+          v-for="session in sessionsStore.sessions"
+          :key="session.id"
+          :session="session"
+          :viewing="logs.sessionId === session.id"
+          :active="sessionsStore.activeSessionId === session.id"
+          :active-connections="proxyStore.activeNetlogCount(session.id)"
+          @click="logs.view(session.id)"
+          @contextmenu="sessionMenu($event, session)"
+          @dblclick="onItemDblclick($event, session)"
+        />
+        <div
+          v-if="!sessionsStore.loading && sessionsStore.sessions.length === 0"
+          class="empty-hint"
+        >
+          {{ t("暂无会话，点击下方新建") }}
+        </div>
+      </div>
+      <div class="sb-new-bar">
+        <button
+          ref="newBtnEl"
+          class="sb-new"
+          data-guide="new-session"
+          :disabled="creating"
+          @click="createSession"
+        >
+          <Io5Add :size="14" />
+          <span>{{ t("新建会话") }}</span>
+        </button>
       </div>
     </div>
     <button class="sb-archived" @click="openArchivedSessions">
@@ -320,16 +413,55 @@ watch(sidebarWidth, updatePopupPos);
           @keyup.enter="submitEdit"
           @keyup.esc="closeEdit"
         />
-        <input
+        <textarea
           v-model="editDesc"
-          class="input"
-          :placeholder="t('描述（可选）')"
-          @keyup.enter="submitEdit"
-          @keyup.esc="closeEdit"
+          class="input sb-edit-desc"
+          rows="3"
+          :placeholder="t('描述（可选，支持多行）')"
+          @keydown.esc.stop.prevent="closeEdit"
+          @keydown.enter.meta.prevent="submitEdit"
+          @keydown.enter.ctrl.prevent="submitEdit"
         />
         <div class="sb-edit-actions">
+          <span class="sb-edit-hint">{{ t("⌘/Ctrl + Enter 保存") }}</span>
           <button class="btn primary" :disabled="!editName.trim()" @click="submitEdit">
             {{ t("保存") }}
+          </button>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="showNewHint" ref="newHintEl" class="sb-edit-popup" :style="newHintStyle">
+        <span class="sb-edit-arrow" :style="{ top: newHintArrowTop + 'px' }">
+          <span class="sb-edit-arrow-tip"></span>
+        </span>
+        <span class="sb-popup-text">
+          {{ t("如果想捕获请求内容，需要新建会话并设为活跃") }}
+        </span>
+        <div class="sb-edit-actions">
+          <button class="btn primary" @click="newHintDismissed = true">
+            {{ t("我知道了") }}
+          </button>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="showActiveHint" ref="activeHintEl" class="sb-edit-popup" :style="activeHintStyle">
+        <span class="sb-edit-arrow" :style="{ top: activeHintArrowTop + 'px' }">
+          <span class="sb-edit-arrow-tip"></span>
+        </span>
+        <span class="sb-popup-text">
+          {{
+            t(
+              "当前没有活跃会话，所有请求都会被透明转发。如果您想捕获请求内容，请将下方的某个会话设置为活跃。您可以在会话的右键菜单中设置",
+            )
+          }}
+        </span>
+        <div class="sb-edit-actions">
+          <button class="btn primary" @click="activeHintDismissed = true">
+            {{ t("我知道了") }}
           </button>
         </div>
       </div>
@@ -381,32 +513,26 @@ watch(sidebarWidth, updatePopupPos);
   padding: 8px 12px;
 }
 .sb-title {
-  font-size: 12px;
+  font-size: 13px;
+  /* 与右侧 .traffic-controls 的总高（74.5px）对齐，避免两侧分隔线错位 */
+  line-height: 20.5px;
   font-weight: 600;
   color: var(--text-secondary);
-}
-.sb-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
 }
 .sb-routing {
   width: calc(100% - 16px);
   box-sizing: border-box;
   min-height: 30px;
   margin: 0 8px 7px;
-  padding: 5px 9px;
+  padding: 2px 8px 2px 3px;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-input);
   color: var(--text-secondary);
-  font: inherit;
   font-size: 11px;
-  text-align: left;
-  cursor: pointer;
 }
 .sb-routing:hover {
   border-color: var(--border-strong);
@@ -417,6 +543,38 @@ watch(sidebarWidth, updatePopupPos);
   border-style: dashed;
   background: transparent;
   color: var(--text-faint);
+}
+/* 透明转发记录入口：固定尺寸，不随名称长度压缩。 */
+.sb-bypass {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.sb-bypass:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.sb-routing-main {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 .sb-routing-name {
   min-width: 0;
@@ -461,12 +619,59 @@ watch(sidebarWidth, updatePopupPos);
 }
 .sb-edit-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 8px;
+}
+.sb-edit-hint {
+  margin-right: auto;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+/* 只让会话列表本身滚动：列表随内容收缩，新建按钮在滚动区之外。 */
+.sb-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .sb-list {
-  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 4px;
+}
+.sb-new-bar {
+  flex: none;
+  padding: 0 4px 4px;
+}
+.sb-new {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sb-new:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.sb-new:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.sb-popup-text {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 .sb-archived {
   flex: none;
@@ -492,5 +697,12 @@ watch(sidebarWidth, updatePopupPos);
 .sb-edit-popup .input {
   width: 100%;
   box-sizing: border-box;
+}
+.sb-edit-desc {
+  min-height: 56px;
+  max-height: 180px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.45;
 }
 </style>

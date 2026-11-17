@@ -350,6 +350,23 @@ export default {
   权限配置不可用: "Permission config unavailable",
   来源: "Source",
   松开以导入分享包: "Drop to import bundle",
+  "开始使用 ProxyCrab": "Get started with ProxyCrab",
+  "三步就能看到真实流量：装好 Skill、让设备连上代理，再新建会话并启动代理。":
+    "Three steps to see real traffic: install the Skill, connect your device, then create a session and start the proxy.",
+  "安装 Skill": "Install the Skill",
+  已完成: "Done",
+  "安装 ProxyCrab Skill，即可让 agent 能够调用 ProxyCrab 的完整能力":
+    "Install the ProxyCrab Skill so agents can use the full capabilities of ProxyCrab.",
+  "Skill 管理": "Skill manager",
+  连接设备: "Connect a device",
+  "按说明配置代理地址与证书，让手机或其他设备的流量进入 ProxyCrab。":
+    "Follow the guide to set the proxy address and certificate so phone or other device traffic reaches ProxyCrab.",
+  新建会话并启动代理: "Create a session and start the proxy",
+  "新建一个会话并把代理启动起来，抓包内容就会展示在这块区域。":
+    "Create a session and start the proxy; captured traffic will show up in this area.",
+  悬停指出按钮位置: "Hover to point out the buttons",
+  "当前没有活跃会话，所有请求都会被透明转发。如果您想捕获请求内容，请将下方的某个会话设置为活跃。您可以在会话的右键菜单中设置":
+    "No active session: every request is being bypassed. To capture request content, set one of the sessions below as active — use its context menu to do so.",
   查看历史脚本: "View script history",
   查看和切换工作区: "View and switch the workspace",
   查看进入拦截器前的快照: "View pre-interceptor snapshot",

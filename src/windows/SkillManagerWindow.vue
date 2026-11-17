@@ -141,7 +141,12 @@ onMounted(async () => {
         spellcheck="false"
         @keyup.enter="addPath"
       />
-      <button class="btn" :disabled="!newPath.trim()" @click="addPath">
+      <button
+        class="btn"
+        :class="{ primary: newPath.trim(), 'pulse-hint': newPath.trim() }"
+        :disabled="!newPath.trim()"
+        @click="addPath"
+      >
         <Io5Add :size="15" />
         {{ t("添加") }}
       </button>
@@ -173,7 +178,12 @@ onMounted(async () => {
           <Io5Refresh :size="14" />
           {{ skillStore.loading && !dirty ? t("同步中…") : t("同步全部") }}
         </button>
-        <button class="btn primary" :disabled="!needsSave || skillStore.loading" @click="save">
+        <button
+          class="btn primary"
+          :class="{ 'pulse-hint': needsSave && !skillStore.loading }"
+          :disabled="!needsSave || skillStore.loading"
+          @click="save"
+        >
           <Io5SaveOutline :size="14" />
           {{ skillStore.loading ? t("保存中…") : t("保存") }}
         </button>
@@ -223,6 +233,19 @@ onMounted(async () => {
 .sm-input {
   flex: 1;
   min-width: 0;
+}
+/* 目录非空 / 有未保存项时提示“可以操作”：整个按钮（图标 + 文字）呼吸放大。 */
+.pulse-hint {
+  transform-origin: center;
+  animation: pulse-hint 0.5s ease-in-out infinite alternate;
+}
+@keyframes pulse-hint {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.06);
+  }
 }
 .sm-list {
   flex: 1;
