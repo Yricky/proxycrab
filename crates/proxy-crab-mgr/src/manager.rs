@@ -4,6 +4,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use fancy_regex::Regex;
 use proxy_crab_mitm::{
     ProxyCrab, ReplayBody, ReplayError, ReplayRequest,
     asset::{Asset, AssetError, AssetUpload},
@@ -17,7 +18,6 @@ use proxy_crab_mitm::{
     },
     storage::{BodySide, BodySource},
 };
-use regex::Regex;
 
 use crate::{
     agents::AgentsStore,
@@ -499,9 +499,10 @@ impl MitmManager {
                         value
                     }
                 };
-                regex
-                    .as_ref()
-                    .map_or_else(|| value.contains(input), |regex| regex.is_match(&value))
+                regex.as_ref().map_or_else(
+                    || value.contains(input),
+                    |regex| regex.is_match(&value).unwrap_or(false),
+                )
             }
         }
     }
@@ -2483,6 +2484,43 @@ mod tests {
     }
 
     #[test]
+    fn regex_runtime_errors_are_non_matches() {
+        let regex = fancy_regex::RegexBuilder::new(r"(?:(a|aa)+)\1")
+            .backtrack_limit(0)
+            .build()
+            .unwrap();
+        let item = CaptureSummary {
+            id: 1,
+            session_id: 1,
+            source: "aa".into(),
+            request: request("test"),
+            response: None,
+            outcome: CaptureOutcome::InProgress,
+            stage: "request".into(),
+            error: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        assert!(matches!(
+            regex.is_match(&item.source),
+            Err(fancy_regex::Error::RuntimeError(
+                fancy_regex::RuntimeError::BacktrackLimitExceeded
+            ))
+        ));
+        let filter = PreparedFilter::Column {
+            column: FilterColumn::Source,
+            input: regex.as_str().into(),
+            regex: Some(regex),
+            script: None,
+        };
+        assert!(!MitmManager::matches_filter(
+            &filter,
+            &item,
+            CaptureBodyAccess::unavailable,
+        ));
+    }
+
+    #[test]
     fn response_status_text_uses_the_canonical_reason() {
         assert_eq!(status_text(200), "OK");
         assert_eq!(status_text(404), "Not Found");
@@ -3008,25 +3046,30 @@ mod tests {
         let manager = MitmManager::new(runtime);
         let original = manager.session_view(Some(session.id)).await.unwrap().filter;
 
-        let regex_filter = SessionFilter {
-            option: Some(FilterOption::Column {
-                column: FilterColumn::Uri,
-                regex: true,
-            }),
-            input: r"(?i)^http://example\.com/first$".into(),
-        };
-        let ids = manager
-            .log_ids(LogIdsRequest {
-                session_id: Some(session.id),
-                filter: Some(regex_filter.clone()),
-                ids: None,
-                min_id: None,
-                max_id: None,
-                limit: None,
-            })
-            .await
-            .unwrap();
-        assert_eq!(ids.matched_ids, vec![first]);
+        for (pattern, expected) in [
+            (r"(?i)^http://example\.com/first$", first),
+            (r"^http://example\.com/(?!second$).+$", first),
+            (r"^http://example\.com/(?!First$).+$", second),
+        ] {
+            let ids = manager
+                .log_ids(LogIdsRequest {
+                    session_id: Some(session.id),
+                    filter: Some(SessionFilter {
+                        option: Some(FilterOption::Column {
+                            column: FilterColumn::Uri,
+                            regex: true,
+                        }),
+                        input: pattern.into(),
+                    }),
+                    ids: None,
+                    min_id: None,
+                    max_id: None,
+                    limit: None,
+                })
+                .await
+                .unwrap();
+            assert_eq!(ids.matched_ids, vec![expected], "{pattern}");
+        }
         assert_eq!(
             manager.session_view(Some(session.id)).await.unwrap().filter,
             original
@@ -3096,30 +3139,32 @@ mod tests {
             })
             .await
             .unwrap();
-        let custom = SessionFilter {
-            option: Some(FilterOption::Column {
-                column: FilterColumn::Script {
-                    script_name: "path".into(),
-                },
-                regex: true,
-            }),
-            input: "^/First$".into(),
-        };
-        assert_eq!(
-            manager
+        for (pattern, expected) in [
+            ("^/First$", first),
+            ("^/(?!second$).+$", first),
+            ("^/(?!First$).+$", second),
+        ] {
+            let ids = manager
                 .log_ids(LogIdsRequest {
                     session_id: Some(session.id),
-                    filter: Some(custom),
+                    filter: Some(SessionFilter {
+                        option: Some(FilterOption::Column {
+                            column: FilterColumn::Script {
+                                script_name: "path".into(),
+                            },
+                            regex: true,
+                        }),
+                        input: pattern.into(),
+                    }),
                     ids: None,
                     min_id: None,
                     max_id: None,
                     limit: None,
                 })
                 .await
-                .unwrap()
-                .matched_ids,
-            vec![first]
-        );
+                .unwrap();
+            assert_eq!(ids.matched_ids, vec![expected], "{pattern}");
+        }
 
         manager
             .create_column_script(ScriptRequest {

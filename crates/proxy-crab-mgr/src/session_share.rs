@@ -1116,7 +1116,7 @@ async fn validate_filter_regex(
     Json(request): Json<RegexRequest>,
 ) -> Result<Json<serde_json::Value>, ShareApiError> {
     success(
-        regex::Regex::new(&request.pattern)
+        fancy_regex::Regex::new(&request.pattern)
             .err()
             .map(|error| error.to_string()),
     )
@@ -1183,6 +1183,22 @@ mod tests {
         MitmManager,
         dto::{ActiveSession, CreateSessionRequest, ErrorCode, ScriptRequest},
     };
+
+    #[tokio::test]
+    async fn filter_regex_validation_supports_lookaround() {
+        for (pattern, valid) in [(r"(?i)^get$", true), (r"^(?!xxx).*$", true), ("(", false)] {
+            let Json(body) = validate_filter_regex(Json(RegexRequest {
+                pattern: pattern.into(),
+            }))
+            .await
+            .map_err(|error| error.0)
+            .unwrap();
+            assert_eq!(body["data"].is_null(), valid, "{pattern}");
+            if !valid {
+                assert!(body["data"].is_string());
+            }
+        }
+    }
 
     #[derive(Default)]
     struct TestPolicies(RwLock<BTreeMap<String, Option<String>>>);

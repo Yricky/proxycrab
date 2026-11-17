@@ -225,7 +225,9 @@ separately authorized management identity and the ordinary management workflow.
    The bundled query script and direct `POST /api/logs/ids` calls are always read-only. Save a
    Session filter only when the user explicitly requests it, through
    `PUT /api/sessions/{id}/filter`. Column matching is case-sensitive; add `--regex` to
-   `log-query.mjs` for Rust regex syntax such as anchored exact matches or inline `(?i)` flags.
+   `log-query.mjs` for Rust `fancy-regex` syntax, including anchors, inline `(?i)` flags,
+   lookaround such as `^(?!.*xxx).*$` to exclude values containing `xxx`, and backreferences.
+   Matching runtime errors, including backtracking-limit errors, count as non-matches.
 
 4. Fetch only the candidate captures needed for diagnosis:
 

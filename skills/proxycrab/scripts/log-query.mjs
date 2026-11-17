@@ -47,7 +47,7 @@ Choose at most one filter selector:
   --stage TEXT
   --column-script NAME [--input TEXT]
   --filter-script NAME [--input TEXT]
-  --regex                 Treat the selected column input as Rust regex syntax
+  --regex                 Use Rust fancy-regex syntax (supports lookaround and backreferences)
 
 With no selector or --input, all captures match. Queries are always read-only and never change the
 Session's persisted filter.

@@ -486,7 +486,7 @@ query parameters are present). JSON success responses use `{"ok":true,"data":…
 | `GET /share-api/logs/{id}/interceptors/{execution_id}/snapshot` | Same interceptor-entry snapshot JSON as the management equivalent. Use an execution ID from log detail. |
 | `GET /share-api/column-scripts` | Script metadata array `{name, display_name, content:""}`; library source is not exposed. |
 | `GET /share-api/filter-scripts` | Same metadata-only shape for filter scripts. |
-| `POST /share-api/validate-filter-regex` | `{"pattern":"…"}`; data is `null` for a valid Rust regex, otherwise a validation error string. |
+| `POST /share-api/validate-filter-regex` | `{"pattern":"…"}`; data is `null` for a valid Rust `fancy-regex` pattern (including lookaround), otherwise a validation error string. |
 
 Only the routes above exist on the share surface; there are no Session writes, filter persistence,
 replay, export, breakpoint control, or `/agents.md` routes. Share reads honor effective redaction.
@@ -581,8 +581,10 @@ Every field is optional.
 - `option: null` or an empty `input` matches all captures; an empty input still preserves the
   selected option.
 - With `regex: false`, built-in and custom-column filters use case-sensitive contains matching.
-- With `regex: true`, input uses Rust `regex` syntax and substring matching unless anchored. Inline
-  flags such as `(?i)` control case folding; invalid patterns return `bad_request`.
+- With `regex: true`, input uses Rust `fancy-regex` syntax and substring matching unless anchored.
+  Inline flags such as `(?i)` control case folding; lookaround such as `^(?!.*xxx).*$` and
+  backreferences are supported. Invalid patterns return `bad_request`; matching runtime errors,
+  including backtracking-limit errors, count as non-matches.
 - Lua filter input is passed exactly, including whitespace.
 - Filter/custom-column errors count as non-matches in this endpoint.
 - `min_id` and `max_id` are exclusive.

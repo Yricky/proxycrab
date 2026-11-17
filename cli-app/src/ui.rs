@@ -225,7 +225,7 @@ async fn changes_after(
 
 async fn validate_filter_regex(Json(request): Json<RegexRequest>) -> Response {
     success(
-        regex::Regex::new(&request.pattern)
+        fancy_regex::Regex::new(&request.pattern)
             .err()
             .map(|error| error.to_string()),
     )
@@ -381,6 +381,29 @@ fn manager_error(error: ManagerError) -> Response {
 
 fn error_response(status: StatusCode, error: ManagerError) -> Response {
     (status, Json(json!({ "ok": false, "error": error }))).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    #[tokio::test]
+    async fn filter_regex_validation_supports_lookaround() {
+        for (pattern, valid) in [(r"(?i)^get$", true), (r"^(?!xxx).*$", true), ("(", false)] {
+            let response = validate_filter_regex(Json(RegexRequest {
+                pattern: pattern.into(),
+            }))
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["data"].is_null(), valid, "{pattern}");
+            if !valid {
+                assert!(body["data"].is_string());
+            }
+        }
+    }
 }
 
 async fn set_identity_redaction(

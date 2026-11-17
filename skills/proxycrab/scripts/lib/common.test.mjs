@@ -84,6 +84,13 @@ test("column filters use the regex wire flag", () => {
       input: "^/api",
     },
   );
+  assert.deepEqual(
+    buildRemoteFilter(parseArgs(["--uri", "^(?!.*xxx).*$", "--regex"])),
+    {
+      option: { kind: "column", column: { kind: "uri" }, regex: true },
+      input: "^(?!.*xxx).*$",
+    },
+  );
   assert.deepEqual(buildRemoteFilter(parseArgs(["--method", "GET"])), {
     option: { kind: "column", column: { kind: "method" }, regex: false },
     input: "GET",

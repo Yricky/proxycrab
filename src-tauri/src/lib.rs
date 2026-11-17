@@ -377,7 +377,7 @@ fn validate_filter_regex(pattern: String) -> Option<String> {
 }
 
 fn filter_regex_error(pattern: &str) -> Option<String> {
-    regex::Regex::new(pattern)
+    fancy_regex::Regex::new(pattern)
         .err()
         .map(|error| error.to_string())
 }
@@ -1308,8 +1308,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn filter_regex_validation_uses_rust_regex_syntax() {
+    fn filter_regex_validation_supports_lookaround() {
         assert!(super::filter_regex_error(r"(?i)^get$").is_none());
+        assert!(super::filter_regex_error(r"^(?!xxx).*$").is_none());
         assert!(super::filter_regex_error("(").is_some());
     }
 

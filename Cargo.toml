@@ -28,7 +28,7 @@ if-addrs = "0.15.0"
 mlua = { version = "0.12.2", features = ["lua54", "vendored", "send"] }
 percent-encoding = "2"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "x509-parser"] }
-regex = "1"
+fancy-regex = "0.20.2"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 rustls = "0.23.46"
 serde = { version = "1", features = ["derive"] }
