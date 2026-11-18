@@ -368,11 +368,20 @@ impl BreakpointRegistry {
     }
 
     pub(crate) fn release_all(&self) {
+        self.release_matching(None);
+    }
+
+    pub(crate) fn release_session(&self, session_id: u64) {
+        self.release_matching(Some(session_id));
+    }
+
+    fn release_matching(&self, session_id: Option<u64>) {
         let active = self
             .active
             .lock()
             .expect("breakpoint registry lock poisoned")
             .values()
+            .filter(|active| session_id.is_none_or(|id| active.context.session_id == id))
             .cloned()
             .collect::<Vec<_>>();
         for item in active {

@@ -4,7 +4,7 @@ use std::{
     future::Future,
     net::SocketAddr,
     str::FromStr,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, Weak},
     time::Duration,
 };
 
@@ -140,9 +140,31 @@ impl ProxyController {
         notify_status_change(&self.status_changes);
     }
 
-    pub(crate) async fn mutate_sessions<T>(&self, action: impl FnOnce() -> Result<T>) -> Result<T> {
+    pub(crate) async fn mutate_sessions<T>(
+        &self,
+        action: impl Future<Output = Result<T>>,
+    ) -> Result<T> {
         let _operation = self.operation.lock().await;
-        action()
+        action.await
+    }
+
+    pub(crate) async fn disconnect_session(&self, session_id: u64) {
+        let registry = self
+            .connections
+            .lock()
+            .expect("proxy connections lock poisoned")
+            .clone();
+        if let Some(registry) = registry {
+            let connections = registry.current().tasks.session_connections(session_id);
+            for connection in &connections {
+                connection.cancellation.cancel();
+                connection.tasks.abort();
+            }
+            futures::future::join_all(connections.into_iter().map(|connection| async move {
+                connection.tasks.clone().shutdown(SHUTDOWN_TIMEOUT).await;
+            }))
+            .await;
+        }
     }
 
     pub(crate) async fn mutate_configuration<T>(
@@ -425,8 +447,10 @@ pub(crate) struct TaskGroup {
 struct TaskGroupState {
     closing: bool,
     abort_handles: Vec<AbortHandle>,
-    capture_id_ranges: HashMap<u64, (CaptureStore, u64, u64)>,
-    bypass_id_range: Option<(BypassStore, u64, u64)>,
+    capture_id_ranges: HashMap<u64, (CaptureStore, Vec<(u64, u64)>)>,
+    session_ids: BTreeSet<u64>,
+    connections: Vec<Weak<ConnectionGeneration>>,
+    bypass_id_range: Option<(BypassStore, Vec<(u64, u64)>)>,
 }
 
 #[derive(Clone)]
@@ -500,6 +524,8 @@ impl TaskGroup {
                 closing: false,
                 abort_handles: Vec::new(),
                 capture_id_ranges: HashMap::new(),
+                session_ids: BTreeSet::new(),
+                connections: Vec::new(),
                 bypass_id_range: None,
             })),
             activity,
@@ -513,6 +539,57 @@ impl TaskGroup {
             .closing = true;
     }
 
+    fn register_session(&self, session_id: u64) {
+        self.state
+            .lock()
+            .expect("proxy task state lock poisoned")
+            .session_ids
+            .insert(session_id);
+    }
+
+    fn session_connections(&self, session_id: u64) -> Vec<Arc<ConnectionGeneration>> {
+        let state = self.state.lock().expect("proxy task state lock poisoned");
+        state
+            .connections
+            .iter()
+            .filter_map(Weak::upgrade)
+            .filter(|connection| {
+                connection
+                    .tasks
+                    .state
+                    .lock()
+                    .expect("proxy task state lock poisoned")
+                    .session_ids
+                    .contains(&session_id)
+            })
+            .collect()
+    }
+
+    fn spawn_connection<F, Fut>(&self, cancellation: &CancellationToken, build: F)
+    where
+        F: FnOnce(CancellationToken, TaskGroup) -> Fut,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let connection = Arc::new(ConnectionGeneration {
+            cancellation: cancellation.child_token(),
+            tasks: TaskGroup::new(self.activity.clone()),
+        });
+        {
+            let mut state = self.state.lock().expect("proxy task state lock poisoned");
+            state
+                .connections
+                .retain(|connection| connection.strong_count() > 0);
+            state.connections.push(Arc::downgrade(&connection));
+        }
+        let future = build(connection.cancellation.clone(), connection.tasks.clone());
+        self.spawn(async move {
+            connection.tasks.spawn(future);
+            connection.tasks.tracker.close();
+            connection.tasks.tracker.wait().await;
+            Box::pin(connection.tasks.clone().shutdown(SHUTDOWN_TIMEOUT)).await;
+        });
+    }
+
     fn begin_capture(
         &self,
         store: &CaptureStore,
@@ -523,14 +600,11 @@ impl TaskGroup {
             bail!("proxy connection is closing");
         }
         let id = begin()?;
-        state
+        let (_, ranges) = state
             .capture_id_ranges
             .entry(store.session_id())
-            .and_modify(|(_, min_id, max_id)| {
-                *min_id = (*min_id).min(id);
-                *max_id = (*max_id).max(id);
-            })
-            .or_insert((store.clone(), id, id));
+            .or_insert_with(|| (store.clone(), Vec::new()));
+        track_id_range(ranges, id);
         let activity = self.activity.begin_netlog(store.session_id(), id);
         Ok((id, activity))
     }
@@ -545,13 +619,10 @@ impl TaskGroup {
             bail!("proxy connection is closing");
         }
         let id = begin()?;
-        match &mut state.bypass_id_range {
-            Some((_, min_id, max_id)) => {
-                *min_id = (*min_id).min(id);
-                *max_id = (*max_id).max(id);
-            }
-            range @ None => *range = Some((store.clone(), id, id)),
-        }
+        let (_, ranges) = state
+            .bypass_id_range
+            .get_or_insert_with(|| (store.clone(), Vec::new()));
+        track_id_range(ranges, id);
         let activity = self.activity.begin_bypass(id);
         Ok((id, activity))
     }
@@ -569,21 +640,41 @@ impl TaskGroup {
         state.abort_handles.push(handle.abort_handle());
     }
 
+    fn abort(&self) {
+        let handles = {
+            let mut state = self.state.lock().expect("proxy task state lock poisoned");
+            state.closing = true;
+            std::mem::take(&mut state.abort_handles)
+        };
+        for handle in handles {
+            handle.abort();
+        }
+    }
+
     async fn shutdown(self, timeout_duration: Duration) {
         self.close();
+        let connections = self
+            .state
+            .lock()
+            .expect("proxy task state lock poisoned")
+            .connections
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect::<Vec<_>>();
+        for connection in &connections {
+            connection.cancellation.cancel();
+        }
+        futures::future::join_all(connections.into_iter().map(|connection| async move {
+            Box::pin(connection.tasks.clone().shutdown(timeout_duration)).await;
+        }))
+        .await;
         self.tracker.close();
         if timeout(timeout_duration, self.tracker.wait())
             .await
             .is_err()
         {
             tracing::warn!("proxy connection drain timed out; aborting unfinished tasks");
-            let handles = {
-                let mut state = self.state.lock().expect("proxy task state lock poisoned");
-                std::mem::take(&mut state.abort_handles)
-            };
-            for handle in handles {
-                handle.abort();
-            }
+            self.abort();
             if timeout(Duration::from_secs(1), self.tracker.wait())
                 .await
                 .is_err()
@@ -598,13 +689,27 @@ impl TaskGroup {
                 state.bypass_id_range.take(),
             )
         };
-        for (_, (store, min_id, max_id)) in capture_id_ranges {
-            let _ = store.mark_in_progress_range_as_shutdown(min_id, max_id);
+        for (_, (store, ranges)) in capture_id_ranges {
+            for (min_id, max_id) in ranges {
+                let _ = store.mark_in_progress_range_as_shutdown(min_id, max_id);
+            }
         }
-        if let Some((store, min_id, max_id)) = bypass_id_range {
-            let _ = store.mark_in_progress_range_as_shutdown(min_id, max_id);
+        if let Some((store, ranges)) = bypass_id_range {
+            for (min_id, max_id) in ranges {
+                let _ = store.mark_in_progress_range_as_shutdown(min_id, max_id);
+            }
         }
         self.activity.notify();
+    }
+}
+
+fn track_id_range(ranges: &mut Vec<(u64, u64)>, id: u64) {
+    if let Some((_, max)) = ranges.last_mut()
+        && max.checked_add(1) == Some(id)
+    {
+        *max = id;
+    } else {
+        ranges.push((id, id));
     }
 }
 
@@ -647,9 +752,7 @@ async fn accept_loop(
                     match connection_slots.clone().try_acquire_owned() {
                         Ok(permit) => {
                             let client_runtime = runtime.clone();
-                            let client_cancellation = generation.cancellation.clone();
-                            let client_tracker = generation.tasks.clone();
-                            generation.tasks.spawn(async move {
+                            generation.tasks.spawn_connection(&generation.cancellation, move |client_cancellation, client_tracker| async move {
                                 let _permit = permit;
                                 serve_client(
                                     stream,
@@ -850,6 +953,7 @@ fn handle_connect(
     let RouteDecision::Session(session) = decision else {
         unreachable!()
     };
+    tracker.register_session(session.id);
     let pin = match runtime.pin_session(session.id) {
         Ok(pin) => pin,
         Err(error) => {
@@ -1290,6 +1394,39 @@ mod tests {
             } if active_netlog.is_empty()
                 && latest_netlog_id == BTreeMap::from([(42, 9), (43, 3)])
         ));
+    }
+
+    #[tokio::test]
+    async fn connection_shutdown_preserves_interleaved_captures_from_other_connections() {
+        let root = tempfile::tempdir().unwrap();
+        let store = crate::storage::CaptureStore::open(1, root.path()).unwrap();
+        let (changes, _) = tokio::sync::watch::channel(0);
+        let group = super::TaskGroup::new(super::ActivityTracker::new(changes));
+        let request = crate::model::RequestData {
+            method: "GET".into(),
+            uri: "http://example.com/".into(),
+            version: "HTTP/1.1".into(),
+            headers: HeaderValues::new(),
+            tags: Default::default(),
+        };
+        let (first, _first_activity) = group
+            .begin_capture(&store, || store.begin("first", &request, "request"))
+            .unwrap();
+        let other = store.begin("other", &request, "request").unwrap();
+        let (last, _last_activity) = group
+            .begin_capture(&store, || store.begin("first", &request, "request"))
+            .unwrap();
+        group.shutdown(Duration::from_secs(1)).await;
+        for id in [first, last] {
+            assert_eq!(
+                store.get(id).unwrap().unwrap().summary.outcome,
+                crate::model::CaptureOutcome::Failed
+            );
+        }
+        assert_eq!(
+            store.get(other).unwrap().unwrap().summary.outcome,
+            crate::model::CaptureOutcome::InProgress
+        );
     }
 
     #[test]

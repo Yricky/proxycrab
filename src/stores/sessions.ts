@@ -159,12 +159,12 @@ export const sessionsStore = reactive({
   },
 
   /**
-   * 清扫当前活跃会话：新建一个配置一致的新会话，切换为新活跃会话（只有这一步会断开
-   * 原会话的连接与在途请求），再把原会话归档。返回新会话；任一步失败返回 null 并已上报错误。
+   * 新建配置一致的会话；仅在原会话活跃时切换活跃身份，再归档原会话并断开其连接。
+   * 返回新会话；任一步失败返回 null 并已上报错误。
    */
   async sweep(sessionId: number | null): Promise<SessionMetadata | null> {
     const id = sessionId;
-    if (id === null || this.activeSessionId !== id) return null;
+    if (id === null) return null;
     const current = this.sessions.find((session) => session.id === id);
     if (current === undefined) return null;
     try {
@@ -174,11 +174,11 @@ export const sessionsStore = reactive({
       ]);
       const created = await backend.createSession(sweepCreateRequest(current, view, chains));
       await this.refresh();
-      if (!(await this.replaceActive(created.id))) return null;
+      if (this.activeSessionId === id && !(await this.replaceActive(created.id))) return null;
       try {
         await backend.archiveSession(id);
       } catch (error) {
-        reportError(error, t("新会话已启用，但原会话归档失败，请在侧边栏手动归档"));
+        reportError(error, t("新会话已创建，但原会话归档失败，请在侧边栏手动归档"));
         return null;
       }
       await this.refresh();

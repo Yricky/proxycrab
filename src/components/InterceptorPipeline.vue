@@ -61,14 +61,17 @@ const canInspectBreakpoints = computed(() =>
 
 const requestItems = computed(() => interceptorsStore.request);
 const responseItems = computed(() => interceptorsStore.response);
-/** 清扫只在“当前查看的会话就是活跃会话”时可用。 */
+const isActiveSession = computed(() => logs.sessionId === sessionsStore.activeSessionId);
 const canSweep = computed(
   () =>
-    [backend.createSession, backend.replaceActiveSession, backend.archiveSession].every(
-      (method) => typeof method === "function",
-    ) &&
     logs.sessionId !== null &&
-    logs.sessionId === sessionsStore.activeSessionId,
+    [
+      backend.createSession,
+      backend.getSessionView,
+      backend.getSessionInterceptors,
+      backend.archiveSession,
+    ].every((method) => typeof method === "function") &&
+    (!isActiveSession.value || typeof backend.replaceActiveSession === "function"),
 );
 const configDownload = ref(backend.downloadSessionConfig);
 const downloadingConfig = ref(false);
@@ -93,7 +96,9 @@ async function sweepSession(): Promise<void> {
     if (
       !(await confirmDialog({
         title: t("清扫会话"),
-        message: t("将新建配置一致的活跃会话，当前会话转入已归档，并断开当前活跃连接。是否继续？"),
+        message: isActiveSession.value
+          ? t("将新建配置一致的活跃会话，当前会话转入已归档，并断开当前活跃连接。是否继续？")
+          : t("将新建配置一致的非活跃会话，当前会话转入已归档，并断开该会话的全部连接。是否继续？"),
         confirmText: t("确认清扫"),
       }))
     )
@@ -486,7 +491,11 @@ onBeforeUnmount(() => {
     <AppTooltip
       v-if="canSweep"
       :title="t('清扫会话')"
-      :detail="t('新建配置一致的活跃会话，原会话转入已归档')"
+      :detail="
+        isActiveSession
+          ? t('新建配置一致的活跃会话，原会话转入已归档')
+          : t('新建配置一致的非活跃会话，原会话转入已归档')
+      "
     >
       <button
         class="pipeline-sweep"

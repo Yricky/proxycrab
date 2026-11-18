@@ -5,8 +5,8 @@ import type { SessionViewPayload } from "../api/generated/SessionViewPayload";
 
 /**
  * 清扫会话：以原会话的身份信息与已保存配置，构造一个配置一致的新会话请求。
- * 这里只负责创建：活跃身份随后由 PUT /api/active-session 接管，只有那一步会断开原会话
- * 已建立的连接与在途请求，从而让随后的归档不被 pin 拒绝。
+ * 这里只负责创建：原会话活跃时随后切换活跃身份，否则保持新会话非活跃；
+ * 归档原会话时由后端断开其连接并等待相关任务结束。
  */
 export function sweepCreateRequest(
   session: SessionMetadata,

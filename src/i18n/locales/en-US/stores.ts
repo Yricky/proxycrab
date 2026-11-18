@@ -33,8 +33,8 @@ export default {
   归档会话失败: "Failed to archive session",
   取消归档失败: "Failed to restore from archive",
   删除已归档会话失败: "Failed to delete archived session",
-  "新会话已启用，但原会话归档失败，请在侧边栏手动归档":
-    "New session activated, but archiving the original session failed; archive it manually in the sidebar",
+  "新会话已创建，但原会话归档失败，请在侧边栏手动归档":
+    "New session created, but archiving the original session failed; archive it manually in the sidebar",
   清扫会话失败: "Failed to sweep session",
   切换活跃会话失败: "Failed to switch active session",
   加载会话记录失败: "Failed to load session logs",

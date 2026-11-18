@@ -364,7 +364,10 @@ proxy connections, tunnels, upgrades, and upstream pools; identical updates do n
 - Archive/restore/delete Sessions, delete scripts, clear records, and replay requests only when
   requested. Do not configure another process's proxy environment automatically. Keep debugging
   state unless the user asks for cleanup. An active Session cannot be archived; deactivating it
-  requires authorization too.
+  requires authorization too. Archiving an inactive Session now disconnects its associated
+  connections and replay tasks and releases its breakpoints before moving its files; in-progress
+  requests no longer block archive. Other independent connections and the active selection are
+  preserved. UI Sweep also supports inactive Sessions and keeps their replacement inactive.
 - CA regeneration, full application-config replacement, and workspace changes are unavailable
   through the Agent API. Workspace switching restarts the desktop app and discards unsaved edits;
   CLI workspaces are selected with `--workspace` at startup.

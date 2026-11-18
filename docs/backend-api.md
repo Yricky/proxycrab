@@ -745,11 +745,23 @@ into it without changing the active Session.
 
 Inactive Sessions can be archived while the proxy runs with
 `POST /api/sessions/{id}/archive`. The whole directory moves to `sessions_archived/<id>`; archived
-Sessions disappear from all existing Session, log, view, interceptor, and export APIs. The active
-Session and Sessions with pinned requests return `409 session_in_use`. `GET /api/archived-sessions`
+Sessions disappear from all existing Session, log, view, interceptor, and export APIs. Archiving
+blocks new capture admission for the target Session, disconnects its HTTP/CONNECT/HTTPS/Upgrade/
+WebSocket connections and replay tasks, releases its breakpoints, and waits for task finalization
+and existing storage reads before moving the directory. Unfinished records are finalized through
+the existing `proxy_shutdown` path. Other independent connections and the active Session selection
+are preserved; a shared downstream socket that has carried multiple Sessions closes as one socket.
+Only the active Session still returns `409 session_in_use`; in-progress requests no longer reject
+archive. `GET /api/archived-sessions`
 lists metadata only, `POST /api/archived-sessions/{id}/restore` moves it back without activating
 it, and `DELETE /api/archived-sessions/{id}` permanently removes it. Permanent deletion therefore
 requires archiving the Session first.
+
+The UI Sweep action is available for active and inactive Sessions when the required backend
+methods exist. It copies name, description, columns, filter, and interceptor chains to a new
+Session, archives the original, and displays the new Session. Only sweeping the active Session
+changes the active selection to the copy; sweeping an inactive Session leaves the copy inactive
+and preserves another active Session or the absence of one. Confirmation text reflects this.
 
 ## Global filter scripts
 

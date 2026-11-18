@@ -2177,9 +2177,7 @@ fn map_error(error: anyhow::Error) -> ManagerError {
         | MitmError::ScriptAlreadyExists(_)
         | MitmError::ProxyMustBeStopped
         | MitmError::BypassEntryInProgress(_) => ManagerError::conflict(message),
-        MitmError::ActiveSessionArchive(_) | MitmError::SessionRequestsInProgress(_) => {
-            ManagerError::new(ErrorCode::SessionInUse, message)
-        }
+        MitmError::ActiveSessionArchive(_) => ManagerError::new(ErrorCode::SessionInUse, message),
         MitmError::ProxyAlreadyRunning => ManagerError::new(ErrorCode::ProxyRunning, message),
         MitmError::InvalidScriptName
         | MitmError::InvalidScript(_)

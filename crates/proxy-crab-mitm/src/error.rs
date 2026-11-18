@@ -11,8 +11,6 @@ pub enum Error {
     SessionAlreadyExists(u64),
     #[error("active session {0} cannot be archived")]
     ActiveSessionArchive(u64),
-    #[error("session {0} has requests in progress")]
-    SessionRequestsInProgress(u64),
     #[error("archived session {0} not found")]
     ArchivedSessionNotFound(u64),
     #[error("archived session {0} already exists")]

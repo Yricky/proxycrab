@@ -137,22 +137,23 @@ impl ProxyCrab {
             .map_err(|error| ReplayError::Invalid(error.to_string()))?;
         let (capture_tx, capture_rx) = tokio::sync::oneshot::channel();
         let runtime = self.clone();
-        let cancellation = generation.cancellation.clone();
-        let tasks = generation.tasks.clone();
-        generation.tasks.spawn(async move {
-            let response = mitm::handle_session_http_request(
-                http_request,
-                TrafficSource::Replay,
-                runtime,
-                session_id,
-                cancellation,
-                tasks,
-                Some(capture_tx),
-            )
-            .await;
-            // 完整消费响应 body 以驱动响应捕获完成；重放调用方不需要响应内容。
-            let _ = response.into_body().collect().await;
-        });
+        generation.tasks.spawn_connection(
+            &generation.cancellation,
+            move |cancellation, tasks| async move {
+                let response = mitm::handle_session_http_request(
+                    http_request,
+                    TrafficSource::Replay,
+                    runtime,
+                    session_id,
+                    cancellation,
+                    tasks,
+                    Some(capture_tx),
+                )
+                .await;
+                // 完整消费响应 body 以驱动响应捕获完成；重放调用方不需要响应内容。
+                let _ = response.into_body().collect().await;
+            },
+        );
         capture_rx
             .await
             .context("replay capture did not start")

@@ -244,6 +244,7 @@ pub(crate) async fn handle_session_http_request(
     tracker: TaskGroup,
     capture_id_tx: Option<tokio::sync::oneshot::Sender<u64>>,
 ) -> Response<ProxyBody> {
+    tracker.register_session(session_id);
     let pin = match runtime.pin_session(session_id) {
         Ok(pin) => pin,
         Err(error) => return text_response(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),

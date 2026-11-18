@@ -531,9 +531,13 @@ updated `SessionMetadata`.
 ### `POST /api/sessions/{id}/archive`
 
 Moves an inactive Session and all of its data to `sessions_archived/<id>` and returns its
-`SessionMetadata`. The active Session cannot be archived. The active Session and a Session with
-pinned in-progress requests return `409 session_in_use`; archive is otherwise allowed while the
-proxy runs. Archived
+`SessionMetadata`. The active Session cannot be archived and returns `409 session_in_use`.
+In-progress requests no longer reject archive: the backend blocks new target captures, releases
+its breakpoints, disconnects its HTTP/CONNECT/HTTPS/Upgrade/WebSocket connections and replay
+tasks, and finalizes unfinished records with the existing `proxy_shutdown` behavior before moving
+the files. It waits for existing storage readers to finish. Other independent connections and
+the active selection remain intact; a downstream socket reused across Sessions closes as one
+socket. Archive remains allowed while the proxy runs. Archived
 Sessions are excluded from every existing Session, log, view, interceptor, and export endpoint.
 
 ### `GET /api/archived-sessions`
@@ -1299,7 +1303,7 @@ HTTP status mapping:
 | `snapshot_body_not_found` | 404 | Missing snapshot body for an interceptor execution |
 | `not_acceptable_encoding` | 406 | `Accept-Encoding` prohibits the original and every fallback encoding |
 | `conflict` | 409 | State conflict, including no active Session or other state conflicts |
-| `session_in_use` | 409 | Archiving the active Session or one with pinned in-progress requests |
+| `session_in_use` | 409 | Archiving the active Session |
 | `proxy_running` | 409 | Proxy start requested while it is already running or changing state |
 | `proxy_not_running` | 409 | Replay or another proxy-dependent operation while the proxy is stopped |
 | `body_too_large` | 413 | Stored body exceeds `max_size`; includes both sizes |

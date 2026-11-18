@@ -2431,7 +2431,7 @@ async fn response_breakpoint_exposes_live_response_and_applies_temporary_body() 
 }
 
 #[tokio::test]
-async fn pinned_session_cannot_be_archived_until_request_finishes() {
+async fn archive_waits_for_existing_pins_and_rejects_new_ones() {
     let app_data = tempdir().unwrap();
     let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
     create_active_session(&runtime, None).await;
@@ -2443,16 +2443,270 @@ async fn pinned_session_cannot_be_archived_until_request_finishes() {
         .unwrap();
     let pin = runtime.pin_session(second.id).unwrap();
 
-    assert!(
-        runtime
-            .archive_session(second.id)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("requests in progress")
-    );
+    let archiving = tokio::spawn({
+        let runtime = runtime.clone();
+        async move { runtime.archive_session(second.id).await }
+    });
+    tokio::task::yield_now().await;
+    assert!(!archiving.is_finished());
+    assert!(runtime.pin_session(second.id).is_err());
     drop(pin);
-    runtime.archive_session(second.id).await.unwrap();
+    timeout(Duration::from_secs(1), archiving)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn archiving_disconnects_only_target_connect_tunnels_including_idle_tls() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let active = create_active_session(&runtime, Some("active")).await;
+    let target = runtime.create_session(NewSession::default()).unwrap();
+    let (echo_port, echo) = echo_upstream().await;
+    runtime.create_script(ScriptKind::Routing, Script {
+        name: "archive-route".into(),
+        content: format!("if req.authority == 'target.test:443' then return {} end if req.authority == '127.0.0.1:{}' then return false end return true", target.id, echo_port),
+    }).unwrap();
+    runtime
+        .replace_routing_selection(Some("archive-route".into()))
+        .await
+        .unwrap();
+    let mut idle = connect_tunnel_to(proxy_port, "target.test:443").await;
+    let tls_socket = connect_tunnel_to(proxy_port, "target.test:443").await;
+    let mut roots = RootCertStore::empty();
+    for certificate in rustls_pemfile::certs(&mut Cursor::new(runtime.certificate_pem())) {
+        roots.add(certificate.unwrap()).unwrap();
+    }
+    let connector = TlsConnector::from(Arc::new(
+        ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    ));
+    let mut tls = connector
+        .connect(ServerName::try_from("target.test").unwrap(), tls_socket)
+        .await
+        .unwrap();
+    let mut other = connect_tunnel_to(proxy_port, "other.test:443").await;
+    let mut bypass = connect_tunnel_to(proxy_port, &format!("127.0.0.1:{echo_port}")).await;
+
+    timeout(Duration::from_secs(2), runtime.archive_session(target.id))
+        .await
+        .unwrap()
+        .unwrap();
+    let mut byte = [0];
+    assert_eq!(
+        timeout(Duration::from_secs(1), idle.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
+    let closed = timeout(Duration::from_secs(1), tls.read(&mut byte))
+        .await
+        .unwrap();
+    assert!(closed.is_err() || closed.unwrap() == 0);
+    assert!(
+        timeout(Duration::from_millis(50), other.read(&mut byte))
+            .await
+            .is_err()
+    );
+    bypass.write_all(b"ping").await.unwrap();
+    let mut echoed = [0; 4];
+    timeout(Duration::from_secs(1), bypass.read_exact(&mut echoed))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&echoed, b"ping");
+    assert_eq!(runtime.active_session_id(), Some(active.id));
+    assert!(
+        matches!(runtime.proxy_status(), ProxyStatus::Running { active_netlog, .. } if !active_netlog.contains_key(&target.id) && active_netlog.contains_key(&active.id))
+    );
+    assert!(!runtime.workspace().session_dir(target.id).exists());
+    runtime.restore_session(target.id).await.unwrap();
+    let captures = runtime.list_captures(target.id, 10, None).unwrap();
+    assert_eq!(captures.len(), 2);
+    assert!(
+        captures
+            .iter()
+            .all(|capture| capture.outcome != CaptureOutcome::InProgress)
+    );
+    runtime.stop_proxy().await.unwrap();
+    echo.abort();
+}
+
+#[tokio::test]
+async fn archiving_cancels_http_and_replay_bodies_without_interrupting_other_sessions() {
+    async fn streaming_client(proxy_port: u16, upstream_port: u16, path: &str) -> TcpStream {
+        let mut client = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+        client.write_all(format!("GET http://127.0.0.1:{upstream_port}/{path} HTTP/1.1\r\nHost: 127.0.0.1:{upstream_port}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        let mut headers = Vec::new();
+        while !headers.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            timeout(Duration::from_secs(2), client.read_exact(&mut byte))
+                .await
+                .unwrap()
+                .unwrap();
+            headers.push(byte[0]);
+        }
+        let mut body = [0; 5];
+        client.read_exact(&mut body).await.unwrap();
+        assert_eq!(&body, b"hello");
+        client
+    }
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let active = create_active_session(&runtime, None).await;
+    let target = runtime.create_session(NewSession::default()).unwrap();
+    runtime
+        .create_script(
+            ScriptKind::Routing,
+            Script {
+                name: "archive-route".into(),
+                content: format!(
+                    "if req.uri.path == '/target' then return {} end return true",
+                    target.id
+                ),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_routing_selection(Some("archive-route".into()))
+        .await
+        .unwrap();
+    let (target_port, target_upstream) =
+        delayed_response_frame_upstream(Duration::from_secs(30)).await;
+    let (other_port, release_other, other_upstream) = staged_http_upstream().await;
+    let (replay_port, replay_upstream) =
+        delayed_response_frame_upstream(Duration::from_secs(30)).await;
+    let mut target_client = streaming_client(proxy_port, target_port, "target").await;
+    let mut other_client = streaming_client(proxy_port, other_port, "other").await;
+    runtime
+        .replay(
+            target.id,
+            ReplayRequest {
+                method: "GET".into(),
+                url: format!("http://127.0.0.1:{replay_port}/replay"),
+                headers: vec![],
+                body: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    timeout(Duration::from_secs(2), runtime.archive_session(target.id))
+        .await
+        .unwrap()
+        .unwrap();
+    let mut rest = Vec::new();
+    timeout(Duration::from_secs(1), target_client.read_to_end(&mut rest))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(rest.is_empty());
+    assert_eq!(runtime.active_session_id(), Some(active.id));
+    release_other.send(()).unwrap();
+    timeout(Duration::from_secs(2), other_client.read_to_end(&mut rest))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rest, b"world");
+    runtime.restore_session(target.id).await.unwrap();
+    let captures = runtime.list_captures(target.id, 10, None).unwrap();
+    assert_eq!(captures.len(), 2);
+    assert!(
+        captures
+            .iter()
+            .all(|capture| capture.outcome == CaptureOutcome::Failed)
+    );
+    runtime.stop_proxy().await.unwrap();
+    target_upstream.abort();
+    replay_upstream.abort();
+    other_upstream.abort();
+}
+
+#[tokio::test]
+async fn archiving_releases_only_the_target_sessions_breakpoints() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let active = create_active_session(&runtime, None).await;
+    let target = runtime.create_session(NewSession::default()).unwrap();
+    let (upstream_port, upstream) = fixed_http_upstream().await;
+    runtime
+        .create_script(
+            ScriptKind::Routing,
+            Script {
+                name: "archive-route".into(),
+                content: format!(
+                    "if req.uri.path == '/target' then return {} end return true",
+                    target.id
+                ),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_routing_selection(Some("archive-route".into()))
+        .await
+        .unwrap();
+    runtime
+        .create_script(
+            ScriptKind::RequestInterceptor,
+            Script {
+                name: "pause".into(),
+                content: "breakpoint(30000)".into(),
+            },
+        )
+        .unwrap();
+    for id in [active.id, target.id] {
+        runtime
+            .replace_session_interceptors(
+                id,
+                SessionInterceptors {
+                    request: vec![SessionInterceptor {
+                        name: "pause".into(),
+                        enabled: true,
+                    }],
+                    response: vec![],
+                },
+            )
+            .unwrap();
+    }
+    let mut requests = Vec::new();
+    for path in ["target", "other"] {
+        requests.push(tokio::spawn(async move {
+            proxy_get(
+                proxy_port,
+                &format!("http://127.0.0.1:{upstream_port}/{path}"),
+                &format!("127.0.0.1:{upstream_port}"),
+            )
+            .await
+        }));
+    }
+    let filter = |session_id| BreakpointListFilter {
+        session_id,
+        phase: None,
+        interceptor_name: None,
+    };
+    timeout(Duration::from_secs(2), async {
+        while runtime.breakpoints(&filter(target.id)).is_empty()
+            || runtime.breakpoints(&filter(active.id)).is_empty()
+        {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    timeout(Duration::from_secs(2), runtime.archive_session(target.id))
+        .await
+        .unwrap()
+        .unwrap();
+    let other = runtime.breakpoints(&filter(active.id));
+    assert_eq!(other.len(), 1);
+    runtime.release_breakpoint(other[0].id).unwrap();
+    for request in requests {
+        request.await.unwrap();
+    }
+    assert_eq!(runtime.active_session_id(), Some(active.id));
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
 }
 
 #[tokio::test]
@@ -3493,8 +3747,35 @@ async fn websocket_capture_is_linked_live_and_keeps_http_handshake_complete() {
 
 #[tokio::test]
 async fn stopping_proxy_finalizes_live_websocket_as_cancelled() {
+    close_live_websocket(false).await;
+}
+
+#[tokio::test]
+async fn archiving_session_finalizes_live_websocket_as_cancelled() {
+    close_live_websocket(true).await;
+}
+
+async fn close_live_websocket(archive: bool) {
     let (_data, runtime, proxy_port) = runtime().await;
-    let session = create_active_session(&runtime, None).await;
+    let session = if archive {
+        let session = runtime.create_session(NewSession::default()).unwrap();
+        runtime
+            .create_script(
+                ScriptKind::Routing,
+                Script {
+                    name: "archive-ws".into(),
+                    content: format!("return {}", session.id),
+                },
+            )
+            .unwrap();
+        runtime
+            .replace_routing_selection(Some("archive-ws".into()))
+            .await
+            .unwrap();
+        session
+    } else {
+        create_active_session(&runtime, None).await
+    };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let upstream = tokio::spawn(async move {
@@ -3523,12 +3804,21 @@ async fn stopping_proxy_finalizes_live_websocket_as_cancelled() {
         .into_iter()
         .find(|c| c.request.version == "WebSocket/13")
         .unwrap();
-    runtime.stop_proxy().await.unwrap();
+    if archive {
+        timeout(Duration::from_secs(2), runtime.archive_session(session.id))
+            .await
+            .unwrap()
+            .unwrap();
+        runtime.restore_session(session.id).await.unwrap();
+    } else {
+        runtime.stop_proxy().await.unwrap();
+    }
     let info = runtime.websocket_info(session.id, ws.id).unwrap().unwrap();
     assert!(info.closed_at.is_some());
     let detail = runtime.capture(session.id, ws.id).unwrap().unwrap();
     assert_eq!(detail.summary.outcome, CaptureOutcome::Failed);
     assert_eq!(detail.summary.error.unwrap().kind, "proxy_shutdown");
+    runtime.stop_proxy().await.unwrap();
     upstream.await.unwrap();
 }
 

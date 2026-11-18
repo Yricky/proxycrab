@@ -60,13 +60,20 @@ fn body_replacement_payload(
     }
 }
 
+#[derive(Default)]
+struct SessionPins {
+    counts: HashMap<u64, usize>,
+    archiving: HashSet<u64>,
+}
+
 pub struct ProxyCrab {
     workspace: Arc<Workspace>,
     assets: AssetStore,
     authority: RwLock<Arc<CertificateAuthority>>,
     bypass: BypassStore,
     stores: Mutex<HashMap<u64, CaptureStore>>,
-    session_pins: Mutex<HashMap<u64, usize>>,
+    session_pins: Mutex<SessionPins>,
+    session_idle: tokio::sync::Notify,
     view_updates: Mutex<()>,
     log_buffer: Arc<LogBuffer>,
     breakpoints: Arc<BreakpointRegistry>,
@@ -92,7 +99,8 @@ impl ProxyCrab {
             authority: RwLock::new(authority),
             bypass,
             stores: Mutex::new(HashMap::new()),
-            session_pins: Mutex::new(HashMap::new()),
+            session_pins: Mutex::new(SessionPins::default()),
+            session_idle: tokio::sync::Notify::new(),
             view_updates: Mutex::new(()),
             log_buffer,
             breakpoints: Arc::new(BreakpointRegistry::default()),
@@ -170,37 +178,56 @@ impl ProxyCrab {
 
     pub async fn archive_session(&self, id: u64) -> Result<SessionMetadata> {
         self.proxy
-            .mutate_sessions(|| {
-                if self.active_session_id() == Some(id) {
-                    bail!(Error::ActiveSessionArchive(id));
+            .mutate_sessions(async {
+                {
+                    let mut pins = self
+                        .session_pins
+                        .lock()
+                        .expect("session pins lock poisoned");
+                    if self.active_session_id() == Some(id) {
+                        bail!(Error::ActiveSessionArchive(id));
+                    }
+                    if !self.sessions().iter().any(|session| session.id == id) {
+                        bail!(Error::SessionNotFound(id));
+                    }
+                    pins.archiving.insert(id);
                 }
-                let pins = self
-                    .session_pins
-                    .lock()
-                    .expect("session pins lock poisoned");
-                if pins.get(&id).copied().unwrap_or_default() != 0 {
-                    bail!(Error::SessionRequestsInProgress(id));
+                let _archiving = ArchivingSession { runtime: self, id };
+                self.breakpoints.release_session(id);
+                self.proxy.disconnect_session(id).await;
+                loop {
+                    let idle = self.session_idle.notified();
+                    tokio::pin!(idle);
+                    idle.as_mut().enable();
+                    if !self
+                        .session_pins
+                        .lock()
+                        .expect("session pins lock poisoned")
+                        .counts
+                        .contains_key(&id)
+                    {
+                        break;
+                    }
+                    idle.await;
                 }
                 self.stores
                     .lock()
                     .expect("capture stores lock poisoned")
                     .remove(&id);
-                let result = self.workspace.archive_session(id);
-                drop(pins);
-                result
+                self.workspace.archive_session(id)
             })
             .await
     }
 
     pub async fn restore_session(&self, id: u64) -> Result<SessionMetadata> {
         self.proxy
-            .mutate_sessions(|| self.workspace.restore_session(id))
+            .mutate_sessions(async { self.workspace.restore_session(id) })
             .await
     }
 
     pub async fn delete_archived_session(&self, id: u64) -> Result<()> {
         self.proxy
-            .mutate_sessions(|| self.workspace.delete_archived_session(id))
+            .mutate_sessions(async { self.workspace.delete_archived_session(id) })
             .await
     }
 
@@ -313,8 +340,11 @@ impl ProxyCrab {
             .session_pins
             .lock()
             .expect("session pins lock poisoned");
+        if pins.archiving.contains(&session_id) {
+            bail!(Error::SessionNotFound(session_id));
+        }
         let store = self.capture_store_locked(session_id)?;
-        *pins.entry(session_id).or_default() += 1;
+        *pins.counts.entry(session_id).or_default() += 1;
         Ok(SessionPin {
             runtime: self.clone(),
             session_id,
@@ -327,8 +357,11 @@ impl ProxyCrab {
             .session_pins
             .lock()
             .expect("session pins lock poisoned");
+        if pins.archiving.contains(&session_id) {
+            bail!(Error::SessionNotFound(session_id));
+        }
         let store = self.capture_store_locked(session_id)?;
-        *pins.entry(session_id).or_default() += 1;
+        *pins.counts.entry(session_id).or_default() += 1;
         Ok(CaptureStorePin {
             runtime: self,
             session_id,
@@ -341,10 +374,11 @@ impl ProxyCrab {
             .session_pins
             .lock()
             .expect("session pins lock poisoned");
-        if let Some(count) = pins.get_mut(&session_id) {
+        if let Some(count) = pins.counts.get_mut(&session_id) {
             *count = count.saturating_sub(1);
             if *count == 0 {
-                pins.remove(&session_id);
+                pins.counts.remove(&session_id);
+                self.session_idle.notify_waiters();
             }
         }
     }
@@ -1041,6 +1075,22 @@ fn header_tokens(headers: &crate::model::HeaderValues, name: &str) -> Vec<String
         .collect()
 }
 
+struct ArchivingSession<'a> {
+    runtime: &'a ProxyCrab,
+    id: u64,
+}
+
+impl Drop for ArchivingSession<'_> {
+    fn drop(&mut self) {
+        self.runtime
+            .session_pins
+            .lock()
+            .expect("session pins lock poisoned")
+            .archiving
+            .remove(&self.id);
+    }
+}
+
 pub struct SessionPin {
     runtime: Arc<ProxyCrab>,
     session_id: u64,
@@ -1179,16 +1229,15 @@ mod tests {
         let pin = runtime.pin_capture_store(session.id).unwrap();
 
         assert!(runtime.session_pins.try_lock().is_ok());
-        assert!(
-            runtime
-                .archive_session(session.id)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("requests in progress")
-        );
+        let archiving = tokio::spawn({
+            let runtime = runtime.clone();
+            async move { runtime.archive_session(session.id).await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!archiving.is_finished());
+        assert!(runtime.pin_capture_store(session.id).is_err());
         drop(pin);
-        runtime.archive_session(session.id).await.unwrap();
+        archiving.await.unwrap().unwrap();
     }
 
     #[test]

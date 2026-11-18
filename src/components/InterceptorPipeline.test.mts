@@ -33,9 +33,9 @@ afterEach(() => {
   for (const key of Object.keys(backend)) delete backend[key];
   vi.clearAllMocks();
 });
-function render() {
+function render(sessionId: number | null = 7) {
   return renderToString(
-    createSSRApp(InterceptorPipeline, { logs: { sessionId: 7, loading: false } as any }),
+    createSSRApp(InterceptorPipeline, { logs: { sessionId, loading: false } as any }),
   );
 }
 test("readonly pipeline retains names and state but no add, drag, breakpoint, sweep or action hints", async () => {
@@ -61,6 +61,7 @@ test("readonly pipeline retains names and state but no add, drag, breakpoint, sw
 test("write-capable backends retain add, toggle, drag, script and breakpoint behavior", async () => {
   for (const method of [
     "getSessionInterceptors",
+    "getSessionView",
     "replaceSessionInterceptors",
     "listInterceptors",
     "getInterceptor",
@@ -82,6 +83,20 @@ test("write-capable backends retain add, toggle, drag, script and breakpoint beh
   expect(html).toContain("右键可重新创建");
   expect(html).toContain("breakpoint-count");
   expect(html).toContain('aria-label="清扫会话"');
+});
+
+test("inactive Sessions show sweep without requiring activation capability", async () => {
+  for (const method of [
+    "getSessionView",
+    "getSessionInterceptors",
+    "createSession",
+    "archiveSession",
+  ]) {
+    backend[method] = vi.fn();
+  }
+  expect(await render(8)).toContain('aria-label="清扫会话"');
+  expect(await render(7)).not.toContain('aria-label="清扫会话"');
+  expect(await render(null)).not.toContain('aria-label="清扫会话"');
 });
 
 test("configuration download is shown only when the backend exposes it", async () => {

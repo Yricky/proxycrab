@@ -131,6 +131,8 @@ export default {
   导出当前列表的全部筛选结果: "Export all filtered rows in the current list",
   "将新建配置一致的活跃会话，当前会话转入已归档，并断开当前活跃连接。是否继续？":
     "A new active session with identical config will be created; the current session moves to archived and its active connections are dropped. Continue?",
+  "将新建配置一致的非活跃会话，当前会话转入已归档，并断开该会话的全部连接。是否继续？":
+    "A new inactive session with identical config will be created; the current session moves to archived and all its connections are dropped. Continue?",
   小工具: "Tools",
   展开: "Expand",
   展示完整内容: "Show full content",
@@ -190,6 +192,8 @@ export default {
   新建会话: "New session",
   "新建配置一致的活跃会话，原会话转入已归档":
     "Create an active session with identical config; the original moves to archived",
+  "新建配置一致的非活跃会话，原会话转入已归档":
+    "Create an inactive session with identical config; move the original session to archived",
   新文件名或相对路径: "New file name or relative path",
   无: "None",
   "无 Body": "No body",

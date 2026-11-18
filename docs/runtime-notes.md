@@ -198,8 +198,15 @@ fallback buffers the final file. Export does not provide an atomic snapshot of c
 or pin one redaction revision across separate reads. Original content is never used as a fallback
 for policy-denied reads. Exported files may contain sensitive data from the authorized read view.
 
-Sweep now asks for confirmation before creating a new active Session, archiving the current one,
-and disconnecting active traffic.
+Sweep is available for active and inactive Sessions when the backend exposes the required
+methods. After confirmation it copies the Session configuration, archives the original, and
+displays the copy. An active Session is replaced by a new active Session; an inactive Session is
+replaced by a new inactive Session without changing the active selection. Archive blocks new
+requests for its target, releases its breakpoints, disconnects its HTTP/CONNECT/HTTPS/Upgrade/
+WebSocket and replay activity, waits for task and storage-reader completion, then moves the files.
+Other independent connections remain open. A socket reused across multiple Sessions is closed
+as a whole. Active Sessions still require deactivation before direct archive; in-progress
+requests no longer cause a Session-in-use error.
 
 ## CLI browser UI
 
