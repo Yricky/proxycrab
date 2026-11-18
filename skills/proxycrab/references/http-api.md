@@ -172,6 +172,7 @@ Exactly one of:
   "port": 8089,
   "started_at": 1785380000000,
   "active_netlog": { "1786333525006": [1, 2, 3, 4, 5] },
+  "latest_netlog_id": { "1786333525006": 8 },
   "active_bypass_count": 2
 }
 { "status": "stopping" }
@@ -183,6 +184,20 @@ Exactly one of:
 netlogs. `active_bypass_count` is the total number of active transparent-forwarding records.
 Persisted `outcome` and `stage` continue to represent result and execution phase; they do not imply
 current activity.
+
+`latest_netlog_id` maps Session IDs to the greatest successfully registered capture ID observed
+by the current application process. IDs reuse the per-Session SQLite AUTOINCREMENT sequence.
+The map is updated after insertion and before notification, retained after request completion,
+discard, and proxy stop/start, and starts empty on application restart. Missing keys mean no new
+capture has been registered for that Session in this process, not that its stored history is
+empty. Status reads use memory without querying databases. This is a discovery marker, not an
+activity indicator.
+
+The UI queries new IDs when the viewed Session's marker increases, even when `active_netlog` is
+empty and the Session is inactive. It polls rows every second only while requests are active or
+filter/finalization/discovery retries remain, and stops when idle. Share responses scope both
+maps to the authorized Session; their long-poll revision includes the latest ID to retain short
+request changes through notification coalescing.
 
 ### Script
 
@@ -305,7 +320,7 @@ the binary was compiled for.
 Returns `ProxyStatus`.
 
 Share-token responses use the same status contract but retain only their
-authorized Session in `active_netlog` and omit `active_bypass_count`; `/share-api/proxy/changes`
+authorized Session in `active_netlog` and `latest_netlog_id`, and omit `active_bypass_count`; `/share-api/proxy/changes`
 provides the authenticated revision-based long-poll invalidation.
 
 ### `POST /api/proxy/start`
@@ -1299,7 +1314,12 @@ Routing and capture lifecycle details:
 - Routing runs once per direct HTTP request and once per CONNECT tunnel.
 - A routing script returns `true` to capture into the active Session and `false` or `nil` to bypass.
   Returning `true` while no Session is active also bypasses.
-- Invalid returns and runtime errors emit a system warning and bypass.
+- A positive Lua integer Session ID captures into that non-archived Session, using its interceptors
+  without changing the active Session. It also works when no Session is active.
+- Routing-only `get_sessions()` returns a per-execution snapshot of non-archived Sessions, each
+  with `id`, `name`, optional `description` (Lua nil), and boolean `active`. See `lua-api.md`.
+- Nonexistent or archived IDs, non-positive integers, floats, strings, other invalid returns, and
+  runtime errors emit a system warning and bypass.
 - A routed normal request is inserted before forwarding. If insertion fails, traffic is not
   forwarded.
 - A bypassed CONNECT is transparently tunneled without TLS decryption.

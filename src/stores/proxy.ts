@@ -60,6 +60,11 @@ export const proxyStore = reactive({
     return this.activeNetlogIds(sessionId).length;
   },
 
+  latestNetlogId(sessionId: number | null): number {
+    if (sessionId === null || this.status.status !== "running") return 0;
+    return this.status.latest_netlog_id[String(sessionId)] ?? 0;
+  },
+
   isNetlogActive(sessionId: number | null, id: number): boolean {
     return this.activeNetlogIds(sessionId).includes(id);
   },

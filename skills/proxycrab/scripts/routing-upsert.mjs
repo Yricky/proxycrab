@@ -22,6 +22,9 @@ NAME accepts a relative path, e.g. business/example (without the automatic .lua 
 
 Create a routing script or replace the source of an existing script with the same name.
 This does not select the script; use routing-select.mjs separately.
+Lua get_sessions() lists non-archived Sessions (id, name, description, active).
+Return a positive integer Session ID to capture there, true for the active Session,
+or false/nil to bypass. HTTPS selects its Session once at CONNECT.
 `);
     return;
   }

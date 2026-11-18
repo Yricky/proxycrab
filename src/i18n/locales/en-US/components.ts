@@ -237,6 +237,7 @@ export default {
   没有可添加的脚本: "No scripts available to add",
   活跃: "Active",
   活跃会话: "Active session",
+  "{n} 条活跃连接": "{n} active connection | {n} active connections",
   "活跃会话，{n} 条活跃连接":
     "Active session with {n} active connection | Active session with {n} active connections",
   浅色: "Light",

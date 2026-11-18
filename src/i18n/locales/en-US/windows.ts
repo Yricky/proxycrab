@@ -367,6 +367,8 @@ export default {
   悬停指出按钮位置: "Hover to point out the buttons",
   "当前没有活跃会话，所有请求都会被透明转发。如果您想捕获请求内容，请将下方的某个会话设置为活跃。您可以在会话的右键菜单中设置":
     "No active session: every request is being bypassed. To capture request content, set one of the sessions below as active — use its context menu to do so.",
+  "当前没有活跃会话，所有没有被分流脚本明确分流目标的请求都会被透明转发。如果您想捕获请求内容，请将下方的某个会话设置为活跃。":
+    "No active session: requests without an explicit target from the routing script are transparently forwarded. To capture request content, set one of the sessions below as active.",
   查看历史脚本: "View script history",
   查看和切换工作区: "View and switch the workspace",
   查看进入拦截器前的快照: "View pre-interceptor snapshot",

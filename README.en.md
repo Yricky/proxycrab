@@ -147,7 +147,7 @@ Some host capabilities differ: the desktop app provides human approval and Skill
 | Request editing & replay | Modify and resend requests through the selected Session's interceptor chain |
 | CA download & Clash subscription | Configure device access via certificate download, subscription link and QR code |
 | Session archiving & restore | Save and organize captures by issue or debugging stage |
-| Lua routing rules | Decide whether traffic enters the active Session or is forwarded directly |
+| Lua routing rules | List Sessions and route traffic to a specific Session, the active Session, or direct forwarding |
 | Body viewing & download | Inspect text, images and Protobuf/gRPC structures; download fully decoded content |
 | HAR export | Export the HTTP records in the current filter result |
 | Workspace assets | Manage reusable files for mocks, body replacement and request replay |
@@ -165,7 +165,7 @@ Some host capabilities differ: the desktop app provides human approval and Skill
 
 When connecting through Clash, pick the local IP on the **Proxy connection** page, then enable and import the subscription.
 
-The proxy stays stopped by default when the desktop app launches. Without an active Session, traffic is forwarded directly; once a routing script is selected, the script decides whether to capture.
+The proxy stays stopped by default when the desktop app launches. Without an active Session, traffic is forwarded directly by default; a routing script can list non-archived Sessions and return a Session ID to capture there. Existing `true` (active Session) and `false` / `nil` (direct forwarding) behavior is unchanged.
 
 ### CLI with browser management
 

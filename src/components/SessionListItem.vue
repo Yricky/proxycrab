@@ -18,7 +18,7 @@ const props = withDefaults(
     viewing?: boolean;
     /** 是否为活跃会话。 */
     active?: boolean;
-    /** 活跃连接数，大于 0 时以徽标替代「活跃」文字。 */
+    /** 活跃连接数，大于 0 时显示徽标，不限于活跃会话。 */
     activeConnections?: number;
   }>(),
   { viewing: false, active: false, activeConnections: 0 },
@@ -47,16 +47,20 @@ const share = computed(() => sessionsStore.shares[props.session.id]);
           <span class="session-item-name" :title="session.name">{{ session.name }}</span>
         </span>
         <span
-          v-if="active"
+          v-if="active || activeConnections > 0"
           class="session-item-active"
           :title="
-            activeConnections > 0 ? t('活跃会话，{n} 条活跃连接', activeConnections) : t('活跃会话')
+            active
+              ? activeConnections > 0
+                ? t('活跃会话，{n} 条活跃连接', activeConnections)
+                : t('活跃会话')
+              : t('{n} 条活跃连接', activeConnections)
           "
         >
           <span v-if="activeConnections > 0" class="activity-badge session-item-badge">
             {{ formatActivityCount(activeConnections) }}
           </span>
-          <Io5RadioButtonOn v-else :size="11" />{{ t("活跃") }}
+          <Io5RadioButtonOn v-else :size="11" /><template v-if="active">{{ t("活跃") }}</template>
         </span>
       </div>
       <div class="session-item-meta">

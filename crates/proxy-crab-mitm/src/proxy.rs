@@ -37,7 +37,7 @@ use crate::{
     bypass::BypassStore,
     error::Error,
     lua::{
-        BodyReplacement, BreakpointHook, ModificationJournal, ResponseScriptContext,
+        BodyReplacement, BreakpointHook, ModificationJournal, ResponseScriptContext, RoutingResult,
         SharedInterceptorState, evaluate_routing, execute_response_with_state,
     },
     model::{
@@ -119,12 +119,14 @@ impl ProxyController {
             .clone();
         if let ProxyStatus::Running {
             active_netlog,
+            latest_netlog_id,
             active_bypass_count,
             ..
         } = &mut status
         {
             let snapshot = self.activity.snapshot();
             *active_netlog = snapshot.active_netlog;
+            *latest_netlog_id = snapshot.latest_netlog_id;
             *active_bypass_count = snapshot.active_bypass_count;
         }
         status
@@ -212,6 +214,7 @@ impl ProxyController {
             port,
             started_at,
             active_netlog: BTreeMap::new(),
+            latest_netlog_id: BTreeMap::new(),
             active_bypass_count: 0,
         };
         self.notify_status_change();
@@ -275,11 +278,13 @@ fn notify_status_change(changes: &watch::Sender<u64>) {
 #[derive(Default)]
 struct ActivityState {
     netlog: BTreeMap<u64, BTreeSet<u64>>,
+    latest_netlog_id: BTreeMap<u64, u64>,
     bypass: BTreeSet<u64>,
 }
 
 struct ActivitySnapshot {
     active_netlog: BTreeMap<u64, Vec<u64>>,
+    latest_netlog_id: BTreeMap<u64, u64>,
     active_bypass_count: usize,
 }
 
@@ -298,13 +303,15 @@ impl ActivityTracker {
     }
 
     fn begin_netlog(&self, session_id: u64, id: u64) -> ActivityGuard {
-        self.state
-            .lock()
-            .expect("proxy activity lock poisoned")
-            .netlog
-            .entry(session_id)
-            .or_default()
-            .insert(id);
+        {
+            let mut state = self.state.lock().expect("proxy activity lock poisoned");
+            state.netlog.entry(session_id).or_default().insert(id);
+            state
+                .latest_netlog_id
+                .entry(session_id)
+                .and_modify(|latest| *latest = (*latest).max(id))
+                .or_insert(id);
+        }
         notify_status_change(&self.changes);
         ActivityGuard::new(self.clone(), ActivityKind::Netlog { session_id, id })
     }
@@ -353,6 +360,7 @@ impl ActivityTracker {
                 .iter()
                 .map(|(session_id, ids)| (*session_id, ids.iter().copied().collect()))
                 .collect(),
+            latest_netlog_id: state.latest_netlog_id.clone(),
             active_bypass_count: state.bypass.len(),
         }
     }
@@ -361,7 +369,8 @@ impl ActivityTracker {
         let changed = {
             let mut state = self.state.lock().expect("proxy activity lock poisoned");
             let changed = !state.netlog.is_empty() || !state.bypass.is_empty();
-            *state = ActivityState::default();
+            state.netlog.clear();
+            state.bypass.clear();
             changed
         };
         if changed {
@@ -764,16 +773,34 @@ fn resolve_route(
     let Some(script) = script else {
         return active_route(runtime);
     };
-    match evaluate_routing(
+    let sessions = runtime.sessions();
+    let result = evaluate_routing(
         &script.content,
         phase,
         request,
         authority,
         source,
         &script.name,
-    ) {
-        Ok(None | Some(false)) => RouteDecision::Bypass("script_bypass"),
-        Ok(Some(true)) => active_route(runtime),
+        &sessions,
+        runtime.active_session_id(),
+    )
+    .and_then(|result| {
+        Ok(match result {
+            RoutingResult::Bypass => RouteDecision::Bypass("script_bypass"),
+            RoutingResult::ActiveSession => active_route(runtime),
+            RoutingResult::Session(id) => {
+                let session = sessions
+                    .into_iter()
+                    .find(|session| session.id == id)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("routing target Session {id} does not exist or is archived")
+                    })?;
+                RouteDecision::Session(session)
+            }
+        })
+    });
+    match result {
+        Ok(decision) => decision,
         Err(error) => {
             tracing::warn!("routing script {} failed: {error}", script.name);
             RouteDecision::Bypass("routing_script_error")
@@ -1189,7 +1216,7 @@ fn text_response(status: StatusCode, message: &str) -> Response<ProxyBody> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{collections::BTreeMap, time::Duration};
 
     use bytes::Bytes;
     use http_body_util::BodyExt;
@@ -1222,6 +1249,7 @@ mod tests {
             port: 8080,
             started_at: 1,
             active_netlog: Default::default(),
+            latest_netlog_id: Default::default(),
             active_bypass_count: 0,
         };
         let mut changes = controller.subscribe_status_changes();
@@ -1235,21 +1263,32 @@ mod tests {
             controller.status(),
             ProxyStatus::Running {
                 active_netlog,
+                latest_netlog_id,
                 active_bypass_count: 1,
                 ..
             } if active_netlog.get(&42) == Some(&vec![7, 9])
+                && latest_netlog_id.get(&42) == Some(&9)
         ));
 
         drop(netlog_a);
         drop(netlog_b);
         drop(bypass);
+        let late_registration = controller.activity.begin_netlog(42, 8);
+        drop(late_registration);
+        let other_session = controller.activity.begin_netlog(43, 3);
+        drop(other_session);
+        controller.activity.clear();
+        // 请求开始、结束和活动清理全部发生在读取下一次通知之前。
+        changes.changed().await.unwrap();
         assert!(matches!(
             controller.status(),
             ProxyStatus::Running {
                 active_netlog,
+                latest_netlog_id,
                 active_bypass_count: 0,
                 ..
             } if active_netlog.is_empty()
+                && latest_netlog_id == BTreeMap::from([(42, 9), (43, 3)])
         ));
     }
 

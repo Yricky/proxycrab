@@ -9,7 +9,6 @@ import { LruKeys } from "../utils/lru";
 import { reportError } from "./app";
 import { t } from "../i18n";
 import { proxyStore } from "./proxy";
-import { sessionsStore } from "./sessions";
 import { HTTP_API_CHANGE_EVENT } from "./http-api-sync";
 
 export function emptySessionFilter(): SessionFilter {
@@ -26,7 +25,6 @@ export function createLogsStore() {
   const ID_PAGE_SIZE = 5_000;
   const ROW_CACHE_CAPACITY = 5_000;
   const POLL_INTERVAL = 1_000;
-  const IDLE_POLL_INTERVAL = 2_000;
 
   let generation = 0;
   let rowGeneration = 0;
@@ -134,17 +132,13 @@ export function createLogsStore() {
   function schedulePoll(delay?: number): void {
     clearPollTimer();
     if (!pollingEnabled || logsStore.sessionId === null) return;
-    const hasWork = logsStore.hasActive || pendingFilterIds.size > 0;
-    const discoversNew = logsStore.sessionId === sessionsStore.activeSessionId;
-    if (!hasWork && !discoversNew) return;
-    pollTimer = window.setTimeout(
-      async () => {
-        pollTimer = undefined;
-        await logsStore.poll();
-        schedulePoll();
-      },
-      delay ?? (hasWork ? POLL_INTERVAL : IDLE_POLL_INTERVAL),
-    );
+    const hasNew = proxyStore.latestNetlogId(logsStore.sessionId) > maxId;
+    if (!logsStore.hasActive && pendingFilterIds.size === 0 && !hasNew) return;
+    pollTimer = window.setTimeout(async () => {
+      pollTimer = undefined;
+      await logsStore.poll();
+      schedulePoll();
+    }, delay ?? POLL_INTERVAL);
   }
 
   function wakePoll(): void {
@@ -631,8 +625,12 @@ export function createLogsStore() {
       pollInFlight = true;
       const targetGeneration = generation;
       try {
-        if (sessionsStore.activeSessionId === sessionId) {
+        const latestId = proxyStore.latestNetlogId(sessionId);
+        if (latestId > maxId) {
           await this.discoverNew(sessionId, targetGeneration);
+          if (logsStore.sessionId !== sessionId || generation !== targetGeneration) return;
+          // 已扫描到的最大 ID 即使被丢弃也不回退，避免空闲时重复查询。
+          maxId = Math.max(maxId, latestId);
         }
         if (logsStore.sessionId !== sessionId || generation !== targetGeneration) return;
         await this.refreshFilterCandidates(sessionId, targetGeneration);
@@ -753,9 +751,14 @@ export function createLogsStore() {
       () => ({
         sessionId: logsStore.sessionId,
         ids: proxyStore.activeNetlogIds(logsStore.sessionId),
+        latestId: proxyStore.latestNetlogId(logsStore.sessionId),
       }),
       (current, previous) => {
         if (current.sessionId === null || current.sessionId !== previous.sessionId) return;
+        const idsChanged =
+          current.ids.length !== previous.ids.length ||
+          current.ids.some((id, index) => id !== previous.ids[index]);
+        if (!idsChanged && current.latestId === previous.latestId) return;
         const currentIds = new Set(current.ids);
         const removed = previous.ids.filter((id) => !currentIds.has(id));
         if (removed.length > 0) void logsStore.finalize(removed);

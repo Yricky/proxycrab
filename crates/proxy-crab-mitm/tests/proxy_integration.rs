@@ -1257,6 +1257,234 @@ async fn routing_script_false_and_invalid_returns_bypass_even_with_an_active_ses
 }
 
 #[tokio::test]
+async fn routing_script_targets_inactive_sessions_with_and_without_an_active_session() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let (upstream_port, upstream) = fixed_http_upstream().await;
+    let active = create_active_session(&runtime, Some("active")).await;
+    let target = runtime
+        .create_session(NewSession {
+            name: Some("proxycrab-skill-eval-route".into()),
+            description: Some("routing target".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    let archived = runtime
+        .create_session(NewSession {
+            name: Some("archived".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    runtime.archive_session(archived.id).await.unwrap();
+    runtime
+        .create_script(
+            ScriptKind::ResponseInterceptor,
+            Script {
+                name: "target-response".into(),
+                content: "resp.body:replace_with_string('routed')".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_session_interceptors(
+            target.id,
+            SessionInterceptors {
+                request: vec![],
+                response: vec![SessionInterceptor {
+                    name: "target-response".into(),
+                    enabled: true,
+                }],
+            },
+        )
+        .unwrap();
+    runtime
+        .create_script(
+            ScriptKind::Routing,
+            Script {
+                name: "route".into(),
+                content: format!(
+                    "local sessions = get_sessions(); assert(#sessions == 2); \
+             for _, s in ipairs(sessions) do \
+               assert(s.id ~= {}); \
+               assert(s.active == (s.id == {} and req.uri.path == '/active')); \
+               if s.id == {} then assert(s.description == 'routing target') end \
+             end\n{}",
+                    archived.id,
+                    active.id,
+                    target.id,
+                    include_str!(
+                        "../../../skills/proxycrab/evals/fixtures/test-routing-sessions.lua"
+                    ),
+                ),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_routing_selection(Some("route".into()))
+        .await
+        .unwrap();
+
+    for (path, active_id) in [("/active", Some(active.id)), ("/no-active", None)] {
+        runtime.replace_active_session(active_id).await.unwrap();
+        let response = proxy_get(
+            proxy_port,
+            &format!("http://127.0.0.1:{upstream_port}{path}"),
+            &format!("127.0.0.1:{upstream_port}"),
+        )
+        .await;
+        assert!(response.ends_with("routed"), "{response}");
+        assert_eq!(runtime.active_session_id(), active_id);
+    }
+    assert!(
+        runtime
+            .list_captures(active.id, 10, None)
+            .unwrap()
+            .is_empty()
+    );
+    let captures = runtime.list_captures(target.id, 10, None).unwrap();
+    assert_eq!(captures.len(), 2);
+    for capture in captures {
+        let detail = runtime.capture(target.id, capture.id).unwrap().unwrap();
+        assert_eq!(detail.response_interceptors[0].name, "target-response");
+    }
+    assert!(runtime.bypass_entries(10, None).unwrap().is_empty());
+    let latest_id = runtime.list_captures(target.id, 1, None).unwrap()[0].id;
+    timeout(Duration::from_secs(1), async {
+        loop {
+            if let ProxyStatus::Running {
+                active_netlog,
+                latest_netlog_id,
+                ..
+            } = runtime.proxy_status()
+            {
+                assert_eq!(latest_netlog_id.get(&target.id), Some(&latest_id));
+                assert!(!latest_netlog_id.contains_key(&active.id));
+                if active_netlog.is_empty() {
+                    break;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    runtime.stop_proxy().await.unwrap();
+    runtime.start_proxy().await.unwrap();
+    assert!(
+        matches!(runtime.proxy_status(), ProxyStatus::Running { latest_netlog_id, .. }
+        if latest_netlog_id.get(&target.id) == Some(&latest_id))
+    );
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn routing_script_invalid_session_ids_warn_and_bypass() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let (upstream_port, upstream) = fixed_http_upstream().await;
+    let active = create_active_session(&runtime, None).await;
+    let archived = runtime.create_session(NewSession::default()).unwrap();
+    runtime.archive_session(archived.id).await.unwrap();
+    runtime
+        .create_script(
+            ScriptKind::Routing,
+            Script {
+                name: "route".into(),
+                content: "return true".into(),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_routing_selection(Some("route".into()))
+        .await
+        .unwrap();
+    let invalid = [
+        archived.id.to_string(),
+        "9223372036854775807".into(),
+        "0".into(),
+        "-1".into(),
+        "1.5".into(),
+        format!("'{}'", active.id),
+    ];
+    for id in &invalid {
+        runtime
+            .update_routing_script("route", format!("return {id}"))
+            .await
+            .unwrap();
+        let response = proxy_get(
+            proxy_port,
+            &format!("http://127.0.0.1:{upstream_port}/invalid"),
+            &format!("127.0.0.1:{upstream_port}"),
+        )
+        .await;
+        assert!(response.ends_with("ok"), "{response}");
+    }
+    assert!(
+        runtime
+            .list_captures(active.id, 10, None)
+            .unwrap()
+            .is_empty()
+    );
+    let bypass = runtime.bypass_entries(10, None).unwrap();
+    assert_eq!(bypass.len(), invalid.len());
+    assert!(
+        bypass
+            .iter()
+            .all(|entry| entry.reason == "routing_script_error")
+    );
+    assert_eq!(runtime.active_session_id(), Some(active.id));
+    runtime.stop_proxy().await.unwrap();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn routing_script_selects_session_only_at_connect_for_https() {
+    let (_app_data, runtime, proxy_port) = runtime().await;
+    let target = runtime
+        .create_session(NewSession {
+            name: Some("proxycrab-skill-eval-route".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    mock_old_ca_url(&runtime, target.id);
+    runtime
+        .create_script(
+            ScriptKind::Routing,
+            Script {
+                name: "route".into(),
+                content: format!(
+                    "assert(phase == 'connect')\n{}",
+                    include_str!(
+                        "../../../skills/proxycrab/evals/fixtures/test-routing-sessions.lua"
+                    )
+                ),
+            },
+        )
+        .unwrap();
+    runtime
+        .replace_routing_selection(Some("route".into()))
+        .await
+        .unwrap();
+    let response = proxy_https_get(&runtime, proxy_port, "proxy.crab:443", "/ca.crt").await;
+    assert!(response.contains("200 OK"), "{response}");
+    let captures = runtime.list_captures(target.id, 10, None).unwrap();
+    assert_eq!(captures.len(), 2);
+    assert!(
+        captures
+            .iter()
+            .any(|capture| capture.request.method == "CONNECT")
+    );
+    let request = captures
+        .iter()
+        .find(|capture| capture.request.method == "GET")
+        .unwrap();
+    let detail = runtime.capture(target.id, request.id).unwrap().unwrap();
+    assert_eq!(detail.request_interceptors[0].name, "mock-old-ca-url");
+    assert_eq!(runtime.active_session_id(), None);
+    assert!(runtime.bypass_entries(10, None).unwrap().is_empty());
+    runtime.stop_proxy().await.unwrap();
+}
+
+#[tokio::test]
 async fn session_interceptor_chain_executes_and_records_source() {
     let (_app_data, runtime, proxy_port) = runtime().await;
     let (upstream_port, upstream) = fixed_http_upstream().await;

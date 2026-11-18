@@ -176,6 +176,44 @@ numbers outside the finite `f64` range. JSON output is compact rather than prett
 Interceptor bodies and persisted capture bodies also use the same JSON representation through
 `body:as_json()` as documented below.
 
+## Routing scripts
+
+A routing script runs once per direct HTTP request and once at CONNECT for an HTTPS tunnel.
+The selected Session stays fixed for the whole tunnel; decrypted requests do not run routing again.
+
+```lua
+for _, session in ipairs(get_sessions()) do
+  if session.name == "API debugging" and req.uri.host == "api.example.com" then
+    return session.id
+  end
+end
+return true
+```
+
+- `true` captures into the active Session; with no active Session, traffic bypasses.
+- `false` or `nil` bypasses. Bypassed HTTPS tunnels do not perform TLS decryption.
+- A positive Lua integer selects that non-archived Session directly, even if it is inactive or
+  no Session is active. It uses the target Session's interceptors and does not change the active Session.
+- Nonexistent or archived IDs, zero, negative numbers, floats (including `1.0`), strings, other
+  invalid returns, and runtime errors write a system warning and bypass (`routing_script_error`).
+- With no selected routing script, the active Session captures all traffic; if none is active,
+  traffic bypasses. Existing boolean and nil behavior is unchanged.
+
+`get_sessions()` is available only in routing scripts. It returns a 1-based array of all
+non-archived Sessions in the current workspace, including inactive Sessions. Each item has:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | integer | Session ID, usable directly as the script's return value |
+| `name` | string | Session name; names can be duplicated |
+| `description` | string or nil | Session description |
+| `active` | boolean | Whether this is the current active Session |
+
+The list and active flags are a snapshot for this routing execution. Each call returns fresh
+Lua tables; local edits do not change Sessions or later calls. An empty workspace returns an empty
+array. When no Session is active, every item's `active` is false. No Session creation, update, or
+activation API is exposed to routing scripts.
+
 ## Filter scripts
 
 A global filter script receives the filter-bar input string as the Lua chunk's first vararg (`...`). It must explicitly return a boolean. `entry` remains available as a read-only global:

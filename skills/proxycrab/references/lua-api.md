@@ -184,8 +184,9 @@ Interceptor bodies and persisted capture bodies expose the same decoded JSON rep
 
 ## Routing scripts
 
-A routing script runs once for every direct HTTP request and once for a CONNECT tunnel. It must
-return a boolean or `nil`.
+A routing script runs once for every direct HTTP request and once at CONNECT for an HTTPS tunnel.
+The selected Session stays fixed for the whole tunnel; decrypted requests do not run routing again.
+It returns a boolean, `nil`, or a positive Lua integer Session ID.
 
 ```lua
 if phase == "connect" and req.uri.host == "internal.example.com" then
@@ -199,9 +200,35 @@ return false
 
 - `true` captures into the active Session. If no Session is active, traffic bypasses.
 - `false` or `nil` means transparent bypass. HTTPS bypass does not perform TLS decryption.
-- A runtime error or other return type writes a system warning and bypasses.
+- A positive Lua integer selects that non-archived Session directly, even if it is inactive or
+  no Session is active. Capture and interceptors use the target Session; the active Session is unchanged.
+- Nonexistent or archived IDs, zero, negative numbers, floats (including `1.0`), strings, other
+  invalid returns, and runtime errors write a system warning and bypass (`routing_script_error`).
 - With no selected routing script, the active Session captures all traffic; if no Session is
   active, traffic bypasses.
+
+`get_sessions()` is available only in routing scripts. It returns a 1-based array of all
+non-archived Sessions in the current workspace, including inactive Sessions:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | integer | Session ID, usable directly as the script's return value |
+| `name` | string | Session name; names can be duplicated |
+| `description` | string or nil | Session description |
+| `active` | boolean | Whether this is the current active Session |
+
+The list and active flags are a snapshot for this routing execution. Each call returns fresh Lua
+tables; local edits do not change Sessions or later calls. An empty workspace returns an empty
+array. With no active Session, all active flags are false. No Session write APIs are exposed.
+
+```lua
+for _, session in ipairs(get_sessions()) do
+  if session.name == "API debugging" and req.uri.host == "api.example.com" then
+    return session.id
+  end
+end
+return true -- existing active-Session fallback; bypass when none is active
+```
 
 Routing globals are read-only:
 

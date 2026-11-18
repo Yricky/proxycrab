@@ -41,9 +41,10 @@ surface has no `/api/agents.md` endpoint and needs no management API key or loca
   its management service are running instead.
 - Proxy lifecycle is user-controlled. Do not start or stop the proxy unless the user explicitly
   asks for that separate action.
-- Capturing traffic requires an active Session and a proxy that the user has already started. With
-  no selected routing script, traffic enters the active Session; if none is active, traffic is
-  transparently forwarded and recorded in `bypass.db`.
+- Capturing traffic requires a proxy that the user has already started and either an active
+  Session or a routing script returning a valid Session ID. With no selected routing script,
+  traffic enters the active Session; if none is active, traffic is transparently forwarded and
+  recorded in `bypass.db`.
 - Use Node.js 18 or newer. The scripts have no npm dependencies.
 - On the desktop target, a management call may wait for approval for up to 30 seconds. Bundled
   scripts allow 40 seconds for that decision. If a call returns `approval_timeout`, ask the user to
@@ -248,6 +249,11 @@ separately authorized management identity and the ordinary management workflow.
      with `outcome`, `stage`, and `error`. If current activity matters, read `ProxyStatus`: a netlog
      ID is active only when it appears under its Session ID in `running.active_netlog`. Do not infer
      activity from persisted `outcome`, `stage`, `created_at`, or `started_at`.
+   - `running.latest_netlog_id` is a per-Session new-record marker, not an activity count. It retains
+     the greatest registered capture ID observed by the application process after requests finish,
+     so merged notifications still reveal short requests. It survives proxy stop/start, starts
+     empty on application restart, and is Session-scoped on share reads. The UI uses it to discover
+     new records independently of active-Session selection and stops log polling when idle.
 
 6. Report the Session ID and log IDs used, the observed evidence, the most likely cause, uncertainty,
    and a concrete next check. Redact secrets from the user-facing explanation.
@@ -340,8 +346,12 @@ only when the user asks. Temporary execution keeps the breakpoint paused and can
 made before a Lua error; inspect the returned `execution.error` and modifications.
 
 Routing scripts return `true` to capture into the active Session and `false` or `nil` to bypass
-capture and TLS decryption. Returning `true` with no active Session also bypasses. Invalid returns
-and script errors emit a system warning and bypass. Select a routing script only after reviewing
+capture and TLS decryption. Returning `true` with no active Session also bypasses. A positive Lua
+integer Session ID selects that non-archived Session directly, even when no Session is active,
+using its interceptors without changing the active Session. Routing-only `get_sessions()` returns
+a snapshot of non-archived Sessions with `id`, `name`, optional `description`, and boolean `active`.
+HTTPS selects its Session once at CONNECT for the entire tunnel. Invalid or archived targets,
+invalid returns, and script errors emit a system warning and bypass. Select a routing script only after reviewing
 `references/lua-api.md`. Effective active-Session and selected-routing changes disconnect existing
 proxy connections, tunnels, upgrades, and upstream pools; identical updates do not.
 

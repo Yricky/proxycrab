@@ -131,6 +131,7 @@ pub enum SharedProxyStatus {
         port: u16,
         started_at: u64,
         active_netlog: BTreeMap<u64, Vec<u64>>,
+        latest_netlog_id: BTreeMap<u64, u64>,
     },
     Stopping,
     Failed {
@@ -152,14 +153,17 @@ fn scope_proxy_status(
             port,
             started_at,
             mut active_netlog,
+            mut latest_netlog_id,
             ..
         } => {
             active_netlog.retain(|candidate, _| *candidate == session_id);
+            latest_netlog_id.retain(|candidate, _| *candidate == session_id);
             SharedProxyStatus::Running {
                 host,
                 port,
                 started_at,
                 active_netlog,
+                latest_netlog_id,
             }
         }
         ProxyStatus::Stopping => SharedProxyStatus::Stopping,
@@ -2026,6 +2030,7 @@ mod tests {
             port: 8080,
             started_at: 1,
             active_netlog: BTreeMap::from([(7, vec![1, 2]), (8, vec![3])]),
+            latest_netlog_id: BTreeMap::from([(7, 2), (8, 3)]),
             active_bypass_count: 4,
         };
 
@@ -2035,6 +2040,7 @@ mod tests {
 
         assert_eq!(value["active_netlog"]["7"], json!([1, 2]));
         assert!(value["active_netlog"].get("8").is_none());
+        assert_eq!(value["latest_netlog_id"], json!({"7": 2}));
         assert!(value.get("active_bypass_count").is_none());
 
         let unrelated_change = scope_proxy_status(
@@ -2043,6 +2049,7 @@ mod tests {
                 port: 8080,
                 started_at: 1,
                 active_netlog: BTreeMap::from([(7, vec![1, 2]), (8, vec![3, 4])]),
+                latest_netlog_id: BTreeMap::from([(7, 2), (8, 4)]),
                 active_bypass_count: 9,
             },
             7,
@@ -2055,11 +2062,33 @@ mod tests {
                 port: 8080,
                 started_at: 1,
                 active_netlog: BTreeMap::from([(7, vec![1])]),
+                latest_netlog_id: BTreeMap::from([(7, 2)]),
                 active_bypass_count: 9,
             },
             7,
         );
         assert_ne!(shared_proxy_revision(&authorized_change).unwrap(), revision);
+    }
+
+    #[test]
+    fn shared_proxy_revision_detects_completed_short_requests() {
+        let status = |latest| {
+            scope_proxy_status(
+                proxy_crab_mitm::model::ProxyStatus::Running {
+                    host: "127.0.0.1".into(),
+                    port: 8080,
+                    started_at: 1,
+                    active_netlog: BTreeMap::new(),
+                    latest_netlog_id: BTreeMap::from([(7, latest)]),
+                    active_bypass_count: 0,
+                },
+                7,
+            )
+        };
+        assert_ne!(
+            shared_proxy_revision(&status(1)).unwrap(),
+            shared_proxy_revision(&status(2)).unwrap(),
+        );
     }
 
     #[test]

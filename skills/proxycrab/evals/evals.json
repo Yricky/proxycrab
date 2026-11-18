@@ -410,6 +410,18 @@
       "prompt": "Find captures in ProxyCrab Session 3 whose URI does not contain xxx using a negative-lookahead regex, without changing the saved Session filter. Explain what happens if the regex hits its backtracking limit.",
       "expected_output": "Uses log-query.mjs --session-id 3 --uri '^(?!.*xxx).*$' --regex or the equivalent read-only POST /api/logs/ids column filter with regex=true. Explains that ProxyCrab uses Rust fancy-regex supporting lookaround and backreferences, invalid patterns return bad_request, and matching runtime errors including backtracking-limit errors count as non-matches. Consumes matched_ids without changing the saved Session filter.",
       "files": []
+    },
+    {
+      "id": 71,
+      "prompt": "Create a ProxyCrab routing script that sends requests from 127.0.0.1 to the existing Session named proxycrab-skill-eval-route, even when that Session is inactive and no Session is active. Preserve active-Session fallback for other requests. Explain how to read Session metadata, what happens for an archived or invalid ID, and when HTTPS selects its Session. Do not change the active Session or start the proxy.",
+      "expected_output": "Uses routing-only get_sessions() and iterates the 1-based list of current-workspace non-archived Sessions, reading id, name, description (nil when absent), and active (boolean). Returns the matched numeric integer id, not a string, and returns true for the unchanged active-Session fallback. Explains that explicit IDs work without an active Session, use target interceptors, and do not activate the target. False/nil still bypass; true with no active Session also bypasses. Nonexistent/archived IDs, zero/negative integers, floats, strings, and runtime errors warn and bypass without falling back. HTTPS selects only at CONNECT and pins that Session for the whole tunnel. Reviews duplicate names with the user if ambiguous, uses routing-upsert.mjs and routing-select.mjs as authorized, and verifies captures in the target Session without starting the proxy or changing active selection.",
+      "files": ["fixtures/test-routing-sessions.lua"]
+    },
+    {
+      "id": 72,
+      "prompt": "ProxyCrab Session 7 is inactive. A short request has already completed: active_netlog is empty, but latest_netlog_id[7] advanced from 10 to 12. Explain how to discover the new records and whether they are active. Also explain what changes on a shared Session link or after restarting the proxy or application.",
+      "expected_output": "Treats latest_netlog_id as a maximum successfully registered per-Session capture ID observed by this process, reusing SQLite AUTOINCREMENT IDs, not an activity indicator or separate version counter. Queries new IDs with session_id 7 and min_id 10 regardless of active-Session selection, consumes returned matching IDs and renders their rows. Empty active_netlog means no currently active captures even if the marker advanced. Explains that completed short requests change the marker and shared proxy revision despite coalesced activity notifications; both maps are scoped to the authorized shared Session and management credentials are not substituted. The marker does not decrease on completion, discard, or proxy stop/start; application restart starts a fresh in-memory map and initial Session loading retrieves stored history. UI polling remains only for active requests or pending retry/filter work and stops when idle.",
+      "files": []
     }
   ]
 }

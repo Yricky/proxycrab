@@ -19,6 +19,7 @@ test("a running proxy only invalidates records older than its start time", () =>
     port: 8089,
     started_at: 200,
     active_netlog: {},
+    latest_netlog_id: {},
     active_bypass_count: 0,
   };
   expect(isStaleByProxyRun("in_progress", 199, status)).toBe(true);

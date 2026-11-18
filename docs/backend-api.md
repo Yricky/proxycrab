@@ -237,8 +237,13 @@ If HTTP archives the viewed Session, the frontend selects the first remaining Se
 
 The log table separates ID membership from row rendering. On every Session switch or filter
 change, it captures the newest unfiltered ID as a fixed upper bound, pages every matching ID up to
-that bound, then resumes incremental unfiltered discovery from its frontend-only `max_id`. With a
-filter, newly discovered IDs and `active_netlog ∪ in_progress_ids` candidates are re-evaluated
+that bound, then resumes incremental unfiltered discovery from its frontend-only `max_id`. A rise
+in the viewed Session's `latest_netlog_id` wakes discovery, including when all new requests have
+already completed and `active_netlog` is empty. No active-Session selection is required. Polling
+continues every second only for active requests, pending filter/finalization work, or failed
+discovery; it stops when idle. Unchanged snapshots and changes to other Sessions do not wake it.
+After successful discovery, the cursor also advances past discarded IDs to avoid repeated empty
+queries. With a filter, newly discovered IDs and `active_netlog ∪ in_progress_ids` candidates are re-evaluated
 through the same read-only ID endpoint; leaving `active_netlog` triggers one final filter and row
 refresh. The virtual table requests row values only for the visible window plus 500 rows on each
 side, in batches of 200, and retains at most 5,000 non-protected rows for the current Session.
@@ -734,8 +739,9 @@ reference it. Script names cannot be changed.
 New Sessions default to the fixed built-in method, URI, status-code, and source columns plus an
 empty filter. `POST /api/sessions` also accepts optional `view` (same shape as the Session view:
 `columns` plus `filter`) and `interceptors` (Session interceptor chains preset by name, without
-validating that the referenced interceptors exist). Creation never changes the active Session: an
-inactive Session captures nothing, so make the new Session active with `PUT /api/active-session`.
+validating that the referenced interceptors exist). Creation never changes the active Session.
+Make it active with `PUT /api/active-session`, or return its ID from the routing script to capture
+into it without changing the active Session.
 
 Inactive Sessions can be archived while the proxy runs with
 `POST /api/sessions/{id}/archive`. The whole directory moves to `sessions_archived/<id>`; archived
@@ -769,8 +775,13 @@ custom-column script used as a filter target, resets those Session filters to no
 For direct HTTP, routing runs per request. For HTTPS, it runs once on CONNECT and pins the selected
 Session for the whole tunnel. Lua returns `true` to capture into the current active Session and
 `false` or `nil` to bypass. If `true` is returned while no Session is active, the request bypasses.
-Invalid returns and runtime errors emit a system warning and bypass. With no selected script, the
-active Session captures all traffic; with no active Session, traffic bypasses.
+A positive Lua integer Session ID instead captures directly into that non-archived Session, using
+its interceptors without changing the active Session, even when none is active. Routing scripts
+can call `get_sessions()` for a per-execution snapshot of the current workspace's non-archived
+Sessions, with `id`, `name`, nullable `description` (Lua nil), and boolean `active` fields.
+Nonexistent or archived IDs, non-positive integers, floats, strings, other invalid returns, and
+runtime errors emit a system warning and bypass. With no selected script, the active Session
+captures all traffic; with no active Session, traffic bypasses.
 
 `GET /api/sessions` returns `{"sessions":[...],"active_session_id":1}`, with non-archived
 `SessionMetadata` entries under `sessions`. When no Session is active, `active_session_id` is `null`;
@@ -880,6 +891,7 @@ snapshot:
   "port": 8089,
   "started_at": 1785380000000,
   "active_netlog": { "1786333525006": [1, 2, 3, 4, 5] },
+  "latest_netlog_id": { "1786333525006": 8 },
   "active_bypass_count": 2
 }
 ```
@@ -887,7 +899,17 @@ snapshot:
 `active_netlog` keys are Session IDs and its values are exact active capture IDs. This map is the
 only source for deciding whether a persisted netlog row is currently active; `outcome` remains the
 persisted result and `stage` remains its execution/failure phase. A share-token status response
-retains only the authorized Session key and omits `active_bypass_count`.
+retains only the authorized Session key in both maps and omits `active_bypass_count`. Its proxy
+revision includes `latest_netlog_id`, so completed short requests still wake the share long poll.
+
+`latest_netlog_id` maps Session IDs to the maximum successfully registered capture ID observed by
+this application process. It reuses the persisted, per-Session SQLite AUTOINCREMENT ID; there is
+no separate version counter. The map updates after capture insertion succeeds and before its
+activity notification. Concurrent registration uses the maximum, so delayed lower IDs cannot
+roll it back. Completion, failure, body updates, discard, and proxy stop/start do not reset it.
+The map is in memory, does not query storage on status reads, and starts empty in a new process.
+Missing Session keys mean no capture has been registered for that Session in this process;
+clients load existing history on Session entry. This field signals new records, never activity.
 
 A routed HTTP request is inserted into its selected Session database before it is forwarded. The
 Session is pinned for the entire request/response lifecycle even if the active Session changes.

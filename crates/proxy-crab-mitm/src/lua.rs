@@ -21,7 +21,7 @@ use crate::{
     model::{
         BodySourceType, CaptureOutcome, CaptureSummary, HeaderValues, Modification, RequestData,
         RequestInterceptorSnapshot, RequestTags, ResponseData, ResponseInterceptorSnapshot,
-        ScriptKind,
+        ScriptKind, SessionMetadata,
     },
     proxy::body::{DeferredBodyRead, DeferredBodyReader},
     storage::{BodySide, BodySource, BodySourceData},
@@ -97,6 +97,13 @@ pub fn validate_script(kind: ScriptKind, source: &str) -> Result<()> {
         .map_err(|error| crate::error::Error::InvalidScript(error.to_string()).into())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutingResult {
+    Bypass,
+    ActiveSession,
+    Session(u64),
+}
+
 pub fn evaluate_routing(
     source: &str,
     phase: &str,
@@ -104,8 +111,26 @@ pub fn evaluate_routing(
     authority: &str,
     source_address: SocketAddr,
     script_name: &str,
-) -> Result<Option<bool>> {
+    sessions: &[SessionMetadata],
+    active_session_id: Option<u64>,
+) -> Result<RoutingResult> {
     let (lua, warnings) = safe_lua()?;
+    let sessions = sessions.to_vec();
+    lua.globals().set(
+        "get_sessions",
+        lua.create_function(move |lua, ()| {
+            let result = lua.create_table_with_capacity(sessions.len(), 0)?;
+            for (index, session) in sessions.iter().enumerate() {
+                let item = lua.create_table_with_capacity(0, 4)?;
+                item.set("id", session.id)?;
+                item.set("name", session.name.as_str())?;
+                item.set("description", session.description.as_deref())?;
+                item.set("active", active_session_id == Some(session.id))?;
+                result.raw_set(index + 1, item)?;
+            }
+            Ok(result)
+        })?,
+    )?;
     lua.globals().set("phase", phase)?;
     lua.globals().set(
         "req",
@@ -119,9 +144,10 @@ pub fn evaluate_routing(
     let result = lua.load(source).eval::<Value>();
     log_json_warnings(&warnings, ScriptKind::Routing, script_name, None);
     match result? {
-        Value::Nil => Ok(None),
-        Value::Boolean(value) => Ok(Some(value)),
-        _ => bail!("routing script must return a boolean or nil"),
+        Value::Nil | Value::Boolean(false) => Ok(RoutingResult::Bypass),
+        Value::Boolean(true) => Ok(RoutingResult::ActiveSession),
+        Value::Integer(id) if id > 0 => Ok(RoutingResult::Session(id as u64)),
+        _ => bail!("routing script must return a boolean, nil, or a positive integer Session ID"),
     }
 }
 
@@ -1860,17 +1886,17 @@ mod tests {
         log_buffer::{BufferLayer, LogBuffer},
         model::{
             CaptureOutcome, CaptureSummary, HeaderValues, RequestData, RequestTags, ResponseData,
-            ScriptKind,
+            ScriptKind, SessionMetadata,
         },
         storage::{BodySide, BodySource, BodySourceData},
     };
 
     use super::{
         BodyReplacement, CaptureBodyAccess, ColumnEvaluator, FilterEvaluator, LUA_BODY_LIMIT,
-        ModificationJournal, ResponseScriptContext, SharedInterceptorState, evaluate_column,
-        evaluate_column_named, evaluate_filter, evaluate_filter_named, evaluate_routing,
-        execute_request, execute_request_with_state, execute_response, execute_response_with_state,
-        validate_script,
+        ModificationJournal, ResponseScriptContext, RoutingResult, SharedInterceptorState,
+        evaluate_column, evaluate_column_named, evaluate_filter, evaluate_filter_named,
+        evaluate_routing, execute_request, execute_request_with_state, execute_response,
+        execute_response_with_state, validate_script,
     };
 
     fn entry() -> CaptureSummary {
@@ -2167,21 +2193,150 @@ mod tests {
         "#;
 
         assert_eq!(
-            evaluate_routing(script, "http", &request, "example.com:443", source, "route",)
-                .unwrap(),
-            Some(true)
+            evaluate_routing(
+                script,
+                "http",
+                &request,
+                "example.com:443",
+                source,
+                "route",
+                &[],
+                None
+            )
+            .unwrap(),
+            RoutingResult::ActiveSession
         );
         assert_eq!(
-            evaluate_routing("return nil", "http", &request, "", source, "route").unwrap(),
-            None
+            evaluate_routing(
+                "return nil",
+                "http",
+                &request,
+                "",
+                source,
+                "route",
+                &[],
+                None
+            )
+            .unwrap(),
+            RoutingResult::Bypass
         );
         assert_eq!(
-            evaluate_routing("return false", "http", &request, "", source, "route").unwrap(),
-            Some(false)
+            evaluate_routing(
+                "return false",
+                "http",
+                &request,
+                "",
+                source,
+                "route",
+                &[],
+                None
+            )
+            .unwrap(),
+            RoutingResult::Bypass
         );
         assert!(
-            evaluate_routing("return 'capture'", "http", &request, "", source, "route").is_err()
+            evaluate_routing(
+                "return 'capture'",
+                "http",
+                &request,
+                "",
+                source,
+                "route",
+                &[],
+                None
+            )
+            .is_err()
         );
+    }
+
+    #[test]
+    fn routing_lists_session_snapshots_and_returns_integer_targets() {
+        let request = entry().request;
+        let source = "127.0.0.1:4321".parse().unwrap();
+        let sessions = vec![
+            SessionMetadata {
+                id: 1,
+                name: "active".into(),
+                description: None,
+                created_at: 0,
+            },
+            SessionMetadata {
+                id: 2,
+                name: "目标会话".into(),
+                description: Some("测试描述".into()),
+                created_at: 1,
+            },
+        ];
+        let script = r#"
+            local sessions = get_sessions()
+            assert(#sessions == 2)
+            assert(sessions[1].id == 1 and sessions[1].name == "active")
+            assert(sessions[1].active == true and sessions[1].description == nil)
+            assert(sessions[2].name == "目标会话" and sessions[2].description == "测试描述")
+            assert(sessions[2].active == false)
+            sessions[2].name = "local edit"
+            table.remove(sessions, 1)
+            assert(#get_sessions() == 2 and get_sessions()[2].name == "目标会话")
+            return sessions[1].id
+        "#;
+        assert_eq!(
+            evaluate_routing(
+                script,
+                "http",
+                &request,
+                "",
+                source,
+                "route",
+                &sessions,
+                Some(1)
+            )
+            .unwrap(),
+            RoutingResult::Session(2),
+        );
+        assert_eq!(
+            evaluate_routing(
+                "for _, s in ipairs(get_sessions()) do assert(s.active == false) end; return 2",
+                "connect",
+                &request,
+                "",
+                source,
+                "route",
+                &sessions,
+                None,
+            )
+            .unwrap(),
+            RoutingResult::Session(2),
+        );
+        assert_eq!(
+            evaluate_routing(
+                "assert(#get_sessions() == 0); return nil",
+                "http",
+                &request,
+                "",
+                source,
+                "route",
+                &[],
+                None
+            )
+            .unwrap(),
+            RoutingResult::Bypass,
+        );
+        for result in ["0", "-1", "1.5", "2.0", "'2'", "{}", "function() end"] {
+            assert!(
+                evaluate_routing(
+                    &format!("return {result}"),
+                    "http",
+                    &request,
+                    "",
+                    source,
+                    "route",
+                    &sessions,
+                    None
+                )
+                .is_err(),
+                "unexpectedly accepted {result}",
+            );
+        }
     }
 
     #[test]
@@ -2770,9 +2925,11 @@ mod tests {
                 "example.com",
                 "127.0.0.1:1".parse().unwrap(),
                 "codec-route",
+                &[],
+                None,
             )
             .unwrap(),
-            Some(true),
+            RoutingResult::ActiveSession,
         );
 
         let request_effects = execute_request(

@@ -562,6 +562,8 @@ pub enum ProxyStatus {
         started_at: u64,
         #[ts(type = "Record<string, number[]>")]
         active_netlog: BTreeMap<u64, Vec<u64>>,
+        #[ts(type = "Record<string, number>")]
+        latest_netlog_id: BTreeMap<u64, u64>,
         active_bypass_count: usize,
     },
     Stopping,
