@@ -13,7 +13,6 @@ import type { CreateAgentsPresetRequest } from "./generated/CreateAgentsPresetRe
 import type { BreakpointQuery } from "./generated/BreakpointQuery";
 import type { BypassQuery } from "./generated/BypassQuery";
 import type { CreateSessionRequest } from "./generated/CreateSessionRequest";
-import type { DebugFilterScriptRequest } from "./generated/DebugFilterScriptRequest";
 import type { ExecuteTemporaryScriptRequest } from "./generated/ExecuteTemporaryScriptRequest";
 import type { ExtendBreakpointRequest } from "./generated/ExtendBreakpointRequest";
 import type { InterceptorCreateRequest } from "./generated/InterceptorCreateRequest";
@@ -264,8 +263,6 @@ export function createTauriBackend(): Backend {
     updateFilterScript: (name: string, request: UpdateScriptRequest) =>
       call("update_filter_script", { name, request }),
     deleteFilterScript: (name: string) => call("delete_filter_script", { name }),
-    debugFilterScript: (name: string, request: DebugFilterScriptRequest) =>
-      call("debug_filter_script", { name, request }),
 
     listRoutingScripts: () => call("list_routing_scripts"),
     createRoutingScript: (request: ScriptRequest) => call("create_routing_script", { request }),

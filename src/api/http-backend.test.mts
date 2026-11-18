@@ -40,6 +40,35 @@ test("certificate reads public PEM from the backend without management credentia
   await expect(backend.getCertificate()).rejects.toMatchObject({ code: "network_error" });
 });
 
+test("inline Lua is sent through the existing log IDs JSON request", async () => {
+  const payload = { matched_ids: [1042], in_progress_ids: [] };
+  const fetchMock = vi.fn().mockResolvedValue(Response.json({ ok: true, data: payload }));
+  vi.stubGlobal("fetch", fetchMock);
+  const backend = createHttpBackend("http://backend:18089", "test-key", {
+    target: "cli",
+    workspace: { current_path: "/workspace", configured_path: "/workspace" },
+    http_service: { running: true, host: "0.0.0.0", port: 18089, error: null },
+  });
+  const request = {
+    session_id: 3,
+    min_id: 1041,
+    max_id: 1043,
+    filter: {
+      option: {
+        kind: "script_content" as const,
+        content: "local input = ...\nreturn input == ' x & y '\n",
+      },
+      input: " x & y ",
+    },
+  };
+  expect(await backend.getLogIds(request)).toEqual(payload);
+  const [url, init] = fetchMock.mock.calls[0];
+  expect(url.pathname).toBe("/api/logs/ids");
+  expect(url.search).toBe("");
+  expect(JSON.parse(init.body)).toEqual(request);
+  expect(init.headers.get("Content-Type")).toBe("application/json");
+});
+
 test("Session sharing creates and updates config through the same POST", async () => {
   const state = { session_id: 7, enabled: true, persistent: true, token: "same-token" };
   const fetchMock = vi

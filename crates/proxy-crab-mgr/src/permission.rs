@@ -198,7 +198,6 @@ pub static API_ACTIONS: &[ApiAction] = &[
     action!("DELETE", "/api/column-scripts/{name}", Deny),
     action!("GET", "/api/filter-scripts", Allow),
     action!("POST", "/api/filter-scripts", Approval),
-    action!("POST", "/api/filter-scripts/{name}/debug", Allow),
     action!("GET", "/api/filter-scripts/{name}", Allow),
     action!("PUT", "/api/filter-scripts/{name}", Approval),
     action!("DELETE", "/api/filter-scripts/{name}", Deny),
@@ -235,6 +234,7 @@ pub static API_ACTIONS: &[ApiAction] = &[
 ];
 
 pub const OBSOLETE_API_ACTION_IDS: &[&str] = &[
+    "POST /api/filter-scripts/{name}/debug",
     "PUT /api/session-shares/{id}/redaction",
     "PUT /api/session-har-shares/{id}/redaction",
     "GET /api/session-har-shares/{id}",

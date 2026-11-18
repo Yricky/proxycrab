@@ -69,11 +69,6 @@ export const ACTION_META: Readonly<Record<string, PermissionActionMeta>> = {
   "DELETE /api/column-scripts/{name}": { label: "删除自定义列脚本", impact: "danger" },
   "GET /api/filter-scripts": { label: "列出过滤脚本", impact: "read" },
   "POST /api/filter-scripts": { label: "创建过滤脚本", impact: "write" },
-  "POST /api/filter-scripts/{name}/debug": {
-    label: "调试过滤脚本",
-    impact: "write",
-    redaction: true,
-  },
   "GET /api/filter-scripts/{name}": { label: "读取过滤脚本", impact: "read" },
   "PUT /api/filter-scripts/{name}": { label: "更新过滤脚本", impact: "write" },
   "DELETE /api/filter-scripts/{name}": { label: "删除过滤脚本", impact: "danger" },

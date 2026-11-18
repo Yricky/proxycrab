@@ -82,8 +82,6 @@ export type SessionView = { columns: Array<Column>, filter: SessionFilter, };
 
 export type CreateSessionRequest = { name?: string | null, description?: string | null, view?: SessionView | null, interceptors?: SessionInterceptors | null, };
 
-export type DebugFilterScriptRequest = { session_id?: number | null, log_id: number, input: string, };
-
 export type DeleteCount = { deleted: number, };
 
 export type ExecuteTemporaryScriptRequest = { content: string, };
@@ -110,7 +108,11 @@ export type HttpApiChange = { resources: Array<HttpApiResource>, session_id?: nu
 
 export type LogIdsPayload = { matched_ids: Array<number>, in_progress_ids: Array<number>, };
 
-export type LogIdsRequest = { session_id?: number | null, filter?: SessionFilter | null, ids?: Array<number> | null, min_id?: number | null, max_id?: number | null, limit?: number | null, };
+export type LogFilterOption = { "kind": "column", column: FilterColumn, regex: boolean, } | { "kind": "script", script_name: string, } | { "kind": "script_content", content: string, };
+
+export type LogFilter = { option: LogFilterOption | null, input: string, };
+
+export type LogIdsRequest = { session_id?: number | null, filter?: LogFilter | null, ids?: Array<number> | null, min_id?: number | null, max_id?: number | null, limit?: number | null, };
 
 export type LogViewException = { id: number, column_index?: number, code: string, message: string, };
 
@@ -124,7 +126,7 @@ export type SessionViewInput = { columns: Array<Column>, };
 
 export type LogViewsRequest = { session_id?: number | null, logs: Array<LogViewItem>, view?: SessionViewInput | null, };
 
-export type ProxyStatus = { "status": "stopped" } | { "status": "starting" } | { "status": "running", host: string, port: number, started_at: number, active_netlog: Record<string, number[]>, active_bypass_count: number, } | { "status": "stopping" } | { "status": "failed", message: string, };
+export type ProxyStatus = { "status": "stopped" } | { "status": "starting" } | { "status": "running", host: string, port: number, started_at: number, active_netlog: Record<string, number[]>, latest_netlog_id: Record<string, number>, active_bypass_count: number, } | { "status": "stopping" } | { "status": "failed", message: string, };
 
 export type SessionInterceptorInput = { name: string, enabled: boolean, };
 
@@ -432,7 +434,6 @@ interface ApplicationBackend {
   getFilterScript(name: string): Promise<Script>;
   updateFilterScript(name: string, request: UpdateScriptRequest): Promise<void>;
   deleteFilterScript(name: string): Promise<void>;
-  debugFilterScript(name: string, request: DebugFilterScriptRequest): Promise<boolean>;
 
   // routing scripts
   listRoutingScripts(): Promise<Script[]>;

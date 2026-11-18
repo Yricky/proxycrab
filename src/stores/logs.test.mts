@@ -141,6 +141,27 @@ test("active requests poll their rows and refresh once more on completion", asyn
   expect(backend.getLogViews).toHaveBeenCalledTimes(queries);
 });
 
+test("empty-input Lua filters re-evaluate membership when a capture completes", async () => {
+  logs.appliedFilter = { option: { kind: "script", script_name: "pending" }, input: "" };
+  backend.getLogIds.mockImplementation(async (request: LogIdsRequest) => ({
+    matched_ids:
+      request.filter?.option?.kind === "script" && records.get(1) === "success" ? [] : [1],
+    in_progress_ids: records.get(1) === "in_progress" ? [1] : [],
+  }));
+  records.set(1, "in_progress");
+  proxyStore.applyStatus(status({ 7: 1 }, { 7: [1] }));
+  await flush();
+  expect(logs.ids).toEqual([1]);
+  expect(backend.getLogIds).toHaveBeenCalledWith(
+    expect.objectContaining({ filter: logs.appliedFilter, ids: [1] }),
+  );
+
+  records.set(1, "success");
+  proxyStore.applyStatus(status({ 7: 1 }));
+  await flush();
+  expect(logs.ids).toEqual([]);
+});
+
 test("failed discovery retries even after every request has completed", async () => {
   records.set(1, "success");
   backend.getLogIds.mockRejectedValueOnce(new Error("temporary network failure"));

@@ -40,9 +40,9 @@ use crate::{
     clash_subscription::{EnableClashSubscriptionRequest, SaveClashConfigRequest},
     dto::{
         ActiveSession, AssetQuery, BodyQuery, BreakpointQuery, BypassQuery, CreateSessionRequest,
-        DebugFilterScriptRequest, DeleteBypassRequest, ErrorCode, ExecuteTemporaryScriptRequest,
-        ExtendBreakpointRequest, HttpApiChange, HttpApiResource, InterceptorCreateRequest,
-        InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest, ManagerError, ManagerResult,
+        DeleteBypassRequest, ErrorCode, ExecuteTemporaryScriptRequest, ExtendBreakpointRequest,
+        HttpApiChange, HttpApiResource, InterceptorCreateRequest, InterceptorUpdateRequest,
+        LogIdsRequest, LogViewsRequest, ManagerError, ManagerResult,
         ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ReplayRequestPayload,
         RoutingSelection, ScriptRequest, SessionQuery, SystemInfo, SystemLogsQuery,
         UpdateScriptRequest, UpdateSessionRequest, WebSocketQuery, default_body_max_size,
@@ -371,10 +371,6 @@ fn router_with_changes_and_extra(
         .route(
             "/api/filter-scripts",
             get(filter_scripts).post(create_filter_script),
-        )
-        .route(
-            "/api/filter-scripts/{name}/debug",
-            post(debug_filter_script),
         )
         .route(
             "/api/filter-scripts/{name}",
@@ -1421,14 +1417,6 @@ async fn delete_filter_script(
 ) -> ApiResult {
     manager.delete_filter_script(name).await?;
     success(json!({}))
-}
-
-async fn debug_filter_script(
-    ReadManager(manager): ReadManager,
-    ApiPath(name): ApiPath<String>,
-    ApiJson(request): ApiJson<DebugFilterScriptRequest>,
-) -> ApiResult {
-    success(manager.debug_filter_script(name, request).await?)
 }
 
 async fn routing_scripts(State(manager): State<ManagerState>) -> ApiResult {
@@ -3572,6 +3560,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inline_lua_filter_is_query_only_and_read_only() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
+        let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
+        let id = store
+            .begin(
+                "client",
+                &RequestData {
+                    method: "GET".into(),
+                    uri: "https://example.com/test".into(),
+                    version: "HTTP/1.1".into(),
+                    headers: Default::default(),
+                    tags: Default::default(),
+                },
+                "request",
+            )
+            .unwrap();
+        runtime
+            .replace_active_session(Some(session.id))
+            .await
+            .unwrap();
+        let manager = MitmManager::new(runtime);
+        let original = manager.session_view(Some(session.id)).await.unwrap().filter;
+        let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
+        let app = router_with_changes(manager.clone(), allow_all(), changes);
+        let filter = |content: &str, input: &str| json!({"option": {"kind": "script_content", "content": content}, "input": input});
+        // Omitted Session resolves to the active Session, and explicit IDs still work.
+        let response = app.clone().oneshot(Request::builder().method("POST").uri("/api/logs/ids")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"ids": [id], "filter": filter("return (...) == ' x ' and entry.req.uri.host == 'example.com'", " x ")}).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(
+            body["data"],
+            json!({"matched_ids": [id], "in_progress_ids": []})
+        );
+        for source in ["return )", "error('boom')", "return 1"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/logs/ids")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            json!({"session_id": session.id, "filter": filter(source, "")})
+                                .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let body: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(body["error"]["code"], "bad_request");
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/sessions/{}/filter", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(filter("return true", "").to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        for uri in ["/api/filter-scripts/example/debug", "/api/logs/filter"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                response.status(),
+                StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+            ));
+        }
+        assert_eq!(
+            manager.session_view(Some(session.id)).await.unwrap().filter,
+            original
+        );
+        assert!(manager.filter_scripts().await.unwrap().is_empty());
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn log_id_reads_are_silent_and_filter_writes_publish_session_view() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
@@ -3925,7 +4013,7 @@ mod tests {
 
         for (method, uri) in [
             ("GET", "/api/logs"),
-            ("POST", "/api/logs/filter"),
+            ("POST", "/api/filter-scripts/example/debug"),
             ("GET", "/api/sessions/1/logs"),
             ("GET", "/api/columns"),
             ("PUT", "/api/interceptors/order"),

@@ -39,6 +39,7 @@ export interface ScriptLibraryDebugRun {
     name: string;
     logId: number;
     input: string;
+    content: string;
   }): Promise<{ result: string; failed: boolean }>;
 }
 
@@ -302,6 +303,7 @@ async function saveAndRun(): Promise<void> {
       name,
       logId,
       input: debugInput.value,
+      content: content.value,
     });
     debugResult.value = out.result;
     debugFailed.value = out.failed;

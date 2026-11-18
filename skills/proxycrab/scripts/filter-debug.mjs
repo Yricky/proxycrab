@@ -25,15 +25,19 @@ Evaluate one saved Lua filter against one capture and report its boolean result 
   }
   const name = requiredString(args, "name");
   const sessionId = optionalInteger(args, "session-id", { min: 1 });
-  const body = {
-    ...(sessionId === undefined ? {} : { session_id: sessionId }),
-    log_id: requiredInteger(args, "log-id", { min: 1 }),
-    input: optionalString(args, "input") ?? "",
-  };
-  const matched = await apiRequest(
-    args,
-    `/api/filter-scripts/${encodeURIComponent(name)}/debug`,
-    { method: "POST", body },
-  );
-  printJson({ name, matched });
+  const logId = requiredInteger(args, "log-id", { min: 1, max: Number.MAX_SAFE_INTEGER - 1 });
+  const script = await apiRequest(args, `/api/filter-scripts/${encodeURIComponent(name)}`);
+  const result = await apiRequest(args, "/api/logs/ids", {
+    method: "POST",
+    body: {
+      session_id: sessionId,
+      min_id: logId - 1,
+      max_id: logId + 1,
+      filter: {
+        option: { kind: "script_content", content: script.content },
+        input: optionalString(args, "input") ?? "",
+      },
+    },
+  });
+  printJson({ name, matched: result.matched_ids.includes(logId) });
 });

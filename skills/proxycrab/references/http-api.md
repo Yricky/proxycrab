@@ -34,7 +34,7 @@ parent directories. Existing root-level names remain valid. Bindings use the ful
 Names are limited to 128 UTF-8 bytes. Each `/`-separated segment may contain letters, numbers,
 `.`, `_`, and `-`; empty segments, `.` and `..`, absolute paths and backslashes are rejected.
 Script operations do not follow symlinks within the library. Encode the **whole** name as one
-URL parameter: `/api/filter-scripts/business%2Ferrors` (and append `/debug` for debugging).
+URL parameter: `/api/filter-scripts/business%2Ferrors`. To test a filter, send its source as a `script_content` filter to `/api/logs/ids`.
 JSON bodies and helper `--name` arguments use the unencoded value `business/errors`.
 
 There are no script rename, move, or empty-directory management endpoints.
@@ -597,15 +597,16 @@ Every field is optional.
 
 - The endpoint is always read-only. Omitting `filter` matches all captures and never reads or
   changes the Session's saved filter.
-- `option: null` or an empty `input` matches all captures; an empty input still preserves the
-  selected option.
+- `option: null` matches all captures. Empty `input` matches all for column filters; Lua filter
+  scripts always execute with the exact input, including an empty string.
 - With `regex: false`, built-in and custom-column filters use case-sensitive contains matching.
 - With `regex: true`, input uses Rust `fancy-regex` syntax and substring matching unless anchored.
   Inline flags such as `(?i)` control case folding; lookaround such as `^(?!.*xxx).*$` and
   backreferences are supported. Invalid patterns return `bad_request`; matching runtime errors,
   including backtracking-limit errors, count as non-matches.
 - Lua filter input is passed exactly, including whitespace.
-- Filter/custom-column errors count as non-matches in this endpoint.
+- Named filter-script and custom-column errors count as non-matches. Inline `script_content` errors
+  fail the request, as described below.
 - `min_id` and `max_id` are exclusive.
 - `ids` re-evaluates an explicit candidate set and cannot be combined with range bounds.
 - Default and maximum `limit` are 10,000. `0` returns no IDs.
@@ -629,6 +630,37 @@ persisted in-progress records that are also active in the current run's authorit
 unfinished records from earlier runs are excluded. Keep re-evaluating those IDs until they complete.
 When an ID leaves `in_progress_ids`, re-evaluate it once more and use that final `matched_ids`
 membership; current activity still comes only from `ProxyStatus.running.active_netlog`.
+
+### Inline Lua with `POST /api/logs/ids`
+
+The query uses independent `LogFilter` / `LogFilterOption` types. In addition to existing column
+and named-script options, `filter.option` accepts `{"kind":"script_content","content":"..."}`:
+
+```json
+{
+  "session_id": 3,
+  "filter": {
+    "option": { "kind": "script_content", "content": "return entry.req.uri.host == (...)" },
+    "input": "example.com"
+  },
+  "min_id": 1041,
+  "max_id": 1043
+}
+```
+
+Everything else follows the existing endpoint: optional Session, explicit `ids` or exclusive
+ranges, default/max limit 10,000, and `{matched_ids, in_progress_ids}`. Standard filter Lua sees
+redacted `entry` and bodies and the exact `input` string through `...`, even when empty.
+`script_content` compilation/runtime errors, budget exhaustion, and non-boolean results fail the
+whole query with `bad_request`; per-record failures identify the log ID. Named `script` options
+retain their non-match-on-error behavior.
+
+The same option works on `POST /share-api/logs/ids` within the shared Session and redaction policy.
+It is query-only: the common `FilterOption` and `SessionFilter` types are unchanged and Session
+filter writes reject it. Nothing is saved and the Session's saved filter is not combined.
+Use `scripts/log-filter.mjs --session-id 3 --file /tmp/filter.lua` for an unsaved query.
+The named debug route is removed; `filter-debug.mjs` reads source then uses a single-ID range
+on `/api/logs/ids` and checks `matched_ids` membership. No separate Lua query route exists.
 
 ### `POST /api/logs/views`
 
@@ -941,19 +973,6 @@ DELETE /api/filter-scripts/{name}
 ```
 
 Deleting a referenced filter or custom-column filter resets those Session filters to no selection.
-
-### `POST /api/filter-scripts/{name}/debug`
-
-```json
-{
-  "session_id": 3,
-  "log_id": 1042,
-  "input": "example.com"
-}
-```
-
-`session_id` is optional. Returns a boolean. Runtime errors and non-boolean results return
-`bad_request`, unlike normal list filtering where they count as non-matches.
 
 ### Routing endpoints
 

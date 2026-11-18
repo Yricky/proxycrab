@@ -49,8 +49,8 @@ Choose at most one filter selector:
   --filter-script NAME [--input TEXT]
   --regex                 Use Rust fancy-regex syntax (supports lookaround and backreferences)
 
-With no selector or --input, all captures match. Queries are always read-only and never change the
-Session's persisted filter.
+With no selector, all captures match. Empty input matches all for column filters; Lua filter
+scripts always execute, including with empty input. Queries never change the Session's persisted filter.
 `);
     return;
   }

@@ -9,7 +9,6 @@ import type { BreakpointQuery } from "./generated/BreakpointQuery";
 import type { BypassQuery } from "./generated/BypassQuery";
 import type { CreateAgentsPresetRequest } from "./generated/CreateAgentsPresetRequest";
 import type { CreateSessionRequest } from "./generated/CreateSessionRequest";
-import type { DebugFilterScriptRequest } from "./generated/DebugFilterScriptRequest";
 import type { ExecuteTemporaryScriptRequest } from "./generated/ExecuteTemporaryScriptRequest";
 import type { ExtendBreakpointRequest } from "./generated/ExtendBreakpointRequest";
 import type { HttpApiChange } from "./generated/HttpApiChange";
@@ -357,8 +356,6 @@ export function createHttpBackend(
     updateFilterScript: (name: string, requestValue: UpdateScriptRequest) =>
       call(scriptPath("filter-scripts", name), json("PUT", requestValue)),
     deleteFilterScript: (name: string) => call(scriptPath("filter-scripts", name), json("DELETE")),
-    debugFilterScript: (name: string, requestValue: DebugFilterScriptRequest) =>
-      call(`${scriptPath("filter-scripts", name)}/debug`, json("POST", requestValue)),
 
     listRoutingScripts: () => call("/api/routing-scripts"),
     createRoutingScript: (requestValue: ScriptRequest) =>

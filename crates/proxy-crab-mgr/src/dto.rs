@@ -4,8 +4,9 @@ use proxy_crab_mitm::{
     bypass::BypassEntry,
     model::{
         AppConfig, BodyPayload, BreakpointSummary, CaptureError, CaptureOutcome, Column,
-        InterceptorExecution, InterceptorKind, InterceptorLibraryItem, ProxyStatus, Script,
-        SessionFilter, SessionInterceptors, SessionMetadata, SessionView, SystemLogEntry,
+        FilterColumn, FilterOption, InterceptorExecution, InterceptorKind, InterceptorLibraryItem,
+        ProxyStatus, Script, SessionFilter, SessionInterceptors, SessionMetadata, SessionView,
+        SystemLogEntry,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -268,12 +269,48 @@ pub const fn default_body_max_size() -> u64 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export)]
+pub enum LogFilterOption {
+    Column {
+        column: FilterColumn,
+        #[serde(default)]
+        regex: bool,
+    },
+    Script {
+        script_name: String,
+    },
+    ScriptContent {
+        content: String,
+    },
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LogFilter {
+    pub option: Option<LogFilterOption>,
+    pub input: String,
+}
+
+impl From<SessionFilter> for LogFilter {
+    fn from(filter: SessionFilter) -> Self {
+        Self {
+            option: filter.option.map(|option| match option {
+                FilterOption::Column { column, regex } => LogFilterOption::Column { column, regex },
+                FilterOption::Script { script_name } => LogFilterOption::Script { script_name },
+            }),
+            input: filter.input,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LogIdsRequest {
     #[ts(optional = nullable)]
     pub session_id: Option<u64>,
     #[ts(optional = nullable)]
-    pub filter: Option<SessionFilter>,
+    pub filter: Option<LogFilter>,
     #[ts(optional = nullable)]
     pub ids: Option<Vec<u64>>,
     #[ts(optional = nullable)]
@@ -454,15 +491,6 @@ pub struct ScriptRequest {
 #[ts(export)]
 pub struct UpdateScriptRequest {
     pub content: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct DebugFilterScriptRequest {
-    #[ts(optional = nullable)]
-    pub session_id: Option<u64>,
-    pub log_id: u64,
-    pub input: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

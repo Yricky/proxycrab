@@ -259,9 +259,14 @@ local body = entry.req.body:as_string()
 return body ~= nil and body:find(input, 1, true) ~= nil
 ```
 
-The input is exact, including leading and trailing whitespace. During normal log filtering,
+The input is exact, including leading and trailing whitespace. Filter scripts execute even when
+the input is an empty string. During normal log filtering,
 runtime errors, instruction exhaustion, or non-boolean results count as non-matches without a system
-log entry. `/api/filter-scripts/{name}/debug` reports those errors directly.
+log entry. `POST /api/logs/ids` also accepts a query-only `script_content` option containing Lua
+source directly. This option reports compilation/runtime errors, instruction exhaustion, and
+non-boolean results as `bad_request` instead of suppressing them. All ordinary ID query parameters
+and the `{matched_ids, in_progress_ids}` result apply. The same option works on `/share-api/logs/ids`
+within the shared Session and redaction policy. It is not a Session filter type and cannot be saved.
 
 Batch filtering may reuse a script's Lua VM and compiled function, but every capture starts with a
 fresh sandbox environment, instruction budget, and JSON warning count. Global assignments and

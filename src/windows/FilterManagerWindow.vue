@@ -26,13 +26,14 @@ const config: ScriptLibraryConfig = {
     }),
   debug: {
     mode: "log-id-input",
-    run: async ({ name, logId, input }) => {
-      const result = await backend.debugFilterScript(name, {
+    run: async ({ logId, input, content }) => {
+      const result = await backend.getLogIds({
         session_id: props.sessionId ?? null,
-        log_id: logId,
-        input,
+        min_id: logId - 1,
+        max_id: logId + 1,
+        filter: { option: { kind: "script_content", content }, input },
       });
-      return { result: String(result), failed: false };
+      return { result: String(result.matched_ids.includes(logId)), failed: false };
     },
   },
   api: {

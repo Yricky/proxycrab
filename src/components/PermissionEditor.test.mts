@@ -18,7 +18,6 @@ const redactedActions = [
   "POST /api/breakpoints/{id}/extend",
   "POST /api/breakpoints/{id}/execute",
   "GET /api/session-view",
-  "POST /api/filter-scripts/{name}/debug",
   "GET /api/bypass",
 ];
 const actionIds = [

@@ -91,10 +91,13 @@ impl Fixture {
     fn ids(&self, option: FilterOption, input: &str) -> LogIdsRequest {
         LogIdsRequest {
             session_id: Some(self.sid),
-            filter: Some(SessionFilter {
-                option: Some(option),
-                input: input.into(),
-            }),
+            filter: Some(
+                SessionFilter {
+                    option: Some(option),
+                    input: input.into(),
+                }
+                .into(),
+            ),
             ids: None,
             min_id: None,
             max_id: None,
@@ -106,6 +109,83 @@ fn column(column: FilterColumn) -> FilterOption {
     FilterOption::Column {
         column,
         regex: false,
+    }
+}
+
+#[tokio::test]
+async fn temporary_filter_uses_redacted_headers_and_bodies() {
+    let f = Fixture::new(MASK).await;
+    let reader = f.manager.reader(Some("mask"), "/api/logs/ids").unwrap();
+    let query = |content: &str| LogIdsRequest {
+        session_id: Some(f.sid),
+        filter: Some(LogFilter {
+            option: Some(LogFilterOption::ScriptContent {
+                content: content.into(),
+            }),
+            input: String::new(),
+        }),
+        ids: None,
+        min_id: None,
+        max_id: None,
+        limit: None,
+    };
+    let result = reader.log_ids(query(
+        "return entry.req.uri.path == '/safe' and entry.req.body:as_string() == 'masked request' and entry.resp.body:as_string() == 'masked response'"
+    )).await.unwrap();
+    assert_eq!(result.matched_ids, vec![f.id]);
+    assert!(reader.log_ids(query(
+        "return entry.req.uri.path == '/secret' or entry.req.body:as_string() == 'secret request'"
+    )).await.unwrap().matched_ids.is_empty());
+    let error = reader
+        .log_ids(query("error(entry.req.body:as_string())"))
+        .await
+        .unwrap_err();
+    assert!(error.message.contains("masked request"));
+    assert!(!error.message.contains("secret request"));
+    assert!(
+        f.manager
+            .log(Some(f.sid), f.id)
+            .await
+            .unwrap()
+            .request
+            .uri
+            .contains("secret")
+    );
+}
+
+#[tokio::test]
+async fn shared_inline_filter_is_scoped_and_redacted() {
+    let f = Fixture::new(MASK).await;
+    let manager: Arc<dyn ProxyCrabManager> = f.manager.clone();
+    let shares = SessionShareService::new();
+    let share = shares
+        .enable_with_script(&manager, f.sid, Some("mask".into()))
+        .await
+        .unwrap();
+    let app = proxy_crab_mgr::session_share::router(manager, shares);
+    let token = share.token.unwrap();
+    for (source, expected) in [
+        (
+            "return entry.req.uri.path == '/safe' and entry.req.body:as_string() == 'masked request'",
+            vec![f.id],
+        ),
+        (
+            "return entry.req.uri.path == '/secret' or entry.req.body:as_string() == 'secret request'",
+            vec![],
+        ),
+    ] {
+        let response = app.clone().oneshot(Request::builder().method("POST")
+            .uri(format!("/share-api/logs/ids?token={token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({
+                "session_id": 999, "ids": [f.id],
+                "filter": {"option": {"kind": "script_content", "content": source}, "input": ""}
+            }).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["data"]["matched_ids"], serde_json::json!(expected));
     }
 }
 

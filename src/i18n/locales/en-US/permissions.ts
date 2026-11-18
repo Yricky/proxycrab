@@ -43,7 +43,6 @@ export default {
   删除自定义列脚本: "Delete custom column script",
   列出过滤脚本: "List filter scripts",
   创建过滤脚本: "Create filter script",
-  调试过滤脚本: "Debug filter script",
   读取过滤脚本: "Read filter script",
   更新过滤脚本: "Update filter script",
   删除过滤脚本: "Delete filter script",

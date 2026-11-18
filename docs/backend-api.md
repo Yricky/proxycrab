@@ -293,7 +293,6 @@ browser UI.
 | `/api/session-interceptors` | `GET`, `PUT` whole-session interceptor chains |
 | `/api/column-scripts`, `/api/column-scripts/{name}` | script CRUD |
 | `/api/filter-scripts`, `/api/filter-scripts/{name}` | global filter-script CRUD |
-| `/api/filter-scripts/{name}/debug` | `POST` debug against one log and input |
 | `/api/routing-scripts`, `/api/routing-scripts/{name}` | global routing-script CRUD |
 | `/api/routing-script-selection` | `GET`, `PUT` nullable current selection |
 | `/api/interceptors`, `/api/interceptors/{kind}/{name}` | global interceptor script CRUD |
@@ -466,8 +465,9 @@ Session. If no Session is active, the operation returns `409 conflict`.
 ```
 
 Every field is optional. The endpoint is always read-only. Omitting `filter`, using `option: null`,
-or using an empty `input` matches all logs. A supplied filter is evaluated only for this request and
-never changes the Session's saved filter.
+or using an empty `input` for a column filter matches all logs. Lua filter scripts always execute,
+including with empty `input`. A supplied filter is evaluated only for this request and never changes
+the Session's saved filter.
 
 A column option supports `method`, `uri`, `code`, `source`, `stage`, or `{ "kind": "script", "script_name": "..." }`. With `regex: false`, built-in and custom-column output use case-sensitive contains matching. With `regex: true`, `input` uses Rust `fancy-regex` syntax and substring matching unless the pattern is anchored; inline flags such as `(?i)` control case folding. Lookaround such as `^(?!.*xxx).*$` and backreferences are supported. Invalid patterns return `400 bad_request`; matching runtime errors (including backtracking-limit errors) count as non-matches. A script option has the form `{ "kind": "script", "script_name": "..." }` and passes `input` to that global Lua filter script. Custom-column and filter-script execution errors silently count as non-matches.
 
@@ -492,6 +492,40 @@ queries, the server scans until it has collected `limit` matches or exhausted th
 therefore clients can paginate with the smallest returned match as the next exclusive `max_id` and
 stop when a page contains fewer than `limit` matches. When an ID leaves `in_progress_ids`, clients
 perform one final explicit-ID evaluation and use its final `matched_ids` membership.
+
+### Inline Lua query filters
+
+`POST /api/logs/ids` uses query-only `LogFilter` / `LogFilterOption` types. Column and named-script
+options retain their existing JSON shapes. The additional `script_content` option runs standard
+filter Lua directly without saving it:
+
+```json
+{
+  "session_id": 1,
+  "filter": {
+    "option": { "kind": "script_content", "content": "local input = ...\nreturn entry.req.uri.host == input" },
+    "input": "example.com"
+  },
+  "min_id": 100,
+  "max_id": 200
+}
+```
+
+All existing `/api/logs/ids` request/response and paging behavior applies, including optional
+`session_id`, explicit `ids` or exclusive range bounds, default/max `limit` 10,000, and read
+redaction. Lua always executes even with empty input. `script_content` compilation/runtime errors,
+instruction exhaustion, and non-boolean results fail the query with `400 bad_request`; per-record
+errors include the log ID. Named `script` errors still count as non-matches.
+
+`script_content` is also supported by `POST /share-api/logs/ids`, restricted to the authorized
+Session and its effective redaction policy. It is not part of the shared `FilterOption` or
+`SessionFilter` types and cannot be saved as a Session filter. Queries never
+save scripts or change Session state. No separate Lua query endpoint exists.
+
+The former named filter debug route and Tauri `debug_filter_script` command have been removed.
+The script manager keeps its save-and-run UI, queries existing `getLogIds` with
+`min_id=id-1` / `max_id=id+1` and a `script_content` filter, and displays membership in
+`matched_ids` (`false` for a missing ID).
 
 ### Batch-render log views
 
@@ -810,18 +844,6 @@ established HTTP connection, CONNECT/MITM tunnel, Upgrade/WebSocket, transparent
 upstream pool before the call returns while leaving the listener running. Changing routing
 selection, changing selected routing content, or deleting the selected rule uses the same reset;
 identical values and unselected routing-script edits do not.
-
-`POST /api/filter-scripts/{name}/debug` evaluates one script without suppressing errors:
-
-```json
-{
-  "session_id": 1,
-  "log_id": 123,
-  "input": "example.com"
-}
-```
-
-The success payload is a boolean. Runtime errors and non-boolean results return `bad_request`.
 
 ## Session interceptors
 

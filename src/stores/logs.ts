@@ -160,7 +160,10 @@ export function createLogsStore() {
     loadProgress: null as number | null,
 
     get filterActive(): boolean {
-      return this.appliedFilter.option !== null && this.appliedFilter.input.length > 0;
+      return (
+        this.appliedFilter.option !== null &&
+        (this.appliedFilter.option.kind === "script" || this.appliedFilter.input.length > 0)
+      );
     },
 
     get hasActive(): boolean {

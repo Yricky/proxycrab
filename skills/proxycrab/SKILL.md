@@ -86,6 +86,7 @@ surface has no `/api/agents.md` endpoint and needs no management API key or loca
 | Upload an immutable workspace Asset | `scripts/asset-upload.mjs` |
 | Wait for a new matching capture | `scripts/log-wait.mjs` |
 | Save a diagnostic artifact | `scripts/log-export.mjs` |
+| Query with temporary Lua without saving | `scripts/log-filter.mjs --session-id ID --file SCRIPT.lua` |
 | Create or update a Lua filter | `scripts/filter-upsert.mjs`, then `scripts/filter-debug.mjs` |
 | Create or update a custom column | `scripts/column-upsert.mjs` |
 | Create or update an interceptor | `scripts/interceptor-upsert.mjs` |
@@ -285,6 +286,19 @@ newlines remain exact.
 For multiple values of one header, use `req.headers:set(name, {"first", "second"})` or the same
 method on `resp.headers`. This replaces existing values; `{}` deletes the header. Every array
 element must be a valid string. See the Lua reference for validation and modification history.
+
+Run a temporary standard filter without saving a script or changing the Session:
+
+```bash
+node <skill-dir>/scripts/log-filter.mjs --session-id 3 --file /tmp/server-error.lua --limit 100
+```
+
+This calls `POST /api/logs/ids` with `filter.option: {kind: "script_content", content: source}`
+and `filter.input` passed exactly via `...`, including the empty string. All ordinary ID query
+parameters and `{matched_ids, in_progress_ids}` behavior apply; omitting Session selects the active
+one. Unlike named-script list filtering, inline compilation/runtime errors and non-boolean returns
+fail with `bad_request`. The option is query-only and also works on `/share-api/logs/ids` within
+the share scope and redaction policy; Session filter writes do not accept it.
 
 Create or update a filter and test it against a known capture:
 

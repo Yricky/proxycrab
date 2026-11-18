@@ -16,11 +16,10 @@ use proxy_crab_mgr::{
     dto::{
         ActiveSession, AgentsPresetState, BreakpointDetailPayload, BreakpointQuery, BypassPage,
         BypassQuery, CertificateResponse, CreateAgentsPresetRequest, CreateSessionRequest,
-        DebugFilterScriptRequest, DeleteCount, ExecuteTemporaryScriptRequest,
-        ExtendBreakpointRequest, HttpApiChange, HttpApiResource, HttpServiceStatus,
-        InterceptorCreateRequest, InterceptorDetail, InterceptorLibraryList,
-        InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest, LogViewsPayload,
-        LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
+        DeleteCount, ExecuteTemporaryScriptRequest, ExtendBreakpointRequest, HttpApiChange,
+        HttpApiResource, HttpServiceStatus, InterceptorCreateRequest, InterceptorDetail,
+        InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogIdsPayload, LogIdsRequest,
+        LogViewsPayload, LogViewsRequest, ManagerError, ReplaceSessionInterceptorsRequest,
         ReplaceSessionViewRequest, ReplayRequestPayload, ReplayResult, RoutingSelection,
         ScriptRequest, SessionInterceptorsPayload, SessionViewPayload, SessionsPayload, SystemInfo,
         SystemLogsQuery, UpdateAgentsPresetRequest, UpdateScriptRequest, UpdateSessionRequest,
@@ -639,15 +638,6 @@ async fn delete_filter_script(
 }
 
 #[tauri::command]
-async fn debug_filter_script(
-    state: State<'_, BackendState>,
-    name: String,
-    request: DebugFilterScriptRequest,
-) -> Result<bool, ManagerError> {
-    state.manager().debug_filter_script(name, request).await
-}
-
-#[tauri::command]
 async fn list_routing_scripts(state: State<'_, BackendState>) -> Result<Vec<Script>, ManagerError> {
     state.manager().routing_scripts().await
 }
@@ -1223,7 +1213,6 @@ pub fn run() {
             get_filter_script,
             update_filter_script,
             delete_filter_script,
-            debug_filter_script,
             list_routing_scripts,
             create_routing_script,
             get_routing_script,

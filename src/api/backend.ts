@@ -10,7 +10,6 @@ import type { BypassQuery } from "./generated/BypassQuery";
 import type { CertificateResponse } from "./generated/CertificateResponse";
 import type { CreateAgentsPresetRequest } from "./generated/CreateAgentsPresetRequest";
 import type { CreateSessionRequest } from "./generated/CreateSessionRequest";
-import type { DebugFilterScriptRequest } from "./generated/DebugFilterScriptRequest";
 import type { DeleteCount } from "./generated/DeleteCount";
 import type { ExecuteTemporaryScriptRequest } from "./generated/ExecuteTemporaryScriptRequest";
 import type { ExtendBreakpointRequest } from "./generated/ExtendBreakpointRequest";
@@ -241,7 +240,6 @@ export interface Backend {
   getFilterScript(name: string): Promise<Script>;
   updateFilterScript(name: string, request: UpdateScriptRequest): Promise<void>;
   deleteFilterScript(name: string): Promise<void>;
-  debugFilterScript(name: string, request: DebugFilterScriptRequest): Promise<boolean>;
 
   // routing scripts
   listRoutingScripts(): Promise<Script[]>;

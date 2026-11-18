@@ -75,7 +75,11 @@ const regexError = ref<string | null>(null);
 const regexValidating = ref(false);
 let validationSequence = 0;
 
-const filterActive = computed(() => props.filter.option !== null && props.filter.input.length > 0);
+const filterActive = computed(
+  () =>
+    props.filter.option !== null &&
+    (props.filter.option.kind === "script" || props.filter.input.length > 0),
+);
 const dirty = computed(() => JSON.stringify(draft.value) !== JSON.stringify(props.filter));
 const selectedColumn = computed(() =>
   draft.value.option?.kind === "column" ? draft.value.option.column : null,
