@@ -12,6 +12,7 @@ import {
 import { useBackend } from "../api";
 import { t } from "../i18n";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import { resourceKinds } from "../utils/api-changes";
 import type { HttpServiceStatus } from "../api/generated/HttpServiceStatus";
 import type { ClashSubscriptionState } from "../api/generated/ClashSubscriptionState";
 import { appStore, reportError } from "../stores/app";
@@ -121,7 +122,7 @@ async function refresh(): Promise<void> {
 }
 
 function onHttpApiChange(event: Event): void {
-  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
   if (resources.some((resource) => ["all", "config", "clash_subscription"].includes(resource)))
     void refreshConnection();
   if (resources.includes("all") || resources.includes("certificate")) {

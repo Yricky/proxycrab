@@ -13,6 +13,7 @@ import { useBackend } from "../api";
 import { t } from "../i18n";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import { resourceKinds } from "../utils/api-changes";
 import type { InterceptorKind } from "../api/generated/InterceptorKind";
 import type { SessionInterceptorItem } from "../api/generated/SessionInterceptorItem";
 import { appStore, reportError } from "../stores/app";
@@ -259,10 +260,11 @@ function onHttpApiChange(event: Event): void {
   configDownload.value = backend.downloadSessionConfig;
   const change = (event as CustomEvent<HttpApiChange>).detail;
   if (change.session_id !== undefined && change.session_id !== logs.sessionId) return;
+  const resources = resourceKinds(change);
   if (
-    change.resources.includes("all") ||
-    change.resources.includes("interceptors") ||
-    change.resources.includes("session_interceptors")
+    resources.includes("all") ||
+    resources.includes("interceptors") ||
+    resources.includes("session_interceptors")
   ) {
     refresh();
   }

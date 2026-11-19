@@ -97,7 +97,7 @@ async function submit(): Promise<void> {
     if (!next.import_id) {
       await sessionsStore.refresh();
       window.dispatchEvent(
-        new CustomEvent(HTTP_API_CHANGE_EVENT, { detail: { resources: ["all"] } }),
+        new CustomEvent(HTTP_API_CHANGE_EVENT, { detail: { resources: [{ kind: "all" }] } }),
       );
     }
   } catch (e) {

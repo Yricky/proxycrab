@@ -10,6 +10,7 @@ import { reportError } from "./app";
 import { t } from "../i18n";
 import { proxyStore } from "./proxy";
 import { HTTP_API_CHANGE_EVENT } from "./http-api-sync";
+import { resourceKinds } from "../utils/api-changes";
 
 export function emptySessionFilter(): SessionFilter {
   return { option: null, input: "" };
@@ -571,19 +572,35 @@ export function createLogsStore() {
       return this.reloadFilter(filter);
     },
 
-    async syncSessionView(): Promise<void> {
+    async syncSessionView(change: HttpApiChange): Promise<void> {
       const sessionId = logsStore.sessionId;
       if (sessionId === null) return;
+      const all = resourceKinds(change).includes("all");
+      const names = new Set(
+        change.resources.flatMap((resource) =>
+          resource.kind === "column_scripts" ? resource.names : [],
+        ),
+      );
+      const refreshRows =
+        all ||
+        this.columns.some((column) => column.kind === "script" && names.has(column.script_name));
+      const option = this.appliedFilter.option;
+      const refreshFilter =
+        all ||
+        (this.filterActive &&
+          option?.kind === "column" &&
+          option.column.kind === "script" &&
+          names.has(option.column.script_name));
       try {
         const view = await backend.getSessionView(sessionId);
         if (logsStore.sessionId !== sessionId) return;
-        this.applyColumns(view.columns);
-        // 不同步的面不跟随后端过滤变更：Session 保存的过滤只在加载时当初始值。
-        if (backend.replaceSessionFilter && !sameFilter(this.appliedFilter, view.filter)) {
-          await this.reloadFilter(view.filter);
-        } else {
-          this.setViewportIds([...viewportIds]);
+        this.applyColumns(view.columns, refreshRows);
+        // 分享页保留自己的过滤条件；可写视图跟随后端保存的过滤条件。
+        const filter = backend.replaceSessionFilter ? view.filter : this.appliedFilter;
+        if (refreshFilter || !sameFilter(this.appliedFilter, filter)) {
+          await this.reloadFilter(filter);
         }
+        if (logsStore.sessionId === sessionId) this.setViewportIds([...viewportIds]);
       } catch (error) {
         reportError(error, t("同步 Session 视图失败"));
       }
@@ -677,20 +694,6 @@ export function createLogsStore() {
       }
     },
 
-    async refreshView(): Promise<void> {
-      const sessionId = logsStore.sessionId;
-      if (sessionId === null) return;
-      try {
-        const view = await backend.getSessionView(sessionId);
-        if (logsStore.sessionId !== sessionId) return;
-        this.applyColumns(view.columns, true);
-        this.setViewportIds([...viewportIds]);
-        await this.hydrateFor(sessionId, generation, proxyStore.activeNetlogIds(sessionId), true);
-      } catch (error) {
-        reportError(error, t("刷新日志列失败"));
-      }
-    },
-
     cellError(id: number, columnIndex: number): string | undefined {
       return this.cellErrors.get(cellErrorKey(id, columnIndex));
     },
@@ -715,7 +718,6 @@ export function createLogsStore() {
       scope.stop();
       window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
       window.removeEventListener("proxycrab-redaction-changed", onRedactionChanged);
-      window.removeEventListener("column-scripts-changed", onColumnScriptsChanged);
       window.removeEventListener("filter-scripts-changed", onFilterScriptsChanged);
     },
   });
@@ -724,19 +726,20 @@ export function createLogsStore() {
     const change = (event as CustomEvent<HttpApiChange>).detail;
     // 后端事件由 http-api-sync 统一转成前端事件，实例只关心自己这个会话。
     if (change.session_id !== undefined && change.session_id !== logsStore.sessionId) return;
-    if (change.resources.includes("all") || change.resources.includes("session_view")) {
-      void logsStore.syncSessionView();
+    const resources = resourceKinds(change);
+    if (
+      resources.includes("all") ||
+      resources.includes("session_view") ||
+      resources.includes("column_scripts")
+    ) {
+      void logsStore.syncSessionView(change);
     }
   }
 
-  // 列脚本改变的是单元格内容，重算视图即可；过滤脚本会改变匹配结果，需要整体重扫。
+  // 脱敏影响内容与匹配结果，必须同时重算。
   function onRedactionChanged(): void {
     logsStore.clearRows();
     void logsStore.reloadFilter(cloneSessionFilter(logsStore.appliedFilter));
-  }
-
-  function onColumnScriptsChanged(): void {
-    void logsStore.refreshView();
   }
 
   function onFilterScriptsChanged(): void {
@@ -779,7 +782,6 @@ export function createLogsStore() {
 
   window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
   window.addEventListener("proxycrab-redaction-changed", onRedactionChanged);
-  window.addEventListener("column-scripts-changed", onColumnScriptsChanged);
   window.addEventListener("filter-scripts-changed", onFilterScriptsChanged);
 
   return logsStore;

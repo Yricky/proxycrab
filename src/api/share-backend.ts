@@ -15,6 +15,10 @@ import type { SessionInterceptorsPayload } from "./generated/SessionInterceptors
 import type { SessionViewPayload } from "./generated/SessionViewPayload";
 import type { Script } from "./types";
 
+interface SharedColumnScript extends Script {
+  revision: string;
+}
+
 interface ApiEnvelope<T> {
   ok: boolean;
   data?: T;
@@ -123,7 +127,7 @@ export function createShareBackend(
       let stopped = false;
       let columns = JSON.stringify(bootstrap.view.columns);
       let redactionRevision = bootstrap.view.redaction_revision ?? null;
-      let columnScripts = "";
+      let columnScripts = new Map<string, string>();
       let filterScripts = "";
       let interceptors = "";
       let polling = false;
@@ -136,7 +140,7 @@ export function createShareBackend(
           const [view, nextColumns, nextFilters, nextInterceptors, capabilities] =
             await Promise.all([
               call<SessionViewPayload>("/share-api/session-view"),
-              call<Script[]>("/share-api/column-scripts"),
+              call<SharedColumnScript[]>("/share-api/column-scripts"),
               call<Script[]>("/share-api/filter-scripts"),
               call<SessionInterceptorsPayload>("/share-api/session-interceptors"),
               call<{ session_config_download: boolean }>("/share-api/capabilities"),
@@ -148,7 +152,7 @@ export function createShareBackend(
           ) {
             implemented.downloadSessionConfig =
               capabilities.session_config_download === true ? downloadConfig : undefined;
-            handler({ resources: ["session_share"], session_id: bootstrap.session.id });
+            handler({ resources: [{ kind: "session_share" }], session_id: bootstrap.session.id });
           }
           const revision = view.redaction_revision ?? null;
           if (revision !== redactionRevision) {
@@ -158,22 +162,33 @@ export function createShareBackend(
           const next = JSON.stringify(view.columns);
           if (next !== columns) {
             columns = next;
-            handler({ resources: ["session_view"], session_id: bootstrap.session.id });
+            handler({ resources: [{ kind: "session_view" }], session_id: bootstrap.session.id });
           }
           const nextInterceptorConfig = JSON.stringify(nextInterceptors);
           if (nextInterceptorConfig !== interceptors) {
             interceptors = nextInterceptorConfig;
-            handler({ resources: ["session_interceptors"], session_id: bootstrap.session.id });
+            handler({
+              resources: [{ kind: "session_interceptors" }],
+              session_id: bootstrap.session.id,
+            });
           }
-          const nextColumnScripts = JSON.stringify(nextColumns);
+          const nextColumnScripts = new Map(
+            nextColumns.map((script) => [script.name, JSON.stringify(script)]),
+          );
+          const names = [...new Set([...columnScripts.keys(), ...nextColumnScripts.keys()])].filter(
+            (name) => columnScripts.get(name) !== nextColumnScripts.get(name),
+          );
+          columnScripts = nextColumnScripts;
           const nextFilterScripts = JSON.stringify(nextFilters);
-          if (nextColumnScripts !== columnScripts) {
-            columnScripts = nextColumnScripts;
-            handler({ resources: ["column_scripts"], session_id: bootstrap.session.id });
+          if (names.length > 0) {
+            handler({
+              resources: [{ kind: "column_scripts", names }],
+              session_id: bootstrap.session.id,
+            });
           }
           if (nextFilterScripts !== filterScripts) {
             filterScripts = nextFilterScripts;
-            handler({ resources: ["filter_scripts"], session_id: bootstrap.session.id });
+            handler({ resources: [{ kind: "filter_scripts" }], session_id: bootstrap.session.id });
           }
         } catch (error) {
           if (
@@ -200,7 +215,7 @@ export function createShareBackend(
             );
             proxyRevision = change.revision;
             if (change.changed) {
-              handler({ resources: ["proxy"], session_id: bootstrap.session.id });
+              handler({ resources: [{ kind: "proxy" }], session_id: bootstrap.session.id });
             }
           } catch {
             if (!stopped) await new Promise((resolve) => window.setTimeout(resolve, 1000));

@@ -12,6 +12,7 @@ import LogDetailWindow from "../windows/LogDetailWindow.vue";
 import CellContentPopup from "./CellContentPopup.vue";
 import type { Column } from "../api/generated/Column";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import { resourceKinds } from "../utils/api-changes";
 import type { LogViewRow } from "../api/generated/LogViewRow";
 import type { Script } from "../api/types";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
@@ -411,7 +412,7 @@ async function refreshColumnScripts(): Promise<void> {
 }
 
 function onScriptChange(event: Event): void {
-  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
   if (resources.includes("all") || resources.includes("column_scripts"))
     void refreshColumnScripts();
 }
@@ -446,7 +447,7 @@ async function updateColumns(
     const view = await backend.getSessionView(sessionId);
     await replaceView(sessionId, { columns: update(view.columns) });
     widthOverrides.value = {};
-    await logsStore.refreshView();
+    await logsStore.syncSessionView({ resources: [{ kind: "session_view" }] });
   } catch (error) {
     reportError(error, errorMessage);
   }
@@ -1610,7 +1611,6 @@ watchEffect(() => {
 
 onMounted(() => {
   void refreshColumnScripts();
-  window.addEventListener("column-scripts-changed", refreshColumnScripts);
   window.addEventListener(HTTP_API_CHANGE_EVENT, onScriptChange);
   const updateSize = () => {
     const rect = tableWrap.value?.getBoundingClientRect();
@@ -1642,7 +1642,6 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener("column-scripts-changed", refreshColumnScripts);
   window.removeEventListener(HTTP_API_CHANGE_EVENT, onScriptChange);
   resizeObserver?.disconnect();
   themeObserver?.disconnect();

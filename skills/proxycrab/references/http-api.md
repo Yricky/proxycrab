@@ -499,8 +499,8 @@ query parameters are present). JSON success responses use `{"ok":true,"data":…
 | `GET /share-api/logs/{id}/websocket/messages/{message_id}/body` | Required `side`; optional `max_size` (default 16777216). Raw message bytes; respect hidden/unavailable content errors. Message IDs are per direction. |
 | `GET /share-api/logs/{id}/interceptors/{execution_id}/content` | Raw executed Lua source, `text/plain`, with `x-proxycrab-script-sha256` header. |
 | `GET /share-api/logs/{id}/interceptors/{execution_id}/snapshot` | Same interceptor-entry snapshot JSON as the management equivalent. Use an execution ID from log detail. |
-| `GET /share-api/column-scripts` | Script metadata array `{name, display_name, content:""}`; library source is not exposed. |
-| `GET /share-api/filter-scripts` | Same metadata-only shape for filter scripts. |
+| `GET /share-api/column-scripts` | Script metadata array `{name, display_name, content:"", revision}`; `revision` is the source SHA-256 and changes on source-only edits. Library source is not exposed. |
+| `GET /share-api/filter-scripts` | Filter metadata array `{name, display_name, content:""}`; library source is not exposed. |
 | `POST /share-api/validate-filter-regex` | `{"pattern":"…"}`; data is `null` for a valid Rust `fancy-regex` pattern (including lookaround), otherwise a validation error string. |
 
 Only the routes above exist on the share surface; there are no Session writes, filter persistence,
@@ -974,6 +974,15 @@ Create:
 
 `content` defaults to an empty string when omitted. Update requires `{ "content": "..." }`.
 Script names cannot be changed. Successful create/update/delete returns `{}`.
+
+Successful HTTP and desktop column-script writes notify open views through the same change event:
+`{resources:[{kind:"column_scripts",names:["correlation-id"]},{kind:"session_view"}]}`.
+Views referencing those names invalidate cached row values and recalculate visible rows even when
+capture timestamps are unchanged; unrelated column changes preserve cached rows. Filters depending
+on a changed column are re-evaluated. Shared viewers detect source changes through the metadata
+`revision` on their next poll (every 1.5 seconds). No page reload or proxy restart is required.
+To verify a value through the API, render the same capture with `logs:[{id:42}]` and omit its
+`updated_at`; capture timestamps do not track script revisions.
 
 ### Filter endpoints
 

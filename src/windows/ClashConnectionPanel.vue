@@ -5,6 +5,7 @@ import { Io5Copy, Io5OpenOutline, Io5Reload, Io5Save, Io5Warning } from "vue-ico
 import { useBackend } from "../api";
 import { t } from "../i18n";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import { resourceKinds } from "../utils/api-changes";
 import type { ClashConfig } from "../api/generated/ClashConfig";
 import type { ClashSubscriptionState } from "../api/generated/ClashSubscriptionState";
 import MonacoEditor from "../components/MonacoEditor.vue";
@@ -109,7 +110,7 @@ async function resetConfig(): Promise<void> {
 }
 
 function onHttpApiChange(event: Event): void {
-  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
   if (!resources.some((resource) => resource === "all" || resource === "clash_config")) return;
   if (configDirty.value) {
     configExternal.value = true;

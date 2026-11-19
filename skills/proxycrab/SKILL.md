@@ -106,6 +106,11 @@ surface has no `/api/agents.md` endpoint and needs no management API key or loca
 Resolve script paths relative to this `SKILL.md`; do not assume the current working directory is the
 skill directory.
 
+Updating an existing custom-column script refreshes cached values in open views using that name,
+including historical captures. Unrelated columns retain their cache. Shared viewers detect source
+changes through metadata revisions on their next poll. Verify API results by rendering the same
+capture without `updated_at`; capture timestamps do not change when a script is edited.
+
 Share defaults are enforced by the backend. New shares with an omitted redaction field inherit
 local dynamically. Keys bound to a script must omit the field and shares follow their Key binding;
 unconfigured Keys must also omit it. Only a Key explicitly bound to `""` may supply a share policy.

@@ -102,7 +102,7 @@ export type InterceptorUpdateRequest = { content: string, };
 
 export type HttpServiceStatus = { running: boolean, host: string, port: number, error: string | null, };
 
-export type HttpApiResource = "workspace" | "config" | "proxy" | "sessions" | "archived_sessions" | "active_session" | "session_share" | "session_pages" | "session_view" | "column_scripts" | "filter_scripts" | "routing_scripts" | "routing_selection" | "bypass" | "interceptors" | "session_interceptors" | "certificate" | "clash_subscription" | "clash_config" | "system_logs" | "all";
+export type HttpApiResource = { "kind": "workspace" } | { "kind": "config" } | { "kind": "proxy" } | { "kind": "sessions" } | { "kind": "archived_sessions" } | { "kind": "active_session" } | { "kind": "session_share" } | { "kind": "session_pages" } | { "kind": "session_view" } | { "kind": "column_scripts", names: Array<string>, } | { "kind": "filter_scripts" } | { "kind": "routing_scripts" } | { "kind": "routing_selection" } | { "kind": "bypass" } | { "kind": "interceptors" } | { "kind": "session_interceptors" } | { "kind": "certificate" } | { "kind": "clash_subscription" } | { "kind": "clash_config" } | { "kind": "system_logs" } | { "kind": "all" };
 
 export type HttpApiChange = { resources: Array<HttpApiResource>, session_id?: number, };
 

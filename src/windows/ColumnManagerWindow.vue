@@ -18,7 +18,6 @@ const config: ScriptLibraryConfig = {
   statusbar: t("Lua 5.4 沙箱 · 10 万指令上限 · 16 MiB 内存上限"),
   defaultSource: "",
   resources: ["column_scripts"],
-  changeEvent: "column-scripts-changed",
   focusScope: "column",
   deleteMessage: (script, dirty) =>
     dirty

@@ -40,7 +40,7 @@ Common methods:
 - `getLogViews({session_id,logs:[{id}],view?})`: up to 200 rows per request.
 - `getWebSocketMessages?.(...)`, `fetchWebSocketMessageBody?.(...)`: captured WebSocket data.
 - `getSessionView(sessionId)`, `getSessionInterceptors(sessionId)`: current read-only configuration.
-- `subscribeChanges(handler)`: resolves to an unsubscribe function. It reports view/config/proxy changes; it is **not** a captured-log stream. Poll log IDs/details separately when needed, avoid overlapping polls, and clear timers/unsubscribe when unmounting.
+- `subscribeChanges(handler)`: resolves to an unsubscribe function. The event is `{resources:[{kind:"session_view"}],session_id?}`; match each resource by `kind`. Column changes carry `{kind:"column_scripts",names:["business/status"]}`. Invalidate cached cells only when they reference an affected name, and re-evaluate filters using it. `{kind:"all"}` invalidates everything. Sharing polls column metadata revisions, so edits are detected without exposing source. This is **not** a captured-log stream. Poll log IDs/details separately when needed, avoid overlapping polls, and clear timers/unsubscribe when unmounting.
 - `saveFile({filename})`: append bytes to the returned writer, then `markAsFinish()`; use `markAsError()` on failure. Downloads remain browser managed.
 
 Management:

@@ -1091,24 +1091,29 @@ async fn column_scripts(
     State(state): State<Arc<ShareState>>,
 ) -> Result<Json<serde_json::Value>, ShareApiError> {
     let scripts = state.manager.column_scripts().await?;
-    success(script_names(scripts))
+    success(
+        scripts
+            .iter()
+            .map(|script| {
+                let mut metadata = script_metadata(script);
+                metadata["revision"] =
+                    json!(proxy_crab_mitm::model::script_content_hash(&script.content));
+                metadata
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 async fn filter_scripts(
     State(state): State<Arc<ShareState>>,
 ) -> Result<Json<serde_json::Value>, ShareApiError> {
     let scripts = state.manager.filter_scripts().await?;
-    success(script_names(scripts))
+    success(scripts.iter().map(script_metadata).collect::<Vec<_>>())
 }
 
-fn script_names(scripts: Vec<Script>) -> Vec<serde_json::Value> {
-    scripts
-        .into_iter()
-        .map(|script| {
-            let display_name = proxy_crab_mitm::model::script_display_name(&script.content);
-            serde_json::json!({ "name": script.name, "content": "", "display_name": display_name })
-        })
-        .collect()
+fn script_metadata(script: &Script) -> serde_json::Value {
+    let display_name = proxy_crab_mitm::model::script_display_name(&script.content);
+    json!({ "name": script.name, "content": "", "display_name": display_name })
 }
 
 #[derive(Deserialize)]
@@ -2420,6 +2425,39 @@ mod tests {
         assert_eq!(body["data"][0]["name"], "secret-column");
         assert_eq!(body["data"][0]["content"], "");
         assert_eq!(body["data"][0]["display_name"], "鉴权token");
+        assert_eq!(
+            body["data"][0]["revision"],
+            proxy_crab_mitm::model::script_content_hash(
+                "-- #display_name: 鉴权token\nreturn 'secret source'"
+            )
+        );
+        assert!(!body.to_string().contains("secret source"));
+        let original_revision = body["data"][0]["revision"].clone();
+        manager
+            .update_column_script(
+                "secret-column".into(),
+                crate::dto::UpdateScriptRequest {
+                    content: "-- #display_name: 鉴权token\nreturn 'changed secret source'".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/share-api/column-scripts?token={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_ne!(body["data"][0]["revision"], original_revision);
+        assert_eq!(body["data"][0]["name"], "secret-column");
+        assert_eq!(body["data"][0]["display_name"], "鉴权token");
+        assert_eq!(body["data"][0]["content"], "");
         assert!(!body.to_string().contains("secret source"));
 
         let original_filter = manager.session_view(Some(shared.id)).await.unwrap().filter;

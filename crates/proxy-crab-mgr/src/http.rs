@@ -705,12 +705,6 @@ fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Optio
             vec![HttpApiResource::SessionShare]
         }
         (&Method::PUT, "/api/session-view") => vec![HttpApiResource::SessionView],
-        (&Method::POST, "/api/column-scripts") => {
-            vec![HttpApiResource::ColumnScripts, HttpApiResource::SessionView]
-        }
-        (&Method::PUT | &Method::DELETE, value) if value.starts_with("/api/column-scripts/") => {
-            vec![HttpApiResource::ColumnScripts, HttpApiResource::SessionView]
-        }
         (&Method::POST, "/api/filter-scripts") => {
             vec![HttpApiResource::FilterScripts, HttpApiResource::SessionView]
         }
@@ -1353,9 +1347,12 @@ async fn column_scripts(State(manager): State<ManagerState>) -> ApiResult {
 
 async fn create_column_script(
     State(manager): State<ManagerState>,
+    Extension(changes): Extension<ChangeSender>,
     ApiJson(request): ApiJson<ScriptRequest>,
 ) -> ApiResult {
+    let change = HttpApiChange::column_script(request.name.clone());
     manager.create_column_script(request).await?;
+    let _ = changes.send(change);
     success(json!({}))
 }
 
@@ -1368,18 +1365,24 @@ async fn column_script(
 
 async fn update_column_script(
     State(manager): State<ManagerState>,
+    Extension(changes): Extension<ChangeSender>,
     ApiPath(name): ApiPath<String>,
     ApiJson(request): ApiJson<UpdateScriptRequest>,
 ) -> ApiResult {
+    let change = HttpApiChange::column_script(name.clone());
     manager.update_column_script(name, request).await?;
+    let _ = changes.send(change);
     success(json!({}))
 }
 
 async fn delete_column_script(
     State(manager): State<ManagerState>,
+    Extension(changes): Extension<ChangeSender>,
     ApiPath(name): ApiPath<String>,
 ) -> ApiResult {
+    let change = HttpApiChange::column_script(name.clone());
     manager.delete_column_script(name).await?;
+    let _ = changes.send(change);
     success(json!({}))
 }
 
@@ -3011,13 +3014,6 @@ mod tests {
                 Some(42),
             ),
             (
-                "PUT",
-                "/api/column-scripts/host",
-                None,
-                vec![HttpApiResource::ColumnScripts, HttpApiResource::SessionView],
-                None,
-            ),
-            (
                 "DELETE",
                 "/api/filter-scripts/errors",
                 None,
@@ -3512,6 +3508,78 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
         assert_eq!(body["ok"], false);
         assert_eq!(body["error"]["code"], "bad_request");
+    }
+
+    #[tokio::test]
+    async fn column_script_writes_publish_names_once_and_only_after_success() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
+        let app = router_with_changes(MitmManager::new(runtime), allow_all(), changes);
+        let name = "业务/status";
+        let encoded = url::form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>();
+        let path = format!("/api/column-scripts/{encoded}");
+        for (method, uri, body, succeeds) in [
+            (
+                "POST",
+                "/api/column-scripts",
+                json!({ "name": name, "content": "return 'old'" }),
+                true,
+            ),
+            (
+                "POST",
+                "/api/column-scripts",
+                json!({ "name": name, "content": "return 'duplicate'" }),
+                false,
+            ),
+            (
+                "PUT",
+                path.as_str(),
+                json!({ "content": "return 'new'" }),
+                true,
+            ),
+            ("DELETE", path.as_str(), json!({}), true),
+            (
+                "PUT",
+                path.as_str(),
+                json!({ "content": "return 'missing'" }),
+                false,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().is_success(), succeeds, "{method} {uri}");
+            if succeeds {
+                let change = receiver.try_recv().unwrap();
+                assert_eq!(
+                    change,
+                    crate::dto::HttpApiChange::column_script(name.into())
+                );
+                assert_eq!(
+                    serde_json::to_value(change).unwrap(),
+                    json!({
+                        "resources": [
+                            { "kind": "column_scripts", "names": [name] },
+                            { "kind": "session_view" }
+                        ]
+                    })
+                );
+            }
+            assert!(
+                receiver.try_recv().is_err(),
+                "no failed or duplicate event: {method} {uri}"
+            );
+        }
     }
 
     #[tokio::test]

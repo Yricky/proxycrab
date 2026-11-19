@@ -568,10 +568,14 @@ async fn list_column_scripts(state: State<'_, BackendState>) -> Result<Vec<Scrip
 
 #[tauri::command]
 async fn create_column_script(
+    app: tauri::AppHandle,
     state: State<'_, BackendState>,
     request: ScriptRequest,
 ) -> Result<(), ManagerError> {
-    state.manager().create_column_script(request).await
+    let change = HttpApiChange::column_script(request.name.clone());
+    state.manager().create_column_script(request).await?;
+    let _ = app.emit("proxycrab://http-api-change", change);
+    Ok(())
 }
 
 #[tauri::command]
@@ -584,19 +588,27 @@ async fn get_column_script(
 
 #[tauri::command]
 async fn update_column_script(
+    app: tauri::AppHandle,
     state: State<'_, BackendState>,
     name: String,
     request: UpdateScriptRequest,
 ) -> Result<(), ManagerError> {
-    state.manager().update_column_script(name, request).await
+    let change = HttpApiChange::column_script(name.clone());
+    state.manager().update_column_script(name, request).await?;
+    let _ = app.emit("proxycrab://http-api-change", change);
+    Ok(())
 }
 
 #[tauri::command]
 async fn delete_column_script(
+    app: tauri::AppHandle,
     state: State<'_, BackendState>,
     name: String,
 ) -> Result<(), ManagerError> {
-    state.manager().delete_column_script(name).await
+    let change = HttpApiChange::column_script(name.clone());
+    state.manager().delete_column_script(name).await?;
+    let _ = app.emit("proxycrab://http-api-change", change);
+    Ok(())
 }
 
 #[tauri::command]

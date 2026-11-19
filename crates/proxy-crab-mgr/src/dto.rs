@@ -705,8 +705,8 @@ pub struct HttpServiceStatus {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export)]
 pub enum HttpApiResource {
     Workspace,
@@ -718,7 +718,7 @@ pub enum HttpApiResource {
     SessionShare,
     SessionPages,
     SessionView,
-    ColumnScripts,
+    ColumnScripts { names: Vec<String> },
     FilterScripts,
     RoutingScripts,
     RoutingSelection,
@@ -739,6 +739,18 @@ pub struct HttpApiChange {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub session_id: Option<u64>,
+}
+
+impl HttpApiChange {
+    pub fn column_script(name: String) -> Self {
+        Self {
+            resources: vec![
+                HttpApiResource::ColumnScripts { names: vec![name] },
+                HttpApiResource::SessionView,
+            ],
+            session_id: None,
+        }
+    }
 }
 
 pub use proxy_crab_mitm::model::{

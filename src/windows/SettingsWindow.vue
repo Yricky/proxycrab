@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Io5Add, Io5Build, Io5Globe, Io5Settings, Io5Trash, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import { resourceKinds } from "../utils/api-changes";
 import type { HttpServiceStatus } from "../api/generated/HttpServiceStatus";
 import type { ApiActionView } from "../api/generated/ApiActionView";
 import type { PermissionIdentitySummary } from "../api/generated/PermissionIdentitySummary";
@@ -255,7 +256,7 @@ async function deleteSelectedKey(): Promise<void> {
 }
 
 function onHttpApiChange(event: Event): void {
-  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
   if (
     !resources.includes("all") &&
     !resources.includes("workspace") &&

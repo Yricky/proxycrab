@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { createShareBackend, type ShareBootstrap } from "./share-backend.ts";
-import type { HttpApiChange } from "./types.ts";
+import type { HttpApiChange } from "./generated/HttpApiChange";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -17,6 +17,8 @@ test("share subscriptions refresh changed script labels without exposing source 
     dispatchEvent: vi.fn(),
   });
   let displayName: string | null = "鉴权token";
+  let revision = "v1";
+  let deleted = false;
   const bootstrap: ShareBootstrap = {
     session: { id: 1, name: "shared", created_at: 0, description: null },
     view: { session_id: 1, columns: [], filter: { option: null, input: "" } },
@@ -34,7 +36,9 @@ test("share subscriptions refresh changed script labels without exposing source 
       path === "/share-api/session-view"
         ? bootstrap.view
         : path === "/share-api/column-scripts"
-          ? [{ name: "auth-token", display_name: displayName, content: "" }]
+          ? deleted
+            ? []
+            : [{ name: "auth-token", display_name: displayName, content: "", revision }]
           : [];
     return new Response(JSON.stringify({ ok: true, data }));
   });
@@ -49,14 +53,32 @@ test("share subscriptions refresh changed script labels without exposing source 
     expect(changes).toEqual([]);
     displayName = "新的标题";
     await vi.advanceTimersByTimeAsync(1500);
-    expect(changes).toEqual([{ resources: ["column_scripts"], session_id: 1 }]);
+    expect(changes).toEqual([
+      { resources: [{ kind: "column_scripts", names: ["auth-token"] }], session_id: 1 },
+    ]);
     expect(await backend.listColumnScripts()).toEqual([
-      { name: "auth-token", display_name: "新的标题", content: "" },
+      { name: "auth-token", display_name: "新的标题", content: "", revision: "v1" },
     ]);
     changes.length = 0;
     displayName = null;
     await vi.advanceTimersByTimeAsync(1500);
-    expect(changes).toEqual([{ resources: ["column_scripts"], session_id: 1 }]);
+    expect(changes).toEqual([
+      { resources: [{ kind: "column_scripts", names: ["auth-token"] }], session_id: 1 },
+    ]);
+    changes.length = 0;
+    revision = "v2";
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(changes).toEqual([
+      { resources: [{ kind: "column_scripts", names: ["auth-token"] }], session_id: 1 },
+    ]);
+    changes.length = 0;
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(changes).toEqual([]);
+    deleted = true;
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(changes).toEqual([
+      { resources: [{ kind: "column_scripts", names: ["auth-token"] }], session_id: 1 },
+    ]);
   } finally {
     stop();
   }
@@ -228,7 +250,7 @@ test("share polls interceptor order, labels, enabled and valid state and stops a
     ]) {
       config = { ...config, request };
       await vi.advanceTimersByTimeAsync(1500);
-      expect(changes).toEqual([{ resources: ["session_interceptors"], session_id: 1 }]);
+      expect(changes).toEqual([{ resources: [{ kind: "session_interceptors" }], session_id: 1 }]);
       changes.length = 0;
     }
   } finally {
@@ -333,6 +355,8 @@ test("configuration download capability follows owner changes and is absent with
   enabled = false;
   await vi.advanceTimersByTimeAsync(1500);
   expect(backend.downloadSessionConfig).toBeUndefined();
-  expect(changes.filter((c) => c.resources.includes("session_share"))).toHaveLength(2);
+  expect(changes.filter((c) => c.resources.some((r) => r.kind === "session_share"))).toHaveLength(
+    2,
+  );
   stop();
 });

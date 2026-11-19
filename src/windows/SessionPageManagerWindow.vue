@@ -7,6 +7,7 @@ import { BackendError } from "../api/backend-error";
 import { saveBytesFile } from "../api/save-file";
 import type { SessionPage } from "../api/generated/SessionPage";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import { resourceKinds } from "../utils/api-changes";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
@@ -103,9 +104,8 @@ async function deletePage(): Promise<void> {
   }
 }
 function changed(event: Event): void {
-  const change = (event as CustomEvent<HttpApiChange>).detail;
-  if (change.resources.includes("all") || change.resources.includes("session_pages"))
-    void refresh();
+  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
+  if (resources.includes("all") || resources.includes("session_pages")) void refresh();
 }
 onMounted(() => {
   void refresh();

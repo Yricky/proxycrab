@@ -16,6 +16,7 @@ import { useBackend } from "../api";
 import type { FilterColumn } from "../api/generated/FilterColumn";
 import type { FilterOption } from "../api/generated/FilterOption";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import { resourceKinds } from "../utils/api-changes";
 import type { SessionFilter } from "../api/generated/SessionFilter";
 import type { Script } from "../api/types";
 import { reportError } from "../stores/app";
@@ -333,7 +334,7 @@ function onDocumentPointerDown(event: PointerEvent): void {
 }
 
 function onHttpApiChange(event: Event): void {
-  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
   if (resources.includes("all") || resources.includes("column_scripts")) {
     void refreshAfterScriptChange();
   } else if (resources.includes("filter_scripts")) void refreshScripts();
@@ -342,7 +343,6 @@ function onHttpApiChange(event: Event): void {
 onMounted(() => {
   void refreshScripts();
   document.addEventListener("pointerdown", onDocumentPointerDown);
-  window.addEventListener("column-scripts-changed", refreshAfterScriptChange);
   window.addEventListener("filter-scripts-changed", refreshAfterScriptChange);
   window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
@@ -350,7 +350,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   closeGroupPopup();
   document.removeEventListener("pointerdown", onDocumentPointerDown);
-  window.removeEventListener("column-scripts-changed", refreshAfterScriptChange);
   window.removeEventListener("filter-scripts-changed", refreshAfterScriptChange);
   window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });

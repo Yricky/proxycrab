@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { Io5Play, Io5RadioButtonOn, Io5Save, Io5Trash } from "vue-icons-plus/io5";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
-import type { HttpApiResource } from "../api/generated/HttpApiResource";
+import { resourceKinds, type ResourceKind } from "../utils/api-changes";
 import MonacoEditor from "./MonacoEditor.vue";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
@@ -63,7 +63,7 @@ export interface ScriptLibraryConfig {
   statusbar?: string;
   defaultSource: string;
   /** HttpApiChange resources this window reacts to. */
-  resources: HttpApiResource[];
+  resources: ResourceKind[];
   /** Custom window event dispatched after create/update/delete. */
   changeEvent?: string;
   /** Active-selection support (routing rules). */
@@ -198,7 +198,7 @@ async function refreshScripts(preferredName?: string): Promise<void> {
 }
 
 function onHttpApiChange(event: Event): void {
-  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
   if (
     !resources.includes("all") &&
     !config.resources.some((resource) => resources.includes(resource))

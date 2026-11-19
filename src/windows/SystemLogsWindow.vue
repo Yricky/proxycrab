@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { Io5Refresh, Io5Trash } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import { resourceKinds } from "../utils/api-changes";
 import type { SystemLogEntry } from "../api/generated/SystemLogEntry";
 import VirtualList from "../components/VirtualList.vue";
 import { reportError } from "../stores/app";
@@ -65,7 +66,7 @@ async function clearLogs(): Promise<void> {
 }
 
 function onHttpApiChange(event: Event): void {
-  const { resources } = (event as CustomEvent<HttpApiChange>).detail;
+  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
   if (resources.includes("all") || resources.includes("system_logs")) {
     entries.value = [];
     void fetchLogs();

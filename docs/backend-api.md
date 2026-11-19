@@ -211,7 +211,20 @@ Successful HTTP operations that mutate application-visible state and runtime pro
 activity transitions publish an internal change event. Tauri also subscribes to runtime status
 directly, so activity updates remain available when the management HTTP service cannot start; the
 CLI browser receives them through its private long-poll route. The frontend coalesces adjacent
-events and refreshes only affected resources. During `stopping`, it retains the final running
+events and refreshes only affected resources. Resource changes are tagged objects: for example,
+`{"resources":[{"kind":"column_scripts","names":["business/status"]},{"kind":"session_view"}]}`.
+Other resources use objects such as `{"kind":"proxy"}`; `{"kind":"all"}` requests full invalidation.
+The optional top-level `session_id` scopes the whole event. Coalescing unions column-script names
+within each scope and preserves separate Session and global events.
+
+Successful column-script CRUD through HTTP or Tauri publishes the same named event; failed writes
+publish nothing. A table referencing a changed script invalidates its row/error/LRU caches and
+rejects earlier in-flight row responses, then reloads visible rows without conditional timestamps.
+Unrelated column-script changes preserve cached rows. A filter depending on a changed column
+re-evaluates membership, including when that column is hidden. Column-script saves use this single
+notification path rather than a separate frontend save event.
+
+During `stopping`, it retains the final running
 activity snapshot until `stopped`, so final filtering and row/detail hydration happen after drain
 has persisted terminal capture state. The read-only share page uses an authenticated,
 revision-based proxy-change long poll and then reloads its Session-scoped status.
@@ -377,8 +390,10 @@ This is response metadata, not an editable identity field: callers continue to s
 display name does not merge their references.
 
 `/share-api/column-scripts` and `/share-api/filter-scripts` retain `name` and `display_name` while
-returning empty `content`. Share-page polling detects label changes even when Session view columns
-have not changed. Metadata edits and removals use the existing script-change notifications.
+returning empty `content`. Column metadata also includes a `revision` containing the SHA-256 of the
+source. Share-page polling compares metadata by script name, so source-only changes, label changes,
+creation and deletion produce named column-script events even when Session columns are unchanged.
+The source remains hidden; filter metadata retains its existing shape.
 
 ## Workspace Assets
 

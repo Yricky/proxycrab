@@ -7,6 +7,7 @@ import CopyableLink from "../components/CopyableLink.vue";
 import { useBackend } from "../api";
 import { t } from "../i18n";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
+import { resourceKinds } from "../utils/api-changes";
 import type { AssetMetadata } from "../api/generated/AssetMetadata";
 import type { SessionPage } from "../api/generated/SessionPage";
 import type { SessionShareState } from "../api/generated/SessionShareState";
@@ -247,12 +248,13 @@ function onRefreshRequest(event: Event): void {
 
 function onHttpApiChange(event: Event): void {
   const change = (event as CustomEvent<HttpApiChange>).detail;
-  if (change.resources.includes("session_pages") || change.resources.includes("all")) {
+  const resources = resourceKinds(change);
+  if (resources.includes("session_pages") || resources.includes("all")) {
     void loadSessionPages();
     void load();
   }
   if (
-    (change.resources.includes("all") || change.resources.includes("session_share")) &&
+    (resources.includes("all") || resources.includes("session_share")) &&
     (change.session_id === undefined || change.session_id === props.sessionId)
   ) {
     void load();
