@@ -12,10 +12,9 @@ import LogDetailWindow from "../windows/LogDetailWindow.vue";
 import CellContentPopup from "./CellContentPopup.vue";
 import type { Column } from "../api/generated/Column";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
-import { resourceKinds } from "../utils/api-changes";
+import { resourceKinds, useBackendChanges } from "../utils/api-changes";
 import type { LogViewRow } from "../api/generated/LogViewRow";
 import type { Script } from "../api/types";
-import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { scriptLabel, scriptLabelFor, scriptTitle } from "../utils/script-label";
 import { isInactiveInProgress } from "../utils/capture-outcome";
 import { copyText as writeClipboardText } from "../utils/clipboard";
@@ -411,8 +410,8 @@ async function refreshColumnScripts(): Promise<void> {
   }
 }
 
-function onScriptChange(event: Event): void {
-  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
+function onScriptChange(change: HttpApiChange): void {
+  const resources = resourceKinds(change);
   if (resources.includes("all") || resources.includes("column_scripts"))
     void refreshColumnScripts();
 }
@@ -1609,9 +1608,10 @@ watchEffect(() => {
   scheduleDraw();
 });
 
+useBackendChanges(backend, onScriptChange);
+
 onMounted(() => {
   void refreshColumnScripts();
-  window.addEventListener(HTTP_API_CHANGE_EVENT, onScriptChange);
   const updateSize = () => {
     const rect = tableWrap.value?.getBoundingClientRect();
     if (!rect) return;
@@ -1642,7 +1642,6 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener(HTTP_API_CHANGE_EVENT, onScriptChange);
   resizeObserver?.disconnect();
   themeObserver?.disconnect();
   if (drawFrame !== undefined) window.cancelAnimationFrame(drawFrame);

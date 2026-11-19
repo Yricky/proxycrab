@@ -9,8 +9,7 @@ import { LruKeys } from "../utils/lru";
 import { reportError } from "./app";
 import { t } from "../i18n";
 import { proxyStore } from "./proxy";
-import { HTTP_API_CHANGE_EVENT } from "./http-api-sync";
-import { resourceKinds } from "../utils/api-changes";
+import { resourceKinds, watchBackendChanges } from "../utils/api-changes";
 
 export function emptySessionFilter(): SessionFilter {
   return { option: null, input: "" };
@@ -716,15 +715,13 @@ export function createLogsStore() {
     dispose(): void {
       this.stopPolling();
       scope.stop();
-      window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
+      unlisten();
       window.removeEventListener("proxycrab-redaction-changed", onRedactionChanged);
       window.removeEventListener("filter-scripts-changed", onFilterScriptsChanged);
     },
   });
 
-  function onHttpApiChange(event: Event): void {
-    const change = (event as CustomEvent<HttpApiChange>).detail;
-    // 后端事件由 http-api-sync 统一转成前端事件，实例只关心自己这个会话。
+  function onHttpApiChange(change: HttpApiChange): void {
     if (change.session_id !== undefined && change.session_id !== logsStore.sessionId) return;
     const resources = resourceKinds(change);
     if (
@@ -780,7 +777,7 @@ export function createLogsStore() {
     );
   });
 
-  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
+  const unlisten = watchBackendChanges(backend, onHttpApiChange);
   window.addEventListener("proxycrab-redaction-changed", onRedactionChanged);
   window.addEventListener("filter-scripts-changed", onFilterScriptsChanged);
 

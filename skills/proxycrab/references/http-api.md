@@ -196,8 +196,8 @@ activity indicator.
 The UI queries new IDs when the viewed Session's marker increases, even when `active_netlog` is
 empty and the Session is inactive. It polls rows every second only while requests are active or
 filter/finalization/discovery retries remain, and stops when idle. Share responses scope both
-maps to the authorized Session; their long-poll revision includes the latest ID to retain short
-request changes through notification coalescing.
+maps to the authorized Session; SSE proxy invalidations compare scoped status including the latest
+ID, retaining short request changes through notification coalescing.
 
 ### Script
 
@@ -320,8 +320,8 @@ the binary was compiled for.
 Returns `ProxyStatus`.
 
 Share-token responses use the same status contract but retain only their
-authorized Session in `active_netlog` and `latest_netlog_id`, and omit `active_bypass_count`; `/share-api/proxy/changes`
-provides the authenticated revision-based long-poll invalidation.
+authorized Session in `active_netlog` and `latest_netlog_id`, and omit `active_bypass_count`;
+`/share-api/changes` provides authenticated SSE invalidations when that scoped status changes.
 
 ### `POST /api/proxy/start`
 
@@ -490,7 +490,7 @@ query parameters are present). JSON success responses use `{"ok":true,"data":…
 | `GET /share-api/session-view` | Returns the shared Session view, including columns, saved filter, and optional `redaction_revision`. |
 | `GET /share-api/session-interceptors` | Returns `{session_id,request,response}` for the Token's Session, ignoring a supplied `session_id`. Ordered items contain only `{name,display_name?,enabled,valid}`; no library source. GET only; no write methods. |
 | `GET /share-api/proxy/status` | Returns scoped proxy status; use `running.active_netlog` for current activity. Other Sessions and global bypass counts are excluded. |
-| `GET /share-api/proxy/changes` | Optional `after` revision string. Returns `{revision, changed}`; matching revisions long-poll for up to 25 seconds. Use the returned revision on the next call. |
+| `GET /share-api/changes` | SSE (`text/event-stream`). JSON data frames contain `{resources,session_id,session_config_download,redaction_revision}`. Each connection and broadcast overflow emits `all`; reconnect and re-read state without a cursor. Proxy changes are scoped to this Session. Named `error` frames carry `{code,message}`; revoked/unavailable shares close the stream. |
 | `POST /share-api/logs/ids` | Same body/result as `POST /api/logs/ids` below: optional `filter`, `ids`, exclusive `min_id`/`max_id`, `limit` (default/max 10000). Returns `{matched_ids, in_progress_ids}`. `{}` matches all, without changing the saved filter. |
 | `POST /share-api/logs/views` | `{"logs":[{"id":42,"updated_at":123}],"view":{"columns":[{"kind":"method","width":50}]}}`. At most 200 rows; timestamps and `view` are optional. Same table payload and conditional row semantics as `/api/logs/views`. |
 | `GET /share-api/logs/{id}` | Same `LogDetail` as `/api/logs/{id}`; ID must belong to the shared Session. |
@@ -502,6 +502,12 @@ query parameters are present). JSON success responses use `{"ok":true,"data":…
 | `GET /share-api/column-scripts` | Script metadata array `{name, display_name, content:"", revision}`; `revision` is the source SHA-256 and changes on source-only edits. Library source is not exposed. |
 | `GET /share-api/filter-scripts` | Filter metadata array `{name, display_name, content:""}`; library source is not exposed. |
 | `POST /share-api/validate-filter-regex` | `{"pattern":"…"}`; data is `null` for a valid Rust `fancy-regex` pattern (including lookaround), otherwise a validation error string. |
+
+The SSE stream sends keepalive comments every 15 seconds and revalidates share access on events
+and at that interval. Stop reconnecting on `invalid_share_token` or `share_session_unavailable`;
+`redaction_failed` invalidates cached content, and the stream can report recovery after policy repair.
+Resource events contain invalidations rather than captured records; fetch IDs, rows and details
+through the read endpoints. Unsubscribe or abort the connection when the consumer is disposed.
 
 Only the routes above exist on the share surface; there are no Session writes, filter persistence,
 replay, export, breakpoint control, or `/agents.md` routes. Share reads honor effective redaction.
@@ -979,8 +985,8 @@ Successful HTTP and desktop column-script writes notify open views through the s
 `{resources:[{kind:"column_scripts",names:["correlation-id"]},{kind:"session_view"}]}`.
 Views referencing those names invalidate cached row values and recalculate visible rows even when
 capture timestamps are unchanged; unrelated column changes preserve cached rows. Filters depending
-on a changed column are re-evaluated. Shared viewers detect source changes through the metadata
-`revision` on their next poll (every 1.5 seconds). No page reload or proxy restart is required.
+on a changed column are re-evaluated. Shared viewers receive named invalidations over SSE,
+including source-only edits without exposing the source. No page reload or proxy restart is required.
 To verify a value through the API, render the same capture with `logs:[{id:42}]` and omit its
 `updated_at`; capture timestamps do not track script revisions.
 

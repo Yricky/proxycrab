@@ -15,8 +15,13 @@ import type { SessionInterceptorsPayload } from "./generated/SessionInterceptors
 import type { SessionViewPayload } from "./generated/SessionViewPayload";
 import type { Script } from "./types";
 
-interface SharedColumnScript extends Script {
-  revision: string;
+import type { HttpApiChange } from "./generated/HttpApiChange";
+import { shareChanges } from "./changes";
+import { subscribeSse } from "./sse";
+
+interface SharedChange extends HttpApiChange {
+  session_config_download: boolean;
+  redaction_revision: string | null;
 }
 
 interface ApiEnvelope<T> {
@@ -123,113 +128,43 @@ export function createShareBackend(
       if (target.kind === "breakpoint") return unsupported("fetch breakpoint body")();
       return fetchBodyFromBase(baseUrl, target, side, maxSize, undefined, "/share-api", token);
     },
-    subscribeChanges: async (handler) => {
-      let stopped = false;
-      let columns = JSON.stringify(bootstrap.view.columns);
+    subscribeChanges: shareChanges(async (handler) => {
       let redactionRevision = bootstrap.view.redaction_revision ?? null;
-      let columnScripts = new Map<string, string>();
-      let filterScripts = "";
-      let interceptors = "";
-      let polling = false;
-      let proxyRevision: string | undefined;
-      const proxyAbort = new AbortController();
-      const poll = async () => {
-        if (stopped || polling) return;
-        polling = true;
-        try {
-          const [view, nextColumns, nextFilters, nextInterceptors, capabilities] =
-            await Promise.all([
-              call<SessionViewPayload>("/share-api/session-view"),
-              call<SharedColumnScript[]>("/share-api/column-scripts"),
-              call<Script[]>("/share-api/filter-scripts"),
-              call<SessionInterceptorsPayload>("/share-api/session-interceptors"),
-              call<{ session_config_download: boolean }>("/share-api/capabilities"),
-            ]);
-          if (stopped) return;
-          if (
-            Boolean(implemented.downloadSessionConfig) !==
-            (capabilities.session_config_download === true)
-          ) {
-            implemented.downloadSessionConfig =
-              capabilities.session_config_download === true ? downloadConfig : undefined;
-            handler({ resources: [{ kind: "session_share" }], session_id: bootstrap.session.id });
-          }
-          const revision = view.redaction_revision ?? null;
-          if (revision !== redactionRevision) {
-            redactionRevision = revision;
-            window.dispatchEvent(new CustomEvent("proxycrab-redaction-changed"));
-          }
-          const next = JSON.stringify(view.columns);
-          if (next !== columns) {
-            columns = next;
-            handler({ resources: [{ kind: "session_view" }], session_id: bootstrap.session.id });
-          }
-          const nextInterceptorConfig = JSON.stringify(nextInterceptors);
-          if (nextInterceptorConfig !== interceptors) {
-            interceptors = nextInterceptorConfig;
-            handler({
-              resources: [{ kind: "session_interceptors" }],
-              session_id: bootstrap.session.id,
-            });
-          }
-          const nextColumnScripts = new Map(
-            nextColumns.map((script) => [script.name, JSON.stringify(script)]),
-          );
-          const names = [...new Set([...columnScripts.keys(), ...nextColumnScripts.keys()])].filter(
-            (name) => columnScripts.get(name) !== nextColumnScripts.get(name),
-          );
-          columnScripts = nextColumnScripts;
-          const nextFilterScripts = JSON.stringify(nextFilters);
-          if (names.length > 0) {
-            handler({
-              resources: [{ kind: "column_scripts", names }],
-              session_id: bootstrap.session.id,
-            });
-          }
-          if (nextFilterScripts !== filterScripts) {
-            filterScripts = nextFilterScripts;
-            handler({ resources: [{ kind: "filter_scripts" }], session_id: bootstrap.session.id });
-          }
-        } catch (error) {
-          if (
-            error instanceof BackendError &&
-            error.code === "redaction_failed" &&
-            redactionRevision !== "failed"
-          ) {
-            redactionRevision = "failed";
-            window.dispatchEvent(new CustomEvent("proxycrab-redaction-changed"));
-          }
-          // The request helper announces terminal share errors; network errors retry.
-        } finally {
-          polling = false;
-        }
+      const invalidateRedaction = (revision: string | null) => {
+        if (revision === redactionRevision) return;
+        redactionRevision = revision;
+        window.dispatchEvent(new CustomEvent("proxycrab-redaction-changed"));
       };
-      const watchProxy = async () => {
-        while (!stopped) {
-          try {
-            const query =
-              proxyRevision === undefined ? "" : `?after=${encodeURIComponent(proxyRevision)}`;
-            const change = await call<{ revision: string; changed: boolean }>(
-              `/share-api/proxy/changes${query}`,
-              { signal: proxyAbort.signal },
-            );
-            proxyRevision = change.revision;
-            if (change.changed) {
-              handler({ resources: [{ kind: "proxy" }], session_id: bootstrap.session.id });
+      const url = new URL("/share-api/changes", baseUrl);
+      url.searchParams.set("token", token);
+      return subscribeSse<SharedChange>(
+        url,
+        { referrerPolicy: "no-referrer" },
+        (change) => {
+          const canDownload = change.session_config_download === true;
+          if (Boolean(implemented.downloadSessionConfig) !== canDownload) {
+            implemented.downloadSessionConfig = canDownload ? downloadConfig : undefined;
+            if (
+              !change.resources.some(
+                (resource) => resource.kind === "session_share" || resource.kind === "all",
+              )
+            ) {
+              change.resources.push({ kind: "session_share" });
             }
-          } catch {
-            if (!stopped) await new Promise((resolve) => window.setTimeout(resolve, 1000));
           }
-        }
-      };
-      void watchProxy();
-      const timer = window.setInterval(() => void poll(), 1500);
-      return () => {
-        stopped = true;
-        proxyAbort.abort();
-        window.clearInterval(timer);
-      };
-    },
+          invalidateRedaction(change.redaction_revision);
+          if (change.resources.length)
+            handler({ resources: change.resources, session_id: change.session_id });
+        },
+        (error) => {
+          if (error.code === "redaction_failed") invalidateRedaction("failed");
+          if (!["invalid_share_token", "share_session_unavailable"].includes(error.code))
+            return false;
+          window.dispatchEvent(new CustomEvent(SHARE_INVALID_EVENT, { detail: error }));
+          return true;
+        },
+      );
+    }),
     subscribeApprovalChanges: async () => () => undefined,
     openExternal: async (url) => {
       const link = document.createElement("a");

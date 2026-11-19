@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { useBackend } from "../api";
+import { resourceKinds, useBackendChanges } from "../utils/api-changes";
 import type { LogsStore } from "../stores/logs";
 import { sessionsStore } from "../stores/sessions";
 import { routingStore } from "../stores/routing";
@@ -286,8 +288,23 @@ function sessionMenu(event: MouseEvent, session: SessionMetadata): void {
   ]);
 }
 
+const backend = useBackend();
+const canReadRouting =
+  typeof backend.listRoutingScripts === "function" &&
+  typeof backend.getRoutingSelection === "function";
+if (canReadRouting)
+  useBackendChanges(backend, (change) => {
+    if (
+      resourceKinds(change).some((kind) =>
+        ["all", "routing_scripts", "routing_selection"].includes(kind),
+      )
+    ) {
+      return routingStore.refresh();
+    }
+  });
+
 onMounted(() => {
-  void routingStore.refresh();
+  if (canReadRouting) void routingStore.refresh();
   document.addEventListener("mousedown", onDocMouseDown);
   window.addEventListener("resize", onWindowResize);
 });
@@ -319,7 +336,12 @@ watch(sidebarWidth, () => {
       <div class="sb-header">
         <span class="sb-title">{{ t("会话") }}</span>
       </div>
-      <div class="sb-routing" ref="routingEl" :class="{ empty: !routingStore.selectedName }">
+      <div
+        v-if="canReadRouting"
+        class="sb-routing"
+        ref="routingEl"
+        :class="{ empty: !routingStore.selectedName }"
+      >
         <button
           class="sb-bypass"
           :title="

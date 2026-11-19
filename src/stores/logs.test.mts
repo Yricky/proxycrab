@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { nextTick } from "vue";
+import type { HttpApiChange } from "../api/generated/HttpApiChange";
 import type { LogIdsRequest } from "../api/generated/LogIdsRequest";
 import type { LogViewsRequest } from "../api/generated/LogViewsRequest";
 import type { ProxyStatus } from "../api/generated/ProxyStatus";
@@ -7,15 +8,21 @@ import type { CaptureOutcome } from "../api/generated/CaptureOutcome";
 import type { Column } from "../api/generated/Column";
 
 const backend = vi.hoisted(() => ({
+  subscribeChanges: vi.fn(),
   getSessionView: vi.fn(),
   getLogIds: vi.fn(),
   getLogViews: vi.fn(),
 }));
 vi.mock("../api/runtime-backend", () => ({ runtimeBackend: backend }));
 vi.mock("./app", () => ({ reportError: vi.fn() }));
-vi.mock("./http-api-sync", () => ({ HTTP_API_CHANGE_EVENT: "proxycrab-http-api-change" }));
 import { createLogsStore, type LogsStore } from "./logs";
 import { proxyStore } from "./proxy";
+
+let changed: (change: HttpApiChange) => void;
+async function emitChange(change: HttpApiChange): Promise<void> {
+  changed(change);
+  await vi.advanceTimersByTimeAsync(40);
+}
 
 let logs: LogsStore;
 const records = new Map<number, CaptureOutcome>();
@@ -44,6 +51,10 @@ beforeEach(async () => {
   vi.resetAllMocks();
   vi.useFakeTimers();
   vi.stubGlobal("window", Object.assign(new EventTarget(), { setTimeout, clearTimeout }));
+  backend.subscribeChanges.mockImplementation(async (handler) => {
+    changed = handler;
+    return () => {};
+  });
   records.clear();
   backend.getSessionView.mockResolvedValue({
     session_id: 7,
@@ -200,16 +211,9 @@ test("column script changes refresh cached visible cells without changing log ti
   expect(logs.row(1).cells).toEqual(["old"]);
   backend.getLogViews.mockClear();
   value = "new";
-  window.dispatchEvent(
-    new CustomEvent("proxycrab-http-api-change", {
-      detail: {
-        resources: [
-          { kind: "column_scripts", names: ["business/status"] },
-          { kind: "session_view" },
-        ],
-      },
-    }),
-  );
+  await emitChange({
+    resources: [{ kind: "column_scripts", names: ["business/status"] }, { kind: "session_view" }],
+  });
   await flush();
   expect(logs.row(1).cells).toEqual(["new"]);
   expect(backend.getLogViews).toHaveBeenCalledWith(expect.objectContaining({ logs: [{ id: 1 }] }));
@@ -229,13 +233,9 @@ test("unrelated column script changes keep cached rows", async () => {
   await flush();
   const cached = logs.rowsById.get(1);
   backend.getLogViews.mockClear();
-  window.dispatchEvent(
-    new CustomEvent("proxycrab-http-api-change", {
-      detail: {
-        resources: [{ kind: "column_scripts", names: ["other"] }, { kind: "session_view" }],
-      },
-    }),
-  );
+  await emitChange({
+    resources: [{ kind: "column_scripts", names: ["other"] }, { kind: "session_view" }],
+  });
   await flush();
   expect(logs.rowsById.get(1)).toBe(cached);
   expect(backend.getLogViews).not.toHaveBeenCalled();
@@ -253,13 +253,9 @@ test("changed column scripts re-evaluate a local filter even when the column is 
   logs.appliedFilter = filter;
   logs.ids = [1];
   records.set(2, "success");
-  window.dispatchEvent(
-    new CustomEvent("proxycrab-http-api-change", {
-      detail: {
-        resources: [{ kind: "column_scripts", names: ["status"] }, { kind: "session_view" }],
-      },
-    }),
-  );
+  await emitChange({
+    resources: [{ kind: "column_scripts", names: ["status"] }, { kind: "session_view" }],
+  });
   await flush();
   expect(logs.ids).toEqual([2]);
   expect(logs.appliedFilter).toEqual(filter);
@@ -283,16 +279,13 @@ test.each(["all", "other-session", "builtins"] as const)(
     logs.setViewportIds([1]);
     await flush();
     backend.getLogViews.mockClear();
-    window.dispatchEvent(
-      new CustomEvent("proxycrab-http-api-change", {
-        detail:
-          scenario === "all"
-            ? { resources: [{ kind: "all" }] }
-            : {
-                resources: [{ kind: "column_scripts", names: ["status"] }],
-                ...(scenario === "other-session" ? { session_id: 8 } : {}),
-              },
-      }),
+    await emitChange(
+      scenario === "all"
+        ? { resources: [{ kind: "all" }] }
+        : {
+            resources: [{ kind: "column_scripts", names: ["status"] }],
+            ...(scenario === "other-session" ? { session_id: 8 } : {}),
+          },
     );
     await flush();
     if (scenario === "all") expect(backend.getLogIds).toHaveBeenCalled();
@@ -329,11 +322,7 @@ test("column invalidation discards a response rendered before the script changed
   }));
   logs.setViewportIds([2]);
   await flush();
-  window.dispatchEvent(
-    new CustomEvent("proxycrab-http-api-change", {
-      detail: { resources: [{ kind: "column_scripts", names: ["status"] }] },
-    }),
-  );
+  await emitChange({ resources: [{ kind: "column_scripts", names: ["status"] }] });
   await flush();
   resolveOld({
     columns,

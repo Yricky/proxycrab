@@ -107,8 +107,8 @@ Resolve script paths relative to this `SKILL.md`; do not assume the current work
 skill directory.
 
 Updating an existing custom-column script refreshes cached values in open views using that name,
-including historical captures. Unrelated columns retain their cache. Shared viewers detect source
-changes through metadata revisions on their next poll. Verify API results by rendering the same
+including historical captures. Unrelated columns retain their cache. Shared viewers receive named
+invalidations over SSE; reconnection triggers a full refresh without exposing script source. Verify API results by rendering the same
 capture without `updated_at`; capture timestamps do not change when a script is edited.
 
 Share defaults are enforced by the backend. New shares with an omitted redaction field inherit
@@ -124,7 +124,9 @@ route is removed. Local/Key lookups fail closed. Startup redaction remains autho
 Create a ZIP with root `manifest.json` (version/id/name/backend_version: 1) and `index.html`.
 Use `import { backend } from "./init.js"` inside a native ES module; initialization is automatic.
 ProxyCrab serves init.js: do not package it. Use relative resource paths, the exported Backend
-methods, and method presence for optional features. Open the page through a Session sharing link;
+methods, and method presence for optional features. Interested components subscribe directly with
+`subscribeChanges`, load initial state explicitly, and unsubscribe on disposal. Subscribers share one
+Backend connection; `all` refreshes only their supported resources. Open the page through a Session sharing link;
 the Backend reads only that link's Session. For format, types, examples and import/share operations, read
 [Session pages](references/session-pages.md).
 

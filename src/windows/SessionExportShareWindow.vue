@@ -7,13 +7,12 @@ import CopyableLink from "../components/CopyableLink.vue";
 import { useBackend } from "../api";
 import { t } from "../i18n";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
-import { resourceKinds } from "../utils/api-changes";
+import { resourceKinds, useBackendChanges } from "../utils/api-changes";
 import type { AssetMetadata } from "../api/generated/AssetMetadata";
 import type { SessionPage } from "../api/generated/SessionPage";
 import type { SessionShareState } from "../api/generated/SessionShareState";
 import { sessionsStore } from "../stores/sessions";
 import { appStore, reportError } from "../stores/app";
-import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { resourceMatches } from "../utils/bundle";
 import { formatBytes } from "../utils/format";
 import { buildSessionShareLinks } from "../utils/session-share";
@@ -246,8 +245,7 @@ function onRefreshRequest(event: Event): void {
   if ((event as CustomEvent<number>).detail === props.sessionId) void load();
 }
 
-function onHttpApiChange(event: Event): void {
-  const change = (event as CustomEvent<HttpApiChange>).detail;
+function onHttpApiChange(change: HttpApiChange): void {
   const resources = resourceKinds(change);
   if (resources.includes("session_pages") || resources.includes("all")) {
     void loadSessionPages();
@@ -261,18 +259,18 @@ function onHttpApiChange(event: Event): void {
   }
 }
 
+useBackendChanges(backend, onHttpApiChange);
+
 onMounted(() => {
   void load();
   void loadAssets();
   void loadSessionPages();
   window.addEventListener("proxycrab-refresh-session-share", onRefreshRequest);
-  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 
 onBeforeUnmount(() => {
   loadSequence++;
   window.removeEventListener("proxycrab-refresh-session-share", onRefreshRequest);
-  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 </script>
 

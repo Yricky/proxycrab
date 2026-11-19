@@ -13,7 +13,7 @@ import { useBackend } from "../api";
 import { t } from "../i18n";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
-import { resourceKinds } from "../utils/api-changes";
+import { resourceKinds, useBackendChanges } from "../utils/api-changes";
 import type { InterceptorKind } from "../api/generated/InterceptorKind";
 import type { SessionInterceptorItem } from "../api/generated/SessionInterceptorItem";
 import { appStore, reportError } from "../stores/app";
@@ -22,7 +22,6 @@ import { interceptorsStore } from "../stores/interceptors";
 import { sessionsStore } from "../stores/sessions";
 import { breakpointsStore } from "../stores/breakpoints";
 import type { LogsStore } from "../stores/logs";
-import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { openHarExport, openBreakpointList, openScriptEditor } from "../windows/launcher";
 import AppTooltip from "./AppTooltip.vue";
 import InterceptorPicker from "./InterceptorPicker.vue";
@@ -255,10 +254,8 @@ function refresh(): void {
     void interceptorsStore.refresh(logs.sessionId);
 }
 
-// 自己没有后端订阅：全局只有 http-api-sync 一条订阅，这里只挑自己关心的事件。
-function onHttpApiChange(event: Event): void {
+function onHttpApiChange(change: HttpApiChange): void {
   configDownload.value = backend.downloadSessionConfig;
-  const change = (event as CustomEvent<HttpApiChange>).detail;
   if (change.session_id !== undefined && change.session_id !== logs.sessionId) return;
   const resources = resourceKinds(change);
   if (
@@ -276,16 +273,16 @@ watch(
   { immediate: true },
 );
 
+useBackendChanges(backend, onHttpApiChange);
+
 onMounted(() => {
   window.addEventListener("focus", refresh);
   window.addEventListener("interceptors-changed", refresh);
-  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("focus", refresh);
   window.removeEventListener("interceptors-changed", refresh);
-  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 </script>
 

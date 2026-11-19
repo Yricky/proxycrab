@@ -11,7 +11,6 @@ import { windowsStore } from "./stores/windows";
 import { sessionsStore } from "./stores/sessions";
 import { proxyStore } from "./stores/proxy";
 import { createLogsStore } from "./stores/logs";
-import { startHttpApiSync, stopHttpApiSync } from "./stores/http-api-sync";
 import { useBackend } from "./api";
 
 const props = defineProps<{ focusLogId?: number }>();
@@ -49,7 +48,7 @@ watch([() => proxyStore.running, () => sessionsStore.activeSessionId, () => logs
 });
 
 onMounted(async () => {
-  await startHttpApiSync();
+  await proxyStore.init();
   await sessionsStore.init();
   logs.view(sessionsStore.sessions[0]?.id ?? null);
   // 确保启动时状态已刷新，避免 syncCapturePolling 拿到过期的 stopped 状态。
@@ -60,7 +59,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   proxyStore.dispose();
   logs.dispose();
-  stopHttpApiSync();
+  sessionsStore.dispose();
 });
 </script>
 

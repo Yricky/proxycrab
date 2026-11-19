@@ -29,9 +29,9 @@ use crate::{
         ActiveSession, AgentsPresetState, BreakpointDetailPayload, BreakpointQuery, BypassPage,
         BypassQuery, CertificateResponse, CreateAgentsPresetRequest, CreateSessionRequest,
         DeleteCount, ErrorCode, ExecuteTemporaryScriptRequest, ExtendBreakpointRequest, HeaderItem,
-        InterceptorCreateRequest, InterceptorDetail, InterceptorLibraryList,
-        InterceptorUpdateRequest, LogDetail, LogFilter, LogFilterOption, LogIdsPayload,
-        LogIdsRequest, LogViewColumn, LogViewException, LogViewRow, LogViewsPayload,
+        HttpApiChange, HttpApiResource, InterceptorCreateRequest, InterceptorDetail,
+        InterceptorLibraryList, InterceptorUpdateRequest, LogDetail, LogFilter, LogFilterOption,
+        LogIdsPayload, LogIdsRequest, LogViewColumn, LogViewException, LogViewRow, LogViewsPayload,
         LogViewsRequest, ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest,
         ReplaceSessionViewRequest, ReplayBodyPayload, ReplayRequestPayload, ReplayResult,
         RequestDetail, ResponseDetail, RoutingSelection, ScriptRequest, SessionInterceptorItem,
@@ -39,7 +39,7 @@ use crate::{
         UpdateAgentsPresetRequest, UpdateScriptRequest, UpdateSessionRequest,
     },
 };
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::{Semaphore, broadcast, watch};
 
 pub(crate) mod redaction;
 use redaction::{ReadPolicy, ReadRedactor};
@@ -83,6 +83,7 @@ pub trait ProxyCrabManager: Send + Sync {
         request: UpdateScriptRequest,
     ) -> ManagerResult<()>;
     async fn delete_redaction_script(&self, name: String) -> ManagerResult<()>;
+    fn change_sender(&self) -> broadcast::Sender<HttpApiChange>;
     fn subscribe_proxy_status_changes(&self) -> watch::Receiver<u64>;
     async fn asset(&self, id: String) -> ManagerResult<Asset>;
     async fn begin_asset_upload(
@@ -277,6 +278,7 @@ pub trait ProxyCrabManager: Send + Sync {
 
 #[derive(Clone)]
 pub struct MitmManager {
+    changes: broadcast::Sender<HttpApiChange>,
     imports: Arc<crate::bundle::BundleImports>,
     pages: Arc<crate::session_page::PageStore>,
     forced_redaction: Option<Script>,
@@ -318,6 +320,7 @@ impl MitmManager {
         }
         let clash_subscription = Arc::new(ClashSubscription::new(runtime.workspace().root()));
         Arc::new(Self {
+            changes: broadcast::channel(128).0,
             imports: Arc::new(crate::bundle::BundleImports::default()),
             pages: Arc::new(crate::session_page::PageStore::new(
                 runtime.workspace().root(),
@@ -329,6 +332,13 @@ impl MitmManager {
             clash_subscription,
             blocking_tasks: Arc::new(Semaphore::new(MAX_BLOCKING_MANAGEMENT_TASKS)),
         })
+    }
+
+    fn notify(&self, resources: Vec<HttpApiResource>, session_id: Option<u64>) {
+        let _ = self.changes.send(HttpApiChange {
+            resources,
+            session_id,
+        });
     }
 
     /// Pin a validated, process-local policy that overrides identity and share bindings.
@@ -595,6 +605,7 @@ impl ProxyCrabManager for MitmManager {
         let pages = self.pages.clone();
         self.run_blocking("import session page", move || pages.import(bytes, replace))
             .await
+            .inspect(|_| self.notify(vec![HttpApiResource::SessionPages], None))
     }
     async fn export_session_page(&self, id: String) -> ManagerResult<Vec<u8>> {
         let pages = self.pages.clone();
@@ -605,6 +616,12 @@ impl ProxyCrabManager for MitmManager {
         let pages = self.pages.clone();
         self.run_blocking("delete session page", move || pages.delete(&id))
             .await
+            .inspect(|_| {
+                self.notify(
+                    vec![HttpApiResource::SessionPages, HttpApiResource::SessionShare],
+                    None,
+                )
+            })
     }
     async fn session_page_file(&self, id: String, path: String) -> ManagerResult<Vec<u8>> {
         let pages = self.pages.clone();
@@ -636,6 +653,7 @@ impl ProxyCrabManager for MitmManager {
                 .map_err(|e| ManagerError::bad_request(format!("{e:#}")))
         })
         .await
+        .inspect(|_| self.notify(vec![HttpApiResource::All], None))
     }
     async fn resolve_bundle(
         &self,
@@ -650,6 +668,7 @@ impl ProxyCrabManager for MitmManager {
                 .map_err(|e| ManagerError::bad_request(format!("{e:#}")))
         })
         .await
+        .inspect(|_| self.notify(vec![HttpApiResource::All], None))
     }
 
     fn reader(&self, script: Option<&str>, api: &str) -> ManagerResult<Arc<dyn ProxyCrabManager>> {
@@ -693,6 +712,7 @@ impl ProxyCrabManager for MitmManager {
                 },
             )
             .map_err(map_error)
+            .inspect(|_| self.notify(vec![HttpApiResource::All], None))
     }
     async fn update_redaction_script(
         &self,
@@ -703,12 +723,18 @@ impl ProxyCrabManager for MitmManager {
         self.runtime
             .update_script(ScriptKind::Redaction, &name, request.content)
             .map_err(map_error)
+            .inspect(|_| self.notify(vec![HttpApiResource::All], None))
     }
     async fn delete_redaction_script(&self, name: String) -> ManagerResult<()> {
         self.ensure_redaction_management_enabled()?;
         self.runtime
             .delete_script(ScriptKind::Redaction, &name)
             .map_err(map_error)
+            .inspect(|_| self.notify(vec![HttpApiResource::All], None))
+    }
+
+    fn change_sender(&self) -> broadcast::Sender<HttpApiChange> {
+        self.changes.clone()
     }
 
     fn subscribe_proxy_status_changes(&self) -> watch::Receiver<u64> {
@@ -740,7 +766,11 @@ impl ProxyCrabManager for MitmManager {
     }
 
     async fn replace_config(&self, config: AppConfig) -> ManagerResult<AppConfig> {
-        self.runtime.replace_config(config).await.map_err(map_error)
+        self.runtime
+            .replace_config(config)
+            .await
+            .map_err(map_error)
+            .inspect(|_| self.notify(vec![HttpApiResource::Config], None))
     }
 
     async fn agents_presets(&self) -> ManagerResult<AgentsPresetState> {
@@ -836,6 +866,10 @@ impl ProxyCrabManager for MitmManager {
             .replace_active_session(active.session_id)
             .await
             .map_err(map_error)?;
+        self.notify(
+            vec![HttpApiResource::ActiveSession, HttpApiResource::Config],
+            None,
+        );
         Ok(active)
     }
 
@@ -851,6 +885,7 @@ impl ProxyCrabManager for MitmManager {
                 interceptors: request.interceptors,
             })
             .map_err(map_error)
+            .inspect(|_| self.notify(vec![HttpApiResource::Sessions], None))
     }
 
     async fn update_session(
@@ -861,14 +896,33 @@ impl ProxyCrabManager for MitmManager {
         self.runtime
             .update_session(id, request.name, request.description)
             .map_err(map_error)
+            .inspect(|_| self.notify(vec![HttpApiResource::Sessions], Some(id)))
     }
 
     async fn archive_session(&self, id: u64) -> ManagerResult<SessionMetadata> {
-        self.runtime.archive_session(id).await.map_err(map_error)
+        self.runtime
+            .archive_session(id)
+            .await
+            .map_err(map_error)
+            .inspect(|_| {
+                self.notify(
+                    vec![HttpApiResource::Sessions, HttpApiResource::ArchivedSessions],
+                    Some(id),
+                )
+            })
     }
 
     async fn restore_session(&self, id: u64) -> ManagerResult<SessionMetadata> {
-        self.runtime.restore_session(id).await.map_err(map_error)
+        self.runtime
+            .restore_session(id)
+            .await
+            .map_err(map_error)
+            .inspect(|_| {
+                self.notify(
+                    vec![HttpApiResource::Sessions, HttpApiResource::ArchivedSessions],
+                    Some(id),
+                )
+            })
     }
 
     async fn delete_archived_session(&self, id: u64) -> ManagerResult<()> {
@@ -876,6 +930,7 @@ impl ProxyCrabManager for MitmManager {
             .delete_archived_session(id)
             .await
             .map_err(map_error)
+            .inspect(|_| self.notify(vec![HttpApiResource::ArchivedSessions], Some(id)))
     }
 
     async fn log_ids(&self, request: LogIdsRequest) -> ManagerResult<LogIdsPayload> {
@@ -1689,6 +1744,7 @@ impl ProxyCrabManager for MitmManager {
             .runtime
             .replace_session_filter(session_id, filter)
             .map_err(map_error)?;
+        self.notify(vec![HttpApiResource::SessionView], Some(session_id));
         Ok(SessionViewPayload {
             redaction_revision: self
                 .read_policy
@@ -1710,6 +1766,7 @@ impl ProxyCrabManager for MitmManager {
             .runtime
             .replace_session_columns(session_id, request.columns)
             .map_err(map_error)?;
+        self.notify(vec![HttpApiResource::SessionView], Some(session_id));
         Ok(SessionViewPayload {
             redaction_revision: self
                 .read_policy
@@ -1726,6 +1783,7 @@ impl ProxyCrabManager for MitmManager {
     }
 
     async fn create_column_script(&self, request: ScriptRequest) -> ManagerResult<()> {
+        let name = request.name.clone();
         self.runtime
             .create_script(
                 ScriptKind::Column,
@@ -1735,6 +1793,9 @@ impl ProxyCrabManager for MitmManager {
                 },
             )
             .map_err(map_error)
+            .inspect(|_| {
+                let _ = self.changes.send(HttpApiChange::column_script(name));
+            })
     }
 
     async fn column_script(&self, name: String) -> ManagerResult<Script> {
@@ -1751,12 +1812,18 @@ impl ProxyCrabManager for MitmManager {
         self.runtime
             .update_script(ScriptKind::Column, &name, request.content)
             .map_err(map_error)
+            .inspect(|_| {
+                let _ = self.changes.send(HttpApiChange::column_script(name));
+            })
     }
 
     async fn delete_column_script(&self, name: String) -> ManagerResult<()> {
         self.runtime
             .delete_script(ScriptKind::Column, &name)
             .map_err(map_error)
+            .inspect(|_| {
+                let _ = self.changes.send(HttpApiChange::column_script(name));
+            })
     }
 
     async fn filter_scripts(&self) -> ManagerResult<Vec<Script>> {
@@ -1773,6 +1840,12 @@ impl ProxyCrabManager for MitmManager {
                 },
             )
             .map_err(map_error)
+            .inspect(|_| {
+                self.notify(
+                    vec![HttpApiResource::FilterScripts, HttpApiResource::SessionView],
+                    None,
+                )
+            })
     }
 
     async fn filter_script(&self, name: String) -> ManagerResult<Script> {
@@ -1789,12 +1862,24 @@ impl ProxyCrabManager for MitmManager {
         self.runtime
             .update_script(ScriptKind::Filter, &name, request.content)
             .map_err(map_error)
+            .inspect(|_| {
+                self.notify(
+                    vec![HttpApiResource::FilterScripts, HttpApiResource::SessionView],
+                    None,
+                )
+            })
     }
 
     async fn delete_filter_script(&self, name: String) -> ManagerResult<()> {
         self.runtime
             .delete_script(ScriptKind::Filter, &name)
             .map_err(map_error)
+            .inspect(|_| {
+                self.notify(
+                    vec![HttpApiResource::FilterScripts, HttpApiResource::SessionView],
+                    None,
+                )
+            })
     }
 
     async fn routing_scripts(&self) -> ManagerResult<Vec<Script>> {
@@ -1811,6 +1896,7 @@ impl ProxyCrabManager for MitmManager {
                 },
             )
             .map_err(map_error)
+            .inspect(|_| self.notify(vec![HttpApiResource::RoutingScripts], None))
     }
 
     async fn routing_script(&self, name: String) -> ManagerResult<Script> {
@@ -1828,6 +1914,15 @@ impl ProxyCrabManager for MitmManager {
             .update_routing_script(&name, request.content)
             .await
             .map_err(map_error)
+            .inspect(|_| {
+                self.notify(
+                    vec![
+                        HttpApiResource::RoutingScripts,
+                        HttpApiResource::RoutingSelection,
+                    ],
+                    None,
+                )
+            })
     }
 
     async fn delete_routing_script(&self, name: String) -> ManagerResult<()> {
@@ -1835,6 +1930,15 @@ impl ProxyCrabManager for MitmManager {
             .delete_routing_script(&name)
             .await
             .map_err(map_error)
+            .inspect(|_| {
+                self.notify(
+                    vec![
+                        HttpApiResource::RoutingScripts,
+                        HttpApiResource::RoutingSelection,
+                    ],
+                    None,
+                )
+            })
     }
 
     async fn routing_selection(&self) -> ManagerResult<RoutingSelection> {
@@ -1852,6 +1956,7 @@ impl ProxyCrabManager for MitmManager {
             .replace_routing_selection(selection.name)
             .await
             .map_err(map_error)?;
+        self.notify(vec![HttpApiResource::RoutingSelection], None);
         Ok(RoutingSelection { name })
     }
 
@@ -1873,6 +1978,13 @@ impl ProxyCrabManager for MitmManager {
                 },
             )
             .map_err(map_error)?;
+        self.notify(
+            vec![
+                HttpApiResource::Interceptors,
+                HttpApiResource::SessionInterceptors,
+            ],
+            None,
+        );
         Ok(())
     }
 
@@ -1904,6 +2016,13 @@ impl ProxyCrabManager for MitmManager {
         self.runtime
             .update_script(script_kind, &name, request.content)
             .map_err(map_error)?;
+        self.notify(
+            vec![
+                HttpApiResource::Interceptors,
+                HttpApiResource::SessionInterceptors,
+            ],
+            None,
+        );
         Ok(())
     }
 
@@ -1911,6 +2030,15 @@ impl ProxyCrabManager for MitmManager {
         self.runtime
             .delete_script(interceptor_script_kind(kind), &name)
             .map_err(map_error)
+            .inspect(|_| {
+                self.notify(
+                    vec![
+                        HttpApiResource::Interceptors,
+                        HttpApiResource::SessionInterceptors,
+                    ],
+                    None,
+                )
+            })
     }
 
     async fn session_interceptors(
@@ -1976,6 +2104,7 @@ impl ProxyCrabManager for MitmManager {
                 },
             )
             .map_err(map_error)?;
+        self.notify(vec![HttpApiResource::SessionInterceptors], Some(session_id));
         self.session_interceptors(Some(session_id)).await
     }
 
@@ -1987,11 +2116,15 @@ impl ProxyCrabManager for MitmManager {
         &self,
         request: EnableClashSubscriptionRequest,
     ) -> ManagerResult<ClashSubscriptionState> {
-        self.clash_subscription.enable(&request.server)
+        self.clash_subscription
+            .enable(&request.server)
+            .inspect(|_| self.notify(vec![HttpApiResource::ClashSubscription], None))
     }
 
     async fn disable_clash_subscription(&self) -> ManagerResult<ClashSubscriptionState> {
-        Ok(self.clash_subscription.disable())
+        let state = self.clash_subscription.disable();
+        self.notify(vec![HttpApiResource::ClashSubscription], None);
+        Ok(state)
     }
 
     async fn clash_subscription_yaml(&self) -> ManagerResult<String> {
@@ -2007,11 +2140,15 @@ impl ProxyCrabManager for MitmManager {
         &self,
         request: SaveClashConfigRequest,
     ) -> ManagerResult<ClashConfig> {
-        self.clash_subscription.save_config(&request.yaml)
+        self.clash_subscription
+            .save_config(&request.yaml)
+            .inspect(|_| self.notify(vec![HttpApiResource::ClashConfig], None))
     }
 
     async fn reset_clash_config(&self) -> ManagerResult<ClashConfig> {
-        self.clash_subscription.reset_config()
+        self.clash_subscription
+            .reset_config()
+            .inspect(|_| self.notify(vec![HttpApiResource::ClashConfig], None))
     }
 
     async fn certificate(&self) -> ManagerResult<CertificateResponse> {
@@ -2026,6 +2163,7 @@ impl ProxyCrabManager for MitmManager {
             .await
             .map(|pem| CertificateResponse { pem })
             .map_err(map_error)
+            .inspect(|_| self.notify(vec![HttpApiResource::Certificate], None))
     }
 
     async fn system_logs(&self, query: SystemLogsQuery) -> ManagerResult<Vec<SystemLogEntry>> {
@@ -2036,6 +2174,7 @@ impl ProxyCrabManager for MitmManager {
 
     async fn clear_system_logs(&self) -> ManagerResult<()> {
         self.runtime.clear_system_logs();
+        self.notify(vec![HttpApiResource::SystemLogs], None);
         Ok(())
     }
 
@@ -2066,6 +2205,7 @@ impl ProxyCrabManager for MitmManager {
             runtime.delete_bypass_entry(id).map_err(map_error)
         })
         .await
+        .inspect(|_| self.notify(vec![HttpApiResource::Bypass], None))
     }
 
     async fn delete_bypass_entries(&self, ids: Vec<u64>) -> ManagerResult<DeleteCount> {
@@ -2077,6 +2217,7 @@ impl ProxyCrabManager for MitmManager {
                 .map_err(map_error)
         })
         .await
+        .inspect(|_| self.notify(vec![HttpApiResource::Bypass], None))
     }
 
     async fn clear_bypass_entries(&self) -> ManagerResult<DeleteCount> {
@@ -2088,6 +2229,7 @@ impl ProxyCrabManager for MitmManager {
                 .map_err(map_error)
         })
         .await
+        .inspect(|_| self.notify(vec![HttpApiResource::Bypass], None))
     }
 }
 

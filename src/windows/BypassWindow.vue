@@ -3,13 +3,13 @@ import { computed, onBeforeUnmount, onMounted, watch } from "vue";
 import { Io5Refresh, Io5Trash } from "vue-icons-plus/io5";
 import type { BypassEntry } from "../api/generated/BypassEntry";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
-import { resourceKinds } from "../utils/api-changes";
+import { resourceKinds, useBackendChanges } from "../utils/api-changes";
+import { useBackend } from "../api";
 import VirtualList from "../components/VirtualList.vue";
 import { appStore } from "../stores/app";
 import { bypassStore } from "../stores/bypass";
 import { confirmDialog } from "../stores/dialog";
 import { proxyStore } from "../stores/proxy";
-import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { isStaleByProxyRun } from "../utils/capture-outcome";
 import { formatDateTime } from "../utils/format";
 import { t } from "../i18n";
@@ -83,16 +83,17 @@ async function clearTerminal(): Promise<void> {
   appStore.toast(t("已清空 {n} 条记录", { n: deleted }), "success");
 }
 
-function onHttpApiChange(event: Event): void {
-  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
+function onHttpApiChange(change: HttpApiChange): Promise<void> | undefined {
+  const resources = resourceKinds(change);
   if (resources.includes("all") || resources.includes("bypass")) {
-    void bypassStore.refresh();
+    return bypassStore.refresh();
   }
 }
 
+useBackendChanges(useBackend(), onHttpApiChange);
+
 onMounted(() => {
   void bypassStore.refresh();
-  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
   timer = window.setInterval(() => {
     if (proxyStore.running) void bypassStore.refreshNewest();
   }, 1500);
@@ -105,7 +106,6 @@ watch(
 
 onBeforeUnmount(() => {
   if (timer !== undefined) window.clearInterval(timer);
-  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 </script>
 

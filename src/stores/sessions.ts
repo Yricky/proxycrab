@@ -1,3 +1,5 @@
+import type { Unsubscribe } from "../api/backend";
+import { resourceKinds, watchBackendChanges } from "../utils/api-changes";
 import { reactive } from "vue";
 import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { SessionMetadata } from "../api/generated/SessionMetadata";
@@ -7,6 +9,7 @@ import { sweepCreateRequest } from "../utils/session-sweep";
 import { reportError } from "./app";
 import { t } from "../i18n";
 
+let unlisten: Unsubscribe | undefined;
 let shareRevision = 0;
 let shareReadSequence = 0;
 const shareWrites = new Map<number, number>();
@@ -66,6 +69,17 @@ export const sessionsStore = reactive({
   },
 
   async init(): Promise<void> {
+    unlisten ??= watchBackendChanges(backend, (change) => {
+      const resources = resourceKinds(change);
+      if (
+        resources.some((kind) =>
+          ["all", "sessions", "archived_sessions", "active_session", "config"].includes(kind),
+        )
+      ) {
+        return this.syncFromBackend();
+      }
+      if (resources.includes("session_share")) return this.refreshShares();
+    });
     this.loading = true;
     try {
       const [sessionList, archivedSessions] = await Promise.all([
@@ -81,6 +95,11 @@ export const sessionsStore = reactive({
     } finally {
       this.loading = false;
     }
+  },
+
+  dispose(): void {
+    unlisten?.();
+    unlisten = undefined;
   },
 
   async syncFromBackend(): Promise<void> {

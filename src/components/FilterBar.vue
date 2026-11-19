@@ -16,12 +16,11 @@ import { useBackend } from "../api";
 import type { FilterColumn } from "../api/generated/FilterColumn";
 import type { FilterOption } from "../api/generated/FilterOption";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
-import { resourceKinds } from "../utils/api-changes";
+import { resourceKinds, useBackendChanges } from "../utils/api-changes";
 import type { SessionFilter } from "../api/generated/SessionFilter";
 import type { Script } from "../api/types";
 import { reportError } from "../stores/app";
 import { cloneSessionFilter, emptySessionFilter } from "../stores/logs";
-import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { scriptLabel, scriptLabelFor, scriptTitle } from "../utils/script-label";
 import { t } from "../i18n";
 import {
@@ -333,25 +332,25 @@ function onDocumentPointerDown(event: PointerEvent): void {
   }
 }
 
-function onHttpApiChange(event: Event): void {
-  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
+function onHttpApiChange(change: HttpApiChange): void {
+  const resources = resourceKinds(change);
   if (resources.includes("all") || resources.includes("column_scripts")) {
     void refreshAfterScriptChange();
   } else if (resources.includes("filter_scripts")) void refreshScripts();
 }
 
+useBackendChanges(backend, onHttpApiChange);
+
 onMounted(() => {
   void refreshScripts();
   document.addEventListener("pointerdown", onDocumentPointerDown);
   window.addEventListener("filter-scripts-changed", refreshAfterScriptChange);
-  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 
 onBeforeUnmount(() => {
   closeGroupPopup();
   document.removeEventListener("pointerdown", onDocumentPointerDown);
   window.removeEventListener("filter-scripts-changed", refreshAfterScriptChange);
-  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 </script>
 

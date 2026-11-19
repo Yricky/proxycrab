@@ -106,6 +106,7 @@ export interface Backend {
 
   fetchBody(target: BodyTarget, side: BodySide, maxSize?: number): Promise<LoadedBody>;
   downloadBody?(target: BodyTarget, side: BodySide, filename: string): Promise<boolean>;
+  /** Subscribers share one transport; only the last unsubscribe closes it. Read initial state explicitly. */
   subscribeChanges(handler: (change: HttpApiChange) => void): Promise<Unsubscribe>;
   subscribeApprovalChanges(handler: (count: number) => void): Promise<Unsubscribe>;
   openExternal(url: string): Promise<void>;

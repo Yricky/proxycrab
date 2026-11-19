@@ -2,6 +2,7 @@
 
 mod agents;
 pub mod bundle;
+pub mod changes;
 pub mod clash_subscription;
 pub mod dto;
 pub mod http;

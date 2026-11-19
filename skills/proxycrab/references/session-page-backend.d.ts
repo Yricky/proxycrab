@@ -216,7 +216,7 @@ export type SkillSaveResult = { state: SkillManagerState, removal_errors: Array<
 
 export type WorkspacePaths = { current_path: string, configured_path: string, };
 
-export type ErrorCode = "redaction_failed" | "share_redaction_forbidden" | "page_not_authorized" | "message_content_unavailable" | "message_content_hidden" | "redaction_management_disabled" | "bad_request" | "not_found" | "log_not_found" | "body_not_found" | "asset_not_found" | "execution_not_found" | "snapshot_not_found" | "snapshot_body_not_found" | "conflict" | "proxy_running" | "proxy_not_running" | "session_in_use" | "asset_already_exists" | "asset_path_conflict" | "invalid_asset_id" | "invalid_asset_format" | "not_acceptable_encoding" | "body_too_large" | "body_decode_failed" | "internal_error" | "body_read_failed" | "asset_store_failed" | "replay_failed" | "invalid_api_key" | "invalid_ui_token" | "share_session_unavailable";
+export type ErrorCode = "redaction_failed" | "share_redaction_forbidden" | "page_not_authorized" | "message_content_unavailable" | "message_content_hidden" | "redaction_management_disabled" | "bad_request" | "not_found" | "log_not_found" | "body_not_found" | "asset_not_found" | "execution_not_found" | "snapshot_not_found" | "snapshot_body_not_found" | "conflict" | "proxy_running" | "proxy_not_running" | "session_in_use" | "asset_already_exists" | "asset_path_conflict" | "invalid_asset_id" | "invalid_asset_format" | "not_acceptable_encoding" | "body_too_large" | "body_decode_failed" | "internal_error" | "body_read_failed" | "asset_store_failed" | "replay_failed" | "invalid_api_key" | "invalid_ui_token" | "invalid_share_token" | "share_session_unavailable";
 
 export type ManagerError = { code: ErrorCode, message: string, actual_size?: number, max_size?: number, };
 
@@ -302,6 +302,7 @@ interface ApplicationBackend {
 
   fetchBody(target: BodyTarget, side: BodySide, maxSize?: number): Promise<LoadedBody>;
   downloadBody?(target: BodyTarget, side: BodySide, filename: string): Promise<boolean>;
+  /** Subscribers share one transport; only the last unsubscribe closes it. Read initial state explicitly. */
   subscribeChanges(handler: (change: HttpApiChange) => void): Promise<Unsubscribe>;
   subscribeApprovalChanges(handler: (count: number) => void): Promise<Unsubscribe>;
   openExternal(url: string): Promise<void>;

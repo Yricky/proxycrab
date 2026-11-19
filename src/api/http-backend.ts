@@ -11,7 +11,8 @@ import type { CreateAgentsPresetRequest } from "./generated/CreateAgentsPresetRe
 import type { CreateSessionRequest } from "./generated/CreateSessionRequest";
 import type { ExecuteTemporaryScriptRequest } from "./generated/ExecuteTemporaryScriptRequest";
 import type { ExtendBreakpointRequest } from "./generated/ExtendBreakpointRequest";
-import type { HttpApiChange } from "./generated/HttpApiChange";
+import { shareChanges } from "./changes";
+import { subscribeSse } from "./sse";
 import type { HttpServiceStatus } from "./generated/HttpServiceStatus";
 import type { InterceptorCreateRequest } from "./generated/InterceptorCreateRequest";
 import type { InterceptorKind } from "./generated/InterceptorKind";
@@ -127,27 +128,13 @@ export function createHttpBackend(
       fetchBodyFromBase(baseUrl, target, side, maxSize, authorization(token)),
     downloadBody: (target, side, filename) =>
       downloadBodyFromBase(baseUrl, target, side, filename, authorization(token)),
-    subscribeChanges: async (handler) => {
-      let stopped = false;
-      let cursor = 0;
-      const poll = async () => {
-        while (!stopped) {
-          try {
-            const result = await call<{ cursor: number; changes: HttpApiChange[] }>(
-              query("/ui-api/changes", { after: cursor }),
-            );
-            cursor = result.cursor;
-            for (const change of result.changes) handler(change);
-          } catch {
-            await new Promise((resolve) => window.setTimeout(resolve, 1000));
-          }
-        }
-      };
-      void poll();
-      return () => {
-        stopped = true;
-      };
-    },
+    subscribeChanges: shareChanges(async (handler) =>
+      subscribeSse(
+        new URL("/ui-api/changes", baseUrl),
+        { headers: { Authorization: authorization(token) } },
+        handler,
+      ),
+    ),
     subscribeApprovalChanges: async () => () => undefined,
     openExternal: async (url) => {
       const link = document.createElement("a");

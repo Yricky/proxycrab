@@ -21,7 +21,7 @@ Usage: node column-upsert.mjs --name NAME --file SCRIPT.lua [--base-url URL]
 NAME accepts a relative path, e.g. business/example (without the automatic .lua extension).
 
 Create a custom-column script or replace the source of an existing script with the same name.
-Open views using NAME recalculate cached cells; shared viewers update on their next metadata poll.
+Open views using NAME recalculate cached cells; shared viewers receive named SSE invalidations.
 Verify values with logs/views without updated_at because script edits do not change capture timestamps.
 `);
     return;

@@ -2,11 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { Io5Play, Io5RadioButtonOn, Io5Save, Io5Trash } from "vue-icons-plus/io5";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
-import { resourceKinds, type ResourceKind } from "../utils/api-changes";
+import { resourceKinds, useBackendChanges, type ResourceKind } from "../utils/api-changes";
+import { useBackend } from "../api";
 import MonacoEditor from "./MonacoEditor.vue";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
-import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { windowsStore } from "../stores/windows";
 import { scriptLabel, scriptTitle } from "../utils/script-label";
 import { t } from "../i18n";
@@ -197,8 +197,8 @@ async function refreshScripts(preferredName?: string): Promise<void> {
   }
 }
 
-function onHttpApiChange(event: Event): void {
-  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
+function onHttpApiChange(change: HttpApiChange): void {
+  const resources = resourceKinds(change);
   if (
     !resources.includes("all") &&
     !config.resources.some((resource) => resources.includes(resource))
@@ -397,10 +397,11 @@ async function onFocusScript(event: Event): Promise<void> {
   }
 }
 
+useBackendChanges(useBackend(), onHttpApiChange);
+
 onMounted(() => {
   windowsStore.registerCloseGuard(config.windowId, confirmDiscard);
   window.addEventListener("keydown", onKeydown);
-  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
   window.addEventListener("proxycrab-focus-script", onFocusScript);
   void refreshScripts(props.initialName ?? undefined);
 });
@@ -408,7 +409,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   windowsStore.unregisterCloseGuard(config.windowId);
   window.removeEventListener("keydown", onKeydown);
-  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
   window.removeEventListener("proxycrab-focus-script", onFocusScript);
 });
 </script>

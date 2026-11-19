@@ -19,7 +19,6 @@ vi.mock("./stores/proxy", () => ({
 vi.mock("./stores/logs", () => ({
   createLogsStore: () => ({ view: vi.fn(), stopPolling: vi.fn(), dispose: vi.fn() }),
 }));
-vi.mock("./stores/http-api-sync", () => ({ startHttpApiSync: vi.fn(), stopHttpApiSync: vi.fn() }));
 vi.mock("./stores/breakpoints", () => ({ breakpointsStore: { stopPolling: vi.fn() } }));
 vi.mock("./stores/approvals", () => ({ approvalsStore: {} }));
 vi.mock("./stores/skill", () => ({ skillStore: { refresh: vi.fn() } }));

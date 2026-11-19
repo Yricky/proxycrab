@@ -47,6 +47,7 @@ pub enum ErrorCode {
     ReplayFailed,
     InvalidApiKey,
     InvalidUiToken,
+    InvalidShareToken,
     ShareSessionUnavailable,
 }
 
@@ -85,6 +86,7 @@ impl ErrorCode {
             Self::ReplayFailed => "replay_failed",
             Self::InvalidApiKey => "invalid_api_key",
             Self::InvalidUiToken => "invalid_ui_token",
+            Self::InvalidShareToken => "invalid_share_token",
             Self::ShareSessionUnavailable => "share_session_unavailable",
         }
     }

@@ -16,7 +16,6 @@ import { windowsStore } from "./stores/windows";
 import { sessionsStore } from "./stores/sessions";
 import { proxyStore } from "./stores/proxy";
 import { createLogsStore } from "./stores/logs";
-import { startHttpApiSync, stopHttpApiSync } from "./stores/http-api-sync";
 import { breakpointsStore } from "./stores/breakpoints";
 import { approvalsStore } from "./stores/approvals";
 import { skillStore } from "./stores/skill";
@@ -66,7 +65,6 @@ watch(
 
 onMounted(async () => {
   window.addEventListener("proxycrab-open-session", onOpenSession);
-  await startHttpApiSync();
   if (backend.listHttpApprovals) await approvalsStore.start();
   void skillStore.refresh();
   await proxyStore.init();
@@ -86,7 +84,7 @@ onBeforeUnmount(() => {
   proxyStore.dispose();
   logs.dispose();
   breakpointsStore.stopPolling();
-  stopHttpApiSync();
+  sessionsStore.dispose();
   if (backend.listHttpApprovals) approvalsStore.stop();
 });
 // 拖放导入：dragenter/dragleave 计数决定覆盖层，避免在子元素间移动时闪烁。

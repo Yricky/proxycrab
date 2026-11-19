@@ -12,7 +12,7 @@ use axum::{
         ConnectInfo, FromRequest, FromRequestParts, MatchedPath, Path, Query, Request, State,
     },
     http::{
-        HeaderMap, HeaderValue, Method, StatusCode,
+        HeaderMap, HeaderValue, StatusCode,
         header::{
             ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LENGTH,
             CONTENT_TYPE, VARY,
@@ -30,7 +30,7 @@ use proxy_crab_mitm::storage::{BodySide, BodySource, BodySourceData};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, BufReader};
-use tokio::{sync::broadcast, task::JoinHandle};
+use tokio::task::JoinHandle;
 use tokio_util::{
     io::{ReaderStream, StreamReader},
     sync::CancellationToken,
@@ -41,11 +41,11 @@ use crate::{
     dto::{
         ActiveSession, AssetQuery, BodyQuery, BreakpointQuery, BypassQuery, CreateSessionRequest,
         DeleteBypassRequest, ErrorCode, ExecuteTemporaryScriptRequest, ExtendBreakpointRequest,
-        HttpApiChange, HttpApiResource, InterceptorCreateRequest, InterceptorUpdateRequest,
-        LogIdsRequest, LogViewsRequest, ManagerError, ManagerResult,
-        ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ReplayRequestPayload,
-        RoutingSelection, ScriptRequest, SessionQuery, SystemInfo, SystemLogsQuery,
-        UpdateScriptRequest, UpdateSessionRequest, WebSocketQuery, default_body_max_size,
+        InterceptorCreateRequest, InterceptorUpdateRequest, LogIdsRequest, LogViewsRequest,
+        ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest,
+        ReplayRequestPayload, RoutingSelection, ScriptRequest, SessionQuery, SystemInfo,
+        SystemLogsQuery, UpdateScriptRequest, UpdateSessionRequest, WebSocketQuery,
+        default_body_max_size,
     },
     manager::ProxyCrabManager,
     permission::{
@@ -56,7 +56,6 @@ use crate::{
 };
 
 type ManagerState = Arc<dyn ProxyCrabManager>;
-type ChangeSender = broadcast::Sender<HttpApiChange>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
 #[cfg(test)]
@@ -137,7 +136,6 @@ pub struct HttpServerHandle {
     pub port: u16,
     cancellation: CancellationToken,
     task: JoinHandle<()>,
-    changes: ChangeSender,
 }
 
 impl HttpServerHandle {
@@ -149,17 +147,13 @@ impl HttpServerHandle {
         self.cancellation.cancel();
         let _ = self.task.await;
     }
-
-    pub fn subscribe_changes(&self) -> broadcast::Receiver<HttpApiChange> {
-        self.changes.subscribe()
-    }
 }
 
 pub async fn start_http_server(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
 ) -> Result<HttpServerHandle, ManagerError> {
-    start_http_server_with_routes(manager, permissions, SessionShareService::new(), |_| {
+    start_http_server_with_routes(manager, permissions, SessionShareService::new(), || {
         Router::new()
     })
     .await
@@ -172,7 +166,7 @@ pub async fn start_http_server_with_routes<F>(
     extra_routes: F,
 ) -> Result<HttpServerHandle, ManagerError>
 where
-    F: FnOnce(broadcast::Sender<HttpApiChange>) -> Router,
+    F: FnOnce() -> Router,
 {
     let config = manager.config().await?;
     let address = std::net::SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, config.api_port));
@@ -181,16 +175,9 @@ where
         .map_err(|error| ManagerError::internal(format!("failed to bind {address}: {error}")))?;
     let cancellation = CancellationToken::new();
     let server_shutdown = cancellation.clone();
-    let task_shutdown = cancellation.clone();
-    let (changes, _) = broadcast::channel(128);
-    let change_task = spawn_proxy_status_change_bridge(
-        manager.subscribe_proxy_status_changes(),
-        changes.clone(),
-        cancellation.clone(),
-    );
-    let extra = extra_routes(changes.clone());
-    let app =
-        secured_router_with_changes_and_extra(manager, permissions, shares, changes.clone(), extra);
+    let extra = extra_routes();
+    let app = secured_router_with_extra(manager, permissions, shares, extra)
+        .layer(Extension(cancellation.clone()));
     let task = tokio::spawn(async move {
         if let Err(error) = axum::serve(
             listener,
@@ -201,68 +188,30 @@ where
         {
             tracing::error!("management HTTP server failed: {error}");
         }
-        task_shutdown.cancel();
-        let _ = change_task.await;
     });
     Ok(HttpServerHandle {
         host: std::net::Ipv4Addr::UNSPECIFIED.to_string(),
         port: config.api_port,
         cancellation,
         task,
-        changes,
-    })
-}
-
-fn spawn_proxy_status_change_bridge(
-    mut status_changes: tokio::sync::watch::Receiver<u64>,
-    changes: ChangeSender,
-    cancellation: CancellationToken,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                result = status_changes.changed() => {
-                    if result.is_err() {
-                        break;
-                    }
-                    let _ = changes.send(HttpApiChange {
-                        resources: vec![HttpApiResource::Proxy],
-                        session_id: None,
-                    });
-                }
-                _ = cancellation.cancelled() => break,
-            }
-        }
     })
 }
 
 #[cfg(test)]
 pub(crate) fn router(manager: ManagerState, permissions: Arc<dyn PermissionManager>) -> Router {
-    let (changes, _) = broadcast::channel(128);
-    router_with_changes(manager, permissions, changes)
-}
-
-#[cfg(test)]
-fn router_with_changes(
-    manager: ManagerState,
-    permissions: Arc<dyn PermissionManager>,
-    changes: ChangeSender,
-) -> Router {
-    router_with_changes_and_extra(
+    router_with_extra(
         manager,
         permissions,
         SessionShareService::new(),
-        changes,
         Router::new(),
     )
     .layer(Extension(InProcessLocalRequest))
 }
 
-fn router_with_changes_and_extra(
+fn router_with_extra(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
     shares: Arc<SessionShareService>,
-    changes: ChangeSender,
     extra: Router,
 ) -> Router {
     shares.set_permissions(permissions.clone());
@@ -434,11 +383,6 @@ fn router_with_changes_and_extra(
         .with_state(manager)
         .layer(Extension(shares))
         .layer(Extension(permissions))
-        .layer(Extension(changes.clone()))
-        .layer(middleware::from_fn_with_state(
-            changes,
-            publish_successful_http_changes,
-        ))
         .merge(extra)
         .merge(downloads)
         .fallback(not_found)
@@ -446,33 +390,21 @@ fn router_with_changes_and_extra(
 
 #[cfg(test)]
 fn secured_router(manager: ManagerState, permissions: Arc<dyn PermissionManager>) -> Router {
-    let (changes, _) = broadcast::channel(128);
-    secured_router_with_changes(manager, permissions, changes)
-}
-
-#[cfg(test)]
-fn secured_router_with_changes(
-    manager: ManagerState,
-    permissions: Arc<dyn PermissionManager>,
-    changes: ChangeSender,
-) -> Router {
-    secured_router_with_changes_and_extra(
+    secured_router_with_extra(
         manager,
         permissions,
         SessionShareService::new(),
-        changes,
         Router::new(),
     )
 }
 
-fn secured_router_with_changes_and_extra(
+fn secured_router_with_extra(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
     shares: Arc<SessionShareService>,
-    changes: ChangeSender,
     extra: Router,
 ) -> Router {
-    router_with_changes_and_extra(manager, permissions, shares, changes, extra)
+    router_with_extra(manager, permissions, shares, extra)
         .layer(middleware::from_fn(auth::prepare_management_request))
 }
 
@@ -636,141 +568,6 @@ fn permission_denied_response(denied: PermissionDenied) -> Response {
         })),
     )
         .into_response()
-}
-
-async fn publish_successful_http_changes(
-    State(changes): State<ChangeSender>,
-    request: Request,
-    next: Next,
-) -> Response {
-    let change = change_for_request(
-        request.method(),
-        request.uri().path(),
-        request.uri().query(),
-    );
-    let response = next.run(request).await;
-    if response.status().is_success()
-        && let Some(change) = change
-    {
-        let _ = changes.send(change);
-    }
-    response
-}
-
-fn change_for_request(method: &Method, path: &str, query: Option<&str>) -> Option<HttpApiChange> {
-    let resources = match (method, path) {
-        (&Method::POST, value) if value == "/api/imports" || value.starts_with("/api/imports/") => {
-            vec![HttpApiResource::All]
-        }
-        (&Method::POST | &Method::PUT | &Method::DELETE, value)
-            if value.starts_with("/api/redaction-scripts") || value.ends_with("/redaction") =>
-        {
-            vec![HttpApiResource::All]
-        }
-        (&Method::POST, "/api/session-pages") => vec![HttpApiResource::SessionPages],
-        (&Method::DELETE, value) if value.starts_with("/api/session-pages/") => {
-            vec![HttpApiResource::SessionPages, HttpApiResource::SessionShare]
-        }
-        (&Method::POST, "/api/sessions") => {
-            vec![HttpApiResource::Sessions, HttpApiResource::ActiveSession]
-        }
-        (&Method::POST, value) if value.ends_with("/archive") => {
-            vec![HttpApiResource::Sessions, HttpApiResource::ArchivedSessions]
-        }
-        (&Method::POST, value) if value.ends_with("/restore") => {
-            vec![HttpApiResource::Sessions, HttpApiResource::ArchivedSessions]
-        }
-        (&Method::DELETE, value) if value.starts_with("/api/archived-sessions/") => {
-            vec![HttpApiResource::ArchivedSessions]
-        }
-        (&Method::PUT, value)
-            if value.starts_with("/api/sessions/") && value.ends_with("/filter") =>
-        {
-            vec![HttpApiResource::SessionView]
-        }
-        (&Method::PUT, value) if value.starts_with("/api/sessions/") => {
-            vec![HttpApiResource::Sessions]
-        }
-        (&Method::PUT, "/api/active-session") => {
-            vec![HttpApiResource::ActiveSession, HttpApiResource::Config]
-        }
-        (&Method::PUT | &Method::DELETE, "/api/clash-subscription") => {
-            vec![HttpApiResource::ClashSubscription]
-        }
-        (&Method::PUT | &Method::DELETE, "/api/clash-config") => {
-            vec![HttpApiResource::ClashConfig]
-        }
-        (&Method::POST, "/api/session-shares") => vec![HttpApiResource::SessionShare],
-        (&Method::DELETE, value) if value.starts_with("/api/session-shares/") => {
-            vec![HttpApiResource::SessionShare]
-        }
-        (&Method::PUT, "/api/session-view") => vec![HttpApiResource::SessionView],
-        (&Method::POST, "/api/filter-scripts") => {
-            vec![HttpApiResource::FilterScripts, HttpApiResource::SessionView]
-        }
-        (&Method::PUT | &Method::DELETE, value) if value.starts_with("/api/filter-scripts/") => {
-            vec![HttpApiResource::FilterScripts, HttpApiResource::SessionView]
-        }
-        (&Method::POST, "/api/routing-scripts") => vec![HttpApiResource::RoutingScripts],
-        (&Method::PUT | &Method::DELETE, value) if value.starts_with("/api/routing-scripts/") => {
-            vec![
-                HttpApiResource::RoutingScripts,
-                HttpApiResource::RoutingSelection,
-            ]
-        }
-        (&Method::PUT, "/api/routing-script-selection") => {
-            vec![HttpApiResource::RoutingSelection]
-        }
-        (&Method::POST, "/api/interceptors") => vec![
-            HttpApiResource::Interceptors,
-            HttpApiResource::SessionInterceptors,
-        ],
-        (&Method::PUT | &Method::DELETE, value) if value.starts_with("/api/interceptors/") => {
-            vec![
-                HttpApiResource::Interceptors,
-                HttpApiResource::SessionInterceptors,
-            ]
-        }
-        (&Method::PUT, "/api/session-interceptors") => {
-            vec![HttpApiResource::SessionInterceptors]
-        }
-        (&Method::DELETE, "/api/system-logs") => vec![HttpApiResource::SystemLogs],
-        (&Method::DELETE, "/api/bypass") | (&Method::POST, "/api/bypass/delete") => {
-            vec![HttpApiResource::Bypass]
-        }
-        (&Method::DELETE, value) if value.starts_with("/api/bypass/") => {
-            vec![HttpApiResource::Bypass]
-        }
-        _ => return None,
-    };
-    Some(HttpApiChange {
-        resources,
-        session_id: session_id_from_query(query)
-            .or_else(|| session_filter_id_from_path(path))
-            .or_else(|| session_share_id_from_path(path)),
-    })
-}
-
-fn session_filter_id_from_path(path: &str) -> Option<u64> {
-    path.strip_prefix("/api/sessions/")?
-        .strip_suffix("/filter")?
-        .parse()
-        .ok()
-}
-
-fn session_share_id_from_path(path: &str) -> Option<u64> {
-    path.strip_prefix("/api/session-shares/")?.parse().ok()
-}
-
-fn session_id_from_query(query: Option<&str>) -> Option<u64> {
-    query?
-        .split('&')
-        .filter_map(|part| part.split_once('='))
-        .find_map(|(key, value)| {
-            (key == "session_id" || key == "session")
-                .then(|| value.parse().ok())
-                .flatten()
-        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1347,12 +1144,9 @@ async fn column_scripts(State(manager): State<ManagerState>) -> ApiResult {
 
 async fn create_column_script(
     State(manager): State<ManagerState>,
-    Extension(changes): Extension<ChangeSender>,
     ApiJson(request): ApiJson<ScriptRequest>,
 ) -> ApiResult {
-    let change = HttpApiChange::column_script(request.name.clone());
     manager.create_column_script(request).await?;
-    let _ = changes.send(change);
     success(json!({}))
 }
 
@@ -1365,24 +1159,18 @@ async fn column_script(
 
 async fn update_column_script(
     State(manager): State<ManagerState>,
-    Extension(changes): Extension<ChangeSender>,
     ApiPath(name): ApiPath<String>,
     ApiJson(request): ApiJson<UpdateScriptRequest>,
 ) -> ApiResult {
-    let change = HttpApiChange::column_script(name.clone());
     manager.update_column_script(name, request).await?;
-    let _ = changes.send(change);
     success(json!({}))
 }
 
 async fn delete_column_script(
     State(manager): State<ManagerState>,
-    Extension(changes): Extension<ChangeSender>,
     ApiPath(name): ApiPath<String>,
 ) -> ApiResult {
-    let change = HttpApiChange::column_script(name.clone());
     manager.delete_column_script(name).await?;
-    let _ = changes.send(change);
     success(json!({}))
 }
 
@@ -1916,7 +1704,9 @@ impl ErrorCode {
             Self::BadRequest | Self::InvalidAssetId | Self::InvalidAssetFormat => {
                 StatusCode::BAD_REQUEST
             }
-            Self::InvalidApiKey | Self::InvalidUiToken => StatusCode::UNAUTHORIZED,
+            Self::InvalidApiKey | Self::InvalidUiToken | Self::InvalidShareToken => {
+                StatusCode::UNAUTHORIZED
+            }
             Self::NotFound
             | Self::LogNotFound
             | Self::BodyNotFound
@@ -1978,7 +1768,6 @@ mod tests {
         io::{Read, Write},
         net::SocketAddr,
         sync::{Arc, Mutex},
-        time::Duration,
     };
 
     use async_trait::async_trait;
@@ -2010,15 +1799,11 @@ mod tests {
     };
     use serde_json::{Value, json};
     use tempfile::tempdir;
-    use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
 
     use crate::{
         dto::{ErrorCode, HttpApiResource},
-        http::{
-            ApiError, body_response, change_for_request, router, router_with_changes,
-            secured_router, spawn_proxy_status_change_bridge,
-        },
+        http::{ApiError, body_response, router, secured_router},
         manager::{MitmManager, ProxyCrabManager},
         permission::{ManagementCredential, PermissionAction, PermissionDenied, PermissionManager},
     };
@@ -2947,152 +2732,6 @@ mod tests {
         assert_eq!(body["error"]["code"], "session_in_use");
     }
 
-    #[test]
-    fn maps_http_mutations_to_their_ui_resources() {
-        let cases = [
-            (
-                "PUT",
-                "/api/active-session",
-                None,
-                vec![HttpApiResource::ActiveSession, HttpApiResource::Config],
-                None,
-            ),
-            (
-                "PUT",
-                "/api/sessions/42",
-                None,
-                vec![HttpApiResource::Sessions],
-                None,
-            ),
-            (
-                "POST",
-                "/api/sessions/42/archive",
-                None,
-                vec![HttpApiResource::Sessions, HttpApiResource::ArchivedSessions],
-                None,
-            ),
-            (
-                "POST",
-                "/api/archived-sessions/42/restore",
-                None,
-                vec![HttpApiResource::Sessions, HttpApiResource::ArchivedSessions],
-                None,
-            ),
-            (
-                "DELETE",
-                "/api/archived-sessions/42",
-                None,
-                vec![HttpApiResource::ArchivedSessions],
-                None,
-            ),
-            (
-                "PUT",
-                "/api/sessions/42/filter",
-                None,
-                vec![HttpApiResource::SessionView],
-                Some(42),
-            ),
-            (
-                "PUT",
-                "/api/session-view",
-                Some("session_id=42"),
-                vec![HttpApiResource::SessionView],
-                Some(42),
-            ),
-            (
-                "POST",
-                "/api/session-shares",
-                None,
-                vec![HttpApiResource::SessionShare],
-                None,
-            ),
-            (
-                "DELETE",
-                "/api/session-shares/42",
-                None,
-                vec![HttpApiResource::SessionShare],
-                Some(42),
-            ),
-            (
-                "DELETE",
-                "/api/filter-scripts/errors",
-                None,
-                vec![HttpApiResource::FilterScripts, HttpApiResource::SessionView],
-                None,
-            ),
-            (
-                "PUT",
-                "/api/routing-script-selection",
-                None,
-                vec![HttpApiResource::RoutingSelection],
-                None,
-            ),
-            (
-                "POST",
-                "/api/interceptors",
-                None,
-                vec![
-                    HttpApiResource::Interceptors,
-                    HttpApiResource::SessionInterceptors,
-                ],
-                None,
-            ),
-            (
-                "PUT",
-                "/api/session-interceptors",
-                Some("session_id=42"),
-                vec![HttpApiResource::SessionInterceptors],
-                Some(42),
-            ),
-            (
-                "POST",
-                "/api/bypass/delete",
-                None,
-                vec![HttpApiResource::Bypass],
-                None,
-            ),
-            (
-                "DELETE",
-                "/api/system-logs",
-                None,
-                vec![HttpApiResource::SystemLogs],
-                None,
-            ),
-        ];
-
-        for (method, path, query, resources, session_id) in cases {
-            let change =
-                change_for_request(&method.parse().unwrap(), path, query).expect("mapped change");
-            assert_eq!(change.resources, resources, "{method} {path}");
-            assert_eq!(change.session_id, session_id, "{method} {path}");
-        }
-        assert!(change_for_request(&Method::GET, "/api/sessions", None).is_none());
-        assert!(
-            change_for_request(&Method::POST, "/api/filter-scripts/name/debug", None).is_none()
-        );
-        assert!(change_for_request(&Method::POST, "/api/logs/ids", None).is_none());
-        assert!(change_for_request(&Method::POST, "/api/proxy/start", None).is_none());
-    }
-
-    #[tokio::test]
-    async fn bridges_runtime_proxy_status_changes_to_ui_events() {
-        let (status_sender, status_receiver) = tokio::sync::watch::channel(0_u64);
-        let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
-        let cancellation = CancellationToken::new();
-        let task = spawn_proxy_status_change_bridge(status_receiver, changes, cancellation.clone());
-
-        status_sender.send(1).unwrap();
-        let change = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(change.resources, vec![HttpApiResource::Proxy]);
-        assert_eq!(change.session_id, None);
-
-        cancellation.cancel();
-        task.await.unwrap();
-    }
-
     #[tokio::test]
     async fn returns_the_standard_success_envelope() {
         let app_data = tempdir().unwrap();
@@ -3514,8 +3153,10 @@ mod tests {
     async fn column_script_writes_publish_names_once_and_only_after_success() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
-        let app = router_with_changes(MitmManager::new(runtime), allow_all(), changes);
+        let manager = MitmManager::new(runtime);
+        let changes = manager.change_sender();
+        let mut receiver = changes.subscribe();
+        let app = router(manager, allow_all());
         let name = "业务/status";
         let encoded = url::form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>();
         let path = format!("/api/column-scripts/{encoded}");
@@ -3586,8 +3227,10 @@ mod tests {
     async fn publishes_ui_resources_only_after_a_successful_http_write() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
-        let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
-        let app = router_with_changes(MitmManager::new(runtime), allow_all(), changes);
+        let manager = MitmManager::new(runtime);
+        let changes = manager.change_sender();
+        let mut receiver = changes.subscribe();
+        let app = router(manager, allow_all());
 
         let response = app
             .clone()
@@ -3603,10 +3246,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         let change = receiver.try_recv().unwrap();
-        assert_eq!(
-            change.resources,
-            vec![HttpApiResource::Sessions, HttpApiResource::ActiveSession]
-        );
+        assert_eq!(change.resources, vec![HttpApiResource::Sessions]);
 
         let response = app
             .oneshot(
@@ -3638,8 +3278,9 @@ mod tests {
             .await
             .unwrap()
             .columns;
-        let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
-        let app = router_with_changes(manager.clone(), allow_all(), changes);
+        let changes = manager.change_sender();
+        let mut receiver = changes.subscribe();
+        let app = router(manager.clone(), allow_all());
         let column = json!({"kind": "script_content", "name": "host", "content": "return entry.req.uri.host", "width": 160.0});
         let response = app.clone().oneshot(Request::builder().method("POST").uri("/api/logs/views")
             .header("content-type", "application/json").body(Body::from(json!({
@@ -3721,8 +3362,9 @@ mod tests {
             .unwrap();
         let manager = MitmManager::new(runtime);
         let original = manager.session_view(Some(session.id)).await.unwrap().filter;
-        let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
-        let app = router_with_changes(manager.clone(), allow_all(), changes);
+        let changes = manager.change_sender();
+        let mut receiver = changes.subscribe();
+        let app = router(manager.clone(), allow_all());
         let filter = |content: &str, input: &str| json!({"option": {"kind": "script_content", "content": content}, "input": input});
         // Omitted Session resolves to the active Session, and explicit IDs still work.
         let response = app.clone().oneshot(Request::builder().method("POST").uri("/api/logs/ids")
@@ -3809,8 +3451,10 @@ mod tests {
             .replace_active_session(Some(session.id))
             .await
             .unwrap();
-        let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
-        let app = router_with_changes(MitmManager::new(runtime), allow_all(), changes);
+        let manager = MitmManager::new(runtime);
+        let changes = manager.change_sender();
+        let mut receiver = changes.subscribe();
+        let app = router(manager, allow_all());
         let filter_body = r#"{"option":{"kind":"column","column":{"kind":"uri"},"regex":false},"input":"example"}"#;
         let query_body = format!(r#"{{"filter":{filter_body}}}"#);
 
@@ -3853,7 +3497,7 @@ mod tests {
     async fn share_summaries_are_read_only_and_permission_controlled() {
         use super::{
             CreateSessionRequest, InProcessLocalRequest, ManagerState, SessionShareService,
-            router_with_changes_and_extra,
+            router_with_extra,
         };
         let directory = tempdir().unwrap();
         let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
@@ -3864,15 +3508,10 @@ mod tests {
             .unwrap();
         let shares = SessionShareService::open(directory.path()).unwrap();
         shares.enable(&manager, session.id).await.unwrap();
-        let (sender, mut receiver) = tokio::sync::broadcast::channel(16);
-        let app = router_with_changes_and_extra(
-            manager.clone(),
-            allow_all(),
-            shares,
-            sender,
-            axum::Router::new(),
-        )
-        .layer(axum::Extension(InProcessLocalRequest));
+        let sender = manager.change_sender();
+        let mut receiver = sender.subscribe();
+        let app = router_with_extra(manager.clone(), allow_all(), shares, axum::Router::new())
+            .layer(axum::Extension(InProcessLocalRequest));
         let response = app
             .oneshot(
                 Request::builder()
@@ -3913,7 +3552,7 @@ mod tests {
     async fn share_config_updates_are_authorized_and_notify() {
         use super::{
             CreateSessionRequest, InProcessLocalRequest, ManagerState, SessionShareService,
-            router_with_changes_and_extra,
+            router_with_extra,
         };
         let directory = tempdir().unwrap();
         let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
@@ -3923,13 +3562,12 @@ mod tests {
             .await
             .unwrap();
         let shares = SessionShareService::open(directory.path()).unwrap();
-        let (sender, _) = tokio::sync::broadcast::channel(16);
+        let sender = manager.change_sender();
         let mut receiver = sender.subscribe();
-        let app = router_with_changes_and_extra(
+        let app = router_with_extra(
             manager.clone(),
             allow_all(),
             shares.clone(),
-            sender,
             axum::Router::new(),
         )
         .layer(axum::Extension(InProcessLocalRequest));
@@ -3951,6 +3589,7 @@ mod tests {
         assert!(!shares.status(&manager, session.id).await.unwrap().enabled);
         assert!(receiver.try_recv().is_err());
         let enabled = shares.enable(&manager, session.id).await.unwrap();
+        receiver.try_recv().unwrap();
         let path = "/api/session-shares".to_string();
         let response = app
             .oneshot(
@@ -3971,7 +3610,7 @@ mod tests {
         assert_eq!(body["data"]["token"].as_str(), enabled.token.as_deref());
         let change = receiver.try_recv().unwrap();
         assert_eq!(change.resources, vec![HttpApiResource::SessionShare]);
-        assert_eq!(change.session_id, None);
+        assert_eq!(change.session_id, Some(session.id));
         assert!(
             SessionShareService::open(directory.path())
                 .unwrap()
@@ -4344,8 +3983,9 @@ mod tests {
         let directory = tempdir().unwrap();
         let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
         let manager = MitmManager::new(runtime.clone());
-        let (changes, mut receiver) = tokio::sync::broadcast::channel(128);
-        let app = router_with_changes(manager.clone(), allow_all(), changes);
+        let changes = manager.change_sender();
+        let mut receiver = changes.subscribe();
+        let app = router(manager.clone(), allow_all());
 
         let response = app
             .clone()
@@ -4464,6 +4104,10 @@ mod tests {
         let mut config = manager.config().await.unwrap();
         config.proxy_port = 9876;
         manager.replace_config(config).await.unwrap();
+        assert_eq!(
+            receiver.try_recv().unwrap().resources,
+            vec![HttpApiResource::Config]
+        );
         assert!(
             manager
                 .clash_subscription_yaml()

@@ -1,8 +1,9 @@
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { SessionsPayload } from "../api/types.ts";
 
 const { backend, reportError } = vi.hoisted(() => ({
   backend: {
+    subscribeChanges: vi.fn(),
     listSessions: vi.fn(),
     listArchivedSessions: vi.fn(),
     listSessionShares: vi.fn(),
@@ -17,10 +18,14 @@ const { backend, reportError } = vi.hoisted(() => ({
 vi.mock("../api/runtime-backend", () => ({ runtimeBackend: backend }));
 vi.mock("./app", () => ({ reportError }));
 
+afterEach(() => sessionsStore.dispose());
+
 const { sessionsStore } = await import("./sessions.ts");
 
 beforeEach(() => {
+  sessionsStore.dispose();
   vi.resetAllMocks();
+  backend.subscribeChanges.mockResolvedValue(() => {});
   backend.listSessionShares.mockResolvedValue({ shares: [] });
   sessionsStore.shares = {};
   sessionsStore.sessions = [];

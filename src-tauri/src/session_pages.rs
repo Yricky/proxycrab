@@ -1,19 +1,7 @@
 use crate::BackendState;
-use proxy_crab_mgr::{
-    dto::{HttpApiChange, HttpApiResource, ManagerError},
-    session_page::SessionPage,
-};
-use tauri::{Emitter, State};
+use proxy_crab_mgr::{dto::ManagerError, session_page::SessionPage};
+use tauri::State;
 
-fn changed(app: &tauri::AppHandle) {
-    let _ = app.emit(
-        "proxycrab://http-api-change",
-        HttpApiChange {
-            resources: vec![HttpApiResource::SessionPages, HttpApiResource::SessionShare],
-            session_id: None,
-        },
-    );
-}
 #[tauri::command]
 pub(crate) async fn list_session_pages(
     state: State<'_, BackendState>,
@@ -22,7 +10,6 @@ pub(crate) async fn list_session_pages(
 }
 #[tauri::command]
 pub(crate) async fn import_session_page(
-    app: tauri::AppHandle,
     state: State<'_, BackendState>,
     request: tauri::ipc::Request<'_>,
 ) -> Result<SessionPage, ManagerError> {
@@ -37,7 +24,6 @@ pub(crate) async fn import_session_page(
         .manager()
         .import_session_page(bytes.clone(), replace)
         .await?;
-    changed(&app);
     Ok(result)
 }
 #[tauri::command]
@@ -51,11 +37,9 @@ pub(crate) async fn export_session_page(
 }
 #[tauri::command]
 pub(crate) async fn delete_session_page(
-    app: tauri::AppHandle,
     state: State<'_, BackendState>,
     id: String,
 ) -> Result<(), ManagerError> {
     state.manager().delete_session_page(id).await?;
-    changed(&app);
     Ok(())
 }

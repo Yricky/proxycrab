@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { saveBytesFile } from "../api/save-file";
 import QRCode from "qrcode";
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import {
   Io5Copy,
   Io5Download,
@@ -12,12 +12,11 @@ import {
 import { useBackend } from "../api";
 import { t } from "../i18n";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
-import { resourceKinds } from "../utils/api-changes";
+import { resourceKinds, useBackendChanges } from "../utils/api-changes";
 import type { HttpServiceStatus } from "../api/generated/HttpServiceStatus";
 import type { ClashSubscriptionState } from "../api/generated/ClashSubscriptionState";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
-import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { proxyStore } from "../stores/proxy";
 import { copyText as writeClipboardText } from "../utils/clipboard";
 import { clashServerAddresses, clashSubscriptionUrl } from "../utils/clash-subscription";
@@ -121,8 +120,8 @@ async function refresh(): Promise<void> {
   }
 }
 
-function onHttpApiChange(event: Event): void {
-  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
+function onHttpApiChange(change: HttpApiChange): void {
+  const resources = resourceKinds(change);
   if (resources.some((resource) => ["all", "config", "clash_subscription"].includes(resource)))
     void refreshConnection();
   if (resources.includes("all") || resources.includes("certificate")) {
@@ -188,14 +187,11 @@ watch(certificateUrl, async (url, _previous, onCleanup) => {
   }
 });
 
+useBackendChanges(backend, onHttpApiChange);
+
 onMounted(() => {
   void refresh();
   void refreshConnection();
-  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
-});
-
-onBeforeUnmount(() => {
-  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
 });
 </script>
 

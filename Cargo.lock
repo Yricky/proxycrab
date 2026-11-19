@@ -3585,6 +3585,7 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "fancy-regex",
+ "futures",
  "getrandom 0.4.3",
  "include_dir",
  "proxy-crab-mgr",
@@ -3595,6 +3596,7 @@ dependencies = [
  "subtle",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]

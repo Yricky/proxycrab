@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { InvokeArgs, InvokeOptions } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { shareChanges } from "./changes";
 import type { Backend } from "./backend";
 import { BackendError } from "./backend-error";
 import { BodyFetchError, DEFAULT_BODY_MAX_SIZE, UI_BODY_MAX_SIZE } from "./body";
@@ -111,12 +112,12 @@ export function createTauriBackend(): Backend {
         );
       }
     },
-    subscribeChanges: async (handler) => {
+    subscribeChanges: shareChanges(async (handler) => {
       const unlisten = await listen("proxycrab://http-api-change", (event) =>
         handler(event.payload as import("./generated/HttpApiChange").HttpApiChange),
       );
       return unlisten;
-    },
+    }),
     subscribeApprovalChanges: async (handler) => {
       const unlisten = await listen<number>("proxycrab://approval-change", (event) =>
         handler(event.payload),

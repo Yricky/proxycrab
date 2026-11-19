@@ -1,24 +1,18 @@
-use std::{
-    collections::VecDeque,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
-};
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, Query, Request, State},
+    extract::{Extension, Path, Request, State},
     http::{
         HeaderValue, StatusCode,
         header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, REFERRER_POLICY},
     },
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Response, sse::Event},
     routing::{delete, get, post, put},
 };
+use futures::StreamExt;
 use proxy_crab_mgr::{
     ProxyCrabManager,
     dto::{
@@ -28,57 +22,11 @@ use proxy_crab_mgr::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::sync::{Notify, broadcast};
+use tokio_util::sync::CancellationToken;
 
 use crate::permissions::{CliPermissionService, PermissionEntry, UiAccess};
 
 include!(concat!(env!("OUT_DIR"), "/ui_assets.rs"));
-
-struct ChangeLog {
-    cursor: AtomicU64,
-    entries: Mutex<VecDeque<(u64, HttpApiChange)>>,
-    notify: Notify,
-}
-
-impl ChangeLog {
-    fn new(mut receiver: broadcast::Receiver<HttpApiChange>) -> Arc<Self> {
-        let value = Arc::new(Self {
-            cursor: AtomicU64::new(0),
-            entries: Mutex::new(VecDeque::new()),
-            notify: Notify::new(),
-        });
-        let target = value.clone();
-        tokio::spawn(async move {
-            loop {
-                match receiver.recv().await {
-                    Ok(change) => {
-                        let cursor = target.cursor.fetch_add(1, Ordering::SeqCst) + 1;
-                        let mut entries = target.entries.lock().expect("change log lock poisoned");
-                        entries.push_back((cursor, change));
-                        while entries.len() > 256 {
-                            entries.pop_front();
-                        }
-                        drop(entries);
-                        target.notify.notify_waiters();
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        });
-        value
-    }
-
-    fn after(&self, cursor: u64) -> Vec<HttpApiChange> {
-        self.entries
-            .lock()
-            .expect("change log lock poisoned")
-            .iter()
-            .filter(|(entry_cursor, _)| *entry_cursor > cursor)
-            .map(|(_, change)| change.clone())
-            .collect()
-    }
-}
 
 #[derive(Clone)]
 struct UiState {
@@ -86,7 +34,6 @@ struct UiState {
     workspace: String,
     permissions: Arc<CliPermissionService>,
     access: Arc<UiAccess>,
-    changes: Arc<ChangeLog>,
 }
 
 #[derive(Deserialize)]
@@ -104,35 +51,21 @@ struct RegexRequest {
     pattern: String,
 }
 
-#[derive(Deserialize)]
-struct ChangeQuery {
-    #[serde(default)]
-    after: u64,
-}
-
-#[derive(Serialize)]
-struct ChangePayload {
-    cursor: u64,
-    changes: Vec<HttpApiChange>,
-}
-
 pub fn router(
     manager: Arc<dyn ProxyCrabManager>,
     workspace: String,
     permissions: Arc<CliPermissionService>,
     access: Arc<UiAccess>,
-    changes: broadcast::Sender<HttpApiChange>,
 ) -> Router {
     let state = Arc::new(UiState {
         manager,
         workspace,
         permissions,
         access,
-        changes: ChangeLog::new(changes.subscribe()),
     });
     let protected = Router::new()
         .route("/ui-api/bootstrap", get(bootstrap))
-        .route("/ui-api/changes", get(changes_after))
+        .route("/ui-api/changes", get(changes))
         .route("/ui-api/validate-filter-regex", post(validate_filter_regex))
         .route(
             "/ui-api/agents-presets",
@@ -207,20 +140,20 @@ async fn bootstrap(State(state): State<Arc<UiState>>) -> Response {
     }
 }
 
-async fn changes_after(
+async fn changes(
     State(state): State<Arc<UiState>>,
-    Query(query): Query<ChangeQuery>,
+    cancellation: Option<Extension<CancellationToken>>,
 ) -> Response {
-    let mut values = state.changes.after(query.after);
-    if values.is_empty() {
-        let _ =
-            tokio::time::timeout(Duration::from_secs(25), state.changes.notify.notified()).await;
-        values = state.changes.after(query.after);
-    }
-    success(ChangePayload {
-        cursor: state.changes.cursor.load(Ordering::SeqCst),
-        changes: values,
-    })
+    proxy_crab_mgr::changes::response(
+        proxy_crab_mgr::changes::stream(state.manager.clone()).map(|change| {
+            Event::default()
+                .json_data(change)
+                .expect("serialize resource change")
+        }),
+        cancellation
+            .map(|Extension(token)| token)
+            .unwrap_or_default(),
+    )
 }
 
 async fn validate_filter_regex(Json(request): Json<RegexRequest>) -> Response {
@@ -303,7 +236,14 @@ async fn create_api_key(
 }
 
 async fn delete_api_key(State(state): State<Arc<UiState>>, Path(id): Path<String>) -> Response {
-    result(state.permissions.delete_api_key(&id))
+    let value = state.permissions.delete_api_key(&id);
+    if value.is_ok() {
+        let _ = state.manager.change_sender().send(HttpApiChange {
+            resources: vec![proxy_crab_mgr::dto::HttpApiResource::All],
+            session_id: None,
+        });
+    }
+    result(value)
 }
 
 async fn index() -> Response {
@@ -423,6 +363,94 @@ async fn set_identity_redaction(
     result(
         state
             .permissions
-            .set_redaction(&id, binding.redaction_script),
+            .set_redaction(&id, binding.redaction_script)
+            .inspect(|_| {
+                let _ = state.manager.change_sender().send(HttpApiChange {
+                    resources: vec![proxy_crab_mgr::dto::HttpApiResource::All],
+                    session_id: None,
+                });
+            }),
     )
+}
+
+#[cfg(test)]
+mod sse_tests {
+    use super::*;
+    use proxy_crab_mgr::{MitmManager, dto::ScriptRequest, session_share::SessionShareService};
+    use proxy_crab_mitm::{ProxyCrab, log_buffer::LogBuffer};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn read_until(connection: &mut tokio::net::TcpStream, marker: &str) -> String {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let mut value = String::new();
+            while !value.contains(marker) {
+                let mut bytes = [0; 4096];
+                let count = connection.read(&mut bytes).await.unwrap();
+                assert!(count > 0, "stream closed before {marker}: {value}");
+                value.push_str(std::str::from_utf8(&bytes[..count]).unwrap());
+            }
+            value
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn ui_sse_requires_bearer_streams_manager_changes_and_closes_on_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = ProxyCrab::open(dir.path(), Arc::new(LogBuffer::default())).unwrap();
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        runtime
+            .workspace()
+            .override_config_in_memory(|config| config.api_port = port);
+        let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
+        let access = Arc::new(UiAccess::new("test-ui-key"));
+        let permissions = CliPermissionService::open(dir.path(), Some(access.clone())).unwrap();
+        let ui_manager = manager.clone();
+        let ui_permissions = permissions.clone();
+        let workspace = dir.path().to_string_lossy().into_owned();
+        let server = proxy_crab_mgr::http::start_http_server_with_routes(
+            manager.clone(),
+            permissions,
+            SessionShareService::new(),
+            move || router(ui_manager, workspace, ui_permissions, access),
+        )
+        .await
+        .unwrap();
+        let mut denied = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        denied
+            .write_all(
+                b"GET /ui-api/changes HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        assert!(
+            read_until(&mut denied, "invalid_ui_token")
+                .await
+                .starts_with("HTTP/1.1 401")
+        );
+        let mut connection = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        connection.write_all(b"GET /ui-api/changes HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-ui-key\r\n\r\n").await.unwrap();
+        let initial = read_until(&mut connection, "\"kind\":\"all\"").await;
+        assert!(initial.starts_with("HTTP/1.1 200"));
+        assert!(initial.contains("text/event-stream"));
+        manager
+            .create_column_script(ScriptRequest {
+                name: "status".into(),
+                content: "return 'ok'".into(),
+            })
+            .await
+            .unwrap();
+        let update = read_until(&mut connection, "\"names\":[\"status\"]").await;
+        assert!(update.contains("column_scripts"));
+        tokio::time::timeout(std::time::Duration::from_secs(2), server.shutdown())
+            .await
+            .unwrap();
+    }
 }

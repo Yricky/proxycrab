@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Io5Add, Io5Build, Io5Globe, Io5Settings, Io5Trash, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
-import { resourceKinds } from "../utils/api-changes";
+import { resourceKinds, useBackendChanges } from "../utils/api-changes";
 import type { HttpServiceStatus } from "../api/generated/HttpServiceStatus";
 import type { ApiActionView } from "../api/generated/ApiActionView";
 import type { PermissionIdentitySummary } from "../api/generated/PermissionIdentitySummary";
@@ -15,7 +15,6 @@ import PermissionEditor from "../components/PermissionEditor.vue";
 import { i18n, setLocale, t, type AppLocale } from "../i18n";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
-import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { windowsStore } from "../stores/windows";
 import { formatDateTime } from "../utils/format";
 import { DIMENSION_OPTIONS, type PermissionGroupDimension } from "../utils/permission-meta";
@@ -255,8 +254,8 @@ async function deleteSelectedKey(): Promise<void> {
   }
 }
 
-function onHttpApiChange(event: Event): void {
-  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
+function onHttpApiChange(change: HttpApiChange): void {
+  const resources = resourceKinds(change);
   if (
     !resources.includes("all") &&
     !resources.includes("workspace") &&
@@ -273,16 +272,16 @@ function onKeydown(event: KeyboardEvent): void {
   }
 }
 
+useBackendChanges(backend, onHttpApiChange);
+
 onMounted(() => {
   windowsStore.registerCloseGuard(WINDOW_ID, confirmDiscardCurrentPage);
-  window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
   window.addEventListener("keydown", onKeydown);
   void Promise.all([refreshWorkspace(), refreshManagement()]);
 });
 
 onBeforeUnmount(() => {
   windowsStore.unregisterCloseGuard(WINDOW_ID);
-  window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
   window.removeEventListener("keydown", onKeydown);
 });
 </script>

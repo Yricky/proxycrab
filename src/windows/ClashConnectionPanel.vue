@@ -1,17 +1,16 @@
 <script setup lang="ts">
 import QRCode from "qrcode";
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { Io5Copy, Io5OpenOutline, Io5Reload, Io5Save, Io5Warning } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import { t } from "../i18n";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
-import { resourceKinds } from "../utils/api-changes";
+import { resourceKinds, useBackendChanges } from "../utils/api-changes";
 import type { ClashConfig } from "../api/generated/ClashConfig";
 import type { ClashSubscriptionState } from "../api/generated/ClashSubscriptionState";
 import MonacoEditor from "../components/MonacoEditor.vue";
 import { appStore, reportError } from "../stores/app";
 import { confirmDialog } from "../stores/dialog";
-import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { proxyStore } from "../stores/proxy";
 import { copyText } from "../utils/clipboard";
 import { clashImportUrl } from "../utils/clash-subscription";
@@ -109,8 +108,8 @@ async function resetConfig(): Promise<void> {
   }
 }
 
-function onHttpApiChange(event: Event): void {
-  const resources = resourceKinds((event as CustomEvent<HttpApiChange>).detail);
+function onHttpApiChange(change: HttpApiChange): void {
+  const resources = resourceKinds(change);
   if (!resources.some((resource) => resource === "all" || resource === "clash_config")) return;
   if (configDirty.value) {
     configExternal.value = true;
@@ -165,15 +164,10 @@ watch(
   { immediate: true },
 );
 
-onMounted(() => {
-  if (configBackend) {
-    void loadConfig();
-    window.addEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
-  }
-});
+if (configBackend) useBackendChanges(backend, onHttpApiChange);
 
-onBeforeUnmount(() => {
-  if (configBackend) window.removeEventListener(HTTP_API_CHANGE_EVENT, onHttpApiChange);
+onMounted(() => {
+  if (configBackend) void loadConfig();
 });
 </script>
 

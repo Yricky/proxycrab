@@ -102,7 +102,7 @@ The browser landing page verifies the token through `GET /ui-api/bootstrap`, ins
 Backend in `window.proxyCrabBackend`, and then mounts the shared application. The cleartext token is
 not written to the workspace; the CLI stores only a SHA-256 digest in memory.
 
-The token protects target-private `/ui-api/*` routes for bootstrap, long-poll UI changes,
+The token protects target-private `/ui-api/*` routes for bootstrap, SSE UI changes,
 regex helpers, Agent preset management, and API-key/permission management. It is also accepted
 as a trusted credential for the shared `/api/*` resources so the UI remains usable even when the
 ordinary local identity denies an action. These routes and this token are UI internals, not public
@@ -184,7 +184,7 @@ the desktop binary does not embed a second CLI bundle. Every `/share-api/*` requ
 exactly one non-empty `token` query parameter; `Authorization` is ignored. Responses set
 `Cache-Control: no-store`, and the page uses `Referrer-Policy: no-referrer`. The server derives the
 Session scope on every request and overwrites any client Session ID. The surface
-contains bootstrap, scoped proxy status and proxy-change long polling, Session view, stateless log-ID queries, rendered log rows, detail,
+contains bootstrap, scoped proxy status and SSE resource changes, Session view, stateless log-ID queries, rendered log rows, detail,
 body, metadata-only column/filter lists, the current Session interceptor chain, and regex validation.
 `GET /share-api/session-interceptors` returns `SessionInterceptorsPayload` for the Token's Session,
 ignoring any client `session_id`: ordered request/response arrays contain only `name`, optional
@@ -196,22 +196,36 @@ editable column controls instead of offering actions the surface would reject. C
 adjustable in each viewer's own page; the overrides live only in memory and are never written back.
 `AppReadonly` reuses `InterceptorPipeline`; missing write methods remove add/edit/recreate/remove,
 toggle and drag interactions and action hints. Missing breakpoint reads suppress breakpoint UI.
-Existing read/save methods retain frontend HAR export. Share polling checks interceptor configuration
-every 1.5 seconds with the existing metadata poll, emitting scoped `session_interceptors` changes
-when chain order, membership, labels, enabled state or validity changes. The component then refreshes
-through `getSessionInterceptors`; unchanged state produces no repeated change events and stopped
-subscriptions emit no further changes.
+Existing read/save methods retain frontend HAR export. Share subscriptions receive scoped
+`session_interceptors` invalidations when the chain or its library scripts change. The component
+then refreshes through `getSessionInterceptors`; each viewer releases its subscription when unmounted.
+The Backend closes its SSE connection when the last subscriber leaves.
 Disabling invalidates the token; restart invalidates only temporary shares. An archived Session
 is unavailable, and restoring it preserves its enabled share. Agents may use the token on
 `/share-api/*`; it is not accepted as a management credential on `/api/*`.
 
 ## HTTP changes and desktop UI synchronization
 
-Successful HTTP operations that mutate application-visible state and runtime proxy lifecycle or
-activity transitions publish an internal change event. Tauri also subscribes to runtime status
-directly, so activity updates remain available when the management HTTP service cannot start; the
-CLI browser receives them through its private long-poll route. The frontend coalesces adjacent
-events and refreshes only affected resources. Resource changes are tagged objects: for example,
+Successful manager mutations publish resource invalidations shared by HTTP and Tauri commands;
+failed mutations publish nothing. Runtime proxy lifecycle and activity transitions use the same
+subscription stream. Tauri subscribes independently of the management HTTP service, so desktop
+updates remain available when that service cannot start. Browser clients use SSE:
+`GET /ui-api/changes` retains the UI Bearer header, and `GET /share-api/changes?token=…` uses the
+share token. Both send `text/event-stream` with JSON `data` frames and 15-second keepalive comments.
+Each Backend instance shares one transport connection across its subscribers, including reconnect
+and abort handling. The first subscriber opens it; the last unsubscribe closes it. Tauri listeners
+follow the same ownership model. Components and stores subscribe directly through
+`backend.subscribeChanges`; there is no central business-refresh layer or DOM event relay.
+Session and proxy stores own their subscriptions, while routing and bypass reads are subscribed
+only by their mounted consumers. Shared viewers therefore never refresh unsupported management resources.
+
+Every connection starts with `all`; broadcast lag also produces `all`. Clients re-read current
+state instead of replaying history, so there is no event cursor or retained change log. The existing
+`subscribeChanges(handler): Promise<Unsubscribe>` interface remains unchanged. Each frontend consumer
+coalesces adjacent events and refreshes only resources it owns and can read. `all` invalidates that
+consumer's resources; it does not request unsupported Backend methods. Consumers still load initial
+state explicitly, since Tauri subscriptions do not send an initial event. Subscriptions are released
+on unmount/dispose, including when subscription setup completes after disposal. Resource changes are tagged objects: for example,
 `{"resources":[{"kind":"column_scripts","names":["business/status"]},{"kind":"session_view"}]}`.
 Other resources use objects such as `{"kind":"proxy"}`; `{"kind":"all"}` requests full invalidation.
 The optional top-level `session_id` scopes the whole event. Coalescing unions column-script names
@@ -226,8 +240,14 @@ notification path rather than a separate frontend save event.
 
 During `stopping`, it retains the final running
 activity snapshot until `stopped`, so final filtering and row/detail hydration happen after drain
-has persisted terminal capture state. The read-only share page uses an authenticated,
-revision-based proxy-change long poll and then reloads its Session-scoped status.
+has persisted terminal capture state. The read-only share page receives `proxy` invalidations
+only when its Session-scoped status changes, then reloads that scoped status. Changes belonging
+to another Session are filtered out. Share frames also carry `session_config_download` and
+`redaction_revision`, so capabilities and cached redacted content update without metadata polling.
+The stream revalidates the share on events and at 15-second intervals; revoked tokens and archived
+Sessions receive a named SSE `error` event before closure. `redaction_failed` invalidates cached
+content while allowing later policy recovery on the same connection. Streams close on server
+shutdown. The former `/share-api/proxy/changes` long-poll route has been removed.
 
 | HTTP operation | UI resources affected | Desktop behavior |
 | --- | --- | --- |
@@ -235,7 +255,7 @@ revision-based proxy-change long poll and then reloads its Session-scoped status
 | Session create/update/archive/restore | Active and archived Session lists | Archiving the viewed Session selects the first remaining Session |
 | Archived Session delete | Archived Session list | Refreshes the archived Session window |
 | `PUT /api/active-session` | Active Session and settings | Refreshes the active indicator without changing the viewed Session |
-| Session share enable/disable | Target Session share state | Refreshes an open “链接分享” window; enabling refreshes all such windows because the Session ID is carried in the request body |
+| Session share enable/disable | Target Session share state | Refreshes the matching open “链接分享” window using the Session ID published by the share service |
 | Routing-script create/update/delete/selection | Routing library and selection | Refreshes the routing manager |
 | Bypass delete/batch delete/clear | Bypass table | Refreshes the bypass window |
 | `PUT /api/sessions/{id}/filter` | Target Session filter and visible log set | Reloads the table only when that Session is being viewed; ID queries stay silent |
@@ -391,9 +411,9 @@ display name does not merge their references.
 
 `/share-api/column-scripts` and `/share-api/filter-scripts` retain `name` and `display_name` while
 returning empty `content`. Column metadata also includes a `revision` containing the SHA-256 of the
-source. Share-page polling compares metadata by script name, so source-only changes, label changes,
-creation and deletion produce named column-script events even when Session columns are unchanged.
-The source remains hidden; filter metadata retains its existing shape.
+source. Shared viewers receive named column-script invalidations over SSE for source edits, label
+changes, creation and deletion, even when Session columns are unchanged. The source remains hidden;
+filter metadata retains its existing shape.
 
 ## Workspace Assets
 
@@ -964,7 +984,7 @@ snapshot:
 only source for deciding whether a persisted netlog row is currently active; `outcome` remains the
 persisted result and `stage` remains its execution/failure phase. A share-token status response
 retains only the authorized Session key in both maps and omits `active_bypass_count`. Its proxy
-revision includes `latest_netlog_id`, so completed short requests still wake the share long poll.
+revision includes `latest_netlog_id`, so completed short requests still produce share SSE invalidations.
 
 `latest_netlog_id` maps Session IDs to the maximum successfully registered capture ID observed by
 this application process. It reuses the persisted, per-Session SQLite AUTOINCREMENT ID; there is

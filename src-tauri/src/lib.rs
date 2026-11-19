@@ -70,7 +70,6 @@ async fn list_session_shares(
 
 #[tauri::command]
 async fn import_bundle(
-    app: tauri::AppHandle,
     state: State<'_, BackendState>,
     bytes: Vec<u8>,
     accepted_intent_ids: Vec<String>,
@@ -79,34 +78,15 @@ async fn import_bundle(
         .manager()
         .import_bundle(bytes, accepted_intent_ids)
         .await?;
-    if result.import_id.is_none() {
-        let _ = app.emit(
-            "proxycrab://http-api-change",
-            HttpApiChange {
-                resources: vec![HttpApiResource::All],
-                session_id: None,
-            },
-        );
-    }
     Ok(result)
 }
 #[tauri::command]
 async fn resolve_bundle(
-    app: tauri::AppHandle,
     state: State<'_, BackendState>,
     id: String,
     resolutions: Vec<proxy_crab_mgr::bundle::Resolution>,
 ) -> Result<proxy_crab_mgr::bundle::ImportResult, ManagerError> {
     let result = state.manager().resolve_bundle(id, resolutions).await?;
-    if result.import_id.is_none() {
-        let _ = app.emit(
-            "proxycrab://http-api-change",
-            HttpApiChange {
-                resources: vec![HttpApiResource::All],
-                session_id: None,
-            },
-        );
-    }
     Ok(result)
 }
 
@@ -568,14 +548,10 @@ async fn list_column_scripts(state: State<'_, BackendState>) -> Result<Vec<Scrip
 
 #[tauri::command]
 async fn create_column_script(
-    app: tauri::AppHandle,
     state: State<'_, BackendState>,
     request: ScriptRequest,
 ) -> Result<(), ManagerError> {
-    let change = HttpApiChange::column_script(request.name.clone());
-    state.manager().create_column_script(request).await?;
-    let _ = app.emit("proxycrab://http-api-change", change);
-    Ok(())
+    state.manager().create_column_script(request).await
 }
 
 #[tauri::command]
@@ -588,27 +564,19 @@ async fn get_column_script(
 
 #[tauri::command]
 async fn update_column_script(
-    app: tauri::AppHandle,
     state: State<'_, BackendState>,
     name: String,
     request: UpdateScriptRequest,
 ) -> Result<(), ManagerError> {
-    let change = HttpApiChange::column_script(name.clone());
-    state.manager().update_column_script(name, request).await?;
-    let _ = app.emit("proxycrab://http-api-change", change);
-    Ok(())
+    state.manager().update_column_script(name, request).await
 }
 
 #[tauri::command]
 async fn delete_column_script(
-    app: tauri::AppHandle,
     state: State<'_, BackendState>,
     name: String,
 ) -> Result<(), ManagerError> {
-    let change = HttpApiChange::column_script(name.clone());
-    state.manager().delete_column_script(name).await?;
-    let _ = app.emit("proxycrab://http-api-change", change);
-    Ok(())
+    state.manager().delete_column_script(name).await
 }
 
 #[tauri::command]
@@ -981,7 +949,12 @@ fn create_http_api_key(
 
 #[tauri::command]
 fn delete_http_api_key(state: State<'_, BackendState>, id: String) -> Result<(), ManagerError> {
-    state.permissions()?.delete_api_key(&id)
+    state.permissions()?.delete_api_key(&id).inspect(|_| {
+        let _ = state.manager.change_sender().send(HttpApiChange {
+            resources: vec![HttpApiResource::All],
+            session_id: None,
+        });
+    })
 }
 
 #[tauri::command]
@@ -1113,7 +1086,7 @@ pub fn run() {
                     manager.clone(),
                     permissions.clone(),
                     shares.clone(),
-                    move |_| {
+                    move || {
                         share_ui::router(share_assets).merge(proxy_crab_mgr::session_share::router(
                             share_manager,
                             share_service,
@@ -1129,8 +1102,8 @@ pub fn run() {
             } else {
                 (None, permission_error.clone())
             };
-            if let Some(http) = http.as_ref() {
-                let mut changes = http.subscribe_changes();
+            {
+                let mut changes = manager.change_sender().subscribe();
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     loop {
@@ -1380,5 +1353,13 @@ async fn set_http_identity_redaction(
     if let Some(name) = redaction_script.as_ref().filter(|name| !name.is_empty()) {
         state.manager().redaction_script(name.clone()).await?;
     }
-    state.permissions()?.set_redaction(&id, redaction_script)
+    state
+        .permissions()?
+        .set_redaction(&id, redaction_script)
+        .inspect(|_| {
+            let _ = state.manager.change_sender().send(HttpApiChange {
+                resources: vec![HttpApiResource::All],
+                session_id: None,
+            });
+        })
 }

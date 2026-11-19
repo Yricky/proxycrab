@@ -168,8 +168,8 @@ async fn run(args: RunArgs) -> Result<()> {
             manager.clone(),
             permissions,
             shares.clone(),
-            move |changes| {
-                ui::router(ui_manager, ui_workspace, ui_permissions, access, changes).merge(
+            move || {
+                ui::router(ui_manager, ui_workspace, ui_permissions, access).merge(
                     proxy_crab_mgr::session_share::router(share_manager, share_service),
                 )
             },

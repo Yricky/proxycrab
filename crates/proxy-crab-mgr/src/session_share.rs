@@ -16,10 +16,14 @@ use axum::{
         header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, REFERRER_POLICY},
     },
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Response, sse::Event},
     routing::{get, post},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use futures::{
+    StreamExt,
+    stream::{self, BoxStream},
+};
 use proxy_crab_mitm::{
     model::{InterceptorScriptContent, Script},
     storage::BodySide,
@@ -28,11 +32,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 
 use crate::{
     ProxyCrabManager,
-    dto::{BodyQuery, ErrorCode, LogIdsRequest, LogViewsRequest, ManagerError, SessionViewPayload},
+    dto::{
+        BodyQuery, ErrorCode, HttpApiChange, HttpApiResource, LogIdsRequest, LogViewsRequest,
+        ManagerError, SessionViewPayload,
+    },
     http::body_response,
     permission::{PermissionManager, RedactionIdentity},
 };
@@ -636,6 +644,10 @@ impl SessionShareService {
         let mut next = entries.clone();
         next.insert(session_id, entry);
         self.commit(&mut entries, next)?;
+        let _ = manager.change_sender().send(HttpApiChange {
+            resources: vec![HttpApiResource::SessionShare],
+            session_id: Some(session_id),
+        });
         Ok(result)
     }
 
@@ -646,6 +658,10 @@ impl SessionShareService {
     ) -> Result<SessionShareState, ManagerError> {
         Self::ensure_session(manager, session_id).await?;
         self.remove(session_id)?;
+        let _ = manager.change_sender().send(HttpApiChange {
+            resources: vec![HttpApiResource::SessionShare],
+            session_id: Some(session_id),
+        });
         Ok(SessionShareState {
             session_pages: vec![],
             session_config_share: None,
@@ -698,7 +714,7 @@ pub fn router(manager: Arc<dyn ProxyCrabManager>, shares: Arc<SessionShareServic
         .route("/share-api/session-config", get(download_session_config))
         .route("/share-api/capabilities", get(capabilities))
         .route("/share-api/proxy/status", get(proxy_status))
-        .route("/share-api/proxy/changes", get(proxy_changes))
+        .route("/share-api/changes", get(changes))
         .route("/share-api/session-view", get(session_view))
         .route("/share-api/session-interceptors", get(session_interceptors))
         .route("/share-api/logs/ids", post(log_ids))
@@ -846,15 +862,15 @@ async fn proxy_status(
     ))
 }
 
-#[derive(Deserialize)]
-struct ProxyChangesQuery {
-    after: Option<String>,
-}
-
-#[derive(Serialize)]
-struct SharedProxyChange {
-    revision: String,
-    changed: bool,
+struct ShareChanges {
+    state: Arc<ShareState>,
+    token: String,
+    changes: BoxStream<'static, HttpApiChange>,
+    check: tokio::time::Interval,
+    proxy_revision: Option<String>,
+    metadata: Option<(bool, Option<String>)>,
+    redaction_failed: bool,
+    done: bool,
 }
 
 fn shared_proxy_revision(status: &SharedProxyStatus) -> Result<String, ManagerError> {
@@ -863,31 +879,147 @@ fn shared_proxy_revision(status: &SharedProxyStatus) -> Result<String, ManagerEr
     Ok(URL_SAFE_NO_PAD.encode(Sha256::digest(encoded)))
 }
 
-async fn proxy_changes(
-    State(state): State<Arc<ShareState>>,
-    Extension(scope): Extension<ShareScope>,
-    Query(query): Query<ProxyChangesQuery>,
-) -> Result<Json<serde_json::Value>, ShareApiError> {
-    let mut changes = state.manager.subscribe_proxy_status_changes();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
-    loop {
-        let status = scope_proxy_status(state.manager.proxy_status().await?, scope.session_id);
-        let revision = shared_proxy_revision(&status)?;
-        if query.after.as_ref() != Some(&revision) {
-            return success(SharedProxyChange {
-                revision,
-                changed: true,
-            });
+async fn changes(State(state): State<Arc<ShareState>>, request: Request) -> Response {
+    let cancellation = request
+        .extensions()
+        .get::<CancellationToken>()
+        .cloned()
+        .unwrap_or_default();
+    let updates = crate::changes::stream(state.manager.clone()).boxed();
+    let stream = ShareChanges {
+        state,
+        token: query_token(&request).expect("authenticated share token"),
+        changes: updates,
+        check: tokio::time::interval_at(
+            tokio::time::Instant::now() + Duration::from_secs(15),
+            Duration::from_secs(15),
+        ),
+        proxy_revision: None,
+        metadata: None,
+        redaction_failed: false,
+        done: false,
+    };
+    crate::changes::response(
+        stream::unfold(stream, |mut stream| async move {
+            while !stream.done {
+                let mut change = tokio::select! {
+                    change = stream.changes.next() => change?,
+                    _ = stream.check.tick() => HttpApiChange { resources: vec![], session_id: None },
+                };
+                match stream.prepare(&mut change).await {
+                    Ok(Some(metadata)) => {
+                        let data = json!({
+                            "resources": change.resources, "session_id": change.session_id,
+                            "session_config_download": metadata.0, "redaction_revision": metadata.1,
+                        });
+                        return Some((
+                            Event::default()
+                                .json_data(data)
+                                .expect("serialize share change"),
+                            stream,
+                        ));
+                    }
+                    Ok(None) => continue,
+                    Err(error) => {
+                        stream.done = matches!(
+                            error.code.as_str(),
+                            "invalid_share_token" | "share_session_unavailable"
+                        );
+                        if error.code == ErrorCode::RedactionFailed {
+                            if stream.redaction_failed {
+                                continue;
+                            }
+                            stream.redaction_failed = true;
+                        }
+                        return Some((
+                            Event::default()
+                                .event("error")
+                                .json_data(error)
+                                .expect("serialize share error"),
+                            stream,
+                        ));
+                    }
+                }
+            }
+            None
+        }),
+        cancellation,
+    )
+}
+
+impl ShareChanges {
+    async fn prepare(
+        &mut self,
+        change: &mut HttpApiChange,
+    ) -> Result<Option<(bool, Option<String>)>, ManagerError> {
+        let mut scope = self
+            .state
+            .shares
+            .authenticate(&self.token)
+            .map_err(|_| ManagerError::new(ErrorCode::InvalidShareToken, "分享链接无效"))?;
+        if !self
+            .state
+            .manager
+            .sessions()
+            .await?
+            .sessions
+            .iter()
+            .any(|session| session.id == scope.session_id)
+        {
+            return Err(ManagerError::new(
+                ErrorCode::ShareSessionUnavailable,
+                "分享会话不可用",
+            ));
         }
-        if !matches!(
-            tokio::time::timeout_at(deadline, changes.changed()).await,
-            Ok(Ok(()))
-        ) {
-            return success(SharedProxyChange {
-                revision,
-                changed: false,
-            });
+        if change.session_id.is_some_and(|id| id != scope.session_id) {
+            return Ok(None);
         }
+        change.resources.retain(|resource| {
+            matches!(
+                resource,
+                HttpApiResource::All
+                    | HttpApiResource::Proxy
+                    | HttpApiResource::SessionView
+                    | HttpApiResource::ColumnScripts { .. }
+                    | HttpApiResource::FilterScripts
+                    | HttpApiResource::SessionInterceptors
+                    | HttpApiResource::SessionShare
+            )
+        });
+        if change.resources.contains(&HttpApiResource::Proxy)
+            || change.resources.contains(&HttpApiResource::All)
+        {
+            let revision = shared_proxy_revision(&scope_proxy_status(
+                self.state.manager.proxy_status().await?,
+                scope.session_id,
+            ))?;
+            if self.proxy_revision.as_ref() == Some(&revision) {
+                change
+                    .resources
+                    .retain(|resource| *resource != HttpApiResource::Proxy);
+            }
+            self.proxy_revision = Some(revision);
+        }
+        scope.redaction_script = self.state.shares.effective_redaction(&scope).await?;
+        let reader = self
+            .state
+            .manager
+            .reader(scope.redaction_script.as_deref(), "/share-api/session-view")?;
+        let view = reader.session_view(Some(scope.session_id)).await?;
+        let metadata = (
+            scope.session_config_share.is_some(),
+            view.redaction_revision,
+        );
+        if self.redaction_failed {
+            change.resources.push(HttpApiResource::All);
+            self.redaction_failed = false;
+        }
+        if change.resources.is_empty() && self.metadata.as_ref() == Some(&metadata) {
+            return Ok(None);
+        }
+        self.metadata = Some(metadata.clone());
+        change.session_id = Some(scope.session_id);
+        Ok(Some(metadata))
     }
 }
 
@@ -1192,6 +1324,184 @@ mod tests {
         MitmManager,
         dto::{ActiveSession, CreateSessionRequest, ErrorCode, ScriptRequest},
     };
+
+    async fn next_sse(body: &mut Body) -> (String, serde_json::Value) {
+        use http_body_util::BodyExt;
+        let frame = tokio::time::timeout(Duration::from_secs(1), body.frame())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let bytes = frame.into_data().unwrap();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        let event = text
+            .lines()
+            .find_map(|line| line.strip_prefix("event: "))
+            .unwrap_or("message")
+            .to_owned();
+        let data = text
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .unwrap();
+        (event, serde_json::from_str(data).unwrap())
+    }
+
+    #[tokio::test]
+    async fn share_sse_scopes_manager_writes_updates_capabilities_and_ends_on_revocation() {
+        let dir = tempdir().unwrap();
+        let runtime = ProxyCrab::open(dir.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
+        let session = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        let other = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        let shares = SessionShareService::new();
+        let token = shares
+            .enable(&manager, session.id)
+            .await
+            .unwrap()
+            .token
+            .unwrap();
+        let app = router(manager.clone(), shares.clone());
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/share-api/changes?token={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
+        let mut body = response.into_body();
+        let (_, initial) = next_sse(&mut body).await;
+        assert_eq!(initial["resources"], json!([{"kind":"all"}]));
+        assert_eq!(initial["session_id"], session.id);
+        manager
+            .replace_session_view(
+                Some(other.id),
+                crate::dto::ReplaceSessionViewRequest { columns: vec![] },
+            )
+            .await
+            .unwrap();
+        // A later own-session event must be the next visible event.
+        manager
+            .replace_session_view(
+                Some(session.id),
+                crate::dto::ReplaceSessionViewRequest { columns: vec![] },
+            )
+            .await
+            .unwrap();
+        let (_, change) = next_sse(&mut body).await;
+        assert_eq!(change["resources"], json!([{"kind":"session_view"}]));
+        assert_eq!(change["session_id"], session.id);
+        manager
+            .create_column_script(ScriptRequest {
+                name: "status".into(),
+                content: "return 'hidden source'".into(),
+            })
+            .await
+            .unwrap();
+        let (_, change) = next_sse(&mut body).await;
+        assert_eq!(
+            change["resources"][0],
+            json!({"kind":"column_scripts","names":["status"]})
+        );
+        assert!(!change.to_string().contains("hidden source"));
+        shares
+            .enable_with_config(
+                &manager,
+                session.id,
+                Some(SessionShareConfig {
+                    session_config_share: Some(Some(crate::bundle::ConfigShare { assets: vec![] })),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .unwrap();
+        let (_, change) = next_sse(&mut body).await;
+        assert_eq!(change["session_config_download"], true);
+        shares.disable(&manager, session.id).await.unwrap();
+        let (event, error) = next_sse(&mut body).await;
+        assert_eq!(event, "error");
+        assert_eq!(error["code"], "invalid_share_token");
+        use http_body_util::BodyExt;
+        assert!(body.frame().await.is_none());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/share-api/changes?token={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn share_sse_reports_failed_redaction_and_recovers_without_reconnecting() {
+        let dir = tempdir().unwrap();
+        let runtime = ProxyCrab::open(dir.path(), Arc::new(LogBuffer::default())).unwrap();
+        let manager: Arc<dyn ProxyCrabManager> = MitmManager::new(runtime);
+        let session = manager
+            .create_session(CreateSessionRequest::default())
+            .await
+            .unwrap();
+        manager
+            .create_redaction_script(ScriptRequest {
+                name: "mask".into(),
+                content: "return {}".into(),
+            })
+            .await
+            .unwrap();
+        let shares = SessionShareService::new();
+        let token = shares
+            .enable_with_script(&manager, session.id, Some("mask".into()))
+            .await
+            .unwrap()
+            .token
+            .unwrap();
+        let response = router(manager.clone(), shares)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/share-api/changes?token={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let mut body = response.into_body();
+        let (_, initial) = next_sse(&mut body).await;
+        assert!(initial["redaction_revision"].is_string());
+        manager
+            .delete_redaction_script("mask".into())
+            .await
+            .unwrap();
+        let (event, error) = next_sse(&mut body).await;
+        assert_eq!(event, "error");
+        assert_eq!(error["code"], "redaction_failed");
+        manager
+            .create_redaction_script(ScriptRequest {
+                name: "mask".into(),
+                content: "return {uri = 'hidden'}".into(),
+            })
+            .await
+            .unwrap();
+        let (_, change) = next_sse(&mut body).await;
+        assert!(
+            change["resources"]
+                .as_array()
+                .unwrap()
+                .contains(&json!({"kind":"all"}))
+        );
+        assert_ne!(change["redaction_revision"], initial["redaction_revision"]);
+    }
 
     #[tokio::test]
     async fn filter_regex_validation_supports_lookaround() {

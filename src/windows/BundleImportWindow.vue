@@ -13,7 +13,6 @@ import type { FileStatus } from "../api/generated/FileStatus";
 import type { ImportResult } from "../api/generated/ImportResult";
 import type { Resolution } from "../api/generated/Resolution";
 import { sessionsStore } from "../stores/sessions";
-import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { windowsStore } from "../stores/windows";
 import { formatBytes } from "../utils/format";
 import { parseBundle } from "../utils/bundle";
@@ -96,9 +95,6 @@ async function submit(): Promise<void> {
       };
     if (!next.import_id) {
       await sessionsStore.refresh();
-      window.dispatchEvent(
-        new CustomEvent(HTTP_API_CHANGE_EVENT, { detail: { resources: [{ kind: "all" }] } }),
-      );
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);

@@ -1,3 +1,5 @@
+import type { Unsubscribe } from "../api/backend";
+import { resourceKinds, watchBackendChanges } from "../utils/api-changes";
 import { reactive } from "vue";
 import { runtimeBackend as backend } from "../api/runtime-backend";
 import type { AppConfig } from "../api/generated/AppConfig";
@@ -8,6 +10,7 @@ import { t } from "../i18n";
 // Stores are module singletons; they use their own backend handle so that
 // synchronization logic can live outside component setup. Components still go
 // through useBackend() for user-triggered actions.
+let unlisten: Unsubscribe | undefined;
 let portPersistTimer: number | undefined;
 let refreshQueue = Promise.resolve();
 let directStatusVersion = 0;
@@ -154,6 +157,11 @@ export const proxyStore = reactive({
 
   /** Seed toolbar state from AppConfig and load the local IP list. */
   async init(): Promise<void> {
+    unlisten ??= watchBackendChanges(backend, (change) => {
+      if (resourceKinds(change).some((kind) => ["all", "proxy", "config"].includes(kind))) {
+        return this.refresh();
+      }
+    });
     try {
       const config = await backend.getConfig();
       this.persistedPort = config.proxy_port;
@@ -235,6 +243,8 @@ export const proxyStore = reactive({
   },
 
   dispose(): void {
+    unlisten?.();
+    unlisten = undefined;
     cancelPortPersist();
   },
 });
