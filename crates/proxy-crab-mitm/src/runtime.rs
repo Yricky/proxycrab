@@ -16,8 +16,8 @@ use crate::{
     lua::BodyReplacement,
     model::{
         AppConfig, BodyPayload, BreakpointDetail, BreakpointListFilter, BreakpointSummary,
-        CaptureDetail, CaptureSummary, Column, FilterColumn, FilterOption, InterceptorKind,
-        InterceptorLibraryItem, InterceptorScriptContent, InterceptorSnapshot,
+        CaptureDetail, CaptureOutcome, CaptureSummary, Column, FilterColumn, FilterOption,
+        InterceptorKind, InterceptorLibraryItem, InterceptorScriptContent, InterceptorSnapshot,
         MAX_SESSION_INTERCEPTORS_PER_KIND, NewSession, ProxyStatus, ResolvedSessionInterceptor,
         ResolvedSessionInterceptors, Script, ScriptKind, SessionFilter, SessionInterceptors,
         SessionMetadata, SessionView, SystemLogEntry, TemporaryExecutionResult,
@@ -616,6 +616,19 @@ impl ProxyCrab {
         self.pin_capture_store(session_id)?
             .store
             .list_range(limit, min_id, max_id, ascending)
+    }
+
+    pub fn list_capture_id_outcomes_range(
+        &self,
+        session_id: u64,
+        limit: usize,
+        min_id: Option<u64>,
+        max_id: Option<u64>,
+        ascending: bool,
+    ) -> Result<Vec<(u64, CaptureOutcome)>> {
+        self.pin_capture_store(session_id)?
+            .store
+            .list_id_outcomes_range(limit, min_id, max_id, ascending)
     }
 
     pub fn captures(&self, session_id: u64, ids: &[u64]) -> Result<Vec<CaptureSummary>> {

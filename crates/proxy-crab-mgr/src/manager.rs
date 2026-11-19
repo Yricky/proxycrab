@@ -981,7 +981,8 @@ impl ProxyCrabManager for MitmManager {
             } else {
                 None
             };
-            let mut matched_ids = Vec::with_capacity(limit);
+            let mut matched_ids =
+                Vec::with_capacity(requested_ids.as_ref().map_or(limit, Vec::len));
             let mut in_progress_ids = Vec::new();
             if let Some(ids) = requested_ids {
                 let unique_ids = ids.into_iter().collect::<BTreeSet<_>>();
@@ -1013,20 +1014,14 @@ impl ProxyCrabManager for MitmManager {
             } else if limit == 0 {
                 // A zero limit is useful for validating a filter without scanning logs.
             } else if matches!(prepared, PreparedFilter::All) {
-                for item in runtime
-                    .list_captures_range(session_id, limit, min_id, max_id, ascending)
+                for (id, outcome) in runtime
+                    .list_capture_id_outcomes_range(session_id, limit, min_id, max_id, ascending)
                     .map_err(map_error)?
                 {
-                    Self::classify_log_id(
-                        &prepared,
-                        &item,
-                        &active_ids,
-                        || Self::capture_body_access(&runtime, &item),
-                        &mut matched_ids,
-                        &mut in_progress_ids,
-                        redactor.as_ref(),
-                        &runtime,
-                    )?;
+                    matched_ids.push(id);
+                    if outcome == CaptureOutcome::InProgress && active_ids.contains(&id) {
+                        in_progress_ids.push(id);
+                    }
                 }
             } else {
                 let mut min_id = min_id;

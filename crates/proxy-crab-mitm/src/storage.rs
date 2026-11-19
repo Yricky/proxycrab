@@ -9,7 +9,10 @@ use std::{
 use anyhow::{Result, anyhow};
 use brotli::Decompressor;
 use flate2::read::{GzDecoder, ZlibDecoder};
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{
+    Connection, OptionalExtension, Row, params,
+    types::{FromSql, FromSqlResult, ValueRef},
+};
 use tokio::io::AsyncWriteExt;
 use ts_rs::TS;
 
@@ -108,6 +111,17 @@ pub struct CaptureStore {
     websocket_index: Arc<Mutex<crate::websocket::RecordIndex>>,
     session_directory: PathBuf,
     workspace_root: PathBuf,
+}
+
+impl FromSql for CaptureOutcome {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        Ok(match value.as_str()? {
+            "success" => Self::Success,
+            "failed" => Self::Failed,
+            "tunneled" => Self::Tunneled,
+            _ => Self::InProgress,
+        })
+    }
 }
 
 impl CaptureStore {
@@ -754,16 +768,49 @@ impl CaptureStore {
         max_id: Option<u64>,
         ascending: bool,
     ) -> Result<Vec<CaptureSummary>> {
-        let connection = self.connection()?;
+        self.query_range(
+            "id, source, method, uri, req_version, req_headers,
+             resp_status, resp_version, resp_headers, outcome, stage,
+             error_stage, error_kind, error_message, created_at, updated_at, req_tags",
+            limit,
+            min_id,
+            max_id,
+            ascending,
+            |row| self.summary_from_row(row),
+        )
+    }
+
+    pub(crate) fn list_id_outcomes_range(
+        &self,
+        limit: usize,
+        min_id: Option<u64>,
+        max_id: Option<u64>,
+        ascending: bool,
+    ) -> Result<Vec<(u64, CaptureOutcome)>> {
+        self.query_range("id, outcome", limit, min_id, max_id, ascending, |row| {
+            Ok((row.get::<_, i64>(0)? as u64, row.get(1)?))
+        })
+    }
+
+    fn query_range<T>(
+        &self,
+        columns: &str,
+        limit: usize,
+        min_id: Option<u64>,
+        max_id: Option<u64>,
+        ascending: bool,
+        read_row: impl FnMut(&Row<'_>) -> rusqlite::Result<T>,
+    ) -> Result<Vec<T>> {
+        let bounds = match (min_id, max_id) {
+            (Some(_), Some(_)) => "WHERE id > ?1 AND id < ?2",
+            (Some(_), None) => "WHERE id > ?1",
+            (None, Some(_)) => "WHERE id < ?2",
+            (None, None) => "",
+        };
         let order = if ascending { "ASC" } else { "DESC" };
-        let sql = format!(
-            "SELECT id, source, method, uri, req_version, req_headers,
-                    resp_status, resp_version, resp_headers, outcome, stage,
-                    error_stage, error_kind, error_message, created_at, updated_at, req_tags
-             FROM captures
-             WHERE (?1 IS NULL OR id > ?1) AND (?2 IS NULL OR id < ?2)
-             ORDER BY id {order} LIMIT ?3"
-        );
+        // LIMIT uses slot 3 in every query so the cursor bindings stay the same.
+        let sql = format!("SELECT {columns} FROM captures {bounds} ORDER BY id {order} LIMIT ?3");
+        let connection = self.connection()?;
         let mut statement = connection.prepare(&sql)?;
         let rows = statement.query_map(
             params![
@@ -771,7 +818,7 @@ impl CaptureStore {
                 max_id.map(|id| id as i64),
                 limit as i64
             ],
-            |row| self.summary_from_row(row),
+            read_row,
         )?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
@@ -993,7 +1040,6 @@ impl CaptureStore {
         let response_status: Option<u16> = row.get(6)?;
         let response_version: Option<String> = row.get(7)?;
         let response_headers: Option<String> = row.get(8)?;
-        let outcome: String = row.get(9)?;
         let error_stage: Option<String> = row.get(11)?;
         let error_kind: Option<String> = row.get(12)?;
         let error_message: Option<String> = row.get(13)?;
@@ -1017,12 +1063,7 @@ impl CaptureStore {
                     .and_then(|headers| serde_json::from_str(&headers).ok())
                     .unwrap_or_default(),
             }),
-            outcome: match outcome.as_str() {
-                "success" => CaptureOutcome::Success,
-                "failed" => CaptureOutcome::Failed,
-                "tunneled" => CaptureOutcome::Tunneled,
-                _ => CaptureOutcome::InProgress,
-            },
+            outcome: row.get(9)?,
             stage: row.get(10)?,
             error: match (error_stage, error_kind, error_message) {
                 (Some(stage), Some(kind), Some(message)) => Some(CaptureError {
@@ -1489,21 +1530,37 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let older = store
-            .list_range(10, None, Some(ids[4]), false)
-            .unwrap()
-            .into_iter()
-            .map(|item| item.id)
-            .collect::<Vec<_>>();
-        let newer = store
-            .list_range(10, Some(ids[1]), None, true)
-            .unwrap()
-            .into_iter()
-            .map(|item| item.id)
-            .collect::<Vec<_>>();
-
-        assert_eq!(older, vec![ids[3], ids[2], ids[1], ids[0]]);
-        assert_eq!(newer, vec![ids[2], ids[3], ids[4]]);
+        store.tunneled(ids[2]).unwrap();
+        for (limit, min, max, ascending, expected) in [
+            (
+                10,
+                None,
+                Some(ids[4]),
+                false,
+                vec![ids[3], ids[2], ids[1], ids[0]],
+            ),
+            (10, Some(ids[1]), None, true, vec![ids[2], ids[3], ids[4]]),
+            (2, Some(ids[0]), Some(ids[4]), false, vec![ids[3], ids[2]]),
+            (1, None, None, false, vec![ids[4]]),
+            (10, Some(ids[2]), Some(ids[2]), false, vec![]),
+            (0, None, None, false, vec![]),
+        ] {
+            let summaries = store.list_range(limit, min, max, ascending).unwrap();
+            assert_eq!(
+                summaries.iter().map(|item| item.id).collect::<Vec<_>>(),
+                expected
+            );
+            let outcomes = store
+                .list_id_outcomes_range(limit, min, max, ascending)
+                .unwrap();
+            assert_eq!(
+                outcomes,
+                summaries
+                    .into_iter()
+                    .map(|item| (item.id, item.outcome))
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]
