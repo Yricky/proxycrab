@@ -22,6 +22,7 @@ import { copyText as writeClipboardText } from "../utils/clipboard";
 import { clashServerAddresses, clashSubscriptionUrl } from "../utils/clash-subscription";
 import ClashConnectionPanel from "./ClashConnectionPanel.vue";
 import AppTooltip from "../components/AppTooltip.vue";
+import CopyableLink from "../components/CopyableLink.vue";
 
 const backend = useBackend();
 const addresses = ref<string[]>([]);
@@ -135,25 +136,6 @@ async function copyPem(): Promise<void> {
     appStore.toast(t("证书 PEM 已复制到剪贴板"), "success");
   } catch (error) {
     reportError(error, t("复制失败"));
-  }
-}
-
-async function copyDownloadUrl(): Promise<void> {
-  if (!certificateUrl.value) return;
-  try {
-    await writeClipboardText(certificateUrl.value);
-    appStore.toast(t("证书下载地址已复制"), "success");
-  } catch (error) {
-    reportError(error, t("复制失败"));
-  }
-}
-
-async function openDownloadUrl(): Promise<void> {
-  if (!certificateUrl.value) return;
-  try {
-    await backend.openExternal(certificateUrl.value);
-  } catch (error) {
-    reportError(error, t("打开证书下载地址失败"));
   }
 }
 
@@ -293,14 +275,11 @@ onBeforeUnmount(() => {
           <p class="text-secondary">
             {{ t("让手机或其他设备能访问所选 IP，打开以下链接或扫描二维码，无需先连接代理。") }}
           </p>
-          <div v-if="certificateUrl" class="cert-download-link">
-            <a :href="certificateUrl" class="mono" @click.prevent="openDownloadUrl">
-              {{ certificateUrl }}
-            </a>
-            <button class="btn icon" :title="t('复制证书下载地址')" @click="copyDownloadUrl">
-              <Io5Copy :size="14" />
-            </button>
-          </div>
+          <CopyableLink
+            v-if="certificateUrl"
+            :url="certificateUrl"
+            :copy-title="t('复制证书下载地址')"
+          />
         </div>
         <div v-if="certificateUrl" class="cert-qr">
           <img v-if="qrCodeDataUrl" :src="qrCodeDataUrl" :alt="t('证书下载地址二维码')" />
@@ -323,11 +302,6 @@ onBeforeUnmount(() => {
       </div>
       <pre class="cert-pem mono">{{ pem || t("加载中…") }}</pre>
 
-      <div v-if="proxyStore.running" class="cert-hint">
-        <Io5Warning :size="14" />
-        <span>{{ t("代理正在运行，需先停止代理才能重新生成证书。") }}</span>
-      </div>
-
       <div class="cert-actions">
         <button class="btn" :disabled="!pem" @click="copyPem">
           <Io5Copy :size="14" /> {{ t("复制 PEM") }}
@@ -340,7 +314,11 @@ onBeforeUnmount(() => {
           v-if="backend.host"
           class="btn danger"
           :disabled="proxyStore.running || loading"
-          :title="proxyStore.running ? t('需先停止代理') : t('重新生成 CA 证书')"
+          :title="
+            proxyStore.running
+              ? t('代理正在运行，需先停止代理才能重新生成证书。')
+              : t('重新生成 CA 证书')
+          "
           @click="regenerate"
         >
           <Io5Refresh :size="14" /> {{ t("重新生成证书") }}
@@ -457,36 +435,6 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.cert-download-link {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  height: 32px;
-  padding-left: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-panel);
-}
-
-.cert-download-link a {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  color: var(--accent);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  user-select: text;
-}
-
-.cert-download-link a:hover {
-  text-decoration: underline;
-}
-
-.cert-download-link .btn {
-  margin: 2px;
-  flex: none;
-}
-
 .cert-qr {
   display: grid;
   place-items: center;
@@ -537,15 +485,6 @@ onBeforeUnmount(() => {
   white-space: pre-wrap;
   word-break: break-all;
   user-select: text;
-}
-
-.cert-hint {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--warning);
-  font-size: 12px;
-  flex: none;
 }
 
 .cert-actions {

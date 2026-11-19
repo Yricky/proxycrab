@@ -271,10 +271,8 @@ export default {
   "打开 Clash 失败，请确认已安装客户端，或复制链接手动导入":
     "Failed to open Clash; make sure a client is installed, or copy the link and import manually",
   打开分享包失败: "Failed to open bundle",
-  打开分享链接失败: "Failed to open share link",
   打开开发者工具: "Open developer tools",
   打开开发者工具失败: "Failed to open developer tools",
-  打开证书下载地址失败: "Failed to open certificate download URL",
   "执行中…": "Executing…",
   执行临时脚本失败: "Failed to execute ad-hoc script",
   拒绝: "Deny",
@@ -488,7 +486,6 @@ export default {
   设置状态码: "Set status code",
   "证书 PEM 已复制到剪贴板": "Certificate PEM copied to clipboard",
   证书下载地址二维码: "Certificate download QR code",
-  证书下载地址已复制: "Certificate download URL copied",
   证书内容: "Certificate content",
   证书已重新生成: "Certificate regenerated",
   该执行记录没有完整快照: "This execution has no complete snapshot",
@@ -575,7 +572,6 @@ export default {
   阶段: "Stage",
   随附资源: "Attached asset | Attached assets",
   隧道: "Tunnel",
-  需先停止代理: "Stop the proxy first",
   需要确认的管理接口调用会显示在这里: "Management API calls requiring confirmation appear here",
   "预设「{name}」包含未保存的更改，确定放弃吗？":
     'Preset "{name}" has unsaved changes. Discard them?',

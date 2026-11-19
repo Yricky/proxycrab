@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { Io5DocumentOutline, Io5Download, Io5TrashOutline } from "vue-icons-plus/io5";
 import { useBackend } from "../api";
 import { selectFile } from "../api/select-file";
 import { BackendError } from "../api/backend-error";
@@ -8,6 +9,7 @@ import type { SessionPage } from "../api/generated/SessionPage";
 import type { HttpApiChange } from "../api/generated/HttpApiChange";
 import { HTTP_API_CHANGE_EVENT } from "../stores/http-api-sync";
 import { appStore, reportError } from "../stores/app";
+import { confirmDialog } from "../stores/dialog";
 import { formatBytes } from "../utils/format";
 import { t } from "../i18n";
 
@@ -48,10 +50,13 @@ async function importPage(): Promise<void> {
       result = await backend.importSessionPage!(file);
     } catch (e) {
       if (!(e instanceof BackendError) || e.code !== "conflict") throw e;
-      if (
-        !window.confirm(t("同 ID 的会话页面已存在，是否替换整个页面包？已分享的链接将使用新版本。"))
-      )
-        return;
+      const replace = await confirmDialog({
+        title: t("导入会话页面"),
+        message: t("同 ID 的会话页面已存在，是否替换整个页面包？已分享的链接将使用新版本。"),
+        confirmText: t("替换"),
+        danger: true,
+      });
+      if (!replace) return;
       result = await backend.importSessionPage!(file, true);
     }
     await refresh();
@@ -79,7 +84,14 @@ async function exportPage(): Promise<void> {
   }
 }
 async function deletePage(): Promise<void> {
-  if (!current.value || !window.confirm(t("删除此会话页面？已分享的页面将失效。"))) return;
+  if (!current.value) return;
+  const ok = await confirmDialog({
+    title: t("删除会话页面"),
+    message: t("删除此会话页面？已分享的页面将失效。"),
+    confirmText: t("删除"),
+    danger: true,
+  });
+  if (!ok) return;
   busy.value = true;
   try {
     await backend.deleteSessionPage!(current.value.id);
@@ -109,9 +121,9 @@ onBeforeUnmount(() => {
   <main class="pages-manager">
     <aside class="pages-list">
       <header>
-        <strong
-          >{{ t("会话页面") }} <span class="muted">{{ pages.length }}</span></strong
-        >
+        <strong>{{ t("会话页面") }}</strong>
+        <span class="muted mono">{{ pages.length }}</span>
+        <span class="spacer" />
         <button v-if="backend.importSessionPage" class="btn" :disabled="busy" @click="importPage">
           {{ t("导入") }}
         </button>
@@ -124,8 +136,9 @@ onBeforeUnmount(() => {
           :class="{ selected: selected === page.id }"
           @click="selected = page.id"
         >
-          <strong>{{ page.name }}</strong>
-          <span class="muted">{{ page.id }} · {{ formatBytes(page.size) }}</span>
+          <span class="page-name">{{ page.name }}</span>
+          <span class="page-size mono">{{ formatBytes(page.size) }}</span>
+          <span class="page-id mono">{{ page.id }}</span>
         </button>
         <p v-if="!pages.length" class="empty-hint">
           {{ loading ? t("正在加载…") : t("导入 ZIP 页面包以开始使用") }}
@@ -135,11 +148,12 @@ onBeforeUnmount(() => {
     <section v-if="current" class="page-content">
       <header class="page-heading">
         <div class="page-title">
-          <strong>{{ current.name }}</strong
-          ><span class="muted">{{ current.description || current.id }}</span>
+          <strong>{{ current.name }}</strong>
+          <span class="page-title-id mono">{{ current.id }}</span>
         </div>
+        <span class="spacer" />
         <button v-if="backend.exportSessionPage" class="btn" :disabled="busy" @click="exportPage">
-          {{ t("导出") }}
+          <Io5Download :size="14" />{{ t("导出") }}
         </button>
         <button
           v-if="backend.deleteSessionPage"
@@ -147,19 +161,30 @@ onBeforeUnmount(() => {
           :disabled="busy"
           @click="deletePage"
         >
-          {{ t("删除") }}
+          <Io5TrashOutline :size="14" />{{ t("删除") }}
         </button>
       </header>
-      <dl class="page-details">
-        <dt>ID</dt>
-        <dd>{{ current.id }}</dd>
-        <dt>{{ t("大小") }}</dt>
-        <dd>{{ formatBytes(current.size) }}</dd>
-        <dt>{{ t("描述") }}</dt>
-        <dd>{{ current.description || "—" }}</dd>
-      </dl>
+      <div class="page-body">
+        <dl class="page-details">
+          <dt>ID</dt>
+          <dd class="mono">{{ current.id }}</dd>
+          <dt>{{ t("大小") }}</dt>
+          <dd>{{ formatBytes(current.size) }}</dd>
+          <dt>{{ t("导出文件") }}</dt>
+          <dd class="mono">{{ current.id }}.zip</dd>
+          <dt>{{ t("描述") }}</dt>
+          <dd>{{ current.description || "—" }}</dd>
+          <dt>{{ t("包版本") }}</dt>
+          <dd class="mono">{{ current.version }}</dd>
+          <dt>{{ t("运行时版本") }}</dt>
+          <dd class="mono">{{ current.backend_version }}</dd>
+        </dl>
+      </div>
     </section>
-    <div v-else class="empty-hint page-empty">{{ t("选择会话页面查看信息") }}</div>
+    <div v-else class="page-empty">
+      <Io5DocumentOutline :size="22" class="page-empty-icon" />
+      <strong>{{ t("还没有会话页面") }}</strong>
+    </div>
   </main>
 </template>
 
@@ -171,7 +196,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 .pages-list {
-  width: 230px;
+  width: 236px;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -182,39 +207,64 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 42px;
-  padding: 7px 10px;
+  min-height: 34px;
+  padding: 4px 8px 4px 12px;
   border-bottom: 1px solid var(--border);
 }
 .pages-list header strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.spacer {
   flex: 1;
 }
+.muted {
+  color: var(--text-faint);
+}
 .page-items {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
 }
 .page-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 8px;
   width: 100%;
-  padding: 10px 12px;
-  text-align: left;
-  color: var(--text);
-  background: transparent;
+  padding: 5px 12px;
   border: 0;
   border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
   cursor: pointer;
 }
-.page-item:hover,
-.page-item.selected {
+.page-item:hover {
   background: var(--bg-hover);
 }
 .page-item.selected {
-  box-shadow: inset 3px 0 var(--accent);
+  background: var(--bg-selected);
 }
-.page-item strong,
-.page-item span {
-  overflow-wrap: anywhere;
+.page-item.selected .page-name {
+  color: var(--accent);
+}
+.page-name,
+.page-size,
+.page-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.page-size,
+.page-id {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.page-id {
+  grid-column: 1 / -1;
+  line-height: 1.4;
 }
 .page-content {
   display: flex;
@@ -225,21 +275,38 @@ onBeforeUnmount(() => {
 }
 .page-title {
   display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 3px;
+  align-items: baseline;
+  gap: 7px;
   min-width: 0;
 }
-.page-title span {
+.page-title strong,
+.page-title-id {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.page-title strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.page-title-id {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.page-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+}
 .page-details {
   display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 10px 16px;
-  margin: 16px;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0;
 }
 .page-details dt {
   color: var(--text-secondary);
@@ -247,16 +314,24 @@ onBeforeUnmount(() => {
 .page-details dd {
   margin: 0;
   overflow-wrap: anywhere;
+  user-select: text;
 }
 .page-empty {
-  display: grid;
   flex: 1;
+  display: grid;
   place-content: center;
+  justify-items: center;
+  gap: 6px;
   padding: 16px;
+  color: var(--text-faint);
+  text-align: center;
 }
-.muted {
-  font-size: 11px;
+.page-empty-icon {
+  opacity: 0.5;
+}
+.page-empty strong {
   color: var(--text-secondary);
+  font-weight: 600;
 }
 .danger {
   color: var(--danger);
