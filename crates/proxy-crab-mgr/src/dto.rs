@@ -336,10 +336,77 @@ pub struct LogViewItem {
     pub updated_at: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export)]
+pub enum LogViewColumn {
+    Method {
+        width: f32,
+    },
+    Uri {
+        width: f32,
+    },
+    Code {
+        width: f32,
+    },
+    Source {
+        width: f32,
+    },
+    Stage {
+        width: f32,
+    },
+    CreatedAt {
+        width: f32,
+    },
+    UpdatedAt {
+        width: f32,
+    },
+    Script {
+        width: f32,
+        script_name: String,
+    },
+    ScriptContent {
+        width: f32,
+        name: String,
+        content: String,
+    },
+}
+
+impl LogViewColumn {
+    pub fn width(&self) -> f32 {
+        match self {
+            Self::Method { width }
+            | Self::Uri { width }
+            | Self::Code { width }
+            | Self::Source { width }
+            | Self::Stage { width }
+            | Self::CreatedAt { width }
+            | Self::UpdatedAt { width }
+            | Self::Script { width, .. }
+            | Self::ScriptContent { width, .. } => *width,
+        }
+    }
+}
+
+impl From<Column> for LogViewColumn {
+    fn from(column: Column) -> Self {
+        match column {
+            Column::Method { width } => Self::Method { width },
+            Column::Uri { width } => Self::Uri { width },
+            Column::Code { width } => Self::Code { width },
+            Column::Source { width } => Self::Source { width },
+            Column::Stage { width } => Self::Stage { width },
+            Column::CreatedAt { width } => Self::CreatedAt { width },
+            Column::UpdatedAt { width } => Self::UpdatedAt { width },
+            Column::Script { width, script_name } => Self::Script { width, script_name },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct SessionViewInput {
-    pub columns: Vec<Column>,
+pub struct LogViewInput {
+    pub columns: Vec<LogViewColumn>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -349,7 +416,7 @@ pub struct LogViewsRequest {
     pub session_id: Option<u64>,
     pub logs: Vec<LogViewItem>,
     #[ts(optional = nullable)]
-    pub view: Option<SessionViewInput>,
+    pub view: Option<LogViewInput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -376,7 +443,7 @@ pub struct LogViewException {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LogViewsPayload {
-    pub columns: Vec<Column>,
+    pub columns: Vec<LogViewColumn>,
     pub rows: Vec<LogViewRow>,
     pub exceptions: Vec<LogViewException>,
 }

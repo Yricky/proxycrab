@@ -190,6 +190,82 @@ async fn shared_inline_filter_is_scoped_and_redacted() {
 }
 
 #[tokio::test]
+async fn inline_view_columns_use_redaction_and_shared_session_scope() {
+    let f = Fixture::new(MASK).await;
+    let columns = vec![
+        LogViewColumn::ScriptContent {
+            width: 160.0, name: "details".into(),
+            content: "return entry.req.uri.path .. ':' .. entry.req.body:as_string() .. ':' .. entry.resp.body:as_string()".into(),
+        },
+        LogViewColumn::ScriptContent {
+            width: 100.0, name: "details".into(),
+            content: "error(entry.req.body:as_string())".into(),
+        },
+    ];
+    let mut request = LogViewsRequest {
+        session_id: Some(f.sid),
+        logs: vec![LogViewItem {
+            id: f.id,
+            updated_at: Some(u64::MAX),
+        }],
+        view: Some(LogViewInput {
+            columns: columns.clone(),
+        }),
+    };
+    let verify = |result: LogViewsPayload| {
+        assert_eq!(result.columns, columns);
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].cells,
+            vec!["/safe:masked request:masked response", ""]
+        );
+        assert_eq!(result.exceptions.len(), 1);
+        assert_eq!(result.exceptions[0].column_index, Some(1));
+        assert!(result.exceptions[0].message.contains("details"));
+        assert!(result.exceptions[0].message.contains("masked request"));
+        assert!(!result.exceptions[0].message.contains("secret"));
+    };
+    let reader = f.manager.reader(Some("mask"), "/api/logs/views").unwrap();
+    verify(reader.log_views(request.clone()).await.unwrap());
+    let manager: Arc<dyn ProxyCrabManager> = f.manager.clone();
+    let shares = SessionShareService::new();
+    let share = shares
+        .enable_with_script(&manager, f.sid, Some("mask".into()))
+        .await
+        .unwrap();
+    let app = proxy_crab_mgr::session_share::router(manager, shares);
+    request.session_id = Some(999);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/share-api/logs/views?token={}",
+                    share.token.unwrap()
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&request).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    verify(serde_json::from_value(body["data"].clone()).unwrap());
+    assert!(f.manager.column_scripts().await.unwrap().is_empty());
+    assert!(
+        f.manager
+            .log(Some(f.sid), f.id)
+            .await
+            .unwrap()
+            .request
+            .uri
+            .contains("secret")
+    );
+}
+
+#[tokio::test]
 async fn redaction_covers_detail_body_columns_and_filters_without_changing_originals() {
     let f = Fixture::new(MASK).await;
     let reader = f.manager.reader(Some("mask"), "/api/logs/{id}").unwrap();
@@ -224,8 +300,8 @@ async fn redaction_covers_detail_body_columns_and_filters_without_changing_origi
                 id: f.id,
                 updated_at: Some(u64::MAX),
             }],
-            view: Some(SessionViewInput {
-                columns: vec![Column::Script {
+            view: Some(LogViewInput {
+                columns: vec![LogViewColumn::Script {
                     script_name: "body".into(),
                     width: 100.0,
                 }],
@@ -310,8 +386,8 @@ async fn redaction_failures_are_not_swallowed_by_filter_or_column_evaluation() {
                     id: f.id,
                     updated_at: None
                 }],
-                view: Some(SessionViewInput {
-                    columns: vec![Column::Script {
+                view: Some(LogViewInput {
+                    columns: vec![LogViewColumn::Script {
                         script_name: "catch".into(),
                         width: 100.0
                     }]

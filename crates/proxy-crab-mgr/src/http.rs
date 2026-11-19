@@ -3560,6 +3560,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inline_view_column_requires_fields_and_cannot_be_saved() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
+        let manager = MitmManager::new(runtime);
+        let before = manager
+            .session_view(Some(session.id))
+            .await
+            .unwrap()
+            .columns;
+        let (changes, mut receiver) = tokio::sync::broadcast::channel(8);
+        let app = router_with_changes(manager.clone(), allow_all(), changes);
+        let column = json!({"kind": "script_content", "name": "host", "content": "return entry.req.uri.host", "width": 160.0});
+        let response = app.clone().oneshot(Request::builder().method("POST").uri("/api/logs/views")
+            .header("content-type", "application/json").body(Body::from(json!({
+                "session_id": session.id, "logs": [], "view": {"columns": [column.clone()]}
+            }).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["data"]["columns"], json!([column.clone()]));
+        for field in ["name", "content", "width"] {
+            let mut invalid = column.clone();
+            invalid.as_object_mut().unwrap().remove(field);
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/logs/views")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            json!({
+                                "session_id": session.id, "logs": [], "view": {"columns": [invalid]}
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/session-view?session_id={}", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"columns": [column]}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            manager
+                .session_view(Some(session.id))
+                .await
+                .unwrap()
+                .columns,
+            before
+        );
+        assert!(manager.column_scripts().await.unwrap().is_empty());
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn inline_lua_filter_is_query_only_and_read_only() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();

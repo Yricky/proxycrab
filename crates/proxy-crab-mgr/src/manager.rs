@@ -11,9 +11,9 @@ use proxy_crab_mitm::{
     lua::{CaptureBodyAccess, ColumnEvaluator, FilterEvaluator},
     model::{
         AppConfig, BreakpointListFilter, BreakpointSummary, CaptureDetail, CaptureOutcome,
-        CaptureSummary, Column, FilterColumn, HeaderValues, InterceptorKind,
-        InterceptorScriptContent, InterceptorSnapshot, NewSession, ProxyStatus, Script, ScriptKind,
-        SessionFilter, SessionInterceptor, SessionInterceptors, SessionMetadata, SystemLogEntry,
+        CaptureSummary, FilterColumn, HeaderValues, InterceptorKind, InterceptorScriptContent,
+        InterceptorSnapshot, NewSession, ProxyStatus, Script, ScriptKind, SessionFilter,
+        SessionInterceptor, SessionInterceptors, SessionMetadata, SystemLogEntry,
         TemporaryExecutionResult,
     },
     storage::{BodySide, BodySource},
@@ -31,12 +31,12 @@ use crate::{
         DeleteCount, ErrorCode, ExecuteTemporaryScriptRequest, ExtendBreakpointRequest, HeaderItem,
         InterceptorCreateRequest, InterceptorDetail, InterceptorLibraryList,
         InterceptorUpdateRequest, LogDetail, LogFilter, LogFilterOption, LogIdsPayload,
-        LogIdsRequest, LogViewException, LogViewRow, LogViewsPayload, LogViewsRequest,
-        ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest,
-        ReplayBodyPayload, ReplayRequestPayload, ReplayResult, RequestDetail, ResponseDetail,
-        RoutingSelection, ScriptRequest, SessionInterceptorItem, SessionInterceptorsPayload,
-        SessionViewPayload, SessionsPayload, SystemLogsQuery, UpdateAgentsPresetRequest,
-        UpdateScriptRequest, UpdateSessionRequest,
+        LogIdsRequest, LogViewColumn, LogViewException, LogViewRow, LogViewsPayload,
+        LogViewsRequest, ManagerError, ManagerResult, ReplaceSessionInterceptorsRequest,
+        ReplaceSessionViewRequest, ReplayBodyPayload, ReplayRequestPayload, ReplayResult,
+        RequestDetail, ResponseDetail, RoutingSelection, ScriptRequest, SessionInterceptorItem,
+        SessionInterceptorsPayload, SessionViewPayload, SessionsPayload, SystemLogsQuery,
+        UpdateAgentsPresetRequest, UpdateScriptRequest, UpdateSessionRequest,
     },
 };
 use tokio::sync::{Semaphore, watch};
@@ -379,20 +379,20 @@ impl MitmManager {
             .ok_or_else(|| ManagerError::conflict("no active Session"))
     }
 
-    fn render_builtin_cell(column: &Column, item: &CaptureSummary) -> Option<String> {
+    fn render_builtin_cell(column: &LogViewColumn, item: &CaptureSummary) -> Option<String> {
         match column {
-            Column::Method { .. } => Some(item.request.method.clone()),
-            Column::Uri { .. } => Some(item.request.uri.clone()),
-            Column::Code { .. } => item
+            LogViewColumn::Method { .. } => Some(item.request.method.clone()),
+            LogViewColumn::Uri { .. } => Some(item.request.uri.clone()),
+            LogViewColumn::Code { .. } => item
                 .response
                 .as_ref()
                 .map(|response| response.status.to_string())
                 .or_else(|| Some("...".into())),
-            Column::Source { .. } => Some(item.source.clone()),
-            Column::Stage { .. } => Some(item.stage.clone()),
-            Column::CreatedAt { .. } => Some(item.created_at.to_string()),
-            Column::UpdatedAt { .. } => Some(item.updated_at.to_string()),
-            Column::Script { .. } => None,
+            LogViewColumn::Source { .. } => Some(item.source.clone()),
+            LogViewColumn::Stage { .. } => Some(item.stage.clone()),
+            LogViewColumn::CreatedAt { .. } => Some(item.created_at.to_string()),
+            LogViewColumn::UpdatedAt { .. } => Some(item.updated_at.to_string()),
+            LogViewColumn::Script { .. } | LogViewColumn::ScriptContent { .. } => None,
         }
     }
 
@@ -1033,7 +1033,13 @@ impl ProxyCrabManager for MitmManager {
             let redactor = ReadRedactor::prepare(&policy)?;
             let columns = match request.view {
                 Some(view) => view.columns,
-                None => runtime.session_view(session_id).map_err(map_error)?.columns,
+                None => runtime
+                    .session_view(session_id)
+                    .map_err(map_error)?
+                    .columns
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
             };
             if columns
                 .iter()
@@ -1051,17 +1057,22 @@ impl ProxyCrabManager for MitmManager {
                 .into_iter()
                 .map(|item| (item.id, item))
                 .collect::<HashMap<_, _>>();
-            let mut scripts = HashMap::<String, Result<ColumnEvaluator, String>>::new();
-            for column in &columns {
-                if let Column::Script { script_name, .. } = column {
-                    scripts.entry(script_name.clone()).or_insert_with(|| {
+            let scripts = columns
+                .iter()
+                .map(|column| match column {
+                    LogViewColumn::Script { script_name, .. } => Some(
                         runtime
                             .script(ScriptKind::Column, script_name)
                             .and_then(|script| ColumnEvaluator::new(&script.content, &script.name))
-                            .map_err(|error| error.to_string())
-                    });
-                }
-            }
+                            .map_err(|error| error.to_string()),
+                    ),
+                    LogViewColumn::ScriptContent { name, content, .. } => {
+                        Some(ColumnEvaluator::new(content, name).map_err(|error| error.to_string()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let has_scripts = scripts.iter().any(Option::is_some);
 
             let mut rows = Vec::new();
             let mut exceptions = Vec::new();
@@ -1087,7 +1098,7 @@ impl ProxyCrabManager for MitmManager {
                     .transpose()?;
                 let output = view.as_ref().map(|v| v.summary());
                 let item = output.as_ref().unwrap_or(item);
-                let bodies = (!scripts.is_empty()).then(|| {
+                let bodies = has_scripts.then(|| {
                     view.as_ref()
                         .map(|v| v.body_access())
                         .unwrap_or_else(|| Self::capture_body_access(&runtime, item))
@@ -1098,11 +1109,8 @@ impl ProxyCrabManager for MitmManager {
                         cells.push(value);
                         continue;
                     }
-                    let Column::Script { script_name, .. } = column else {
-                        unreachable!("all built-in columns were rendered above");
-                    };
-                    let result = match scripts
-                        .get(script_name)
+                    let result = match scripts[column_index]
+                        .as_ref()
                         .expect("every script column is preloaded")
                     {
                         Ok(evaluator) => evaluator
@@ -1119,6 +1127,12 @@ impl ProxyCrabManager for MitmManager {
                     match result {
                         Ok(value) => cells.push(value),
                         Err(message) => {
+                            let message = match column {
+                                LogViewColumn::ScriptContent { name, .. } => {
+                                    format!("{name}: {message}")
+                                }
+                                _ => message,
+                            };
                             cells.push(String::new());
                             exceptions.push(LogViewException {
                                 id,
@@ -2208,9 +2222,9 @@ mod tests {
 
     use crate::dto::{
         CreateAgentsPresetRequest, ErrorCode, InterceptorCreateRequest, LogFilter, LogFilterOption,
-        LogIdsRequest, LogViewItem, LogViewsRequest, ReplaceSessionInterceptorsRequest,
-        ReplaceSessionViewRequest, ScriptRequest, SessionInterceptorInput, SessionViewInput,
-        UpdateAgentsPresetRequest, UpdateScriptRequest,
+        LogIdsRequest, LogViewColumn, LogViewInput, LogViewItem, LogViewsRequest,
+        ReplaceSessionInterceptorsRequest, ReplaceSessionViewRequest, ScriptRequest,
+        SessionInterceptorInput, UpdateAgentsPresetRequest, UpdateScriptRequest,
     };
 
     use super::{
@@ -2916,6 +2930,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inline_view_columns_are_independent_and_read_only() {
+        let app_data = tempdir().unwrap();
+        let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
+        let session = runtime.create_session(NewSession::default()).unwrap();
+        let store = CaptureStore::open(session.id, runtime.workspace().root()).unwrap();
+        let first = store.begin("client", &request("first"), "request").unwrap();
+        let second = store
+            .begin("client", &request("second"), "request")
+            .unwrap();
+        let manager = MitmManager::new(runtime);
+        manager
+            .create_column_script(ScriptRequest {
+                name: "same".into(),
+                content: "return 'saved'".into(),
+            })
+            .await
+            .unwrap();
+        let before = manager
+            .session_view(Some(session.id))
+            .await
+            .unwrap()
+            .columns;
+        let inline = |content: &str| LogViewColumn::ScriptContent {
+            width: 120.0,
+            name: "same".into(),
+            content: content.into(),
+        };
+        let columns = vec![
+            LogViewColumn::Method { width: 50.0 },
+            LogViewColumn::Script {
+                width: 120.0,
+                script_name: "same".into(),
+            },
+            inline("counter = (counter or 0) + 1; return tostring(counter) .. entry.req.uri.path"),
+            inline("return 'other'"),
+            inline("return )"),
+            inline("error('boom')"),
+        ];
+        let mut query = LogViewsRequest {
+            session_id: Some(session.id),
+            logs: vec![
+                LogViewItem {
+                    id: first,
+                    updated_at: None,
+                },
+                LogViewItem {
+                    id: second,
+                    updated_at: None,
+                },
+            ],
+            view: Some(LogViewInput {
+                columns: columns.clone(),
+            }),
+        };
+        let result = manager.log_views(query.clone()).await.unwrap();
+        assert_eq!(result.columns, columns);
+        for row in &result.rows {
+            let path = if row.id == first { "/first" } else { "/second" };
+            assert_eq!(
+                row.cells,
+                vec![
+                    "GET".into(),
+                    "saved".into(),
+                    format!("1{path}"),
+                    "other".into(),
+                    String::new(),
+                    String::new()
+                ]
+            );
+            for index in [4, 5] {
+                let error = result
+                    .exceptions
+                    .iter()
+                    .find(|error| error.id == row.id && error.column_index == Some(index))
+                    .unwrap();
+                assert_eq!(error.code, "column_script_error");
+                assert!(error.message.contains("same"));
+            }
+        }
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.exceptions.len(), 4);
+        query.logs = result
+            .rows
+            .iter()
+            .map(|row| LogViewItem {
+                id: row.id,
+                updated_at: Some(row.updated_at),
+            })
+            .collect();
+        let unchanged = manager.log_views(query.clone()).await.unwrap();
+        assert!(unchanged.rows.is_empty());
+        assert!(unchanged.exceptions.is_empty());
+        for width in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            query.view = Some(LogViewInput {
+                columns: vec![LogViewColumn::ScriptContent {
+                    width,
+                    name: "same".into(),
+                    content: "return 'value'".into(),
+                }],
+            });
+            assert_eq!(
+                manager.log_views(query.clone()).await.unwrap_err().code,
+                ErrorCode::BadRequest
+            );
+        }
+        assert_eq!(
+            manager
+                .session_view(Some(session.id))
+                .await
+                .unwrap()
+                .columns,
+            before
+        );
+        assert_eq!(manager.column_scripts().await.unwrap().len(), 1);
+        assert_eq!(
+            manager.column_script("same".into()).await.unwrap().content,
+            "return 'saved'"
+        );
+    }
+
+    #[tokio::test]
     async fn log_ids_apply_exclusive_bounds_and_batch_views_report_cell_errors() {
         let app_data = tempdir().unwrap();
         let runtime = ProxyCrab::open(app_data.path(), Arc::new(LogBuffer::default())).unwrap();
@@ -3155,8 +3290,8 @@ mod tests {
                         updated_at: None,
                     },
                 ],
-                view: Some(SessionViewInput {
-                    columns: view.clone(),
+                view: Some(LogViewInput {
+                    columns: view.clone().into_iter().map(Into::into).collect(),
                 }),
             })
             .await

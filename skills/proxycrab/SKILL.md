@@ -300,6 +300,13 @@ one. Unlike named-script list filtering, inline compilation/runtime errors and n
 fail with `bad_request`. The option is query-only and also works on `/share-api/logs/ids` within
 the share scope and redaction policy; Session filter writes do not accept it.
 
+For temporary computed cells, call `POST /api/logs/views` with
+`view.columns: [{kind: "script_content", name: "host", content: "return entry.req.uri.host", width: 160}]`.
+The query and response use `LogViewColumn`; saved Session columns stay unchanged. All three fields
+`name`/`content`/positive `width` are required. Same-name columns run independently. Errors leave
+only that cell empty and appear in `exceptions` with its log ID and column index. Management and
+shared `/logs/views` remain read-only and use the caller's effective redaction policy.
+
 Create or update a filter and test it against a known capture:
 
 ```bash

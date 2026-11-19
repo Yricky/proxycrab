@@ -676,7 +676,8 @@ Batch-renders at most 200 table rows.
   "view": {
     "columns": [
       { "kind": "method", "width": 50.0 },
-      { "kind": "script", "width": 120.0, "script_name": "correlation-id" }
+      { "kind": "script", "width": 120.0, "script_name": "correlation-id" },
+      { "kind": "script_content", "width": 160.0, "name": "host", "content": "return entry.req.uri.host" }
     ]
   }
 }
@@ -685,6 +686,20 @@ Batch-renders at most 200 table rows.
 `view` is optional and defaults to the Session view. Duplicate IDs are deduplicated using the last
 timestamp. A row is returned only when no timestamp was supplied or stored `updated_at` is strictly
 newer.
+
+Request and response use query-only `LogViewColumn` / `LogViewInput`, retaining existing column
+shapes and adding `script_content` with required `name`, `content`, and positive finite `width`.
+It runs standard custom-column Lua against the redacted entry and bodies without reading or
+saving a same-name library script. Names are local labels/error identifiers; duplicate names
+with different source, including names shared with saved scripts, execute independently.
+Returned `columns` echo the query order and inline source. The common Session `Column` type stays
+unchanged and Session view writes reject inline columns.
+
+Inline compilation/runtime errors follow normal column behavior: the cell is empty and
+`exceptions` contains `column_script_error`, the log ID, column index, and a message including
+the column name; the rest of the row still renders. The endpoint never changes scripts or Session
+configuration. `/share-api/logs/views` supports the same columns within the shared Session and
+its effective redaction policy.
 
 ```json
 {

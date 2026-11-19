@@ -247,7 +247,12 @@ export function createLogsStore() {
     },
 
     mergeViews(payload: LogViewsPayload, requestedIds: number[]): void {
-      if (this.columns.length === 0) this.applyColumns(payload.columns);
+      if (
+        this.columns.length === 0 &&
+        payload.columns.every((column) => column.kind !== "script_content")
+      ) {
+        this.applyColumns(payload.columns);
+      }
       const returnedIds = new Set(payload.rows.map((row) => row.id));
       for (const id of returnedIds) {
         for (const key of this.cellErrors.keys()) {

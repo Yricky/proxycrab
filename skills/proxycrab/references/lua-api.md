@@ -278,6 +278,15 @@ I/O and may decompress up to 16 MiB for every evaluated capture.
 
 ## Custom-column scripts
 
+`POST /api/logs/views` can execute inline custom-column source via
+`{"kind":"script_content","name":"host","content":"return entry.req.uri.host","width":160}`
+in `view.columns`. The query-only `LogViewColumn` type is separate from saved Session columns.
+The required name identifies this column and its errors; duplicate names with different source
+execute independently. This does not save a script or change Session state. Inline scripts use
+the standard column sandbox and effective read redaction, including body access. Compilation or
+execution errors leave the cell empty and produce an indexed `column_script_error` exception.
+The same behavior is available on `/share-api/logs/views` within the share scope.
+
 `entry` is the only ProxyCrab-specific global. Return `nil`, string, number, or boolean:
 
 ```lua

@@ -114,17 +114,19 @@ export type LogFilter = { option: LogFilterOption | null, input: string, };
 
 export type LogIdsRequest = { session_id?: number | null, filter?: LogFilter | null, ids?: Array<number> | null, min_id?: number | null, max_id?: number | null, limit?: number | null, };
 
+export type LogViewColumn = { "kind": "method", width: number, } | { "kind": "uri", width: number, } | { "kind": "code", width: number, } | { "kind": "source", width: number, } | { "kind": "stage", width: number, } | { "kind": "created_at", width: number, } | { "kind": "updated_at", width: number, } | { "kind": "script", width: number, script_name: string, } | { "kind": "script_content", width: number, name: string, content: string, };
+
 export type LogViewException = { id: number, column_index?: number, code: string, message: string, };
 
 export type LogViewRow = { id: number, created_at: number, updated_at: number, outcome: CaptureOutcome, cells: Array<string>, };
 
-export type LogViewsPayload = { columns: Array<Column>, rows: Array<LogViewRow>, exceptions: Array<LogViewException>, };
+export type LogViewsPayload = { columns: Array<LogViewColumn>, rows: Array<LogViewRow>, exceptions: Array<LogViewException>, };
+
+export type LogViewInput = { columns: Array<LogViewColumn>, };
 
 export type LogViewItem = { id: number, updated_at?: number | null, };
 
-export type SessionViewInput = { columns: Array<Column>, };
-
-export type LogViewsRequest = { session_id?: number | null, logs: Array<LogViewItem>, view?: SessionViewInput | null, };
+export type LogViewsRequest = { session_id?: number | null, logs: Array<LogViewItem>, view?: LogViewInput | null, };
 
 export type ProxyStatus = { "status": "stopped" } | { "status": "starting" } | { "status": "running", host: string, port: number, started_at: number, active_netlog: Record<string, number[]>, latest_netlog_id: Record<string, number>, active_bypass_count: number, } | { "status": "stopping" } | { "status": "failed", message: string, };
 

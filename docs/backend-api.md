@@ -541,7 +541,8 @@ The script manager keeps its save-and-run UI, queries existing `getLogIds` with
   "view": {
     "columns": [
       { "kind": "method", "width": 50.0 },
-      { "kind": "script", "width": 120.0, "script_name": "host" }
+      { "kind": "script", "width": 120.0, "script_name": "host" },
+      { "kind": "script_content", "width": 160.0, "name": "path", "content": "return entry.req.uri.path" }
     ]
   }
 }
@@ -549,7 +550,21 @@ The script manager keeps its save-and-run UI, queries existing `getLogIds` with
 
 `view` is optional and defaults to the selected Session's view. Duplicate IDs are deduplicated using the last supplied timestamp. A row is returned only when no timestamp was supplied or the stored `updated_at` is strictly greater than the supplied timestamp. IDs and response rows are unordered.
 
-The response columns and cells do not contain the ID column; `row.id` is a separate field which the frontend displays as its fixed first column. `columns` are the Session view's raw `Column` entries (kind/width, plus `script_name` for custom-column scripts); the frontend keeps keys based on `script_name` and resolves script labels through the script list's `display_name` (falling back to `name`):
+Request and response columns use query-only `LogViewColumn` entries through `LogViewInput`. Existing
+column shapes are unchanged; `script_content` adds required `name`, `content`, and positive finite
+`width`. It runs standard custom-column Lua without looking up or saving a library script. `name`
+is a local column/error identifier; same-name columns (including saved scripts) execute their own
+source independently. The response echoes the requested columns in order. Session `Column` and
+saved-view types remain unchanged, and Session view writes reject inline columns.
+
+Both `/api/logs/views` and `/share-api/logs/views` are read-only; shared queries retain the authorized
+Session and effective redaction policy, including for Lua body access and errors. Inline compile or
+execution errors leave only that cell empty and emit `column_script_error` with the column name,
+log ID, and column index; other cells still render. Incremental timestamp behavior is unchanged.
+
+The response columns and cells do not contain the ID column; `row.id` is separate. For saved script
+columns the frontend resolves labels through the script list's `display_name` (falling back to
+`name`):
 
 ```json
 {
