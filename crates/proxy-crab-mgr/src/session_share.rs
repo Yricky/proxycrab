@@ -497,33 +497,6 @@ impl SessionShareService {
         })
     }
 
-    pub async fn enable(
-        &self,
-        manager: &Arc<dyn ProxyCrabManager>,
-        session_id: u64,
-    ) -> Result<SessionShareState, ManagerError> {
-        self.enable_with_config(manager, session_id, None).await
-    }
-
-    pub async fn enable_with_script(
-        &self,
-        manager: &Arc<dyn ProxyCrabManager>,
-        session_id: u64,
-        redaction_script: Option<String>,
-    ) -> Result<SessionShareState, ManagerError> {
-        self.enable_with_config(
-            manager,
-            session_id,
-            Some(SessionShareConfig {
-                session_pages: None,
-                session_config_share: None,
-                redaction_script: redaction_script.map(Some),
-                persistent: false,
-            }),
-        )
-        .await
-    }
-
     pub async fn enable_with_config(
         &self,
         manager: &Arc<dyn ProxyCrabManager>,
@@ -1324,6 +1297,35 @@ mod tests {
         MitmManager,
         dto::{ActiveSession, CreateSessionRequest, ErrorCode, ScriptRequest},
     };
+
+    impl SessionShareService {
+        pub(crate) async fn enable(
+            &self,
+            manager: &Arc<dyn ProxyCrabManager>,
+            session_id: u64,
+        ) -> Result<SessionShareState, ManagerError> {
+            self.enable_with_config(manager, session_id, None).await
+        }
+
+        pub(crate) async fn enable_with_script(
+            &self,
+            manager: &Arc<dyn ProxyCrabManager>,
+            session_id: u64,
+            redaction_script: Option<String>,
+        ) -> Result<SessionShareState, ManagerError> {
+            self.enable_with_config(
+                manager,
+                session_id,
+                Some(SessionShareConfig {
+                    session_pages: None,
+                    session_config_share: None,
+                    redaction_script: redaction_script.map(Some),
+                    persistent: false,
+                }),
+            )
+            .await
+        }
+    }
 
     async fn next_sse(body: &mut Body) -> (String, serde_json::Value) {
         use http_body_util::BodyExt;

@@ -93,7 +93,6 @@ export const ACTION_META: Readonly<Record<string, PermissionActionMeta>> = {
   "GET /api/bypass": { label: "读取 Bypass 流量", impact: "read", redaction: true },
   "DELETE /api/bypass": { label: "清空 Bypass 流量", impact: "danger" },
   "POST /api/bypass/delete": { label: "批量删除 Bypass 流量", impact: "danger" },
-  "DELETE /api/bypass/{id}": { label: "删除 Bypass 流量", impact: "danger" },
   "GET /api/clash-subscription": { label: "读取 Clash 订阅状态", impact: "read" },
   "PUT /api/clash-subscription": { label: "开启或更新 Clash 订阅", impact: "write" },
   "DELETE /api/clash-subscription": { label: "关闭 Clash 订阅", impact: "write" },

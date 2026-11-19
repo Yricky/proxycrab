@@ -271,7 +271,6 @@ pub trait ProxyCrabManager: Send + Sync {
     async fn system_logs(&self, query: SystemLogsQuery) -> ManagerResult<Vec<SystemLogEntry>>;
     async fn clear_system_logs(&self) -> ManagerResult<()>;
     async fn bypass_entries(&self, query: BypassQuery) -> ManagerResult<BypassPage>;
-    async fn delete_bypass_entry(&self, id: u64) -> ManagerResult<()>;
     async fn delete_bypass_entries(&self, ids: Vec<u64>) -> ManagerResult<DeleteCount>;
     async fn clear_bypass_entries(&self) -> ManagerResult<DeleteCount>;
 }
@@ -2192,15 +2191,6 @@ impl ProxyCrabManager for MitmManager {
             Ok(BypassPage { rows, has_more })
         })
         .await
-    }
-
-    async fn delete_bypass_entry(&self, id: u64) -> ManagerResult<()> {
-        let runtime = self.runtime.clone();
-        self.run_blocking("bypass delete", move || {
-            runtime.delete_bypass_entry(id).map_err(map_error)
-        })
-        .await
-        .inspect(|_| self.notify(vec![HttpApiResource::Bypass], None))
     }
 
     async fn delete_bypass_entries(&self, ids: Vec<u64>) -> ManagerResult<DeleteCount> {

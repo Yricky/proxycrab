@@ -307,7 +307,6 @@ export function createTauriBackend(): Backend {
     clearSystemLogs: () => call("clear_system_logs"),
 
     getBypassEntries: (query: BypassQuery) => call("get_bypass_entries", { query }),
-    deleteBypassEntry: (id: number) => call("delete_bypass_entry", { id }),
     deleteBypassEntries: (ids: number[]) => call("delete_bypass_entries", { ids }),
     clearBypassEntries: () => call("clear_bypass_entries"),
 

@@ -57,7 +57,6 @@ export interface ScriptLibraryConfig {
   windowId: string;
   /** Used in dialogs and error messages (e.g. "列脚本", "分流规则"). */
   sidebarTitle: string;
-  createPlaceholder: string;
   emptyListHint: string;
   editorEmptyHint: string;
   statusbar?: string;

@@ -20,7 +20,7 @@ fn permission_catalog_contains_every_unique_route_action() {
         .map(|action| action.id)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(actions.len(), 86);
+    assert_eq!(actions.len(), 85);
     assert_eq!(ids.len(), actions.len());
     assert!(
         actions
@@ -120,7 +120,6 @@ fn permission_catalog_has_the_confirmed_default_matrix() {
         "GET /api/redaction-scripts/{name}",
         "DELETE /api/archived-sessions/{id}",
         "DELETE /api/bypass",
-        "DELETE /api/bypass/{id}",
         "DELETE /api/column-scripts/{name}",
         "DELETE /api/filter-scripts/{name}",
         "DELETE /api/interceptors/{kind}/{name}",
@@ -149,6 +148,8 @@ fn permission_lookup_uses_both_method_and_route_template() {
             .default_mode,
         PermissionMode::Approval
     );
+    assert!(find_api_action("DELETE", "/api/bypass/{id}").is_none());
+    assert_eq!(api_actions_for_path("/api/bypass/123").count(), 0);
     assert!(find_api_action("POST", "/api/filter-scripts/{name}/debug").is_none());
     assert!(find_api_action("POST", "/api/logs/filter").is_none());
     assert!(find_api_action("POST", "/api/session-page-previews").is_none());

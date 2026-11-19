@@ -307,7 +307,12 @@ mod tests {
         let service = HttpPermissionService::open(directory.path(), Arc::new(|_| {})).unwrap();
         let catalog = service.catalog();
 
-        assert_eq!(catalog.len(), 87);
+        assert_eq!(catalog.len(), 85);
+        assert!(
+            !catalog
+                .iter()
+                .any(|action| action.id == "DELETE /api/bypass/{id}")
+        );
         assert!(
             catalog
                 .iter()

@@ -298,7 +298,6 @@ export default {
   文本2: "Text 2",
   断点已放行: "Breakpoint released",
   "断点等待中 · {name} · 剩余 {time}": "Breakpoint waiting · {name} · {time} left",
-  "新{title}名": "New {title} name",
   新建: "New",
   "新建 AGENTS.md 预设失败": "Failed to create AGENTS.md preset",
   "新建一个{title}后即可开始编辑": "Create a {title} to start editing",

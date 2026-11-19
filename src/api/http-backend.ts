@@ -409,7 +409,6 @@ export function createHttpBackend(
     clearSystemLogs: () => call("/api/system-logs", json("DELETE")),
     getBypassEntries: (requestValue: BypassQuery) =>
       call(query("/api/bypass", requestValue as unknown as Record<string, unknown>)),
-    deleteBypassEntry: (id: number) => call(`/api/bypass/${id}`, json("DELETE")),
     deleteBypassEntries: (ids: number[]) => call("/api/bypass/delete", json("POST", { ids })),
     clearBypassEntries: () => call("/api/bypass", json("DELETE")),
 

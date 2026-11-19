@@ -149,16 +149,6 @@ impl HttpServerHandle {
     }
 }
 
-pub async fn start_http_server(
-    manager: ManagerState,
-    permissions: Arc<dyn PermissionManager>,
-) -> Result<HttpServerHandle, ManagerError> {
-    start_http_server_with_routes(manager, permissions, SessionShareService::new(), || {
-        Router::new()
-    })
-    .await
-}
-
 pub async fn start_http_server_with_routes<F>(
     manager: ManagerState,
     permissions: Arc<dyn PermissionManager>,
@@ -372,10 +362,6 @@ fn router_with_extra(
             get(bypass_entries).delete(clear_bypass_entries),
         )
         .route("/api/bypass/delete", post(delete_bypass_entries))
-        .route(
-            "/api/bypass/{id}",
-            axum::routing::delete(delete_bypass_entry),
-        )
         .route_layer(middleware::from_fn_with_state(
             permissions.clone(),
             authorize_request,
@@ -1372,14 +1358,6 @@ async fn bypass_entries(
     ApiQuery(query): ApiQuery<BypassQuery>,
 ) -> ApiResult {
     success(manager.bypass_entries(query).await?)
-}
-
-async fn delete_bypass_entry(
-    State(manager): State<ManagerState>,
-    ApiPath(id): ApiPath<u64>,
-) -> ApiResult {
-    manager.delete_bypass_entry(id).await?;
-    success(json!({}))
 }
 
 async fn delete_bypass_entries(
@@ -4417,6 +4395,50 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn bypass_deletion_uses_only_the_batch_route() {
+        let directory = tempdir().unwrap();
+        let runtime = ProxyCrab::open(directory.path(), Arc::new(LogBuffer::default())).unwrap();
+        let store = proxy_crab_mitm::bypass::BypassStore::open(runtime.workspace().root()).unwrap();
+        let id = store
+            .begin("client", "GET", "http://example.com", "HTTP/1.1", "nil")
+            .unwrap();
+        store.complete(id, Some(200), None, None).unwrap();
+        let app = router(MitmManager::new(runtime), allow_all());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/bypass/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(store.list(10, None).unwrap().len(), 1);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/bypass/delete")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"ids": [id]}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(payload["data"], json!({"deleted": 1}));
+        assert!(store.list(10, None).unwrap().is_empty());
     }
 
     #[tokio::test]

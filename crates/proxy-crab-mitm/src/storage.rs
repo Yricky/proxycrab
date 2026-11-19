@@ -723,44 +723,6 @@ impl CaptureStore {
         Ok(())
     }
 
-    pub fn record_interceptor_run(&self, id: u64, run: &InterceptorRun) -> Result<()> {
-        self.begin_interceptor_run(id, run).map(|_| ())
-    }
-
-    pub fn list(&self, limit: usize, after_id: Option<u64>) -> Result<Vec<CaptureSummary>> {
-        let connection = self.connection()?;
-        let mut statement = connection.prepare(
-            "SELECT id, source, method, uri, req_version, req_headers,
-                    resp_status, resp_version, resp_headers, outcome, stage,
-                    error_stage, error_kind, error_message, created_at, updated_at, req_tags
-             FROM captures WHERE (?1 IS NULL OR id > ?1)
-             ORDER BY id DESC LIMIT ?2",
-        )?;
-        let rows = statement
-            .query_map(params![after_id.map(|id| id as i64), limit as i64], |row| {
-                self.summary_from_row(row)
-            })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
-    }
-
-    pub fn list_before(&self, limit: usize, before_id: Option<u64>) -> Result<Vec<CaptureSummary>> {
-        let connection = self.connection()?;
-        let mut statement = connection.prepare(
-            "SELECT id, source, method, uri, req_version, req_headers,
-                    resp_status, resp_version, resp_headers, outcome, stage,
-                    error_stage, error_kind, error_message, created_at, updated_at, req_tags
-             FROM captures WHERE (?1 IS NULL OR id < ?1)
-             ORDER BY id DESC LIMIT ?2",
-        )?;
-        let rows = statement.query_map(
-            params![before_id.map(|id| id as i64), limit as i64],
-            |row| self.summary_from_row(row),
-        )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
-    }
-
     pub fn list_range(
         &self,
         limit: usize,
@@ -1330,6 +1292,13 @@ mod tests {
     };
 
     use super::{BodySide, BodySourceData, CaptureStore, decode_body};
+    use anyhow::Result;
+
+    impl CaptureStore {
+        fn record_interceptor_run(&self, id: u64, run: &InterceptorRun) -> Result<()> {
+            self.begin_interceptor_run(id, run).map(|_| ())
+        }
+    }
 
     fn request(uri: &str) -> RequestData {
         RequestData {

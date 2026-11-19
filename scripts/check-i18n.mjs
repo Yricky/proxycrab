@@ -8,20 +8,14 @@ const CNG = /[\u4e00-\u9fff]+/g;
 
 // 设计性豁免：中文是 i18n key 或有意不翻译的内容
 // - permission-meta / 各选项表：表内存中文 key，消费处统一 t() 包裹
-// - createPlaceholder：死配置（接口声明但从未被消费）
 // - 简体中文：语言名专有名词按惯例不翻译
 const ALLOW = [
   ["src/utils/permission-meta.ts", ""],
   ["src/components/PermissionEditor.vue", 'label: "'],
   ["src/components/PermissionEditor.vue", 'description: "'],
-  ["src/components/ThemeToggle.vue", 'label: "'],
   ["src/components/HexViewer.vue", 'label: "'],
   ["src/components/CustomSelect.vue", 'placeholder: "'],
   ["src/components/CustomSelect.vue", 'ariaLabel: "'],
-  ["src/windows/ColumnManagerWindow.vue", "createPlaceholder"],
-  ["src/windows/FilterManagerWindow.vue", "createPlaceholder"],
-  ["src/windows/RedactionManagerWindow.vue", "createPlaceholder"],
-  ["src/windows/RoutingManagerWindow.vue", "createPlaceholder"],
   ["src/windows/SettingsWindow.vue", "简体中文"],
 ];
 

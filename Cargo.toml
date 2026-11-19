@@ -26,7 +26,6 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["aws-lc
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio"] }
 if-addrs = "0.15.0"
 mlua = { version = "0.12.2", features = ["lua54", "vendored", "send"] }
-percent-encoding = "2"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "x509-parser"] }
 fancy-regex = "0.20.2"
 rusqlite = { version = "0.41.1", features = ["bundled"] }

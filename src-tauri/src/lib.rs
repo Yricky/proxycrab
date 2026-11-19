@@ -813,11 +813,6 @@ async fn get_bypass_entries(
 }
 
 #[tauri::command]
-async fn delete_bypass_entry(state: State<'_, BackendState>, id: u64) -> Result<(), ManagerError> {
-    state.manager().delete_bypass_entry(id).await
-}
-
-#[tauri::command]
 async fn delete_bypass_entries(
     state: State<'_, BackendState>,
     ids: Vec<u64>,
@@ -1229,7 +1224,6 @@ pub fn run() {
             get_system_logs,
             clear_system_logs,
             get_bypass_entries,
-            delete_bypass_entry,
             delete_bypass_entries,
             clear_bypass_entries,
             get_http_service_error,

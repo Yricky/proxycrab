@@ -119,18 +119,3 @@ const LANGUAGES: Record<string, string> = {
 export function fileLanguage(path: string): string {
   return LANGUAGES[extension(path)] ?? "plaintext";
 }
-
-/** Text kinds get a syntax-highlighted preview; everything else only gets metadata. */
-export function isTextKind(kind: FileKind): boolean {
-  return (
-    kind === "lua" ||
-    kind === "json" ||
-    kind === "html" ||
-    kind === "xml" ||
-    kind === "markdown" ||
-    kind === "yaml" ||
-    kind === "code" ||
-    kind === "text" ||
-    kind === "cert"
-  );
-}

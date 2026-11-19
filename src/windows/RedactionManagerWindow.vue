@@ -8,7 +8,6 @@ const backend = useBackend();
 const config: ScriptLibraryConfig = {
   windowId: "redaction-manager",
   sidebarTitle: t("脱敏脚本"),
-  createPlaceholder: "新脱敏脚本名",
   emptyListHint: t("暂无脱敏脚本"),
   editorEmptyHint: t("新建脚本后，在访问身份或分享设置中绑定"),
   statusbar: t("context：unloaded / loaded / redacted · 读取原值，仅 loaded 部分的修改生效"),

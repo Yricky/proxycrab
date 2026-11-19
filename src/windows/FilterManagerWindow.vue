@@ -13,7 +13,6 @@ const backend = useBackend();
 const config: ScriptLibraryConfig = {
   windowId: "filter-manager",
   sidebarTitle: t("过滤脚本"),
-  createPlaceholder: "新过滤脚本名",
   emptyListHint: t("暂无过滤脚本"),
   editorEmptyHint: t("新建一个过滤脚本后即可开始编辑"),
   statusbar: t("entry 为当前记录 · 字符串参数通过 ... 传入 · 必须返回布尔值"),

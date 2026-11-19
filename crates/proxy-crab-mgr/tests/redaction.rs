@@ -12,6 +12,43 @@ use proxy_crab_mitm::{
 use std::sync::Arc;
 use tower::ServiceExt;
 
+use test_support::ShareWithScript;
+
+mod test_support {
+    use super::*;
+    use proxy_crab_mgr::session_share::{SessionShareConfig, SessionShareState};
+
+    pub(super) trait ShareWithScript {
+        async fn enable_with_script(
+            &self,
+            manager: &Arc<dyn ProxyCrabManager>,
+            session_id: u64,
+            redaction_script: Option<String>,
+        ) -> Result<SessionShareState, ManagerError>;
+    }
+
+    impl ShareWithScript for SessionShareService {
+        async fn enable_with_script(
+            &self,
+            manager: &Arc<dyn ProxyCrabManager>,
+            session_id: u64,
+            redaction_script: Option<String>,
+        ) -> Result<SessionShareState, ManagerError> {
+            self.enable_with_config(
+                manager,
+                session_id,
+                Some(SessionShareConfig {
+                    session_pages: None,
+                    session_config_share: None,
+                    redaction_script: redaction_script.map(Some),
+                    persistent: false,
+                }),
+            )
+            .await
+        }
+    }
+}
+
 const MASK: &str = r#"
 assert(context.api ~= nil)
 if context.req.header == 'loaded' then

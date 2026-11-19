@@ -23,8 +23,6 @@ export interface OpenWindowOptions {
   props?: Record<string, unknown>;
   width?: number;
   height?: number;
-  /** Center offset hint so consecutively opened windows cascade. */
-  cascade?: boolean;
 }
 
 export type WindowCloseGuard = () => boolean | Promise<boolean>;
@@ -83,16 +81,6 @@ export const windowsStore = reactive({
   focus(id: string): void {
     const win = this.windows.find((w) => w.id === id);
     if (win) win.z = ++zCounter;
-  },
-
-  updateGeometry(id: string, x: number, y: number, width: number, height: number): void {
-    const win = this.windows.find((w) => w.id === id);
-    if (win) {
-      win.x = x;
-      win.y = y;
-      win.width = width;
-      win.height = height;
-    }
   },
 
   toggleMaximize(id: string): void {

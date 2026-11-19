@@ -3,10 +3,9 @@ use std::collections::BTreeMap;
 use proxy_crab_mitm::{
     bypass::BypassEntry,
     model::{
-        AppConfig, BodyPayload, BreakpointSummary, CaptureError, CaptureOutcome, Column,
-        FilterColumn, FilterOption, InterceptorExecution, InterceptorKind, InterceptorLibraryItem,
-        ProxyStatus, Script, SessionFilter, SessionInterceptors, SessionMetadata, SessionView,
-        SystemLogEntry,
+        BodyPayload, BreakpointSummary, CaptureError, CaptureOutcome, Column, FilterColumn,
+        FilterOption, InterceptorExecution, InterceptorKind, InterceptorLibraryItem, SessionFilter,
+        SessionInterceptors, SessionMetadata, SessionView,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -156,11 +155,6 @@ impl ManagerError {
 }
 
 pub type ManagerResult<T> = Result<T, ManagerError>;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetWorkspaceRequest {
-    pub path: String,
-}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -754,18 +748,6 @@ impl HttpApiChange {
         }
     }
 }
-
-pub use proxy_crab_mitm::model::{
-    AppConfig as Config, Column as NetLogColumn, InterceptorKind as Kind,
-    ProxyStatus as MitmStatus, SessionMetadata as Session,
-};
-
-pub type AgentsPresetsResponse = AgentsPresetState;
-pub type ConfigResponse = AppConfig;
-pub type ProxyStatusResponse = ProxyStatus;
-pub type SessionsResponse = Vec<SessionMetadata>;
-pub type ScriptsResponse = Vec<Script>;
-pub type SystemLogsResponse = Vec<SystemLogEntry>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[ts(export)]

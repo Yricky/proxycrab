@@ -452,6 +452,12 @@
       "prompt": "Build a live custom ProxyCrab Session page using subscribeChanges. Explain how it stays current after desktop edits, a connection interruption, a redaction policy change, and sharing revocation. Can the change notifications replace log reads?",
       "expected_output": "Uses the injected Backend subscribeChanges contract directly from each interested component/store and stores its unsubscribe function for disposal, including setup that resolves after disposal. Multiple subscribers share one underlying Backend connection; only the last unsubscribe closes it. Reads initial state explicitly because Tauri does not send an initial all. Handles tagged resources and scoped session_id, named column_scripts invalidation, session_interceptors, session_share and all. Treats all as invalidation of the subscriber's supported resources, never calling missing routing or bypass methods on a shared Backend. Explains that browser backends use SSE; desktop and HTTP writes share the manager event source. Every connection/reconnection and broadcast lag sends all, requiring current-state reads rather than cursor replay. Share streams scope resources and proxy activity to the authorized Session, update download capability by method presence and invalidate cached content when redaction changes or fails. Reports invalid_share_token/share_session_unavailable and stops reconnecting, while redaction_failed permits recovery without switching credentials. Calls log ID/row/detail APIs for actual captures; resource notifications are not a captured-record stream. Does not use the removed share-api/proxy/changes endpoint, metadata polling, or management credentials on a share link.",
       "files": []
+    },
+    {
+      "id": 78,
+      "prompt": "Delete transparent-forwarding entry 42 from ProxyCrab. The owner authorized deletion. Use the current management API and explain what happens if the entry is still active.",
+      "expected_output": "Uses POST /api/bypass/delete with {\"ids\":[42]} and reports the returned deleted count. Does not use the removed DELETE /api/bypass/{id} route. Explains that current-run in-progress entries cannot be deleted, while completed and stale entries are deletable. Respects permission denials without switching identities.",
+      "files": []
     }
   ]
 }

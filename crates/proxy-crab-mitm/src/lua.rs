@@ -34,7 +34,6 @@ pub(crate) mod websocket;
 
 pub const INSTRUCTION_LIMIT: u32 = 100_000;
 pub const MEMORY_LIMIT: usize = 16 * 1024 * 1024;
-const ANONYMOUS_SCRIPT_NAME: &str = "<anonymous>";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BodyReplacement {
@@ -151,19 +150,6 @@ pub fn evaluate_routing(
     }
 }
 
-pub fn evaluate_filter(source: &str, argument: &str, entry: &CaptureSummary) -> Result<bool> {
-    evaluate_filter_named(source, argument, entry, ANONYMOUS_SCRIPT_NAME)
-}
-
-pub fn evaluate_filter_named(
-    source: &str,
-    argument: &str,
-    entry: &CaptureSummary,
-    script_name: &str,
-) -> Result<bool> {
-    FilterEvaluator::new(source, script_name)?.evaluate(argument, entry)
-}
-
 pub struct FilterEvaluator {
     script: ReusableScript,
 }
@@ -173,10 +159,6 @@ impl FilterEvaluator {
         Ok(Self {
             script: ReusableScript::new(source, ScriptKind::Filter, script_name)?,
         })
-    }
-
-    pub fn evaluate(&self, argument: &str, entry: &CaptureSummary) -> Result<bool> {
-        self.evaluate_with_bodies(argument, entry, CaptureBodyAccess::unavailable())
     }
 
     pub fn evaluate_with_bodies(
@@ -204,10 +186,6 @@ impl ColumnEvaluator {
         Ok(Self {
             script: ReusableScript::new(source, ScriptKind::Column, script_name)?,
         })
-    }
-
-    pub fn evaluate(&self, entry: &CaptureSummary) -> Result<String> {
-        self.evaluate_with_bodies(entry, CaptureBodyAccess::unavailable())
     }
 
     pub fn evaluate_with_bodies(
@@ -328,57 +306,6 @@ impl InstructionCounter {
     }
 }
 
-pub fn evaluate_column(source: &str, entry: &CaptureSummary) -> Result<String> {
-    evaluate_column_named(source, entry, ANONYMOUS_SCRIPT_NAME)
-}
-
-pub fn evaluate_column_named(
-    source: &str,
-    entry: &CaptureSummary,
-    script_name: &str,
-) -> Result<String> {
-    ColumnEvaluator::new(source, script_name)?.evaluate(entry)
-}
-
-pub fn execute_request(source: &str, request: &RequestData) -> Result<ScriptEffects> {
-    let (effects, error) = execute_request_lenient(source, request)?;
-    if let Some(error) = error {
-        bail!(error);
-    }
-    Ok(effects)
-}
-
-pub fn execute_request_lenient(
-    source: &str,
-    request: &RequestData,
-) -> Result<(ScriptEffects, Option<String>)> {
-    execute_request_lenient_named(source, request, ANONYMOUS_SCRIPT_NAME, None)
-}
-
-pub fn execute_request_lenient_named(
-    source: &str,
-    request: &RequestData,
-    script_name: &str,
-    capture_log_id: Option<u64>,
-) -> Result<(ScriptEffects, Option<String>)> {
-    let state = SharedInterceptorState::new_request(
-        request.method.clone(),
-        request.uri.clone(),
-        request.headers.clone(),
-        request.tags.clone(),
-    );
-    let journal = ModificationJournal::for_request(request, None);
-    execute_request_with_state(
-        source,
-        request,
-        state,
-        journal,
-        script_name,
-        capture_log_id,
-        None,
-    )
-}
-
 pub(crate) fn execute_request_with_state(
     source: &str,
     request: &RequestData,
@@ -462,70 +389,6 @@ fn execute_request_inner(
         state.read_only.store(true, Ordering::Relaxed);
     }
     Ok((state.effects(&journal), error, callback))
-}
-
-pub fn execute_response(source: &str, response: &ResponseData) -> Result<ScriptEffects> {
-    let (effects, error) = execute_response_lenient(source, response)?;
-    if let Some(error) = error {
-        bail!(error);
-    }
-    Ok(effects)
-}
-
-pub fn execute_response_lenient(
-    source: &str,
-    response: &ResponseData,
-) -> Result<(ScriptEffects, Option<String>)> {
-    execute_response_lenient_named(source, response, ANONYMOUS_SCRIPT_NAME, None)
-}
-
-pub fn execute_response_lenient_named(
-    source: &str,
-    response: &ResponseData,
-    script_name: &str,
-    capture_log_id: Option<u64>,
-) -> Result<(ScriptEffects, Option<String>)> {
-    execute_response_lenient_named_with_tags(
-        source,
-        response,
-        &RequestTags::new(),
-        script_name,
-        capture_log_id,
-    )
-}
-
-pub fn execute_response_lenient_named_with_tags(
-    source: &str,
-    response: &ResponseData,
-    request_tags: &RequestTags,
-    script_name: &str,
-    capture_log_id: Option<u64>,
-) -> Result<(ScriptEffects, Option<String>)> {
-    let request = RequestData {
-        method: String::new(),
-        uri: String::new(),
-        version: String::new(),
-        headers: HeaderValues::new(),
-        tags: request_tags.clone(),
-    };
-    let state = SharedInterceptorState::new_response(
-        response.status,
-        response.headers.clone(),
-        request_tags.clone(),
-    );
-    let journal = ModificationJournal::for_response(response, None);
-    execute_response_with_state(
-        source,
-        ResponseScriptContext {
-            request: &request,
-            response,
-        },
-        state,
-        journal,
-        script_name,
-        capture_log_id,
-        None,
-    )
 }
 
 pub(crate) fn execute_response_with_state(
@@ -1891,13 +1754,108 @@ mod tests {
         storage::{BodySide, BodySource, BodySourceData},
     };
 
+    use anyhow::{Result, bail};
+
     use super::{
         BodyReplacement, CaptureBodyAccess, ColumnEvaluator, FilterEvaluator, LUA_BODY_LIMIT,
-        ModificationJournal, ResponseScriptContext, RoutingResult, SharedInterceptorState,
-        evaluate_column, evaluate_column_named, evaluate_filter, evaluate_filter_named,
-        evaluate_routing, execute_request, execute_request_with_state, execute_response,
+        ModificationJournal, ResponseScriptContext, RoutingResult, ScriptEffects,
+        SharedInterceptorState, evaluate_routing, execute_request_with_state,
         execute_response_with_state, validate_script,
     };
+
+    const ANONYMOUS_SCRIPT_NAME: &str = "<anonymous>";
+
+    impl FilterEvaluator {
+        fn evaluate(&self, argument: &str, entry: &CaptureSummary) -> Result<bool> {
+            self.evaluate_with_bodies(argument, entry, CaptureBodyAccess::unavailable())
+        }
+    }
+
+    impl ColumnEvaluator {
+        fn evaluate(&self, entry: &CaptureSummary) -> Result<String> {
+            self.evaluate_with_bodies(entry, CaptureBodyAccess::unavailable())
+        }
+    }
+
+    fn evaluate_filter(source: &str, argument: &str, entry: &CaptureSummary) -> Result<bool> {
+        evaluate_filter_named(source, argument, entry, ANONYMOUS_SCRIPT_NAME)
+    }
+
+    fn evaluate_filter_named(
+        source: &str,
+        argument: &str,
+        entry: &CaptureSummary,
+        script_name: &str,
+    ) -> Result<bool> {
+        FilterEvaluator::new(source, script_name)?.evaluate(argument, entry)
+    }
+
+    fn evaluate_column(source: &str, entry: &CaptureSummary) -> Result<String> {
+        evaluate_column_named(source, entry, ANONYMOUS_SCRIPT_NAME)
+    }
+
+    fn evaluate_column_named(
+        source: &str,
+        entry: &CaptureSummary,
+        script_name: &str,
+    ) -> Result<String> {
+        ColumnEvaluator::new(source, script_name)?.evaluate(entry)
+    }
+
+    fn execute_request(source: &str, request: &RequestData) -> Result<ScriptEffects> {
+        let state = SharedInterceptorState::new_request(
+            request.method.clone(),
+            request.uri.clone(),
+            request.headers.clone(),
+            request.tags.clone(),
+        );
+        let journal = ModificationJournal::for_request(request, None);
+        let (effects, error) = execute_request_with_state(
+            source,
+            request,
+            state,
+            journal,
+            ANONYMOUS_SCRIPT_NAME,
+            None,
+            None,
+        )?;
+        if let Some(error) = error {
+            bail!(error);
+        }
+        Ok(effects)
+    }
+
+    fn execute_response(source: &str, response: &ResponseData) -> Result<ScriptEffects> {
+        let request = RequestData {
+            method: String::new(),
+            uri: String::new(),
+            version: String::new(),
+            headers: HeaderValues::new(),
+            tags: RequestTags::new(),
+        };
+        let state = SharedInterceptorState::new_response(
+            response.status,
+            response.headers.clone(),
+            request.tags.clone(),
+        );
+        let journal = ModificationJournal::for_response(response, None);
+        let (effects, error) = execute_response_with_state(
+            source,
+            ResponseScriptContext {
+                request: &request,
+                response,
+            },
+            state,
+            journal,
+            ANONYMOUS_SCRIPT_NAME,
+            None,
+            None,
+        )?;
+        if let Some(error) = error {
+            bail!(error);
+        }
+        Ok(effects)
+    }
 
     fn entry() -> CaptureSummary {
         CaptureSummary {

@@ -257,7 +257,7 @@ shutdown. The former `/share-api/proxy/changes` long-poll route has been removed
 | `PUT /api/active-session` | Active Session and settings | Refreshes the active indicator without changing the viewed Session |
 | Session share enable/disable | Target Session share state | Refreshes the matching open “链接分享” window using the Session ID published by the share service |
 | Routing-script create/update/delete/selection | Routing library and selection | Refreshes the routing manager |
-| Bypass delete/batch delete/clear | Bypass table | Refreshes the bypass window |
+| Bypass batch delete/clear | Bypass table | Refreshes the bypass window |
 | `PUT /api/sessions/{id}/filter` | Target Session filter and visible log set | Reloads the table only when that Session is being viewed; ID queries stay silent |
 | `PUT /api/session-view` | Target Session columns | Reloads the table only when that Session is being viewed |
 | Column-script create/update/delete | Column/filter choices and rendered custom columns | Refreshes script lists and the current table view |
@@ -329,7 +329,7 @@ browser UI.
 | `/api/routing-scripts`, `/api/routing-scripts/{name}` | global routing-script CRUD |
 | `/api/routing-script-selection` | `GET`, `PUT` nullable current selection |
 | `/api/interceptors`, `/api/interceptors/{kind}/{name}` | global interceptor script CRUD |
-| `/api/bypass`, `/api/bypass/{id}`, `/api/bypass/delete` | query/delete transparent forwarding metadata |
+| `/api/bypass`, `/api/bypass/delete` | query/batch delete/clear transparent forwarding metadata |
 | `/api/clash-subscription` | `GET` current state (default: `allow`); `PUT` enable/update selected IPv4; `DELETE` disable (both default: `approval`) |
 | `/api/clash-config` | `GET` full YAML and default; `PUT` validate/write; `DELETE` reset (all default: `allow`) |
 | `/api/system-logs` | `GET`, `DELETE` |
@@ -1043,8 +1043,9 @@ partial files. See `lua-api.md` for text, encoding, and size-limit semantics.
 
 Bypassed metadata is persisted in `<workspace>/bypass.db` without headers or bodies. Each row stores
 timestamps, source, method, URI, version, routing reason, outcome, optional HTTP status/error, and
-nullable upload/download byte counts. `GET /api/bypass` pages newest first; single, batch, and
-deletable-record clearing are supported. A current-run `in_progress` entry cannot be deleted. An
+nullable upload/download byte counts. `GET /api/bypass` pages newest first;
+`POST /api/bypass/delete` deletes the supplied `ids` (including a one-element array), and
+`DELETE /api/bypass` clears deletable records. A current-run `in_progress` entry cannot be deleted. An
 `in_progress` entry is stale and deletable when the proxy is not running or its `created_at` is
 earlier than the current `ProxyStatus.running.started_at`. Opening the database and starting or
 stopping the proxy do not rewrite its outcome; generation-scoped forced draining can still mark

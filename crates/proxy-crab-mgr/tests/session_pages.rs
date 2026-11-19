@@ -338,7 +338,7 @@ async fn missing_packages_are_cleaned_from_persistent_shares_without_rotating_to
     );
     assert_eq!(
         shares
-            .enable(&manager, session.id)
+            .enable_with_config(&manager, session.id, None)
             .await
             .unwrap()
             .session_pages,

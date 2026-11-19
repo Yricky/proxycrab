@@ -13,7 +13,6 @@ const backend = useBackend();
 const config: ScriptLibraryConfig = {
   windowId: "routing-manager",
   sidebarTitle: t("分流规则"),
-  createPlaceholder: "新规则名称",
   emptyListHint: t("暂无分流规则"),
   editorEmptyHint: t("选择或创建一个分流规则"),
   defaultSource: DEFAULT_SOURCE,

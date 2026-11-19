@@ -37,6 +37,35 @@ use tokio::{
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
+use test_support::CaptureQueries;
+
+mod test_support {
+    use super::*;
+
+    pub(super) trait CaptureQueries {
+        fn list_captures(
+            &self,
+            session_id: u64,
+            limit: usize,
+            after_id: Option<u64>,
+        ) -> anyhow::Result<Vec<proxy_crab_mitm::model::CaptureSummary>>;
+    }
+
+    impl CaptureQueries for ProxyCrab {
+        fn list_captures(
+            &self,
+            session_id: u64,
+            limit: usize,
+            after_id: Option<u64>,
+        ) -> anyhow::Result<Vec<proxy_crab_mitm::model::CaptureSummary>> {
+            if after_id == Some(u64::MAX) {
+                return Ok(Vec::new());
+            }
+            self.list_captures_range(session_id, limit, after_id.map(|id| id + 1), None, false)
+        }
+    }
+}
+
 fn unused_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.local_addr().unwrap().port()

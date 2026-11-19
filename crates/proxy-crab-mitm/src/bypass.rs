@@ -187,10 +187,6 @@ impl BypassStore {
             .context("failed to read bypass entries")
     }
 
-    pub fn delete(&self, id: u64, started_at: Option<u64>) -> Result<()> {
-        self.delete_many(&[id], started_at).map(|_| ())
-    }
-
     pub fn delete_many(&self, ids: &[u64], started_at: Option<u64>) -> Result<usize> {
         if ids.is_empty() {
             return Ok(0);
@@ -304,7 +300,7 @@ mod tests {
                 "nil",
             )
             .unwrap();
-        assert!(store.delete(pending, Some(0)).is_err());
+        assert!(store.delete_many(&[pending], Some(0)).is_err());
         store.complete(pending, None, Some(12), Some(34)).unwrap();
         let rows = store.list(10, None).unwrap();
         assert_eq!(rows[0].outcome, BypassOutcome::Success);
@@ -350,7 +346,7 @@ mod tests {
             .unwrap();
         let created_at = store.list(10, None).unwrap()[0].created_at;
 
-        assert!(store.delete(stale, Some(created_at)).is_err());
+        assert!(store.delete_many(&[stale], Some(created_at)).is_err());
         assert_eq!(
             store.delete_many(&[stale], Some(created_at + 1)).unwrap(),
             1
@@ -365,7 +361,7 @@ mod tests {
                 "no_active_session",
             )
             .unwrap();
-        store.delete(stopped, None).unwrap();
+        assert_eq!(store.delete_many(&[stopped], None).unwrap(), 1);
     }
 
     #[test]

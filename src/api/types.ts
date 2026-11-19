@@ -23,10 +23,6 @@ export interface Script {
   content: string;
 }
 
-/** 内置列 kind 字面量（Column 的窄化辅助）。 */
-export type ColumnKind =
-  "method" | "uri" | "code" | "source" | "stage" | "created_at" | "updated_at" | "script";
-
 /** 创建一次保存，字节通过返回的 Writer 追加。 */
 export interface SaveFileRequest {
   filename: string;

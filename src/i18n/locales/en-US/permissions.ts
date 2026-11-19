@@ -67,7 +67,6 @@ export default {
   "读取 Bypass 流量": "Read bypass traffic",
   "清空 Bypass 流量": "Clear bypass traffic",
   "批量删除 Bypass 流量": "Batch delete bypass traffic",
-  "删除 Bypass 流量": "Delete bypass traffic",
   "读取 Clash 订阅状态": "Read Clash subscription status",
   "开启或更新 Clash 订阅": "Enable or update Clash subscription",
   "关闭 Clash 订阅": "Disable Clash subscription",

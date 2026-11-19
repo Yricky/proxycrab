@@ -431,9 +431,14 @@ mod tests {
         assert!(access.allows_authorization(Some("Bearer custom-ui-key")));
         assert!(!access.allows_authorization(Some("Bearer wrong-ui-key")));
         let permissions = CliPermissionService::open(dir.path(), Some(access)).unwrap();
-        let server = proxy_crab_mgr::http::start_http_server(manager, permissions)
-            .await
-            .unwrap();
+        let server = proxy_crab_mgr::http::start_http_server_with_routes(
+            manager,
+            permissions,
+            SessionShareService::new(),
+            axum::Router::new,
+        )
+        .await
+        .unwrap();
         let read_path = format!("/api/logs/{id}?session_id={}", session.id);
         for (method, path, body, expected) in [
             ("GET", read_path.as_str(), "", "200"),

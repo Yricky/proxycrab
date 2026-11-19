@@ -12,7 +12,6 @@ const backend = useBackend();
 const config: ScriptLibraryConfig = {
   windowId: "column-manager",
   sidebarTitle: t("列脚本"),
-  createPlaceholder: "新列脚本名",
   emptyListHint: t("暂无列脚本"),
   editorEmptyHint: t("新建一个列脚本后即可开始编辑"),
   statusbar: t("Lua 5.4 沙箱 · 10 万指令上限 · 16 MiB 内存上限"),

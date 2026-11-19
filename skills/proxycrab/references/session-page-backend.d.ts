@@ -231,9 +231,6 @@ export interface Script {
   content: string;
 }
 
-export type ColumnKind =
-  "method" | "uri" | "code" | "source" | "stage" | "created_at" | "updated_at" | "script";
-
 export interface SaveFileRequest {
   filename: string;
 }
@@ -472,7 +469,6 @@ interface ApplicationBackend {
 
   // bypass traffic
   getBypassEntries(query: BypassQuery): Promise<BypassPage>;
-  deleteBypassEntry(id: number): Promise<void>;
   deleteBypassEntries(ids: number[]): Promise<DeleteCount>;
   clearBypassEntries(): Promise<DeleteCount>;
 

@@ -276,7 +276,6 @@ export interface Backend {
 
   // bypass traffic
   getBypassEntries(query: BypassQuery): Promise<BypassPage>;
-  deleteBypassEntry(id: number): Promise<void>;
   deleteBypassEntries(ids: number[]): Promise<DeleteCount>;
   clearBypassEntries(): Promise<DeleteCount>;
 

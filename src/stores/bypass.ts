@@ -96,20 +96,6 @@ export const bypassStore = reactive({
     }
   },
 
-  async removeOne(id: number): Promise<boolean> {
-    try {
-      await backend.deleteBypassEntry(id);
-      const selectedIds = new Set(this.selectedIds);
-      selectedIds.delete(id);
-      this.selectedIds = selectedIds;
-      await this.refresh();
-      return true;
-    } catch (error) {
-      reportError(error, t("删除透明转发记录失败"));
-      return false;
-    }
-  },
-
   async clearTerminal(): Promise<number> {
     try {
       const result = await backend.clearBypassEntries();

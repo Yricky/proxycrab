@@ -17,7 +17,6 @@ const kindLabel = computed(() => (props.kind === "request" ? t("请求拦截器"
 const config: ScriptLibraryConfig = {
   windowId: `interceptor-manager-${props.kind}`,
   sidebarTitle: kindLabel.value,
-  createPlaceholder: t("新{title}名", { title: kindLabel.value }),
   emptyListHint: t("暂无{title}", { title: kindLabel.value }),
   editorEmptyHint: t("新建一个{title}后即可开始编辑", { title: kindLabel.value }),
   statusbar: t("Lua 5.4 沙箱 · 10 万指令上限 · 16 MiB 内存上限"),

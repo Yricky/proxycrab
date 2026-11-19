@@ -383,17 +383,6 @@ impl ProxyCrab {
         }
     }
 
-    pub fn list_captures(
-        &self,
-        session_id: u64,
-        limit: usize,
-        after_id: Option<u64>,
-    ) -> Result<Vec<CaptureSummary>> {
-        self.pin_capture_store(session_id)?
-            .store
-            .list(limit, after_id)
-    }
-
     pub fn capture(&self, session_id: u64, id: u64) -> Result<Option<CaptureDetail>> {
         self.pin_capture_store(session_id)?.store.get(id)
     }
@@ -592,17 +581,6 @@ impl ProxyCrab {
 
     pub(crate) fn release_all_breakpoints(&self) {
         self.breakpoints.release_all();
-    }
-
-    pub fn list_captures_before(
-        &self,
-        session_id: u64,
-        limit: usize,
-        before_id: Option<u64>,
-    ) -> Result<Vec<CaptureSummary>> {
-        self.pin_capture_store(session_id)?
-            .store
-            .list_before(limit, before_id)
     }
 
     pub fn list_captures_range(
@@ -1012,10 +990,6 @@ impl ProxyCrab {
 
     pub fn bypass_entries(&self, limit: usize, before_id: Option<u64>) -> Result<Vec<BypassEntry>> {
         self.bypass.list(limit, before_id)
-    }
-
-    pub fn delete_bypass_entry(&self, id: u64) -> Result<()> {
-        self.bypass.delete(id, self.proxy_started_at())
     }
 
     pub fn delete_bypass_entries(&self, ids: &[u64]) -> Result<usize> {

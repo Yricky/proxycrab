@@ -26,8 +26,6 @@ export const JWT_ALGORITHMS = [
   "EdDSA",
 ] as const;
 
-export type JwtAlgorithm = (typeof JWT_ALGORITHMS)[number];
-
 /** 与 jwt.io 一致：下拉框里也包含 none（不验签）。 */
 export const JWT_ALGORITHM_OPTIONS: readonly string[] = [...JWT_ALGORITHMS, "none"];
 

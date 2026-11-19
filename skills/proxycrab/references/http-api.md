@@ -1216,13 +1216,12 @@ Returns newest-first pagination:
 Default limit is 200; valid range is 1–1000. Outcomes are `in_progress`, `success`, and `failed`.
 
 ```text
-DELETE /api/bypass/{id}
 POST   /api/bypass/delete      body: {"ids":[1,2,3]}
 DELETE /api/bypass             clears all terminal and stale entries
 ```
 
-Single delete returns `{}`. Batch and clear return `{ "deleted": N }`. A current-run in-progress
-entry cannot be deleted and clearing skips it. An in-progress entry is stale and deletable when the
+Batch and clear return `{ "deleted": N }`. Use the batch endpoint with a one-element `ids` array
+to delete a single entry. A current-run in-progress entry cannot be deleted and clearing skips it. An in-progress entry is stale and deletable when the
 proxy is not running or its `created_at` is earlier than `ProxyStatus.running.started_at`. Database
 open and proxy start/stop preserve its outcome; generation-scoped forced draining may still mark
 that generation's unfinished rows failed with `error: "proxy_shutdown"`.
