@@ -95,12 +95,15 @@ impl BypassStore {
     ) -> Result<u64> {
         let now = now_millis();
         let connection = self.connection()?;
-        connection.execute(
-            "INSERT INTO bypass_entries (
+        connection
+            .prepare_cached(
+                "INSERT INTO bypass_entries (
                created_at, updated_at, source, method, uri, version, reason, outcome
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'in_progress')",
-            params![now as i64, now as i64, source, method, uri, version, reason],
-        )?;
+            )?
+            .execute(params![
+                now as i64, now as i64, source, method, uri, version, reason
+            ])?;
         Ok(connection.last_insert_rowid() as u64)
     }
 
@@ -148,12 +151,14 @@ impl BypassStore {
         download_bytes: Option<u64>,
     ) -> Result<()> {
         let connection = self.connection()?;
-        let changed = connection.execute(
-            "UPDATE bypass_entries
+        let changed = connection
+            .prepare_cached(
+                "UPDATE bypass_entries
              SET updated_at=?2, outcome=?3, response_status=?4, error=?5,
                  upload_bytes=?6, download_bytes=?7
              WHERE id=?1",
-            params![
+            )?
+            .execute(params![
                 id as i64,
                 now_millis() as i64,
                 outcome,
@@ -161,8 +166,7 @@ impl BypassStore {
                 error,
                 upload_bytes.map(|value| value as i64),
                 download_bytes.map(|value| value as i64),
-            ],
-        )?;
+            ])?;
         if changed == 0 {
             bail!(crate::error::Error::BypassEntryNotFound(id));
         }
@@ -171,7 +175,7 @@ impl BypassStore {
 
     pub fn list(&self, limit: usize, before_id: Option<u64>) -> Result<Vec<BypassEntry>> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare_cached(
             "SELECT id, created_at, updated_at, source, method, uri, version, reason,
                     outcome, response_status, error, upload_bytes, download_bytes
              FROM bypass_entries

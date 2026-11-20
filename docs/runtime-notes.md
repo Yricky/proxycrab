@@ -75,7 +75,9 @@ Each workspace root has a `workspace_schema.json` version label. All persisted-d
 registered in the centralized migration module and run before workspace stores are opened.
 Workspace schema v2 enables SQLite WAL for Session capture databases so management readers can
 recover and interoperate with the established workspace format. Each opened capture or bypass
-store reuses one configured SQLite connection across its clones and serializes access to it.
+store reuses one configured SQLite connection across its clones and caches prepared statements for
+frequent reads and writes. Access to each connection is serialized. Each Session capture connection
+can memory-map up to 128 MiB of `captures.db` for reads.
 Active Sessions live under `sessions/`; archived Sessions move intact to `sessions_archived/` and
 can only be permanently deleted from there. Effective active-Session or selected-routing changes
 rotate all downstream connections, tunnels/upgrades, and upstream pools while keeping the proxy

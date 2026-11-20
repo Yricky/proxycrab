@@ -28,6 +28,8 @@ use crate::{
 };
 
 pub(crate) const BODY_DETAIL_LIMIT: u64 = 64 * 1024;
+const TOUCH_CAPTURE_SQL: &str =
+    "UPDATE captures SET updated_at=MAX(updated_at + 1, ?2) WHERE id=?1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -134,7 +136,8 @@ impl CaptureStore {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch(
             "PRAGMA foreign_keys = ON;
-             PRAGMA synchronous = NORMAL;",
+             PRAGMA synchronous = NORMAL;
+             PRAGMA mmap_size = 134217728;",
         )?;
         let store = Self {
             session_id,
@@ -251,12 +254,14 @@ impl CaptureStore {
     pub fn begin(&self, source: &str, request: &RequestData, stage: &str) -> Result<u64> {
         let now = now_millis();
         let connection = self.connection()?;
-        connection.execute(
-            "INSERT INTO captures (
+        connection
+            .prepare_cached(
+                "INSERT INTO captures (
                 source, method, uri, req_version, req_headers, req_tags,
                 outcome, stage, created_at, updated_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'in_progress', ?7, ?8, ?8)",
-            params![
+            )?
+            .execute(params![
                 source,
                 request.method,
                 request.uri,
@@ -265,17 +270,15 @@ impl CaptureStore {
                 serde_json::to_string(&request.tags)?,
                 stage,
                 now as i64,
-            ],
-        )?;
+            ])?;
         Ok(connection.last_insert_rowid() as u64)
     }
 
     pub fn contains(&self, id: u64) -> Result<bool> {
-        Ok(self.connection()?.query_row(
-            "SELECT EXISTS(SELECT 1 FROM captures WHERE id=?1)",
-            params![id as i64],
-            |row| row.get(0),
-        )?)
+        Ok(self
+            .connection()?
+            .prepare_cached("SELECT EXISTS(SELECT 1 FROM captures WHERE id=?1)")?
+            .query_row(params![id as i64], |row| row.get(0))?)
     }
 
     pub fn update_request(
@@ -284,7 +287,7 @@ impl CaptureStore {
         request: &RequestData,
         final_body: &BodySourceType,
     ) -> Result<()> {
-        self.connection()?.execute(
+        self.execute_cached(
             "UPDATE captures SET
                 method=?2, uri=?3, req_version=?4, req_headers=?5, req_tags=?6,
                 req_modifications=?7,
@@ -302,16 +305,14 @@ impl CaptureStore {
                 })?,
                 now_millis() as i64,
             ],
-        )?;
-        Ok(())
+        )
     }
 
     pub fn update_tags(&self, id: u64, tags: &RequestTags) -> Result<()> {
-        self.connection()?.execute(
+        self.execute_cached(
             "UPDATE captures SET req_tags=?2, updated_at=MAX(updated_at + 1, ?3) WHERE id=?1",
             params![id as i64, serde_json::to_string(tags)?, now_millis() as i64,],
-        )?;
-        Ok(())
+        )
     }
 
     pub fn update_response(
@@ -320,7 +321,7 @@ impl CaptureStore {
         response: &ResponseData,
         final_body: &BodySourceType,
     ) -> Result<()> {
-        self.connection()?.execute(
+        self.execute_cached(
             "UPDATE captures SET
                 resp_status=?2, resp_version=?3, resp_headers=?4,
                 resp_modifications=?5,
@@ -336,8 +337,7 @@ impl CaptureStore {
                 })?,
                 now_millis() as i64,
             ],
-        )?;
-        Ok(())
+        )
     }
 
     pub fn complete(
@@ -346,7 +346,7 @@ impl CaptureStore {
         response: &ResponseData,
         final_body: &BodySourceType,
     ) -> Result<()> {
-        self.connection()?.execute(
+        self.execute_cached(
             "UPDATE captures SET
                 resp_status=?2, resp_version=?3, resp_headers=?4,
                 resp_modifications=?5,
@@ -363,8 +363,7 @@ impl CaptureStore {
                 })?,
                 now_millis() as i64,
             ],
-        )?;
-        Ok(())
+        )
     }
 
     pub fn mitm_established(&self, id: u64) -> Result<()> {
@@ -458,11 +457,7 @@ impl CaptureStore {
     }
 
     fn touch(&self, id: u64) -> Result<()> {
-        self.connection()?.execute(
-            "UPDATE captures SET updated_at=MAX(updated_at + 1, ?2) WHERE id=?1",
-            params![id as i64, now_millis() as i64],
-        )?;
-        Ok(())
+        self.execute_cached(TOUCH_CAPTURE_SQL, params![id as i64, now_millis() as i64])
     }
 
     pub fn interceptor_snapshot(
@@ -554,21 +549,20 @@ impl CaptureStore {
         }
         let row = self
             .connection()?
-            .query_row(
+            .prepare_cached(
                 "SELECT req_headers, resp_status, resp_headers,
                         req_modifications, resp_modifications
                  FROM captures WHERE id=?1",
-                params![id as i64],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<u16>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                    ))
-                },
-            )
+            )?
+            .query_row(params![id as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<u16>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
             .optional()?;
         let Some((
             request_headers,
@@ -685,10 +679,9 @@ impl CaptureStore {
             ],
         )?;
         let execution_id = transaction.last_insert_rowid() as u64;
-        transaction.execute(
-            "UPDATE captures SET updated_at=MAX(updated_at + 1, ?2) WHERE id=?1",
-            params![id as i64, now_millis() as i64],
-        )?;
+        transaction
+            .prepare_cached(TOUCH_CAPTURE_SQL)?
+            .execute(params![id as i64, now_millis() as i64])?;
         transaction.commit()?;
         Ok(execution_id)
     }
@@ -716,10 +709,9 @@ impl CaptureStore {
                 completed,
             ],
         )?;
-        connection.execute(
-            "UPDATE captures SET updated_at=MAX(updated_at + 1, ?2) WHERE id=?1",
-            params![capture_id, now_millis() as i64],
-        )?;
+        connection
+            .prepare_cached(TOUCH_CAPTURE_SQL)?
+            .execute(params![capture_id, now_millis() as i64])?;
         Ok(())
     }
 
@@ -773,7 +765,7 @@ impl CaptureStore {
         // LIMIT uses slot 3 in every query so the cursor bindings stay the same.
         let sql = format!("SELECT {columns} FROM captures {bounds} ORDER BY id {order} LIMIT ?3");
         let connection = self.connection()?;
-        let mut statement = connection.prepare(&sql)?;
+        let mut statement = connection.prepare_cached(&sql)?;
         let rows = statement.query_map(
             params![
                 min_id.map(|id| id as i64),
@@ -812,7 +804,7 @@ impl CaptureStore {
     pub fn get(&self, id: u64) -> Result<Option<CaptureDetail>> {
         let summary = {
             let connection = self.connection()?;
-            let mut statement = connection.prepare(
+            let mut statement = connection.prepare_cached(
                 "SELECT id, source, method, uri, req_version, req_headers,
                         resp_status, resp_version, resp_headers, outcome, stage,
                         error_stage, error_kind, error_message, created_at, updated_at, req_tags
@@ -935,6 +927,11 @@ impl CaptureStore {
         Ok(())
     }
 
+    fn execute_cached(&self, sql: &'static str, params: impl rusqlite::Params) -> Result<()> {
+        self.connection()?.prepare_cached(sql)?.execute(params)?;
+        Ok(())
+    }
+
     fn connection(&self) -> Result<MutexGuard<'_, Connection>> {
         self.connection
             .lock()
@@ -947,7 +944,7 @@ impl CaptureStore {
         phase: InterceptorKind,
     ) -> Result<Vec<InterceptorExecution>> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare_cached(
             "SELECT runs.id, runs.origin, runs.completed, runs.position, runs.name,
                     runs.script_hash, runs.modifications, runs.error, contents.content
              FROM capture_interceptor_runs AS runs
@@ -1379,6 +1376,23 @@ mod tests {
             &store.connection,
             &store.clone().connection,
         ));
+    }
+
+    #[test]
+    fn file_backed_store_enables_mmap_and_reuses_touch_statement() -> Result<()> {
+        let root = tempdir()?;
+        let store = CaptureStore::open(7, root.path())?;
+        let request = request("http://example.com/");
+        for _ in 0..2 {
+            let id = store.begin("client", &request, "request")?;
+            store.touch(id)?;
+        }
+        let connection = store.connection()?;
+        let mmap_size: i64 = connection.pragma_query_value(None, "mmap_size", |row| row.get(0))?;
+        assert_eq!(mmap_size, 128 * 1024 * 1024);
+        let touch = connection.prepare_cached(super::TOUCH_CAPTURE_SQL)?;
+        assert_eq!(touch.get_status(rusqlite::StatementStatus::Run), 2);
+        Ok(())
     }
 
     #[test]
